@@ -307,6 +307,13 @@ for matching code generation. No decomp source was edited.
 
 ### F9 (2026-10-13). KO and status controls write through absent texture-animation sets
 
+Further low-RAM command evidence: direct disc-3 Ark status processing in
+BFAF4 reaches status bit 0x400 with `Battle.curCmd == NULL`. Original MIPS at
+800BFE94 loads Battle+0x1088 and 800BFE9C reads its owner at +4 without a NULL
+guard. A counted port patch maps that read through PSX_NZ; both host Ark
+fixtures then pass 12000 frames and reach battle-end window setup on longer
+runs. Please annotate this dependency alongside F4's idle command reads.
+
 Additional optional-motion evidence: direct disc-3 Ark startup selects Steiner
 model 0x028F, whose default-motion ID is 0xFFFF. AB810 nevertheless reads the
 absent motion header (`lw` at 800AB8F8) and relocates its low-RAM fields. The

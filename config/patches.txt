@@ -103,6 +103,9 @@ src/ovl_0b/ovl_0b_3.c | e = m->unk50 + i | e = PSX_NZ(m->unk50) + i | 1
 # Map the temporary dereference; keep the stored optional motion pointer NULL.
 src/ovl_0b/ovl_0b.c | c = e->unk8->unkC; | c = PSX_NZ(e->unk8->unkC); | 1
 # Idle battle animation checks curCmd before a command exists (PSX 0x80109888 == 0).
+# Status processing also reads the command's owner while curCmd is NULL.
+# Original 800BFE94 loads Battle+0x1088, then 800BFE9C reads word +4.
+src/ovl_0b/ovl_0b.c | (arg0->status & 0x400) && arg0 != g_gameState->unk1C->unk8E4.battle->curCmd->unk4 | (arg0->status & 0x400) && arg0 != PSX_NZ(g_gameState->unk1C->unk8E4.battle->curCmd)->unk4 | 1
 src/ovl_0b/ovl_0b.c | u != cmd->unk4 && u->unk7D == 0 | u != PSX_NZ(cmd)->unk4 && u->unk7D == 0 | 1
 src/ovl_0b/ovl_0b.c | unk34.b.unk4 == 2 && cmd->cmdNo == 0x1F | unk34.b.unk4 == 2 && PSX_NZ(cmd)->cmdNo == 0x1F | 1
 src/ovl_0b/ovl_0b.c | u == cmd->unk4 && (u32)(cmd->cmdNo - 0x37) >= 7 | u == PSX_NZ(cmd)->unk4 && (u32)(PSX_NZ(cmd)->cmdNo - 0x37) >= 7 | 1

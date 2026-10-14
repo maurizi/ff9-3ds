@@ -220,3 +220,20 @@ The existing 360-case effect VM suite and both target builds pass. Both Ark
 fixtures advance to a different failure: BFAF4 dereferences a null `curCmd`
 while processing status bit 0x400 (`pc_ark_positions_models_fault.log`).
 This interface batch still requires fresh native DS validation.
+
+BFAF4's status-bit-0x400 command-owner read now uses the PSX low-RAM shadow
+when `curCmd` is NULL. Original MIPS at BFE94 loads Battle+1088 and BFE9C reads
+word +4 without a NULL guard. The matching source is unchanged. Both target
+builds and low-RAM tests pass; normal and low-HP Ark fixtures each complete
+12000 host frames. At 65000-frame limits both stop earlier in battle-end window
+setup at missing 63118; Meltigemini now stops at missing D4768
+(`scenarios_status_curcmd_extended/report.json`).
+
+Fresh native execution of D57D0 and the unit/model export fixes also reaches
+missing 63118 (`ds_ark_positions_models_current.png` and failure video).
+Savestate hotkeys failed twice in that emulator instance, so no saved frame
+count, fault marker or ITCM comparison is available for this run. The file
+named `ds_ark_positions_models_combat.mp4` was captured after failure and is
+not evidence of combat animation. The earlier trail-writer videos remain the
+last verified live combat recordings. These encounters, post-battle UI,
+graphics and performance still need further work.
