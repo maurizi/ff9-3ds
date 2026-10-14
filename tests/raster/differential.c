@@ -58,6 +58,10 @@ static void shadow_checks(void) {
                                        uint16_t *, uint8_t *, int, int, int, int);
     extern void psx_softgpu_reference_shadow_poly(const Gp0Mode *, const Gp0Vtx *, int,
                                        uint16_t *, uint8_t *, int, int, int, int);
+    extern void psx_softgpu_shadow_rect(const Gp0Mode *, const Gp0Vtx *, int, int,
+                                       uint16_t *, uint8_t *, int, int, int, int);
+    extern void psx_softgpu_reference_shadow_rect(const Gp0Mode *, const Gp0Vtx *, int, int,
+                                                 uint16_t *, uint8_t *, int, int, int, int);
     uint16_t pixels[2][64*64];
     uint8_t known[2][64*64];
     for (int depth=0;depth<2;++depth) for (int semi=0;semi<2;++semi)
@@ -73,6 +77,13 @@ static void shadow_checks(void) {
         psx_vram=actual;
         psx_softgpu_shadow_poly(&m,v,4,pixels[0],known[0],0,0,64,64);
         psx_softgpu_reference_shadow_poly(&m,v,4,pixels[1],known[1],0,0,64,64);
+        assert(memcmp(pixels[0],pixels[1],sizeof pixels[0])==0);
+        assert(memcmp(known[0],known[1],sizeof known[0])==0);
+        for(unsigned i=0;i<64*64;++i) {pixels[0][i]=random_value();known[0][i]=i%2;}
+        memcpy(pixels[1],pixels[0],sizeof pixels[0]);
+        memcpy(known[1],known[0],sizeof known[0]);
+        psx_softgpu_shadow_rect(&m,v,64,64,pixels[0],known[0],0,0,64,64);
+        psx_softgpu_reference_shadow_rect(&m,v,64,64,pixels[1],known[1],0,0,64,64);
         assert(memcmp(pixels[0],pixels[1],sizeof pixels[0])==0);
         assert(memcmp(known[0],known[1],sizeof known[0])==0);
     }

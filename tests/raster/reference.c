@@ -3,4 +3,5 @@
 #define psx_softgpu psx_softgpu_reference
 #define psx_softgpu_enable psx_softgpu_reference_enable
 #define psx_softgpu_shadow_poly psx_softgpu_reference_shadow_poly
+#define psx_softgpu_shadow_rect psx_softgpu_reference_shadow_rect
 #include "../../port/psx/softgpu.c"

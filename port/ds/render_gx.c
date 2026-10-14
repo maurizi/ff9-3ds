@@ -879,30 +879,48 @@ static int shadow_rect_known(const Gp0Vtx *v, int w, int h) {
 }
 
 static void shadow_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
-    if (gp0_state.set_mask || gp0_state.check_mask || m->semi) {
-        shadow_invalidate(v->x, v->y, w, h);
-        return;
-    }
     shadow_start();
-    int x = v->x - origin_x, y = v->y - origin_y;
-    u16 palette[256];
-    int ncol = m->depth == 0 ? 16 : 256;
-    int shaded = m->textured && m->depth < 2 && w * h >= ncol * 2;
-    u16 solid = m->textured ? 0 : sprite_pixel_texel(m, v, 0, 0);
-    if (shaded) for (int i = 0; i < ncol; i++) {
-        u16 t = psx_vram[(m->clut_y & 511) * 1024 + ((m->clut_x + i) & 1023)];
-        palette[i] = t ? (0x8000 | sprite_pixel_texel(m, v, t, 0)) : 0;
+    psx_softgpu_shadow_rect(m, v, w, h, sprite_shadow, sprite_known,
+                           origin_x, origin_y, SHADOW_W, SHADOW_H);
+}
+
+/* Readbacks consume original PSX pixels, including their mask/STP bits. Unknown
+ * pixels are left untouched; an approximated GX primitive cannot invent data. */
+static void sync_shadow_region(int x, int y, int w, int h) {
+    if (!psx_vram || !shadow_ready || !frame_target_valid || w <= 0 || h <= 0) return;
+    int ox = frame_target[0], oy = frame_target[1];
+    int x0 = x > ox ? x : ox, y0 = y > oy ? y : oy;
+    int x1 = x + w < ox + SHADOW_W ? x + w : ox + SHADOW_W;
+    int y1 = y + h < oy + SHADOW_H ? y + h : oy + SHADOW_H;
+    if (x1 > ox + frame_target[2]) x1 = ox + frame_target[2];
+    if (y1 > oy + frame_target[3]) y1 = oy + frame_target[3];
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > 1024) x1 = 1024;
+    if (y1 > 512) y1 = 512;
+    if (x1 <= x0 || y1 <= y0) return;
+    psx_vram_touch(x0, y0, x1 - x0, y1 - y0);
+    for (int row = y0; row < y1; row++) for (int col = x0; col < x1; col++) {
+        int at = (row - oy) * SHADOW_W + col - ox;
+        if (sprite_known[at]) psx_vram[row * 1024 + col] = sprite_shadow[at];
     }
-    for (int j = 0; j < h; j++) {
-        if (y + j < 0 || y + j >= SHADOW_H) continue;
-        for (int i = 0; i < w; i++) {
-            if (x + i < 0 || x + i >= SHADOW_W) continue;
-            u16 t = m->textured ? sprite_sample(m, v->u + i, v->v + j, shaded ? palette : NULL) : 0;
-            if (m->textured && !t) continue;
-            int offset = (y + j) * SHADOW_W + x + i;
-            sprite_shadow[offset] = shaded ? t & 0x7FFF : m->textured ? sprite_pixel_texel(m, v, t, 0) : solid;
-            sprite_known[offset] = 1;
+}
+
+void psx_vram_read(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    flush_buffer(); flush_rect();
+    if (w >= 1024) { x = 0; w = 1024; } else x &= 1023;
+    if (h >= 512) { y = 0; h = 512; } else y &= 511;
+    for (int j = 0; j < h;) {
+        int sy = (y + j) & 511, rows = h - j;
+        if (rows > 512 - sy) rows = 512 - sy;
+        for (int i = 0; i < w;) {
+            int sx = (x + i) & 1023, cols = w - i;
+            if (cols > 1024 - sx) cols = 1024 - sx;
+            sync_shadow_region(sx, sy, cols, rows);
+            i += cols;
         }
+        j += rows;
     }
 }
 
@@ -1076,6 +1094,9 @@ static int frame_target_displayed(void) {
 static void submit_frame(void) {
     if (polys || clear_pending) {
         psx_gx_stats_polys = polys;
+        /* Keep completed backbuffers readable after the shadow starts the next
+         * target; VBlank callbacks can copy from either PSX buffer later. */
+        sync_shadow_region(frame_target[0], frame_target[1], frame_target[2], frame_target[3]);
         glFlush(GL_TRANS_MANUALSORT);
         frame++;
     }
@@ -1348,7 +1369,9 @@ static void gx_rect_now(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
             begin_prim(&plain, v, 1, w, h);
             glBindTexture(0, e->tex); cur_tex = e->tex;
             for (int j = 0; j < h; j++) for (int i = 0; i < w; i++)
-                sprite_shadow[(y + j) * SHADOW_W + x + i] = convbuf16[j * tw + i] & 0x7FFF;
+                sprite_shadow[(y + j) * SHADOW_W + x + i] = sprite_pixel(m, v, v->u + i, v->v + j,
+                        sprite_shadow[(y + j) * SHADOW_W + x + i]) |
+                        (m->textured ? sprite_texel(m, v->u + i, v->v + j) & 0x8000 : 0);
             composite_mode = (Gp0Mode){.textured = 1, .raw = 1};
             m = &composite_mode;
             clipped.u = clipped.v = tex_u0 = tex_v0 = 0;
@@ -1376,7 +1399,7 @@ static void gx_rect_now(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
 }
 
 static void flush_rect(void) {
-    if (!rect_run.active) return;
+    if (!rect_run.active || flushing_rect) return;
     Gp0State saved = gp0_state;
     gp0_state = rect_run.state;
     flushing_rect = 1;

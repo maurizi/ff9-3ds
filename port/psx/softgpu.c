@@ -462,6 +462,20 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     port_profile_draw_end(1,profile_start);
 }
 
+void psx_softgpu_shadow_rect(const Gp0Mode *m, const Gp0Vtx *v, int width, int height,
+                             u16 *pixels, u8 *known, int x, int y, int w, int h) {
+    target.pixels = pixels; target.known = known;
+    target.x = x; target.y = y; target.w = w; target.h = h;
+    Gp0State saved = gp0_state;
+    if (gp0_state.area_x0 < x) gp0_state.area_x0 = x;
+    if (gp0_state.area_y0 < y) gp0_state.area_y0 = y;
+    if (gp0_state.area_x1 >= x + w) gp0_state.area_x1 = x + w - 1;
+    if (gp0_state.area_y1 >= y + h) gp0_state.area_y1 = y + h - 1;
+    sg_rect(m, v, width, height);
+    gp0_state = saved;
+    target.pixels = NULL;
+}
+
 const Gp0Backend psx_softgpu = {sg_poly, sg_line, sg_rect, 0, 0};
 
 /* PC --render / DS debug: rasterise into the VRAM shadow */

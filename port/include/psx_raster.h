@@ -7,4 +7,6 @@ extern const Gp0Backend psx_softgpu;
  * PSX VRAM. Known pixels permit exact subsequent sprite compositing. */
 void psx_softgpu_shadow_poly(const Gp0Mode *, const Gp0Vtx *, int,
                             unsigned short *, unsigned char *, int, int, int, int);
+void psx_softgpu_shadow_rect(const Gp0Mode *, const Gp0Vtx *, int, int,
+                            unsigned short *, unsigned char *, int, int, int, int);
 #endif

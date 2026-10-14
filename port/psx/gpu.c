@@ -50,6 +50,10 @@ static inline u16 *vram_at(int x, int y) {
 __attribute__((weak)) void psx_vram_touch(int x, int y, int w, int h) {
 }
 
+/* Hardware backends materialise rendered pixels before CPU/GPU readback. */
+__attribute__((weak)) void psx_vram_read(int x, int y, int w, int h) {
+}
+
 static void vram_fill(int x, int y, int w, int h, u16 c) {
     if (!psx_vram) {
         return;
@@ -66,6 +70,7 @@ static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
     if (!psx_vram) {
         return;
     }
+    psx_vram_read(sx, sy, w, h);
     psx_vram_touch(dx, dy, w, h);
     /* row buffer: overlapping copies behave as the GPU's line-by-line copy */
     static u16 row[VRAM_W];
@@ -107,6 +112,7 @@ int StoreImage(RECT *r, u32 *p) {
     if (!psx_vram) {
         return 0;
     }
+    psx_vram_read(r->x, r->y, r->w, r->h);
     u16 *dst = (u16 *)p;
     for (int j = 0; j < r->h; j++) {
         for (int i = 0; i < r->w; i++) {

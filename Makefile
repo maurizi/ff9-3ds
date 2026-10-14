@@ -354,7 +354,7 @@ $(BUILD)/tests/raster_ds_fast.o: port/psx/softgpu.c
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
 $(BUILD)/tests/raster_ds_arm.o: port/psx/softgpu.c
 	@mkdir -p $(dir $@)
-	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -Dpsx_softgpu=psx_softgpu_arm -Dpsx_softgpu_enable=psx_softgpu_arm_enable -Dpsx_softgpu_shadow_poly=psx_softgpu_arm_shadow_poly -c $< -o $@
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -Dpsx_softgpu=psx_softgpu_arm -Dpsx_softgpu_enable=psx_softgpu_arm_enable -Dpsx_softgpu_shadow_poly=psx_softgpu_arm_shadow_poly -Dpsx_softgpu_shadow_rect=psx_softgpu_arm_shadow_rect -c $< -o $@
 $(BUILD)/tests/raster_ds.elf: $(BUILD)/tests/raster_ds_main.o $(BUILD)/tests/raster_ds_reference.o $(BUILD)/tests/raster_ds_fast.o $(BUILD)/tests/raster_ds_arm_itcm.o
 	arm-none-eabi-gcc $(DS_ARCH) -specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
 $(BUILD)/tests/raster_ds.nds: $(BUILD)/tests/raster_ds.elf
@@ -362,7 +362,7 @@ $(BUILD)/tests/raster_ds.nds: $(BUILD)/tests/raster_ds.elf
 
 $(BUILD)/tests/raster_ds_arm_itcm.o: port/psx/softgpu.c
 	@mkdir -p $(dir $@)
-	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -DPORT_RASTER_ITCM -Dpsx_softgpu=psx_softgpu_arm_itcm -Dpsx_softgpu_enable=psx_softgpu_arm_itcm_enable -Dpsx_softgpu_shadow_poly=psx_softgpu_arm_itcm_shadow_poly -c $< -o $@
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -DPORT_RASTER_ITCM -Dpsx_softgpu=psx_softgpu_arm_itcm -Dpsx_softgpu_enable=psx_softgpu_arm_itcm_enable -Dpsx_softgpu_shadow_poly=psx_softgpu_arm_itcm_shadow_poly -Dpsx_softgpu_shadow_rect=psx_softgpu_arm_itcm_shadow_rect -c $< -o $@
 
 .PHONY: test-display scale-ds
 test-display: $(BUILD)/tests/display_scale_test $(BUILD)/tests/display_glyph_test

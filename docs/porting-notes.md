@@ -907,3 +907,47 @@ still show missing HUD/floor graphics against the original PSX reference.
 Artifacts use `ds_gx_offscreen_ark_`; exact generated-texture comparison is in
 `gx_offscreen_generated_texture_comparison.json`. The private emulator/display
 are closed after capture and normal SD paths restored. Software stays default.
+
+
+### GX backbuffer readback and sprite mask bits (2026-10-14)
+
+An original-game software watchpoint identifies the remaining blank value cache:
+`ContinueDraw` copies a 32x48 area from backbuffer (528,167) to texture memory
+(960,432). GX drew the source into its destination shadow but GPU copies and
+`StoreImage` read the stale CPU VRAM buffer. A weak readback hook now materialises
+known shadow pixels before either operation. It flushes deferred draws first,
+handles source wrapping and retains completed backbuffers in CPU VRAM before
+starting another target. Unknown pixels are not invented.
+
+Sprite shadows now use the existing PSX rasteriser through a rectangle target
+helper, preserving blending, transparency, mask testing and the complete PSX
+colour/mask word. Generated subtractive composites preserve their source mask
+bit too. A re-entry guard prevents a texture-generation notification during
+submission from recursively flushing the rectangle currently being submitted.
+The independent raster builds rename the new shadow helper alongside their
+existing entry points.
+
+GX checks cover pending/current and completed backbuffers, mask testing, wrapped
+reads and unknown pixels. GPU integration checks exercise the real StoreImage
+and MoveImage entry points, source wrapping, full colour/mask words and
+read-before-destination-write notification. All four GX fixtures and the ordering
+checks pass under ASan/UBSan; 4096 mixed software raster primitives still match
+the generic path byte for byte, and the separate DS raster binary builds.
+
+The native nonwrapping Ark replay (`ff9ds_gx_readback_ark_frame1663`) restores 337
+colours in the previously blank value cache. Of its 5120 words, 912 still differ
+from the software reference; the live source rectangle differs at 47 pixels.
+Skipped/approximated source geometry remains a known limitation, not a readback
+parity pass. The other generated 112x112 region continues to match all 12,544
+words exactly. The matching native state has no captured fault or protected ITCM
+changes. Its instrumented window takes 170.2855 ms (134.9037 ms GP0 and 9.9549 ms
+sprite shadow rasterisation); costs overlap and the render still drops graphics.
+The final wrapping branch is additionally checked in the host fixtures.
+The 2000-frame host route records 59,821 texture failures and 380 budget failures.
+
+The reviewed native video and screenshot still show missing HUD/floor graphics
+against the PSX reference. Native artifacts use `ds_gx_readback_ark_`; generated
+texture comparison is in `gx_readback_generated_texture_comparison.json`. The
+emulator/private display are closed and normal SD paths restored. Software stays
+default; texture/vertex capacity, remaining blends/fonts, missing routines and
+full-game correctness remain unresolved.

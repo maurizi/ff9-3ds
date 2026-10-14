@@ -233,6 +233,46 @@ static void test_texture_name_recovery(void) {
     assert(bind_entry(pinned) && captured_pixel(0) == 0x8002);
 }
 
+static void test_rendered_readback(void) {
+    reset();
+    draw_x = 320; draw_w = 320; draw_h = 218;
+    gp0_state = (Gp0State){.area_x0 = 320, .area_x1 = 639, .area_y1 = 217};
+    gx_fill(320, 0, 320, 218, 0);
+    Gp0Mode plain = {0};
+    Gp0Vtx text = {.x = 528, .y = 167, .r = 248};
+    gp0_state.set_mask = 1;
+    gx_rect(&plain, &text, 32, 48);
+    assert(vram[167 * 1024 + 528] == 0);
+    psx_vram_read(528, 167, 32, 48);
+    for (int y = 167; y < 215; y++) for (int x = 528; x < 560; x++)
+        assert(vram[y * 1024 + x] == 0x801F);
+    assert(vram[166 * 1024 + 528] == 0 && vram[167 * 1024 + 560] == 0);
+    /* Mask testing must retain the old rendered pixel for readback. */
+    gp0_state.set_mask = 0; gp0_state.check_mask = 1;
+    text.r = 0; text.b = 248;
+    gx_rect(&plain, &text, 32, 48);
+    psx_vram_read(528, 167, 32, 48);
+    assert(vram[167 * 1024 + 528] == 0x801F);
+    gp0_state.check_mask = 0;
+    /* Completed backbuffers remain available after swapping and starting a
+     * different target, including when global origin changes offscreen. */
+    gx_frame();
+    assert(!shadow_ready && vram[167 * 1024 + 528] == 0x801F);
+    draw_x = 0;
+    gp0_state = (Gp0State){.area_x1 = 319, .area_y1 = 217};
+    gx_fill(0, 0, 320, 218, 0x00FF00);
+    psx_vram_read(528, 167, 32, 48);
+    assert(vram[167 * 1024 + 528] == 0x801F);
+    vram[10 * 1024 + 10] = 0x4567;
+    shadow_invalidate(10, 10, 1, 1);
+    sprite_shadow[10 * SHADOW_W + 10] = 0x7FFF;
+    psx_vram_read(10, 10, 1, 1);
+    assert(vram[10 * 1024 + 10] == 0x4567); /* Unknown pixels are never invented. */
+    psx_vram_read(1020, 510, 8, 4);
+    assert(vram[0] == 0x03E0 && vram[1024 + 3] == 0x03E0);
+    assert(vram[4] == 0); /* Only the wrapped source intersection was materialised. */
+}
+
 static void test_offscreen_generation(void) {
     static u16 expected[1024 * 512];
     for (int kind = 0; kind < 4; kind++) for (int depth = 0; depth < 3; depth++)
@@ -416,6 +456,7 @@ int main(void) {
     test_tight_indexed_regions();
     test_minimum_indexed_regions();
     test_offscreen_generation();
+    test_rendered_readback();
     test_texture_name_recovery();
     test_backbuffer_presentation();
     reset();
@@ -461,6 +502,7 @@ int main(void) {
         int width = depth ? 32 : 8, height = 16;
         Gp0Mode opaque = {.textured = 1, .depth = depth, .tx = 512, .clut_y = 300};
         Gp0Vtx shade = {.x = 0, .y = 0, .r = 64, .g = 192, .b = 255};
+        gp0_state.area_x1 = 319; gp0_state.area_y1 = 223;
         shadow_start();
         for (int i = 0; i < colours; i++)
             vram[300 * 1024 + i] = i == 0 ? 0 : i == 1 ? 0x8000 : (i * 127) & 0x7fff;
@@ -479,7 +521,7 @@ int main(void) {
             int b = ((t >> 10) & 31) * 255 >> 7;
             if (g > 31) g = 31;
             if (b > 31) b = 31;
-            assert(sprite_shadow[y * SHADOW_W + x] == (t ? r | (g << 5) | (b << 10) : 0x1234));
+            assert(sprite_shadow[y * SHADOW_W + x] == (t ? r | (g << 5) | (b << 10) | (t & 0x8000) : 0x1234));
         }
     }
     reset();
@@ -764,7 +806,7 @@ int main(void) {
     assert(uploads == 1 && polys == 1);
     for(int i=0;i<256;i++) assert(captured_pixel(i)==expected[i]);
     for (int i = 0; i < 256; i++)
-        assert(sprite_shadow[(32 + i / 16) * SHADOW_W + 32 + i % 16] == (expected[i] & 0x7FFF));
+        assert(sprite_shadow[(32 + i / 16) * SHADOW_W + 32 + i % 16] == ((expected[i] & 0x7FFF) | (vram[(i / 16) * 1024 + 512 + i % 16] & 0x8000)));
     Gp0Mode raw_subtract = subtract;
     raw_subtract.raw = 1;
     vram[512] = 0x801F;
@@ -813,7 +855,7 @@ int main(void) {
     base.r = base.g = base.b = 64;
     gx_rect_now(&subtract, &base, 16, 16);
     for (int i = 0; i < 256; i++) assert(captured_pixel(i) == 0x8000);
-    assert(sprite_shadow[0] == 0); /* exact black, without a scene-specific brightness rule */
+    assert(sprite_shadow[0] == 0x8000); /* Exact black retains the source STP/mask bit. */
 #if defined(PORT_GX_EXPERIMENTAL) || defined(PORT_GX_MERGE)
     reset();
     draw_w = 320; draw_h = 224;

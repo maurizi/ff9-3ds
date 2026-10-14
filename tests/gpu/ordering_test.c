@@ -16,7 +16,17 @@ void gp0_run(const unsigned int *words, unsigned int len) {
 }
 void port_log(const char *fmt, ...) { (void)fmt; }
 void port_fatal(const char *fmt, ...) { (void)fmt; abort(); }
-void psx_vram_touch(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; }
+extern u16 *psx_vram;
+static int read_calls, read_pending;
+void psx_vram_read(int x, int y, int w, int h) {
+    read_calls++; read_pending = 0;
+    for (int j = 0; j < h; j++) for (int i = 0; i < w; i++)
+        psx_vram[((y + j) & 511) * 1024 + ((x + i) & 1023)] =
+            0x8000 | ((x + i + 3 * (y + j)) & 0x7FFF);
+}
+void psx_vram_touch(int x, int y, int w, int h) {
+    (void)x; (void)y; (void)w; (void)h; assert(!read_pending);
+}
 void port_draw_ot_buffer(u32 *, const void *, unsigned int);
 
 static void packet(u32 *p, u32 command) {
@@ -93,5 +103,22 @@ int main(void) {
     count = 0;
     DrawOTag(tim_ot + 11);
     assert(count == 2 && decoded[0] == 0xE1000066 && decoded[1] == 0x64000055);
+    /* Readback materialises full PSX colour/mask words before a CPU read or
+     * GPU copy. Source wrapping still uses the original VRAM addressing. */
+    static u16 bitmap[1024 * 512];
+    psx_vram = bitmap;
+    RECT source = {1020, 510, 8, 4};
+    u32 stored[16];
+    read_pending = 1;
+    StoreImage(&source, stored);
+    assert(read_calls == 1 && !read_pending);
+    for (int y = 0; y < 4; y++) for (int x = 0; x < 8; x++)
+        assert(((u16 *)stored)[y * 8 + x] == (0x8000 | ((1020 + x + 3 * (510 + y)) & 0x7FFF)));
+    source = (RECT){528, 167, 32, 48};
+    read_pending = 1;
+    MoveImage(&source, 960, 432);
+    assert(read_calls == 2 && !read_pending);
+    for (int y = 0; y < 48; y++) for (int x = 0; x < 32; x++)
+        assert(bitmap[(432 + y) * 1024 + 960 + x] == (0x8000 | ((528 + x + 3 * (167 + y)) & 0x7FFF)));
     return 0;
 }
