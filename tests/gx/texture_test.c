@@ -233,6 +233,46 @@ static void test_texture_name_recovery(void) {
     assert(bind_entry(pinned) && captured_pixel(0) == 0x8002);
 }
 
+static void test_failed_draw_readback(void) {
+    reset();
+    draw_x = 320; draw_w = 320; draw_h = 218;
+    gp0_state = (Gp0State){.area_x0 = 320, .area_x1 = 639, .area_y1 = 217};
+    gx_fill(320, 0, 320, 218, 0);
+    Gp0Mode m = {.textured = 1, .raw = 1, .depth = 2, .tx = 832, .ty = 256};
+    for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) vram[(256 + y) * 1024 + 832 + x] = 0xFC00;
+    Gp0Vtx v = {.x = 528, .y = 167};
+    reject_upload = 1;
+    int failures = psx_gx_stats_texture_fail;
+    gx_rect(&m, &v, 16, 16);
+    psx_vram_read(528, 167, 16, 16);
+    assert(psx_gx_stats_texture_fail > failures && !polys);
+    assert(vram[167 * 1024 + 528] == 0xFC00);
+#if defined(PORT_GX_EXPERIMENTAL) || defined(PORT_GX_SHADOW)
+    /* Compare complete backbuffers after clipped triangles/quads whose GPU
+     * uploads all fail. PSX interpolation must use the original vertices. */
+    static u16 expected[1024 * 512];
+    memcpy(expected, vram, sizeof vram);
+    unsigned seed = 0x9FF;
+    for (int i = 0; i < 96; i++) {
+        Gp0Vtx face[4];
+        for (int j = 0; j < 4; j++) {
+            seed = seed * 1664525u + 1013904223u;
+            face[j] = (Gp0Vtx){.x = 310 + (int)(seed % 350),
+                .y = -10 + (int)((seed >> 16) % 240), .r = (seed >> 8) & 255,
+                .g = (seed >> 16) & 255, .b = (seed >> 24) & 255,
+                .u = j & 1 ? 31 : 0, .v = j & 2 ? 31 : 0};
+        }
+        m.raw = 0; m.gouraud = 1; m.semi = i & 1; m.abr = (i >> 1) & 3;
+        gp0_state.set_mask = (i >> 3) & 1; gp0_state.check_mask = (i >> 4) & 1;
+        psx_vram = expected; psx_softgpu.poly(&m, face, 3 + (i & 1));
+        psx_vram = vram; gx_poly(&m, face, 3 + (i & 1));
+    }
+    psx_vram_read(320, 0, 320, 218);
+    for (int y = 0; y < 218; y++) for (int x = 320; x < 640; x++)
+        assert(vram[y * 1024 + x] == expected[y * 1024 + x]);
+#endif
+}
+
 static void test_rendered_readback(void) {
     reset();
     draw_x = 320; draw_w = 320; draw_h = 218;
@@ -457,6 +497,7 @@ int main(void) {
     test_minimum_indexed_regions();
     test_offscreen_generation();
     test_rendered_readback();
+    test_failed_draw_readback();
     test_texture_name_recovery();
     test_backbuffer_presentation();
     reset();

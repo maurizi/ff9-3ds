@@ -1092,11 +1092,10 @@ static int frame_target_displayed(void) {
 }
 
 static void submit_frame(void) {
+    /* PSX readback must survive even when GX could not allocate a draw. */
+    sync_shadow_region(frame_target[0], frame_target[1], frame_target[2], frame_target[3]);
     if (polys || clear_pending) {
         psx_gx_stats_polys = polys;
-        /* Keep completed backbuffers readable after the shadow starts the next
-         * target; VBlank callbacks can copy from either PSX buffer later. */
-        sync_shadow_region(frame_target[0], frame_target[1], frame_target[2], frame_target[3]);
         glFlush(GL_TRANS_MANUALSORT);
         frame++;
     }
@@ -1211,20 +1210,6 @@ static void gx_poly_unclipped(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (!begin_prim(m, v, n, 0, 0)) {
         return;
     }
-#if defined(PORT_GX_EXPERIMENTAL) || defined(PORT_GX_SHADOW)
-    shadow_start();
-    psx_softgpu_shadow_poly(m, v, n, sprite_shadow, sprite_known,
-                           origin_x, origin_y, SHADOW_W, SHADOW_H);
-#else
-    int x0 = v[0].x, y0 = v[0].y, x1 = x0, y1 = y0;
-    for (int i = 1; i < n; i++) {
-        if (v[i].x < x0) x0 = v[i].x;
-        if (v[i].x > x1) x1 = v[i].x;
-        if (v[i].y < y0) y0 = v[i].y;
-        if (v[i].y > y1) y1 = v[i].y;
-    }
-    shadow_invalidate(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-#endif
     z++;
     if (n == 4) {
         glBegin(GL_QUADS);
@@ -1295,6 +1280,28 @@ static void gx_clipped_triangle(const Gp0Mode *m, const Gp0Vtx *v) {
 
 static void gx_poly_now(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     flush_rect();
+    if (!triangle_area(v, v + 1, v + 2)
+        && (n == 3 || !triangle_area(v + 1, v + 2, v + 3))) return;
+    /* Readback follows the original PSX primitive, independently of GX
+     * allocation/budget failures and rounded clipping intersections. */
+    if (!planning && drawing_to_screen()) {
+        prepare_frame_target();
+        retain_frame_target();
+#if defined(PORT_GX_EXPERIMENTAL) || defined(PORT_GX_SHADOW)
+        shadow_start();
+        psx_softgpu_shadow_poly(m, v, n, sprite_shadow, sprite_known,
+                               origin_x, origin_y, SHADOW_W, SHADOW_H);
+#else
+        int x0 = v[0].x, y0 = v[0].y, x1 = x0, y1 = y0;
+        for (int i = 1; i < n; i++) {
+            if (v[i].x < x0) x0 = v[i].x;
+            if (v[i].x > x1) x1 = v[i].x;
+            if (v[i].y < y0) y0 = v[i].y;
+            if (v[i].y > y1) y1 = v[i].y;
+        }
+        shadow_invalidate(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+#endif
+    }
     int clipped = 0;
     for (int i = 0; i < n; i++) {
         if (v[i].x < gp0_state.area_x0 || v[i].x > gp0_state.area_x1 + 1
@@ -1349,6 +1356,7 @@ static void gx_rect_now(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     /* Composites allocate textures before begin_prim(), so advance the target
      * first to give their shadow pixels and texture pins the correct frame. */
     prepare_frame_target();
+    retain_frame_target();
     Gp0Mode composite_mode;
     int composite = 0;
     if (m->semi && m->abr == 2 && !gp0_state.set_mask && !gp0_state.check_mask
@@ -1380,8 +1388,8 @@ static void gx_rect_now(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         }
     }
     if (!composite) {
-        if (!begin_prim(m, v, 1, w, h)) return;
         shadow_rect(m, v, w, h);
+        if (!begin_prim(m, v, 1, w, h)) return;
         if (m->semi && m->abr == 2) psx_gx_stats_blend_fallback++;
     }
     z++;

@@ -951,3 +951,50 @@ texture comparison is in `gx_readback_generated_texture_comparison.json`. The
 emulator/private display are closed and normal SD paths restored. Software stays
 default; texture/vertex capacity, remaining blends/fonts, missing routines and
 full-game correctness remain unresolved.
+
+
+### PSX shadows survive GX resource failures (2026-10-14)
+
+Readback still differed because shadow updates ran only after successful GX
+allocation. GPU-clipped triangles also fed rounded intersection vertices back
+into the CPU shadow. Polygon shadows now consume the original PSX primitive
+before GX clipping, upload or vertex-budget checks. Sprite shadows likewise
+update before a failed hardware draw, and CPU-only target updates survive
+submission. The GPU failure counters still report the missing hardware draws.
+
+The added test rejects every textured upload and compares a complete backbuffer
+after 96 mixed clipped triangles/quads, with Gouraud shading, blending and mask
+bits. Its CPU pixels match the software rasteriser byte for byte. All four GX
+fixtures pass, along with the raster/ordering/allocator checks and default DS/PC
+builds. Native frame 1663 now matches all 19,200 words in the three traced regions:
+the offscreen effect texture, the cached value atlas and its backbuffer source.
+The previous 912 atlas differences and 47 source differences are gone.
+`gx_independent_shadow_generated_texture_comparison.json` records that comparison.
+
+This repairs PSX readback semantics, not GPU capacity or performance. The native
+state still records 42,353 texture failures and 432 budget failures. The reviewed
+battle motion and screenshot restore the command-window border, with floor/HUD
+pieces still absent against the original PSX reference. The matched instrumented
+window takes 193.9218 ms per interval: 158.077 ms GP0, including 58.605 ms polygon
+and 14.8519 ms rectangle shadow work. Phase costs overlap. Preserving all PSX
+pixels costs more CPU time; full CPU shadow replay remains a performance issue.
+The 2000-frame host route likewise still fails (57,559 textures, 432 budget).
+Native artifacts use `ds_gx_independent_shadow_ark_`.
+
+The same uninstrumented renderer reaches opening/naming frame 9613 with zero
+dropped draws or resource failures, no captured fault and no protected ITCM
+changes. The real candle transition is captured using the new
+`capture_ds_at_frame.py` helper, which waits on the live frame counter and
+checks the ROM/native code before injecting input. It produces a fresh prelight
+checkpoint at frame 4807 and a focused action clip. The helper also rejects an
+already-passed frame, a mismatched ELF and a short timeout without creating
+output. Native candle/naming footage is compared with the existing original PSX
+candle-action reference; positions and wall-clock timing are not synchronized.
+GX font/blend differences remain visible. All generated artifacts stay ignored.
+Post-action frame 6626 also has zero resource drops, faults and protected ITCM
+changes. The focused 35-second clip is
+`ds_gx_independent_shadow_candle_action_short.mp4`; its source recording includes
+the choice, lighting and room reveal. The emulator/private display are closed
+and normal SD paths restored after recording.
+Software remains default; missing draws, acceptable performance, remaining
+routines and full-game validation are unresolved.

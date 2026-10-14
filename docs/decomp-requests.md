@@ -334,3 +334,21 @@ extra loads/writes in matching code. Three hundred original-MIPS comparisons
 use the production GTE; only the ignored upper padding of C4 is normalized.
 
 Native DS first-fault capture identifies `func_800BD5A0` when Marcus dies. Marcus and Blank have no texture-animation set (`BtlUnit9C.unk50 == NULL`). Original disc MIPS at 0x800BD5E0/600/614/628 performs unconditional stores at +0x2c, +4, +0xc and +0x12. Low RAM is valid on PSX; on DS these addresses alias IRQ/raster instructions. This extends F4 beyond Baku's initialization. The port maps reviewed texture-animation dereferences into its low-RAM shadow while preserving the NULL loader state and matching decomp source. Related status, revival, script and summon accesses are inventoried together (36 dereferences across ten routines). Please annotate the optional animation-set/low-RAM behavior when naming these routines; do not insert guards into matching PSX code merely to make native execution safe.
+
+
+### F10 (2026-10-14). Battle UI consumes rendered backbuffer copies
+
+A PC software watchpoint on the ported decomp code identifies a DR_MOVE from
+(528,167), 32x48, to (960,432), reached through `func_800F4A00` -> `ContinueDraw`
+inside the battle VBlank callback. These coordinates belong to the selected
+320-wide backbuffer; they are not a standalone texture upload. `func_800F4A00`
+saves/restores the embedded drawing state through `GetDrawEnv2` and the
+`D_80105160` array while resuming its UI ordering table. Please annotate this
+rendered-image dependency alongside the cached-name/value routines
+`func_800F2DC0`, `func_800F2ED0` and `func_800F3A8C`, and preserve the ordering and
+colour/mask bits when naming the state/packets. The native GX backend previously
+copied stale CPU VRAM here, producing a blank value atlas. Generated-texture
+comparisons against the software renderer now match after restoring offscreen
+writes, backbuffer readback and original-primitive shadow interpolation. This
+is source/port-runtime evidence, not a new original-PSX breakpoint claim. No
+decomp source was edited.

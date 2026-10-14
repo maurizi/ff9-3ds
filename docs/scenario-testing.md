@@ -39,6 +39,26 @@ Use one emulator at a time. Capture screenshots and short videos on DS and
 the matching PSX encounter; emulator saves remain useful for inspecting a
 precise failure in the same build.
 
+For an animation at a known game frame, arm the recording before that frame
+rather than estimating wall-clock delays. This works after direct scenario entry
+or a scripted opening run on Linux with melonDS's fast-memory backend:
+
+```sh
+DISPLAY=:99 XAUTHORITY=/dev/null python3 tools/capture_ds_at_frame.py \
+  --pid 12345 --window 0x200007 \
+  --rom build/validation/test.nds --elf build/validation/test.elf \
+  --frame 4800 --state-out build/validation/pre_action.ml8 \
+  --seconds 60 --out build/validation/action.mp4
+```
+
+Use the actual emulator PID/window/display and its matching archived ROM/ELF.
+The helper checks the process's ROM argument, native instructions and RAM layout,
+then polls the live game counter. A passed threshold, mismatched build, backwards
+counter or timeout aborts before capture. An optional fresh checkpoint is saved
+first; its JSON reports the actual saved frame, so leave a lead before the action.
+Checkpoints remain tied to their executable. The tool does not pause game logic;
+review the resulting footage to verify that it includes the intended action.
+
 Fixtures use `key=value`, with comments beginning with `#`:
 
 | Key | Meaning |
