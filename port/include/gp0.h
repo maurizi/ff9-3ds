@@ -37,12 +37,13 @@ typedef struct {
     void (*line)(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b);
     void (*rect)(const Gp0Mode *m, const Gp0Vtx *v, int w, int h);
     void (*fill)(int x, int y, int w, int h, unsigned int rgb); /* fill command: VRAM coordinates, no offset */
-    void (*frame)(void);  /* once per displayed frame (VSync) */
+    void (*frame)(void);  /* once per emulated VBlank, including waits between backbuffer updates */
 } Gp0Backend;
 
 extern const Gp0Backend *gp0_backend;
 
 void gp0_run(const unsigned int *w, unsigned int len);
 void psx_gpu_draw_area(int *x, int *y, int *w, int *h);
+void psx_gpu_display_area(int *x, int *y, int *w, int *h);
 
 #endif

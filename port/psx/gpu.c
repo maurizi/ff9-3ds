@@ -247,6 +247,13 @@ void psx_gpu_draw_area(int *x, int *y, int *w, int *h) {
     *h = draw_env.clip.h;
 }
 
+void psx_gpu_display_area(int *x, int *y, int *w, int *h) {
+    *x = disp_env.disp.x;
+    *y = disp_env.disp.y;
+    *w = disp_env.disp.w;
+    *h = disp_env.disp.h;
+}
+
 void GetDrawEnv2(DR_ENV *p) {
     /* GPU readback captures the current GP0 registers, including state changed
      * by packets after PutDrawEnv. Battle inserts this packet after its UI OT

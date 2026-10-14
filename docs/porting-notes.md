@@ -741,3 +741,56 @@ The battle timing and images are retained under `build/validation`, including
 PSX parity or acceptable performance. The default software ROM is restored and
 all native emulators are closed. GX remains opt-in; full-game crashes, effects,
 text quality and performance work remain open.
+
+
+### GX backbuffer lifetime and logical texture names (2026-10-14)
+
+The nearly blank Ark capture has a presentation bug in addition to texture
+pressure. A host trace shows scene submissions around frame 1611 with draw origin
+320/display origin 0, followed at frame 1614 by a 45-polygon HUD update with both
+origins 320. GX previously swapped on every emulated VBlank that drew anything,
+so the HUD-only list replaced the scene. It now retains backbuffer geometry until
+that buffer is displayed. The field can begin drawing its next buffer before the
+next VBlank: the completed visible target is also submitted on that target change.
+This prevents accumulating two field scenes into one geometry list. Composite
+rectangles change target before allocating, keeping their shadow and texture pins
+in the correct frame. The shared GPU layer exposes the display RECT explicitly.
+
+Tests cover scene/HUD updates across VBlanks, repeated waits, clear-only buffers,
+field target changes before VBlank, queued rectangle origins, and the first
+composite on a new target. Indexed regions now use byte-aligned four-bit origins
+and exact eight-bit origins, reducing unused padding. Pixel checks cover both
+formats with non-grid origins and texture windows. In the 2000-frame Ark host
+probe, tight origins reduce cumulative texture failures from 194,206 to 158,057;
+combined presentation changes reduce that to 136,536. These are still failing
+resource probes, not complete rendering or performance passes.
+
+Native opening validation caught two regressions during this work: deferring only
+at VBlank mixed field buffers and exhausted vertices, and indexed image/palette
+sharing exhausted the SDK's 2048 CPU texture names. Those failed captures are
+`ds_gx_retained_opening_candle.mp4` and its contact sheet. They must not be used as
+approval evidence. Texture-name allocation now evicts eligible old entries and
+retries without freeing pinned images. The SDK wrapper permits 8192 logical names
+in its existing dynamic arrays; the GPU texture/palette VRAM budget remains
+512 KiB/64 KiB. The host model matches this project-specific capacity. Native
+name high-water reaches 3289 in the successful replay, so the larger allowance is
+actually exercised.
+
+The final `ff9ds_gx_target_switch_final` replay uses `GXSHADOW=1 GXSHARE=1` and the
+ITCM guard. It reaches naming at frame 6898 with zero dropped draws or recorded
+resource failures, zero first-fault marker and zero protected-code changes. The
+reviewed `ds_gx_target_switch_final_candle.mp4` shows the prompt, rounded light,
+room reveal and naming, compared with the existing original PSX candle reference.
+Actor positions and wall-clock timing are not synchronized. GX text/blend quality
+and later effects remain open. The intermediate Ark retained-scene clip restores
+world/party visibility at frame 1663, but still loses textures and HUD text. Its
+198.6229 ms instrumented interval is not a final-build performance result.
+
+A separate prototype sharing original face bounds across clipped triangles did
+not improve the host pressure result (139,017 failures versus 136,536 over 2000
+frames) and was removed. Cache analysis shows substantial overlapping source data:
+500,224 logical eight-bit bytes cover 257,280 physical source bytes. Only about
+35 KiB of those images are already contained byte-for-byte in a larger resident
+region. More coordinated reuse is still needed for Ark; software remains default.
+Both default targets and renderer/OT/allocator regressions pass. Native emulators
+are closed after captures; no disc data, captures or ROMs are committed.

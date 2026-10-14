@@ -6,7 +6,7 @@
 #include <string.h>
 #include "nds.h"
 
-#define NAMES 2048
+#define NAMES 8192 /* Matches the project's video_gl.c logical-handle override. */
 #define BLOCKS (512 * 1024 / 8)
 static unsigned char occupied[BLOCKS];
 #define PAL_BLOCKS (64*1024/16)

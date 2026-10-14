@@ -12,3 +12,10 @@ opening reproduced this with 378 KiB free and failed 128-byte uploads.
 archive's original videoGL object is therefore not selected. This avoids
 changing the installed SDK. Keep this override until the SDK includes the fix,
 then remove the vendored file and wrapper together.
+
+The wrapper also raises the CPU texture-name limit from 2048 to 8192, using
+libnds' existing dynamic arrays. Indexed pixel sharing can need an image name
+and a separate palette handle for each of the 2048 logical cache entries. This
+does not change the 512 KiB texture or 64 KiB palette VRAM budget. If removing
+the allocator override, preserve the larger name allowance or reduce handle use
+before enabling indexed sharing.

@@ -190,10 +190,17 @@ static unsigned int source_gen(const Gp0Mode *m, int u0, int v0, int width, int 
 }
 static int z, polys, vertices, cur_tex = -1;
 static int clear_pending;
+static int frame_target[4], frame_target_valid;
 static int tex_u0, tex_v0;
 static int texture_origin_u, texture_origin_v;
 static int origin_x, origin_y;
 static int target_w, target_h;
+static void retain_frame_target(void) {
+    if (frame_target_valid) return;
+    frame_target[0] = origin_x; frame_target[1] = origin_y;
+    frame_target[2] = target_w; frame_target[3] = target_h;
+    frame_target_valid = 1;
+}
 /* Sprite pixels support subtractive compositing; polygon coverage invalidates
  * the shadow unless the experimental geometry replay is enabled. */
 #define SHADOW_W 320
@@ -281,6 +288,15 @@ static void free_entry(TexEntry *e) {
     }
 }
 
+static int allocate_texture_name(int *name) {
+    while (!glGenTextures(1, name)) {
+        TexEntry *old = evictable_entry(1);
+        if (!old) return 0;
+        free_entry(old);
+    }
+    return 1;
+}
+
 static int acquire_image(GL_TEXTURE_TYPE_ENUM format, int width, int height, int params,
                          const void *pixels, size_t bytes) {
     unsigned int hash = pixel_hash(pixels, bytes);
@@ -296,7 +312,7 @@ static int acquire_image(GL_TEXTURE_TYPE_ENUM format, int width, int height, int
     for (int i = 0; i < CACHE; i++) if (!images[i].used) { image = &images[i]; break; }
     if (!image) return 0;
     image->pixels = malloc(bytes);
-    if (!image->pixels || !glGenTextures(1, &image->tex)) {
+    if (!image->pixels || !allocate_texture_name(&image->tex)) {
         free(image->pixels); image->pixels = NULL; return 0;
     }
     memcpy(image->pixels, pixels, bytes);
@@ -558,7 +574,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
         free_pixels(e); free(e->palette); e->palette = NULL;
         return NULL;
     }
-    if (!glGenTextures(1, &e->tex)) {
+    if (!allocate_texture_name(&e->tex)) {
         psx_gx_fail_reason[2]++;
         free_pixels(e); free(e->palette); e->palette = NULL;
         return NULL;
@@ -687,7 +703,7 @@ static TexEntry *get_composite(int width, int height) {
     free_entry(e);
     e->image = 0;
     e->pixels = malloc(bytes); e->palette = NULL;
-    if (!e->pixels || !glGenTextures(1, &e->tex)) {
+    if (!e->pixels || !allocate_texture_name(&e->tex)) {
         free(e->pixels); e->pixels = NULL;
         return NULL;
     }
@@ -718,7 +734,7 @@ static TexEntry *get_composite(int width, int height) {
              * pixels with a direct texture when the palette heap is full. */
             glDeleteTextures(1,&e->tex);
             free(e->palette); e->palette=NULL; e->palette_count=0;
-            if (!glGenTextures(1,&e->tex)) {
+            if (!allocate_texture_name(&e->tex)) {
                 free(e->pixels); e->pixels=NULL; cur_tex=-1; return NULL;
             }
             glBindTexture(0,e->tex);
@@ -1003,12 +1019,39 @@ static void gx_plan(int phase) {
     }
 }
 
+static int frame_target_displayed(void) {
+    int x, y, w, h;
+    psx_gpu_display_area(&x, &y, &w, &h);
+    return w <= 0 || h <= 0 ||
+           (x >= frame_target[0] && y >= frame_target[1] &&
+            x + w <= frame_target[0] + frame_target[2] &&
+            y + h <= frame_target[1] + frame_target[3]);
+}
+
+static void submit_frame(void) {
+    if (polys || clear_pending) {
+        psx_gx_stats_polys = polys;
+        glFlush(GL_TRANS_MANUALSORT);
+        frame++;
+    }
+    z = polys = vertices = clear_pending = frame_target_valid = shadow_ready = 0;
+    cur_tex = -1;
+}
+
+static void prepare_frame_target(void) {
+    /* The field can start its next backbuffer before another emulated VBlank.
+     * Submit the completed visible buffer before adding that next scene. */
+    if (frame_target_valid && (origin_x != frame_target[0] || origin_y != frame_target[1])
+        && frame_target_displayed()) submit_frame();
+}
+
 static int begin_prim(const Gp0Mode *m, const Gp0Vtx *v, int n, int w, int h) {
     if (!drawing_to_screen()) {
         return 0;
     }
+    if (!planning) prepare_frame_target();
     int needed = (w || h) ? 4 : n == 1 ? 3 : n;
-    if (polys >= MAX_POLYS || vertices + needed > MAX_VERTICES) {
+    if (!planning && (polys >= MAX_POLYS || vertices + needed > MAX_VERTICES)) {
         psx_gx_stats_dropped++;
         psx_gx_stats_budget_fail++;
         return 0;
@@ -1027,7 +1070,10 @@ static int begin_prim(const Gp0Mode *m, const Gp0Vtx *v, int n, int w, int h) {
     if (!planning) glPolyFmt(POLY_ALPHA(alpha) | POLY_ID(id) | POLY_CULL_NONE);
     if (m->textured) {
         int width, height;
-        int alignment = 16;
+        /* Four-bit conversion reads byte pairs; eight-bit regions can begin
+         * at any texel. Avoid padding every small model face back to a
+         * sixteen-texel grid before rounding its allocation size. */
+        int alignment = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 16;
         texture_bounds(v, n, w, h, &tex_u0, &tex_v0, &width, &height, alignment);
         if (planning) { collect_region(m, tex_u0, tex_v0, width, height); return 0; }
         int plan = plan_active ? find_plan(m) : -1;
@@ -1059,6 +1105,7 @@ static int begin_prim(const Gp0Mode *m, const Gp0Vtx *v, int n, int w, int h) {
         glBindTexture(0, 0);
         cur_tex = 0;
     }
+    retain_frame_target();
     polys++;
     vertices += needed;
     return 1;
@@ -1233,6 +1280,9 @@ static void gx_rect_now(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     v = &clipped;
     if (!drawing_to_screen()) return;
     if (planning) { begin_prim(m, v, 1, w, h); return; }
+    /* Composites allocate textures before begin_prim(), so advance the target
+     * first to give their shadow pixels and texture pins the correct frame. */
+    prepare_frame_target();
     Gp0Mode composite_mode;
     int composite = 0;
     if (m->semi && m->abr == 2 && !gp0_state.set_mask && !gp0_state.check_mask
@@ -1331,6 +1381,7 @@ static void gx_fill_now(int x, int y, int w, int h, unsigned int rgb) {
     if (!drawing_to_screen()) {
         return;
     }
+    prepare_frame_target();
     if (x >= origin_x + target_w || y >= origin_y + target_h || x + w <= origin_x || y + h <= origin_y) {
         return;
     }
@@ -1341,6 +1392,7 @@ static void gx_fill_now(int x, int y, int w, int h, unsigned int rgb) {
         shadow_ready = 0;
         shadow_start();
         clear_pending = 1;
+        retain_frame_target();
         return;
     }
     Gp0Mode m = {0};
@@ -1427,17 +1479,11 @@ static void gx_frame(void) {
     flush_buffer();
     flush_rect();
     if (polys || clear_pending) psx_gx_stats_polys = polys;
-    /* VBlank waits with no new geometry must retain the previous display list. */
-    if (polys || clear_pending) {
-        glFlush(GL_TRANS_MANUALSORT);
-        frame++;
-    }
-    z = 0;
-    polys = 0;
-    vertices = 0;
-    clear_pending = 0;
-    cur_tex = -1;
-    shadow_ready = 0;
+    /* A PSX backbuffer can receive its scene and HUD on separate VBlanks.
+     * Keep those primitives together until the game displays that buffer. */
+    if (frame_target_valid && !frame_target_displayed()) return;
+    /* VBlank waits with no new geometry retain the previous display list. */
+    submit_frame();
 }
 
 static const Gp0Backend gx_backend = {gx_poly, gx_line, gx_rect, gx_fill, gx_frame};

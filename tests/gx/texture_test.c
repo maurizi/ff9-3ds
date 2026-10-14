@@ -11,7 +11,7 @@ u16 *psx_vram = vram;
 Gp0State gp0_state;
 const Gp0Backend *gp0_backend;
 static int next_name, uploads, deletes, flushes, palette_uploads, palette_shares;
-static int reject_upload, reject_palette, max_upload_bytes;
+static int reject_upload, reject_palette, reject_names, max_upload_bytes;
 static u8 captured[256 * 256 * 2];
 static u16 captured_palette[256];
 static u16 named_palettes[16384][256];
@@ -27,6 +27,7 @@ static u16 captured_pixel(int i) {
     return (captured_params & GL_TEXTURE_COLOR0_TRANSPARENT) && !index ? 0 : captured_palette[index] | 0x8000;
 }
 static int draw_x, draw_y, draw_w, draw_h;
+static int display_x, display_y, display_w, display_h;
 static int emitted, min_x, max_x, min_y, max_y;
 void glVertex3v16(v16 x, v16 y, v16 z) {
     (void)z;
@@ -39,8 +40,15 @@ void glVertex3v16(v16 x, v16 y, v16 z) {
 void psx_gpu_draw_area(int *x, int *y, int *w, int *h) {
     *x = draw_x; *y = draw_y; *w = draw_w; *h = draw_h;
 }
+void psx_gpu_display_area(int *x, int *y, int *w, int *h) {
+    *x = display_x; *y = display_y; *w = display_w; *h = display_h;
+}
 
-int glGenTextures(int n, int *names) { assert(n == 1); *names = ++next_name; return 1; }
+int glGenTextures(int n, int *names) {
+    assert(n == 1);
+    if (reject_names) { reject_names--; return 0; }
+    *names = ++next_name; return 1;
+}
 void glBindTexture(int target, int name) {
     (void)target; bound_name = name;
     if (named_pixels[name]) {
@@ -105,16 +113,127 @@ static void reset(void) {
     memset(&gp0_state, 0, sizeof gp0_state);
     frame = 2; stamp = 0; gen_counter = 1; polys = vertices = 0;
     clear_pending = 0; shadow_ready = 0; clear_rgb = 0;
+    frame_target_valid = 0;
     rect_run.active = flushing_rect = 0;
     planning = plan_active = plan_count = buffered_count = buffer_executing = 0;
     draw_x = draw_y = draw_w = draw_h = 0;
+    display_x = display_y = display_w = display_h = 0;
     emitted = 0;
     next_name = 0;
     uploads = deletes = flushes = palette_uploads = palette_shares = reject_upload = reject_palette = 0;
     max_upload_bytes = 0;
+    reject_names = 0;
+}
+
+static void test_texture_name_recovery(void) {
+    reset();
+    Gp0Mode m = {.textured = 1, .raw = 1, .depth = 2};
+    vram[0] = 1; vram[16] = 2; vram[32] = 3; vram[48] = 4;
+    TexEntry *old = get_texture(&m, 0, 0, 16, 16);
+    assert(old);
+    frame += 2;
+    TexEntry *pinned = get_texture(&m, 16, 0, 16, 16);
+    assert(pinned);
+    reject_names = 1;
+    TexEntry *fresh = get_texture(&m, 32, 0, 16, 16);
+    assert(fresh && !old->used && pinned->used && deletes == 1);
+    reject_names = 1;
+    assert(!get_texture(&m, 48, 0, 16, 16));
+    assert(pinned->used && fresh->used && deletes == 1);
+    assert(bind_entry(pinned) && captured_pixel(0) == 0x8002);
+}
+
+static void test_tight_indexed_regions(void) {
+    for (int depth = 0; depth < 2; depth++) for (int window = 0; window < 2; window++) {
+        reset();
+        draw_w = 320; draw_h = 224;
+        gp0_state.area_x1 = 319; gp0_state.area_y1 = 223;
+        gp0_state.twin_mask_x = gp0_state.twin_off_x = window ? 8 : 0;
+        Gp0Mode m = {.textured = 1, .raw = 1, .depth = depth, .tx = 512, .clut_y = 300};
+        for (int i = 1; i < 256; i++) vram[300 * 1024 + i] = (u16)i;
+        for (int y = 0; y < 256; y++) for (int u = 0; u < 256; u++) {
+            unsigned index = 1 + (u + 3 * y) % 15;
+            int shift = depth == 0 ? 2 : 1, bits = depth == 0 ? 4 : 8;
+            vram[y * 1024 + 512 + (u >> shift)] |= index << ((u & ((1 << shift) - 1)) * bits);
+        }
+        Gp0Vtx face[3] = {{10,10,128,128,128,121,117},
+                         {30,10,128,128,128,137,117},
+                         {10,30,128,128,128,121,135}};
+        assert(begin_prim(&m, face, 3, 0, 0));
+        assert(tex_u0 == (depth == 0 ? 120 : 121) && tex_v0 == 117);
+        for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) {
+            int u = tex_u0 + x;
+            if (window) u = (u & ~8) | 8;
+            unsigned expected = 1 + (u + 3 * (117 + y)) % 15;
+            assert(captured_pixel(y * 32 + x) == (0x8000 | expected));
+        }
+    }
+}
+
+static void test_backbuffer_presentation(void) {
+    reset();
+    draw_x = 320; draw_w = display_w = 320; draw_h = display_h = 218;
+    gp0_state.area_x0 = 320; gp0_state.area_x1 = 639; gp0_state.area_y1 = 217;
+    Gp0Mode plain = {0};
+    Gp0Vtx scene[3] = {{330,10,248,0,0}, {350,10,248,0,0}, {330,30,248,0,0}};
+    gx_poly_now(&plain, scene, 3);
+    unsigned initial_frame = frame;
+    gx_frame(); gx_frame();
+    assert(!flushes && polys == 1 && vertices == 3 && frame == initial_frame);
+    display_x = 320;
+    Gp0Vtx hud = {.x = 340, .y = 180, .g = 248};
+    gx_rect_now(&plain, &hud, 8, 8);
+    assert(polys == 2 && vertices == 7);
+    gx_frame();
+    assert(flushes == 1 && !polys && !vertices && !frame_target_valid);
+    assert(frame == initial_frame + 1);
+    gx_frame();
+    assert(flushes == 1); /* Repeated VBlanks preserve the completed scene. */
+
+    reset();
+    draw_x = 320; draw_w = display_w = 320; draw_h = display_h = 218;
+    gp0_state.area_x0 = 320; gp0_state.area_x1 = 639; gp0_state.area_y1 = 217;
+    gx_fill_now(320, 0, 320, 218, 0);
+    gx_frame();
+    assert(!flushes && clear_pending);
+    display_x = 320;
+    gx_frame();
+    assert(flushes == 1 && !clear_pending);
+
+    /* Field rendering starts the next buffer before the next VBlank. */
+    reset();
+    draw_x = display_x = 320; draw_w = display_w = 320; draw_h = display_h = 218;
+    gp0_state.area_x0 = 320; gp0_state.area_x1 = 639; gp0_state.area_y1 = 217;
+    gx_poly_now(&plain, scene, 3);
+    gx_rect_now(&plain, &hud, 8, 8);
+    assert(!flushes && polys == 2);
+    draw_x = 0; gp0_state.area_x0 = 0; gp0_state.area_x1 = 319;
+    Gp0Vtx next_scene[3] = {{10,10,0,0,248}, {30,10,0,0,248}, {10,30,0,0,248}};
+    gx_poly_now(&plain, next_scene, 3);
+    assert(flushes == 1 && polys == 1 && vertices == 3 && frame_target[0] == 0);
+    gx_frame();
+    assert(flushes == 1 && polys == 1);
+    display_x = 0;
+    gx_frame();
+    assert(flushes == 2 && !polys && !frame_target_valid);
+
+    reset();
+    draw_x = display_x = 320; draw_w = display_w = 320; draw_h = display_h = 218;
+    gp0_state.area_x0 = 320; gp0_state.area_x1 = 639; gp0_state.area_y1 = 217;
+    gx_poly_now(&plain, scene, 3);
+    draw_x = 0; gp0_state.area_x0 = 0; gp0_state.area_x1 = 319;
+    Gp0Mode subtract = {.semi = 1, .abr = 2};
+    Gp0Vtx shade = {.x = 10, .y = 10, .r = 248, .g = 248, .b = 248};
+    gx_rect_now(&subtract, &shade, 16, 16);
+    assert(flushes == 1 && polys == 1);
+    for (int i = 0; i < CACHE; i++) if (cache[i].used)
+        assert(cache[i].frame == frame); /* No premature eviction of the new composite. */
 }
 
 int main(void) {
+    test_tight_indexed_regions();
+    test_texture_name_recovery();
+    test_backbuffer_presentation();
     reset();
     draw_w = 320; draw_h = 224;
     gp0_state.area_x1 = 319; gp0_state.area_y1 = 223;
@@ -135,7 +254,7 @@ int main(void) {
     assert(begin_prim(&atlas_mode, atlas_face, 4, 0, 0));
     assert(psx_gx_stats_texture_fail == failures_before && uploads == 1);
     assert(!texture_plans[0].combine);
-    assert(tex_u0 == 64 && tex_v0 == 240 && named_bytes[bound_name] == 512);
+    assert(tex_u0 == 73 && tex_v0 == 240 && named_bytes[bound_name] == 512);
     reset();
     u8 compare_a[520], compare_b[520];
     for (int i = 0; i < 520; i++) compare_a[i] = compare_b[i] = (u8)(i * 13);
@@ -531,11 +650,14 @@ int main(void) {
     gx_frame(); assert(psx_gx_stats_polys==2);
     reset();
     draw_w=320; draw_h=224; gp0_state.area_x1=319; gp0_state.area_y1=223;
+    display_w=320; display_h=224;
     tile.x=tile.u=0; gx_rect(&tiles,&tile,16,16);
     draw_x=320; gp0_state.area_x0=320; gp0_state.area_x1=639;
     tile.x=320; gx_rect(&tiles,&tile,16,16);
     assert(polys==1 && max_x==16); /* queued tile uses its original framebuffer */
-    gx_frame(); assert(psx_gx_stats_polys==2);
+    gx_frame(); assert(psx_gx_stats_polys==1 && flushes==1 && polys==1);
+    display_x=320;
+    gx_frame(); assert(flushes==2 && !polys && emitted==8 && max_x==16);
     reset();
     draw_w=320; draw_h=224; gp0_state.area_x1=319; gp0_state.area_y1=223;
     tile.x=tile.u=0;
