@@ -152,6 +152,61 @@ static u32 strip_color(u32 color, u32 fade) {
     gte_cmd(0x780010);
     return gte_mfc2(22);
 }
+/* Textured strip sibling of D4A30. UV rows may wrap with a bit mask; the
+ * original reuses the point table for every strip and advances only UVs. */
+void o0b_func_800D4768(u32 stride,void *context,u8 *out,u32 *ot) {
+    u32 *ctx=context;
+    const u16 *scales=(const u16 *)word(context,8);
+    const u16 *sizes=(const u16 *)word(context,12);
+    const u16 *uv=(const u16 *)word(context,20);
+    if(!ctx[9]) port_fatal("zero-count textured effect strip");
+    do {
+        for(unsigned axis=0;axis<2;axis++) {
+            u32 size=(u32)*sizes<<2,scaled=size;
+            if(!axis) sizes++;
+            if(scales[0]) {
+                if(!axis) gte_mtc2(8,scales[1]);
+                gte_mtc2(9,size);gte_cmd(0x98003d);scaled=gte_mfc2(9);
+            }
+            ctx[11+axis]=size;ctx[13+axis]=scaled;
+        }
+        const u16 *points=(const u16 *)word(context,16);
+        u32 previous0=0,previous1=0;
+        for(s32 row=0;row<=(s32)ctx[7];row++) {
+            u32 xy[2];
+            for(unsigned side=0;side<2;side++) {
+                gte_mtc2(9,points[0]);gte_mtc2(10,points[1]);
+                gte_mtc2(8,ctx[11+side+2*(row&1)]);gte_cmd(0x98003d);
+                xy[side]=(gte_mfc2(9)&65535)|(gte_mfc2(10)<<16);
+            }
+            points+=2;
+            if(row) {
+                gte_mtc2(0,previous1);gte_mtc2(2,xy[1]);gte_mtc2(4,previous0);
+                u32 index=(s32)(stride+1)<(s32)ctx[7] ? ((u32)(row-1)&stride) : (u32)(row-1);
+                const u16 *first=uv+index;
+                gte_cmd(0x280030);
+                *(u16 *)(out+28)=(u16)((u32)first[0]+ctx[8]);
+                *(u16 *)(out+36)=(u16)((u32)first[1]+ctx[8]);
+                for(unsigned j=0;j<3;j++) *(u32 *)(out+8+j*8)=gte_mfc2(12+j);
+                u32 depth=gte_mfc2(19);
+                if(!gte_mfc2(24)) return;
+                first+=stride+2;
+                gte_mtc2(0,xy[0]);gte_cmd(0x180001);
+                *(u32 *)(out+12)=((u32)first[0]+ctx[8])|ctx[1];
+                *(u32 *)(out+20)=((u32)first[1]+ctx[8])|ctx[10];
+                *(u32 *)(out+4)=ctx[0];*(u32 *)(out+32)=gte_mfc2(14);
+                u32 bucket=(u32)((s32)((u32)((s32)depth>>2)-ctx[6])>>2);
+                if(bucket<4096) {
+                    u32 previous=ot[bucket];*(u32 *)out=0x09000000|(previous&0xffffff);
+                    ot[bucket]=(previous&0xff000000)|((u32)out&0xffffff);
+                }
+                out+=40;
+            }
+            previous0=xy[0];previous1=xy[1];
+        }
+        uv+=stride+2;
+    } while(--ctx[9]);
+}
 /* Original handwritten Gouraud strip emitter, including its MAC0 early exit
  * and separate draw-mode packet. Context offsets follow Unk800D4A30Ctx. */
 void o0b_func_800D4A30(u32 stride, void *context, u8 *out, u32 *ot) {

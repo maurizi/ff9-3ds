@@ -254,3 +254,31 @@ the existing native-stack/arena/alias ordering-table regressions pass. Normal
 and low-HP Ark fixtures each complete 65000 host frames, remaining in mode 8's
 Game Over wait loop (`scenarios_gameover_stack_ot/report.json`). This verifies
 execution through defeat, not victory rewards or dismissal back to the title.
+
+Original PSX defeat was reached through ordinary combat after lowering only
+the living party units' HP to 1 (`psx_ark_defeat_hp_override.json`); executable
+bytes, statuses and enemy data were preserved. The transition video is
+`psx_ark_defeat_transition.mp4`, screenshot `psx_ark_gameover_reference.png`,
+and original state `disc3_ark_gameover_fixture`. The host's rendered Game Over
+frame at 15017 matches every pixel at native RGB15 precision. PNG channels
+differ by at most 7 because PSX expands the low channel bits while the host
+shifts by three (`gameover_psx_host_comparison.json`). This comparison covers
+the static Game Over composition, not all combat rendering.
+
+Fresh DS execution with 63118/native Game Over buffers has reached frame 9751,
+including KO and subsequent Ark attacks, with no first-fault marker or changes
+to the first 16 KiB of ITCM (`ds_ark_window_gameover_posteffects.ml8`, matching
+`ff9ds_ark_window_gameover` ROM/ELF). The combat video is
+`ds_ark_window_gameover_combat.mp4`; PSX combat counterpart
+`psx_ark_window_validation_combat.mp4` has different input/RNG timing.
+Native Game Over remains pending. A level-99 host attack/input probe lost,
+dismissed Game Over, and survived at the title through 65000 frames
+(`pc_ark_attack_probe_level99.log`); it does not validate victory/rewards.
+
+D4768's textured strip emitter now reuses the position table per strip,
+preserves alternating scale rows, the conditional UV row mask, context writes,
+MAC0 early exit, and OT bucket limits. The strip suite covers both textured
+and Gouraud variants in 400 original-MIPS cases with a shared GTE model. Both
+targets build. Ark still passes 65000 host frames; Meltigemini advances to
+missing DF15C after frame 4000 (`scenarios_textured_strip/report.json`). The
+textured-strip addition requires native DS/PSX validation.

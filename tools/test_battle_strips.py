@@ -43,28 +43,32 @@ def main():
                      for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',
                                          (asm / f'func_{addr:08X}.s').read_text()))
     cases, expected = [], []
-    for trial in range(200):
+    for trial in range(400):
+        kind=trial//200
         data = bytearray(rng.randbytes(1024))
         stride, count, rows = rng.choice((1, 2)), rng.randint(1, 3), rng.randint(1, 4)
         values = [rng.choice((0x38000000, 0x3a000000)), rng.randrange(4097),
                   0x02180100, 0x02180120, 0x02180180, 0x02180200,
                   rng.choice((0, 100, 0xffffffff)), rows, 0x02180204, count, rng.randrange(4)*32]
         struct.pack_into('<11I', data, 0, *values)
+        if kind: struct.pack_into('<I',data,32,rng.getrandbits(32))
         struct.pack_into('<2H', data, 0x100, trial % 2, rng.randrange(8192))
         out, ot = rng.randbytes(1024), rng.randbytes(16384)
         regs = [rng.getrandbits(32) for _ in range(64)]
         if trial % 5 == 0:
             regs[24] = 0
-        cases.append(struct.pack('<I', stride) + data + out + ot + struct.pack('<64I', *regs))
+        cases.append(struct.pack('<2I', kind,stride) + data + out + ot + struct.pack('<64I', *regs))
         original = bytearray(data)
-        for offset in (8, 12, 16, 20, 32):
+        for offset in ((8,12,16,20) if kind else (8,12,16,20,32)):
             struct.pack_into('<I', original, offset, struct.unpack_from('<I', data, offset)[0] + 0x7e000000)
-        mem = e.Mem(trial, [(0x800D4A08, image), (0x80180000, bytes(original)),
+        code=image if not kind else b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',(asm/'func_800D4768.s').read_text()))
+        address=0x800D4768 if kind else 0x800D4A08
+        mem = e.Mem(trial, [(address, code), (0x80180000, bytes(original)),
                            (0x80181000, out), (0x80188000, ot)])
-        cpu = Cpu(mem, 0x800D4A08, 0x800D4A08+len(image), {}, {}, trial,
+        cpu = Cpu(mem, address, address+len(code), {}, {}, trial,
                   [stride, 0x80180000, 0x80181000, 0x80188000])
         cpu.g = regs.copy()
-        cpu.run(0x800D4A30)
+        cpu.run(address if kind else 0x800D4A30)
         assert not cpu.events and not cpu.calls, (trial, cpu.events, cpu.calls)
         # Context contains no pointers in this output slice. Normalize OT links
         # by comparing low 24 bits, identical for KSEG0 and host addresses.
