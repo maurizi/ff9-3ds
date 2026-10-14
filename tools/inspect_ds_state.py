@@ -67,7 +67,7 @@ for name, count in [('frames', 1), ('g_primPtr', 1), ('g_ot', 1),
                     ('port_itcm_guard_bytes', 1),
                     ('psx_gx_stats_texture_fail', 1), ('psx_gx_stats_budget_fail', 1),
                     ('psx_gx_stats_dropped', 1), ('psx_gx_fail_reason', 8),
-                    ('psx_gx_stats_compacted', 1),
+                    ('psx_gx_stats_compacted', 1), ('psx_gx_stats_offscreen', 1),
                     ('psx_gx_first_upload_failure', 8)]:
     address = symbols.get(name)
     if address is not None and 0x02000000 <= address < 0x03000000:

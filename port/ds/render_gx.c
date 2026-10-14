@@ -10,7 +10,7 @@
  *   they came from change (psx_vram_touch). Palettes are shared; submitted textures are pinned until rasterised.
  * - Semi-transparency: subtraction over known sprite pixels is CPU-composited. Other blends use polygon alpha;
  *   subtractive geometry and mixed STP textures outside that sprite path are approximated.
- * - Drawing to areas smaller than a screen (offscreen effects) is skipped for now.
+ * - Offscreen DRAWENVs rasterise into PSX VRAM on the CPU; later GX textures see those generated pixels.
  */
 #include <nds.h>
 #include <string.h>
@@ -214,7 +214,7 @@ static u8 convbuf[256 * 256] __attribute__((aligned(4)));      /* conversion scr
 static u16 convbuf16[256 * 256] __attribute__((aligned(4)));   /* 15-bit page */
 int psx_gx_stats_polys, psx_gx_stats_dropped;
 int psx_gx_stats_texture_fail, psx_gx_stats_budget_fail;
-int psx_gx_stats_compacted;
+int psx_gx_stats_compacted, psx_gx_stats_offscreen;
 int psx_gx_stats_composited, psx_gx_stats_blend_fallback;
 /* Diagnostic counts for the native allocator; the host model can miss a libnds
  * resource limit even when its simulated VRAM capacity agrees. */
@@ -1491,7 +1491,41 @@ static void queue_primitive(int kind, const Gp0Mode *m, const Gp0Vtx *v, int n, 
                       &primitive_buffer[i].draw[2], &primitive_buffer[i].draw[3]);
 }
 
+/* Generated HUD text and effect textures use small DRAWENVs outside the main
+ * backbuffer. Preserve those writes in PSX VRAM rather than submitting them as
+ * screen geometry. Notify before writing so deferred users retain old texels. */
+static int render_offscreen(int kind, const Gp0Mode *m, const Gp0Vtx *v,
+                            int n, int w, int h) {
+    if (drawing_to_screen()) return 0;
+    int x0 = v[0].x, x1 = x0, y0 = v[0].y, y1 = y0;
+    if (kind == 2) {
+        if (w <= 0 || h <= 0) return 1;
+        x1 += w - 1; y1 += h - 1;
+    } else for (int i = 1; i < n; i++) {
+        if (v[i].x < x0) x0 = v[i].x;
+        if (v[i].x > x1) x1 = v[i].x;
+        if (v[i].y < y0) y0 = v[i].y;
+        if (v[i].y > y1) y1 = v[i].y;
+    }
+    if (x0 < gp0_state.area_x0) x0 = gp0_state.area_x0;
+    if (y0 < gp0_state.area_y0) y0 = gp0_state.area_y0;
+    if (x1 > gp0_state.area_x1) x1 = gp0_state.area_x1;
+    if (y1 > gp0_state.area_y1) y1 = gp0_state.area_y1;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > 1023) x1 = 1023;
+    if (y1 > 511) y1 = 511;
+    if (x1 < x0 || y1 < y0) return 1;
+    psx_vram_touch(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    if (kind == 0) psx_softgpu.poly(m, v, n);
+    else if (kind == 1) psx_softgpu.line(m, v, v + 1);
+    else psx_softgpu.rect(m, v, w, h);
+    psx_gx_stats_offscreen++;
+    return 1;
+}
+
 static void gx_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
+    if (render_offscreen(0, m, v, n, 0, 0)) return;
 #ifdef PORT_GX_PLAN
     queue_primitive(0, m, v, n, 0, 0, 0);
 #else
@@ -1499,6 +1533,8 @@ static void gx_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
 #endif
 }
 static void gx_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
+    Gp0Vtx offscreen_line[2] = {*a, *b};
+    if (render_offscreen(1, m, offscreen_line, 2, 0, 0)) return;
 #ifdef PORT_GX_PLAN
     Gp0Vtx v[2] = {*a, *b}; queue_primitive(1, m, v, 2, 0, 0, 0);
 #else
@@ -1506,6 +1542,7 @@ static void gx_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
 #endif
 }
 static void gx_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
+    if (render_offscreen(2, m, v, 1, w, h)) return;
 #ifdef PORT_GX_PLAN
     queue_primitive(2, m, v, 1, w, h, 0);
 #else

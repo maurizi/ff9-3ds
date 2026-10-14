@@ -875,3 +875,35 @@ and fresh state capture without taking desktop keyboard focus. The emulator and
 temporary X server are closed, and normal SD paths are restored after validation.
 The software renderer remains default. Resource failures, blending/font quality,
 remaining routines and full-game validation are still unresolved.
+
+
+### GX offscreen generated textures (2026-10-14)
+
+The complete-frame request trace exposed a second source of missing graphics:
+GX skipped every primitive targeting a small offscreen DRAWENV. At frame 1663,
+the 112x112 region starting at (656,400) is all zero in GX but contains 141 colours
+in the correct software renderer. The GX wrappers now rasterise offscreen
+polygons, lines and sprites into PSX VRAM with the existing software rasteriser.
+They notify texture/deferred-source tracking before writes. Main-screen geometry
+continues through GX; generated textures can be sampled by later draws.
+
+Added integration checks compare all VRAM after 48 combinations of primitive
+kind, texture depth, blending and mask bits. Further checks cover cache
+invalidation with immutable submitted pixels, and a queued screen sprite that
+must sample the old source before an offscreen producer changes it. All four GX
+fixtures pass under ASan/UBSan. The complete 2000-frame host route still fails
+capacity checks (59,104 texture failures, 380 vertex-budget failures); restoring
+real source data costs more than caching blank images.
+
+In the fresh native `ff9ds_gx_offscreen_ark_frame1663` replay, all 12,544 words of
+that generated region now match the software frame exactly. The separate
+(960,432,64,80) value cache remains blank in GX versus 343 colours in software;
+its producer/readback still needs investigation. The state records 56,260
+offscreen primitive calls, no fault and no protected ITCM changes. It also records
+44,297 cumulative texture failures and 380 budget failures. The matched window
+takes 162.5809 ms per interval (130.3112 ms in GP0), so neither performance nor
+rendering parity is achieved. Reviewed native entrance video and screenshots
+still show missing HUD/floor graphics against the original PSX reference.
+Artifacts use `ds_gx_offscreen_ark_`; exact generated-texture comparison is in
+`gx_offscreen_generated_texture_comparison.json`. The private emulator/display
+are closed after capture and normal SD paths restored. Software stays default.

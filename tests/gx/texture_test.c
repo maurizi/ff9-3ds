@@ -233,6 +233,63 @@ static void test_texture_name_recovery(void) {
     assert(bind_entry(pinned) && captured_pixel(0) == 0x8002);
 }
 
+static void test_offscreen_generation(void) {
+    static u16 expected[1024 * 512];
+    for (int kind = 0; kind < 4; kind++) for (int depth = 0; depth < 3; depth++)
+    for (int mask = 0; mask < 4; mask++) {
+        reset();
+        draw_x = 656; draw_y = 400; draw_w = 64; draw_h = 32;
+        gp0_state = (Gp0State){.area_x0 = 660, .area_y0 = 402, .area_x1 = 711,
+            .area_y1 = 427, .set_mask = mask & 1, .check_mask = mask >> 1,
+            .twin_mask_x = 8, .twin_off_x = 8};
+        for (int i = 0; i < 1024 * 512; i++) vram[i] = i % 17 ? (u16)(i * 57) : 0;
+        memcpy(expected, vram, sizeof vram);
+        Gp0Mode m = {.textured = 1, .gouraud = 1, .semi = 1, .abr = kind,
+                    .depth = depth, .tx = 832, .ty = 256, .clut_y = 300};
+        Gp0Vtx v[4] = {{654,399,255,90,7,7,9}, {718,401,40,250,3,40,12},
+                      {656,430,180,18,240,7,40}, {718,430,90,250,80,40,40}};
+        psx_vram = expected;
+        if (kind < 2) psx_softgpu.poly(&m, v, kind + 3);
+        else if (kind == 2) psx_softgpu.line(&m, v, v + 3);
+        else psx_softgpu.rect(&m, v, 64, 32);
+        psx_vram = vram;
+        if (kind < 2) gx_poly(&m, v, kind + 3);
+        else if (kind == 2) gx_line(&m, v, v + 3);
+        else gx_rect(&m, v, 64, 32);
+        assert(!memcmp(vram, expected, sizeof vram));
+        assert(!polys && !uploads && !emitted);
+    }
+    reset();
+    draw_x = 640; draw_y = 256; draw_w = 64; draw_h = 32;
+    gp0_state = (Gp0State){.area_x0 = 640, .area_y0 = 256, .area_x1 = 703, .area_y1 = 287};
+    Gp0Mode plain = {0};
+    Gp0Vtx v = {.x = 640, .y = 256, .r = 248};
+    gx_rect(&plain, &v, 16, 16);
+    assert(vram[256 * 1024 + 640] == 31);
+    Gp0Mode direct = {.textured = 1, .raw = 1, .depth = 2, .tx = 640, .ty = 256};
+    TexEntry *old = get_texture(&direct, 0, 0, 16, 16);
+    assert(old && bind_entry(old) && captured_pixel(0) == 0x801F);
+    v.r = 0; v.g = 248;
+    gx_rect(&plain, &v, 8, 8);
+    TexEntry *changed = get_texture(&direct, 0, 0, 16, 16);
+    assert(changed && changed != old && bind_entry(changed) && captured_pixel(0) == 0x83E0);
+    assert(bind_entry(old) && captured_pixel(0) == 0x801F);
+
+    /* Buffered screen users must capture the old source before its offscreen
+     * producer overwrites it. The queued DRAWENV survives the state switch. */
+    reset();
+    draw_w = 320; draw_h = 224;
+    gp0_state = (Gp0State){.area_x1 = 319, .area_y1 = 223};
+    for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) vram[(256 + y) * 1024 + 640 + x] = 31;
+    Gp0Vtx screen = {.x = 10, .y = 10};
+    queue_primitive(2, &direct, &screen, 1, 16, 16, 0);
+    draw_x = 640; draw_y = 256; draw_w = 64; draw_h = 32;
+    gp0_state = (Gp0State){.area_x0 = 640, .area_y0 = 256, .area_x1 = 703, .area_y1 = 287};
+    gx_rect(&plain, &v, 16, 16);
+    assert(!buffered_count && polys == 1 && uploads == 1);
+    assert(captured_pixel(0) == 0x801F && vram[256 * 1024 + 640] == 0x03E0);
+}
+
 static void test_minimum_indexed_regions(void) {
     for (int depth = 0; depth < 2; depth++) {
         reset();
@@ -358,6 +415,7 @@ int main(void) {
     test_compact_indexed_regions();
     test_tight_indexed_regions();
     test_minimum_indexed_regions();
+    test_offscreen_generation();
     test_texture_name_recovery();
     test_backbuffer_presentation();
     reset();
