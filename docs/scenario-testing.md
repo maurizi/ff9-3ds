@@ -348,3 +348,33 @@ The first fresh Ark sample ends at frame 1377: 142.08 ms/interval, including
 (`ds_ark_timing_probe_first.json`, matching state and `ff9ds_ark_timing_probe`
 ROM/ELF). Rasterization is the largest measured cost; primitive-level timing
 and later attack windows still need investigation.
+
+Primitive-level profiling publishes a matching `port_profile_draw_stats` block
+for polygons, rectangles and lines. At the 128-frame window ending 1633, the
+baseline records 67.79 ms polygons and 23.55 ms rectangles within a 147.82 ms
+interval (`ds_ark_raster_timing_first.json`). These raster times are included
+in GPU command time, not additional independent categories.
+
+The covered-row-span raster path now intersects each row with the same biased
+triangle half-planes, skips uncovered interpolant steps with equivalent wrapping
+32-bit arithmetic, and preserves all pixel/shading logic. All 4096 randomized
+full-VRAM cases match the generic path byte-for-byte. Both targets build;
+Ark/Meltigemini each pass 65000 host frames. A fresh matching DS window ending
+1633 has identical call counts and drops polygon time to 55.85 ms (17.6% less),
+with total interval 136.33 ms (7.8% less). Active bitmap comparison at frame
+1663 reports zero changed pixels (`ark_spans_frame1663_comparison.json`,
+baseline `ff9ds_ark_raster_timing`, candidate `ff9ds_ark_spans_frame1663`).
+This is instrumented timing; uninstrumented combat rate and later animations
+remain to be validated.
+
+`CAPTURE_FRAME=N` makes an explicitly diagnostic DS build stop game execution
+after presenting exactly that frame, while VBlank/GUI state capture remains
+available. It is terminal until the emulator resets. The timing block is
+published before the capture stop, so subsequent idle time must not be used
+for frame-rate calculations. Ordinary builds omit this stop entirely.
+
+Original Meltigemini was entered and visually confirmed on PSX
+(`psx_meltigemini_until_current.png`). An attempt to break specifically at
+DF15C produced an internal Redux event-listener exception and unresponsive
+controls; that instance was closed. This does not validate morph animation
+parity or establish a game/port crash.

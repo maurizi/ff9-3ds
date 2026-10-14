@@ -6,6 +6,7 @@
  * sub-pixel edge rules are not modelled. Edge functions and interpolants step per pixel (no division in the loop).
  */
 #include "gp0.h"
+#include "profile.h"
 #include "psyq_port.h"
 #include "psx_raster.h"
 
@@ -160,6 +161,29 @@ static inline int step_attribute(int value, int delta) {
     return (int)((unsigned int)value + (unsigned int)delta);
 }
 
+#ifndef PORT_SOFTGPU_REFERENCE
+/* Intersect a row with one biased half-plane. Only a crossing edge needs
+ * division; fully accepted/rejected rows use their endpoint signs. */
+static inline int clip_span(int edge,int step,int width,int *left,int *right) {
+    int end=edge+step*(width-1);
+    if(edge>=0 && end>=0) return 1;
+    if(edge<0 && end<0) return 0;
+    if(step>0) {
+        int first=(-edge+step-1)/step;
+        if(first>*left) *left=first;
+    } else {
+        int last=edge/(-step)+1;
+        if(last<*right) *right=last;
+    }
+    return *left<*right;
+}
+#define RASTER_COVERED 1
+#define RASTER_STEP_EDGES() ((void)0)
+#else
+#define RASTER_COVERED ((w0+bias0)>=0 && (w1+bias1)>=0 && (w2+bias2)>=0)
+#define RASTER_STEP_EDGES() do {w0+=A0;w1+=A1;w2+=A2;} while(0)
+#endif
+
 /* ---- triangle: edge functions and interpolants stepped in 16.16 fixed point --------------------------- */
 
 static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
@@ -250,37 +274,54 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     for (int y = miny; y < maxy; y++) {
         int w0 = w0row, w1 = w1row, w2 = w2row;
         int r = rrow, g = grow, bl = brow, u = urow, v = vrow;
+        int left=minx,right=maxx;
+#ifndef PORT_SOFTGPU_REFERENCE
+        int first=0,last=maxx-minx,width=last;
+        if(!clip_span(w0+bias0,A0,width,&first,&last) ||
+           !clip_span(w1+bias1,A1,width,&first,&last) ||
+           !clip_span(w2+bias2,A2,width,&first,&last)) last=first;
+        left+=first;right=minx+last;
+        /* Skipping uncovered pixels must reproduce repeated 32-bit adds,
+         * including thin-triangle interpolants that wrap outside coverage. */
+        if(interpolate_rgb) {
+            r=(int)((unsigned)r+(unsigned)drdx*(unsigned)first);
+            g=(int)((unsigned)g+(unsigned)dgdx*(unsigned)first);
+            bl=(int)((unsigned)bl+(unsigned)dbdx*(unsigned)first);
+        }
+        if(interpolate_uv) {
+            u=(int)((unsigned)u+(unsigned)dudx*(unsigned)first);
+            v=(int)((unsigned)v+(unsigned)dvdx*(unsigned)first);
+        }
+#endif
 #ifndef PORT_SOFTGPU_REFERENCE
         if (!m->gouraud) {
-            for (int x = minx; x < maxx; x++) {
-                if ((w0 + bias0) >= 0 && (w1 + bias1) >= 0 && (w2 + bias2) >= 0)
+            for (int x = left; x < right; x++) {
+                if (RASTER_COVERED)
                     plot(m, x, y, a->r, a->g, a->b, u >> 16, v >> 16);
-                w0 += A0; w1 += A1; w2 += A2;
+                RASTER_STEP_EDGES();
                 u = step_attribute(u, dudx); v = step_attribute(v, dvdx);
             }
         } else if (!m->textured) {
             /* Battle lighting overlays interpolate RGB but never consume UV.
              * Avoid both UV setup and the two per-pixel attribute steps. */
-            for (int x = minx; x < maxx; x++) {
-                if ((w0 + bias0) >= 0 && (w1 + bias1) >= 0 && (w2 + bias2) >= 0)
+            for (int x = left; x < right; x++) {
+                if (RASTER_COVERED)
                     plot(m, x, y, r >> 16, g >> 16, bl >> 16, 0, 0);
-                w0 += A0; w1 += A1; w2 += A2;
+                RASTER_STEP_EDGES();
                 r = step_attribute(r, drdx); g = step_attribute(g, dgdx);
                 bl = step_attribute(bl, dbdx);
             }
         } else
 #endif
-        for (int x = minx; x < maxx; x++) {
-            if ((w0 + bias0) >= 0 && (w1 + bias1) >= 0 && (w2 + bias2) >= 0) {
+        for (int x = left; x < right; x++) {
+            if (RASTER_COVERED) {
                 if (m->gouraud) {
                     plot(m, x, y, r >> 16, g >> 16, bl >> 16, u >> 16, v >> 16);
                 } else {
                     plot(m, x, y, a->r, a->g, a->b, u >> 16, v >> 16);
                 }
             }
-            w0 += A0;
-            w1 += A1;
-            w2 += A2;
+            RASTER_STEP_EDGES();
             r = step_attribute(r, drdx); g = step_attribute(g, dgdx);
             bl = step_attribute(bl, dbdx); u = step_attribute(u, dudx); v = step_attribute(v, dvdx);
         }
@@ -296,10 +337,12 @@ static void sg_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (!psx_vram) {
         return;
     }
+    unsigned int profile_start=port_profile_begin();
     triangle(m, &v[0], &v[1], &v[2]);
     if (n == 4) {
         triangle(m, &v[1], &v[2], &v[3]);
     }
+    port_profile_draw_end(0,profile_start);
 }
 
 void psx_softgpu_shadow_poly(const Gp0Mode *m, const Gp0Vtx *v, int n,
@@ -327,6 +370,7 @@ static SG_HOT void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
     if (n >= 1024) {
         return;
     }
+    unsigned int profile_start=port_profile_begin();
     for (int i = 0; i <= n; i++) {
         int x = n ? a->x + dx * i / n : a->x, y = n ? a->y + dy * i / n : a->y;
         if (x < gp0_state.area_x0 || x > gp0_state.area_x1 || y < gp0_state.area_y0 || y > gp0_state.area_y1) {
@@ -340,12 +384,14 @@ static SG_HOT void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
         }
         plot(m, x, y, r, g, bl, 0, 0);
     }
+    port_profile_draw_end(2,profile_start);
 }
 
 static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (!psx_vram) {
         return;
     }
+    unsigned int profile_start=port_profile_begin();
     int x0 = v->x, y0 = v->y, x1 = v->x + w, y1 = v->y + h;
     int u0 = v->u - x0, v0 = v->v - y0;
     if (x0 < gp0_state.area_x0) x0 = gp0_state.area_x0;
@@ -364,6 +410,7 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
             u16 *row = px(x0,y);
             for (int x=x0; x<x1; ++x) *row++ = c;
         }
+        port_profile_draw_end(1,profile_start);
         return;
     }
 #endif
@@ -373,6 +420,7 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
             plot(m, x, y, v->r, v->g, v->b, u0 + x, v0 + y);
         }
     }
+    port_profile_draw_end(1,profile_start);
 }
 
 const Gp0Backend psx_softgpu = {sg_poly, sg_line, sg_rect, 0, 0};

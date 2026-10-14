@@ -40,6 +40,12 @@ void plat_wait_frame(void) {
     display_present();
     frames++;
     port_profile_frame(g_gameState ? g_gameState[8] : ~0u,(unsigned int)frames);
+#ifdef PORT_CAPTURE_FRAME
+    if(frames==PORT_CAPTURE_FRAME) {
+        status_row(19,"capture frame %ld",frames);
+        for(;;) swiWaitForVBlank();
+    }
+#endif
     if (frames % 30 == 0) {
 #ifndef PORT_SOFT_DISPLAY
         status_row(19, "texfail %d budget %d", psx_gx_stats_texture_fail, psx_gx_stats_budget_fail);

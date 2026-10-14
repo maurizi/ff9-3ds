@@ -5,11 +5,13 @@ enum { PORT_PROFILE_GPU,PORT_PROFILE_GTE,PORT_PROFILE_VM,PORT_PROFILE_SCALE,
 #ifdef PORT_PROFILE
 unsigned int port_profile_begin(void);
 void port_profile_end(unsigned int category,unsigned int start);
+void port_profile_draw_end(unsigned int kind,unsigned int start);
 void port_profile_init(void);
 void port_profile_frame(unsigned int mode,unsigned int frame);
 #else
 #define port_profile_begin() 0u
 #define port_profile_end(category,start) ((void)(category),(void)(start))
+#define port_profile_draw_end(kind,start) ((void)(kind),(void)(start))
 #define port_profile_init() ((void)0)
 #define port_profile_frame(mode,frame) ((void)(mode),(void)(frame))
 #endif

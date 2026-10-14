@@ -32,6 +32,16 @@ phases={name:{'ms_per_frame':round(words[5+i]*1000/(frames*hz),4),
               'percent_of_interval':round(words[5+i]*100/total,3),
               'calls_per_frame':round(words[10+i]/frames,3)}
         for i,name in enumerate(('gpu_commands','gte','effect_callbacks','display_scale','vblank_wait'))}
-print(json.dumps({'state':str(a.state),'elf':str(a.elf),'ending_frame':frame,'mode':mode,
+report={'state':str(a.state),'elf':str(a.elf),'ending_frame':frame,'mode':mode,
                   'sample_frames':frames,'clock_hz':hz,'interval_ms_per_frame':round(total*1000/(frames*hz),4),
-                  'phases_overlap':True,'measurement_overhead':True,'phases':phases},indent=2))
+                  'phases_overlap':True,'measurement_overhead':True,'phases':phases}
+draws=[int(line.split()[0],16) for line in symbols.splitlines()
+       if len(line.split())==3 and line.split()[2]=='port_profile_draw_stats']
+if len(draws)==1:
+    draw=struct.unpack_from('<8I',data,36+draws[0]-0x02000000)
+    if draw[0]==frame and draw[7]==0x44525731:
+        report['raster_phases']={name:{'ms_per_frame':round(draw[1+i]*1000/(frames*hz),4),
+            'percent_of_interval':round(draw[1+i]*100/total,3),
+            'calls_per_frame':round(draw[4+i]/frames,3)} for i,name in enumerate(('polygons','rectangles','lines'))}
+    else:report['raster_phases']='No matching complete raster timing window'
+print(json.dumps(report,indent=2))
