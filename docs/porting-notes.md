@@ -1167,3 +1167,27 @@ and fault checks remain clear. The same 128-frame window ending 1633 measures
 preparation), with the same texture/budget failure counts. Both DS and PC default
 builds pass after this fix. The diagnostic emulator was closed and the normal
 SD configuration and default software build restored.
+
+The follow-up host allocator snapshot at GX submission frame 400 (game frame
+1698) has 1010 unique images occupying 515,936 bytes: 448,736 bytes referenced
+this submission and 67,200 only by the previous one. The eight-bit page key
+`0x700000e2` alone has 217 cropped images occupying 110,880 bytes, exceeding the
+65,536 bytes of its full page. This identifies duplication, but does not prove
+that a full-page allocation fits alongside the other pinned textures.
+
+Fresh 1800-frame Ark host runs with GXSHADOW/GXSHARE/GXLAZY give:
+
+| Planner | Texture failures | Geometry budget failures |
+|---|---:|---:|
+| Disabled | 48,653 | 36,842 |
+| Existing GXPLAN | 54,701 | 27,995 |
+| Trial conservative compact-crop byte cost | 69,857 | 21,670 |
+
+The trial required an eight-bit atlas to justify twice its area, accounting
+conservatively for four-bit packed face crops. Its increased texture failures
+reject that heuristic; it was removed. The existing planner remains opt-in.
+These allocator counters measure dropped requests, not rendered image quality
+or DS timing. Probe artifacts are `gx_lazy_material_occupancy*`,
+`gx_lazy_next_material_runtime.log`, `gx_lazy_plan_comparison*` and
+`gx_lazy_plan_compact_cost*`. Native model material layout and HUD batching still
+need implementation and screen validation.
