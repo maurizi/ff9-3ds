@@ -8,6 +8,7 @@
 #include "platform.h"
 #include "psx_mem.h"
 #include "psx_runtime.h"
+#include "profile.h"
 
 unsigned char psx_ram[PSX_RAM_SIZE] __attribute__((aligned(32)));
 
@@ -38,6 +39,7 @@ void plat_wait_frame(void) {
 #endif
     display_present();
     frames++;
+    port_profile_frame(g_gameState ? g_gameState[8] : ~0u,(unsigned int)frames);
     if (frames % 30 == 0) {
 #ifndef PORT_SOFT_DISPLAY
         status_row(19, "texfail %d budget %d", psx_gx_stats_texture_fail, psx_gx_stats_budget_fail);
@@ -133,5 +135,6 @@ int main(void) {
         scanKeys();
     } while (!(keysDown() & KEY_START));
 #endif
+    port_profile_init();
     psx_run_game();
 }

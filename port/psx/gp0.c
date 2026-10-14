@@ -1,6 +1,7 @@
 /* PS1 GPU command decoding (gp0.h), following psx-spx "GPU Render Polygon/Line/Rectangle Commands" and
  * "GPU Rendering Attributes". */
 #include "gp0.h"
+#include "profile.h"
 
 Gp0State gp0_state = {0, 0, 1023, 511, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 const Gp0Backend *gp0_backend;
@@ -220,7 +221,9 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
 }
 
 void gp0_run(const unsigned int *w, unsigned int len) {
+    unsigned int profile_start=port_profile_begin();
     for (unsigned int i = 0; i < len;) {
         i += command(w + i, len - i);
     }
+    port_profile_end(PORT_PROFILE_GPU,profile_start);
 }

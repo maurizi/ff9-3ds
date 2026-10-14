@@ -9,6 +9,7 @@
  */
 #include <stdint.h>
 #include "gte.h"
+#include "profile.h"
 
 typedef int16_t i16;
 typedef int32_t i32;
@@ -311,6 +312,7 @@ static void light(int v, int sf, int lm, int kind) {
 }
 
 void gte_cmd(gte_u32 op) {
+    unsigned int profile_start=port_profile_begin();
     int sf = (op >> 19) & 1;
     int shift = sf * 12;
     int lm = (op >> 10) & 1;
@@ -428,4 +430,5 @@ void gte_cmd(gte_u32 op) {
         break;
     }
     finish_flag();
+    port_profile_end(PORT_PROFILE_GTE,profile_start);
 }

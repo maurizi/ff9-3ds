@@ -4,6 +4,7 @@
 #include "psyq_port.h"
 #include "gte.h"
 #include "effect_vm.h"
+#include "profile.h"
 #include <stdint.h>
 typedef u32 (*NativeExport)(u32,u32,u32,u32,u32,u32,u32,u32,
                            u32,u32,u32,u32,u32,u32,u32,u32);
@@ -60,6 +61,9 @@ static u32 native_call(u32 target,u32 *r) {
     return ((NativeExport)(uintptr_t)target)(a[0],a[1],a[2],a[3],a[4],a[5],a[6],a[7],
                                             a[8],a[9],a[10],a[11],a[12],a[13],a[14],a[15]);
 }
+#ifdef PORT_PROFILE
+#define port_effect_call_words effect_call_words_impl
+#endif
 u32 port_effect_call_words(u32 target,const u32 *arguments,u32 count) {
     if(count>16) port_fatal("effect VM: too many callback arguments");
     if(!guest_code(target)) {
@@ -135,6 +139,15 @@ u32 port_effect_call_words(u32 target,const u32 *arguments,u32 count) {
     }
     port_fatal("effect VM: instruction limit at %08X",pc);return 0;
 }
+#ifdef PORT_PROFILE
+#undef port_effect_call_words
+u32 port_effect_call_words(u32 target,const u32 *arguments,u32 count) {
+    unsigned int start=port_profile_begin();
+    u32 result=effect_call_words_impl(target,arguments,count);
+    port_profile_end(PORT_PROFILE_VM,start);
+    return result;
+}
+#endif
 u32 port_effect_call(u32 target,u32 a0,u32 a1,u32 a2,u32 a3,u32 a4) {
     u32 arguments[5]={a0,a1,a2,a3,a4};
     return port_effect_call_words(target,arguments,5);

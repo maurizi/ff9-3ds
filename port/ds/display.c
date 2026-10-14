@@ -8,6 +8,7 @@
 #include "display.h"
 #include "display_scale.h"
 #include "psx_mem.h"
+#include "profile.h"
 
 typedef struct {
     short x, y, w, h;
@@ -85,6 +86,7 @@ void display_present(void) {
     if (h > 240) {
         h = 240;
     }
+    unsigned int profile_scale=port_profile_begin();
     u16 *dst = BG_BMP_RAM_MAIN(back_buffer*8);
     if (w != previous_w[back_buffer] || h != previous_h[back_buffer]) {
         memset(dst, 0, 256*256*sizeof *dst);
@@ -93,9 +95,12 @@ void display_present(void) {
     psx_display_font_presented=text_count;
     ds_scale_display_text_pair(dst, psx_vram, d->x, d->y, w, h,
                               text_rects, text_count, previous_rects, previous_count);
+    port_profile_end(PORT_PROFILE_SCALE,profile_scale);
     /* The scaler has a nearest pass followed by font coverage. Never let
      * scanout see the intermediate bitmap, even if rendering outlasts blank. */
+    unsigned int profile_wait=port_profile_begin();
     swiWaitForVBlank();
+    port_profile_end(PORT_PROFILE_WAIT,profile_wait);
     bgSetMapBase(bg,back_buffer*8);
     bgSetScroll(bg,0,-(192-h*4/5)/2);
     bgUpdate();

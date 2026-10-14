@@ -325,3 +325,26 @@ ignore it and CFC2 sign-extends the low 16-bit matrix element. This is not a
 hardware GTE verification. Both target builds pass. Ark and Meltigemini now
 complete 65000 host frames (`scenarios_morph_projection/report.json`); DF15C still
 requires native DS and original PSX morph-animation validation.
+
+## Optional native timing diagnostics
+
+Build with `PROFILE=1` to use DS timers 2/3 as a free-running bus/64 clock.
+Ordinary builds neither configure these timers nor insert timing calls. A
+published `port_profile_stats` block covers 128 presentation intervals within
+one game mode. Decode a fresh matching state with:
+
+```sh
+python3 tools/inspect_ds_profile.py --elf MATCHING.elf CAPTURE.ml8
+```
+
+The diagnostic measures GP0 processing, GTE commands, effect callbacks,
+display scaling and VBlank waiting. Categories overlap (native effect exports
+can call GTE), so percentages must not be summed. It also adds measurement
+overhead and is not a substitute for an uninstrumented rate check.
+
+The first fresh Ark sample ends at frame 1377: 142.08 ms/interval, including
+91.41 ms GPU (64.3%), 11.65 ms GTE (8.2%), 16.12 ms scaling (11.3%),
+10.15 ms VBlank waiting (7.1%), and no effect callbacks in that window
+(`ds_ark_timing_probe_first.json`, matching state and `ff9ds_ark_timing_probe`
+ROM/ELF). Rasterization is the largest measured cost; primitive-level timing
+and later attack windows still need investigation.
