@@ -117,3 +117,5 @@ src/ovl_0b/ovl_0b_2.c | func_8002AF70(&v.unk0, (s32)&D_801051F0); | port_measure
 src/main/main.c | func_801EF284(); | battleEnd_main(); | 1
 # Effect setup can submit a native local packet/OT buffer; preserve its exact bounds.
 src/ovl_0b/ovl_0b_2.c | DrawOTag(ot); | port_draw_ot_buffer(ot, p, sizeof(*p)); | 1
+# Game Over owns both display buffers and their packet lists on the native stack.
+src/ovl_65/ovl_65.c | DrawOTagEnv(cur->unk70, &cur->draw); | PutDrawEnv(&cur->draw); port_draw_ot_buffer(cur->unk70, b, sizeof b); | 1

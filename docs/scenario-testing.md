@@ -247,3 +247,10 @@ and coordinate wraparound. Both targets build. Ark's longer host routes now
 reach `gameover_main`, which submits ordering tables and packets from two
 stack-local `DispBuf` structures; DrawOTagEnv's ordinary arena-only link
 resolution rejects those native stack links (`pc_window_setup_ot_fault.log`).
+
+Game Over now submits its two stack-local display buffers through the bounded
+native OT walker, after installing the draw environment. Both target builds and
+the existing native-stack/arena/alias ordering-table regressions pass. Normal
+and low-HP Ark fixtures each complete 65000 host frames, remaining in mode 8's
+Game Over wait loop (`scenarios_gameover_stack_ot/report.json`). This verifies
+execution through defeat, not victory rewards or dismissal back to the title.
