@@ -362,6 +362,15 @@ display scaling and VBlank waiting. Categories overlap (native effect exports
 can call GTE), so percentages must not be summed. It also adds measurement
 overhead and is not a substitute for an uninstrumented rate check.
 
+New builds additionally publish `port_profile_detail_stats` for GX texture
+material lookup/conversion, GPU pixel uploads, palette uploads, the C58E4 battle
+mesh packet emitter and ordering-table traversal. The decoder includes these
+only when their publication frame matches the main 128-frame window. Older
+states remain supported. Texture uploads are included in material time, and
+ordering-table time includes decoded draws and their renderer work; it is not
+the cost of traversing links alone. Software builds report zero GX material and
+upload time. All instrumentation is disabled without `PROFILE=1`.
+
 The first fresh Ark sample ends at frame 1377: 142.08 ms/interval, including
 91.41 ms GPU (64.3%), 11.65 ms GTE (8.2%), 16.12 ms scaling (11.3%),
 10.15 ms VBlank waiting (7.1%), and no effect callbacks in that window

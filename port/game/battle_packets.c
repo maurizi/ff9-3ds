@@ -3,6 +3,7 @@
  * path; this routine packs those results and links them into the active OT. */
 #include "psyq_port.h"
 #include "gte.h"
+#include "profile.h"
 extern u32 g_vtxScreenXY[], g_vtxScreenZ[];
 static u16 h(const void *p, unsigned off) { return *(const u16 *)((const u8 *)p + off); }
 static u32 w(const void *p, unsigned off) { return *(const u32 *)((const u8 *)p + off); }
@@ -15,7 +16,7 @@ static const struct Format formats[8] = {
     {24,36,4,20,0,8,0,0x38}, {20,28,3,19,0,8,0,0x30},
     {16,24,4,13,0,8,0,0x28}, {12,20,3,11,0,8,0,0x20}
 };
-u8 *o0b_func_800C58E4(void *model, u8 mesh_index, u8 *out) {
+static u8 *emit_mesh_packets(void *model, u8 mesh_index, u8 *out) {
     if (!(h(model, 0) & 0x10)) {
         if (!w(model, 16)) putw(model, 16, (u32)out);
         const u8 *mesh = (const u8 *)ptr(ptr(model, 8), 16) + mesh_index * 40;
@@ -76,4 +77,11 @@ u8 *o0b_func_800C58E4(void *model, u8 mesh_index, u8 *out) {
     }
     out[7] = 0xFF;
     return out + 8;
+}
+
+u8 *o0b_func_800C58E4(void *model, u8 mesh_index, u8 *out) {
+    unsigned int profile_start = port_profile_begin();
+    u8 *result = emit_mesh_packets(model, mesh_index, out);
+    port_profile_detail_end(PORT_PROFILE_MESH_PACKETS, profile_start);
+    return result;
 }

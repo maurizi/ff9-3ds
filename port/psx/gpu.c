@@ -11,6 +11,7 @@
  * hands every packet to the GP0 decoder (gp0.c), which drives the active renderer backend.
  */
 #include "psyq_port.h"
+#include "profile.h"
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -449,6 +450,7 @@ void DrawPrim(void *p) {
 }
 
 static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
+    unsigned int profile_start = port_profile_begin();
     /* Explicit bounds disambiguate stack links whose low 24 bits alias arena RAM. */
     u32 head_window = (u32)p & 0xFF000000;
     unsigned int guard = 0;
@@ -475,6 +477,7 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     if (drawsync_cb) {
         drawsync_owed = 1;
     }
+    port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
 }
 void DrawOTag(u32 *p) { draw_ot(p, NULL, 0); }
 void port_draw_ot_buffer(u32 *p, const void *buffer, unsigned int size) {

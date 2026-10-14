@@ -1033,3 +1033,43 @@ the PSX action reference; font/blend differences remain. Opening frame 9953 has
 zero resource drops, captured faults and protected ITCM changes. Artifacts use
 `gx_direct_palette_` / `ds_gx_direct_palette_` under ignored `build/validation`.
 The emulator/private display are closed and software remains the default.
+
+The completed-upload atlas experiment is rejected. It qualified small 64-word
+asset uploads, excluded framebuffers, checked converted face pixels against an
+immutable atlas and kept old images pinned. Across the same 2000-frame Ark route,
+canonical widths of 512, 256, 128 and 64 PSX words cause 68,158, 61,727, 61,727
+and 63,898 texture failures respectively, versus 54,803 without the experiment.
+Large allocations become eligible after earlier scene textures already occupy
+VRAM; smaller tiles still add unused texels and cross-boundary duplication.
+Lower polygon-budget failures in these runs are not an improvement: more faces
+fail texture allocation before reaching that budget. None of this atlas code
+or its upload hook remains in the port. The patch/logs stay ignored under
+`build/validation/gx_uploaded_asset_atlas_rejected.patch` and `gx_asset_*`.
+
+To choose the next native game patch from actual costs, optional profiling now
+separates texture material preparation, pixel/palette uploads, the C58E4 mesh
+packet emitter and OT processing. Existing profile records remain compatible.
+All five GX sanitizer fixtures, 4096 raster comparisons, OT/allocator checks,
+160 packet comparisons and both default builds pass. The matched native Ark
+window ending 1633 measures 191.8324 ms total, 156.7545 ms GP0, 68.4489 ms GX
+material work, 1.0948 ms pixel uploads, 0.0154 ms palette uploads, 5.6587 ms mesh
+packet generation and 11.8663 ms GTE. Polygon/rectangle shadow replay takes
+58.6132/14.8608 ms. These phases overlap; OT's 158.6577 ms includes rendering.
+This diagnostic is not a speedup claim or a complete timing of all game code.
+
+The measurement supports replacing per-face material reconstruction with a
+native asset-load layout and moving model projection/rendering to DS hardware.
+Eliminating packet encoding alone cannot recover the much larger material and
+CPU shadow costs. Native work must preserve PSX ordering, animated textures,
+mask/blend semantics and readback-generated effects, with the existing path as
+the reference. Full CPU shadow drawing should become demand-driven for actual
+readbacks rather than duplicate every model draw.
+
+The fresh frame-1663 state retains exactly the preceding 42,138 texture failures
+and 451 budget failures, no captured fault and no protected ITCM changes. All
+1,039 uploaded image byte arrays and 1,792 resident direct texels pass the native
+bank verifier. The 45-second motion clip starts from a fresh frame-1007 state;
+it and the final screenshot are reviewed against the original PSX Ark entrance
+and HUD references. Floor/HUD-name gaps, blending and text artifacts remain.
+Artifacts use `ds_gx_compatibility_profile_ark_`. The emulator/private display
+are closed, normal SD paths restored, and software is still the default.

@@ -44,4 +44,15 @@ if len(draws)==1:
             'percent_of_interval':round(draw[1+i]*100/total,3),
             'calls_per_frame':round(draw[4+i]/frames,3)} for i,name in enumerate(('polygons','rectangles','lines'))}
     else:report['raster_phases']='No matching complete raster timing window'
+details=[int(line.split()[0],16) for line in symbols.splitlines()
+         if len(line.split())==3 and line.split()[2]=='port_profile_detail_stats']
+if len(details)==1:
+    names=('gx_texture_materials','gx_texture_upload','gx_palette_upload','battle_mesh_packets','ordering_table')
+    count=len(names)
+    detail=struct.unpack_from('<'+str(2*count+2)+'I',data,36+details[0]-0x02000000)
+    if detail[0]==frame and detail[-1]==0x44545031:
+        report['compatibility_phases']={name:{'ms_per_frame':round(detail[1+i]*1000/(frames*hz),4),
+            'percent_of_interval':round(detail[1+i]*100/total,3),
+            'calls_per_frame':round(detail[1+count+i]/frames,3)} for i,name in enumerate(names)}
+    else:report['compatibility_phases']='No matching complete compatibility timing window'
 print(json.dumps(report,indent=2))

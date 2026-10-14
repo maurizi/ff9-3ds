@@ -21,6 +21,7 @@
 #include "psx_raster.h"
 #include "psx_mem.h"
 #include "psx_runtime.h"
+#include "profile.h"
 
 extern unsigned short *psx_vram;
 
@@ -301,6 +302,21 @@ static int allocate_texture_name(int *name) {
     return 1;
 }
 
+static int gx_texture_upload(GL_TEXTURE_TYPE_ENUM format, int width, int height,
+                             int params, const void *pixels) {
+    unsigned int start = port_profile_begin();
+    int result = glTexImage2D(0, 0, format, width, height, 0, params, pixels);
+    port_profile_detail_end(PORT_PROFILE_UPLOAD, start);
+    return result;
+}
+
+static int gx_palette_upload(int count, const u16 *palette) {
+    unsigned int start = port_profile_begin();
+    int result = glColorTableEXT(0, 0, count, 0, 0, palette);
+    port_profile_detail_end(PORT_PROFILE_PALETTE, start);
+    return result;
+}
+
 static int acquire_image(GL_TEXTURE_TYPE_ENUM format, int width, int height, int params,
                          const void *pixels, size_t bytes) {
     unsigned int hash = pixel_hash(pixels, bytes);
@@ -322,7 +338,7 @@ static int acquire_image(GL_TEXTURE_TYPE_ENUM format, int width, int height, int
     memcpy(image->pixels, pixels, bytes);
     glBindTexture(0, image->tex);
     int uploaded;
-    while (!(uploaded = glTexImage2D(0, 0, format, width, height, 0, params, pixels))) {
+    while (!(uploaded = gx_texture_upload(format, width, height, params, pixels))) {
         TexEntry *old = evictable_entry(1);
         if (!old) break;
         free_entry(old); glBindTexture(0, image->tex);
@@ -423,7 +439,7 @@ static int upload_palette(TexEntry *e, int count) {
         if (other->palette_count==count && !gx_memdiff(gpu_palette(other),data,count*sizeof(u16))
             && glAssignColorTable(0,other->tex)) return 1;
     }
-    while (!glColorTableEXT(0,0,count,0,0,data)) {
+    while (!gx_palette_upload(count, data)) {
         TexEntry *old=evictable_entry(2);
         if (!old) return 0;
         free_entry(old);
@@ -437,7 +453,7 @@ static void link_palette(TexEntry *e) {
     palette_heads[e->palette_bucket]=(u16)(e-cache+1);
 }
 
-static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int height) {
+static TexEntry *get_texture_impl(const Gp0Mode *m, int u0, int v0, int width, int height) {
     texture_origin_u = u0;
     texture_origin_v = v0;
     u64 key = tex_key(m) | ((u64)u0 << 32) | ((u64)v0 << 40)
@@ -678,7 +694,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
     glBindTexture(0, e->tex);
     int uploaded = e->image != 0;
     if (!uploaded) {
-        while (!(uploaded = glTexImage2D(0, 0, format, width, height, 0, gpu_params, gpu_pixels))) {
+        while (!(uploaded = gx_texture_upload(format, width, height, gpu_params, gpu_pixels))) {
             psx_gx_fail_reason[5]++;
             TexEntry *old = evictable_entry(1);
             if (!old) break;
@@ -725,7 +741,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
                 return NULL;
             }
             glBindTexture(0, e->tex);
-            while (!(uploaded = glTexImage2D(0, 0, GL_RGBA, width, height, 0, params, pixels))) {
+            while (!(uploaded = gx_texture_upload(GL_RGBA, width, height, params, pixels))) {
                 TexEntry *old = evictable_entry(1);
                 if (!old) break;
                 free_entry(old); glBindTexture(0, e->tex);
@@ -767,8 +783,15 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
     return e;
 }
 
+static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int height) {
+    unsigned int start = port_profile_begin();
+    TexEntry *result = get_texture_impl(m, u0, v0, width, height);
+    port_profile_detail_end(PORT_PROFILE_TEXTURE, start);
+    return result;
+}
+
 /* Composited sprite pixels use a separate cache namespace and exact content comparison. */
-static TexEntry *get_composite(int width, int height) {
+static TexEntry *get_composite_impl(int width, int height) {
     size_t bytes = (size_t)width * height * sizeof(u16);
     unsigned int hash = pixel_hash(convbuf16, bytes);
     u64 key = ((u64)1 << 63) | ((u64)width << 32) | ((u64)height << 41) | hash;
@@ -812,8 +835,8 @@ static TexEntry *get_composite(int width, int height) {
     glBindTexture(0, e->tex);
     int uploaded;
     int params = TEXGEN_OFF | (transparent ? GL_TEXTURE_COLOR0_TRANSPARENT : 0);
-    while (!(uploaded = glTexImage2D(0, 0, indexed ? (ncol<=16 ? GL_RGB16 : GL_RGB256) : GL_RGBA,
-                                    width, height, 0, params, indexed ? (void *)convbuf : (void *)convbuf16))) {
+    while (!(uploaded = gx_texture_upload(indexed ? (ncol<=16 ? GL_RGB16 : GL_RGB256) : GL_RGBA,
+                                         width, height, params, indexed ? (void *)convbuf : (void *)convbuf16))) {
         TexEntry *old = evictable_entry(1);
         if (!old) break;
         free_entry(old);
@@ -830,7 +853,7 @@ static TexEntry *get_composite(int width, int height) {
                 free(e->pixels); e->pixels=NULL; cur_tex=-1; return NULL;
             }
             glBindTexture(0,e->tex);
-            while (!(uploaded=glTexImage2D(0,0,GL_RGBA,width,height,0,TEXGEN_OFF,convbuf16))) {
+            while (!(uploaded=gx_texture_upload(GL_RGBA,width,height,TEXGEN_OFF,convbuf16))) {
                 TexEntry *old=evictable_entry(1);
                 if (!old) break;
                 free_entry(old); glBindTexture(0,e->tex);
@@ -852,6 +875,13 @@ static TexEntry *get_composite(int width, int height) {
     cache_heads[bucket] = (u16)(e - cache + 1);
     link_palette(e);
     return e;
+}
+
+static TexEntry *get_composite(int width, int height) {
+    unsigned int start = port_profile_begin();
+    TexEntry *result = get_composite_impl(width, height);
+    port_profile_detail_end(PORT_PROFILE_TEXTURE, start);
+    return result;
 }
 
 static void shadow_start(void) {
