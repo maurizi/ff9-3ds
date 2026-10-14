@@ -77,6 +77,29 @@ static void shadow_checks(void) {
         assert(memcmp(known[0],known[1],sizeof known[0])==0);
     }
 }
+static void opaque_sprite_checks(void) {
+    /* Large indexed palettes, neutral direct colour, STP/transparent black,
+     * window remapping, clipped UV origins and live source/CLUT feedback. */
+    for(int depth=0;depth<3;depth++) for(int raw=0;raw<2;raw++)
+    for(int neutral=0;neutral<2;neutral++) for(int feedback=0;feedback<3;feedback++) {
+        for(unsigned i=0;i<1024*512;i++)
+            actual[i]=i%13==0 ? 0 : i%19==0 ? 0x8000 : random_value();
+        Gp0Mode m={.textured=1,.depth=depth,.raw=raw,
+            .tx=feedback==1 ? (depth==2 ? 0 : 64) : 640,
+            .ty=feedback==1 ? 96 : 256,
+            .clut_x=feedback==2 ? 32 : 1008,.clut_y=feedback==2 ? 104 : 450};
+        Gp0Vtx v={.x=32,.y=96,.r=neutral ? 128 : 255,
+            .g=neutral ? 128 : 0,.b=neutral ? 128 : 191,
+            .u=feedback==1 ? 0 : 240,.v=feedback==1 ? 0 : 241};
+        gp0_state=(Gp0State){.area_x0=40,.area_y0=100,.area_x1=150,.area_y1=125,
+            .twin_mask_x=feedback==1 ? 0xf8 : 0x18,.twin_off_x=0x08,
+            .twin_mask_y=feedback==1 ? 0 : 0x10,.set_mask=neutral};
+        memcpy(expected,actual,sizeof actual);
+        psx_vram=actual;psx_softgpu.rect(&m,&v,128,32);
+        psx_vram=expected;psx_softgpu_reference.rect(&m,&v,128,32);
+        assert(memcmp(actual,expected,sizeof actual)==0);
+    }
+}
 static void benchmark(void) {
     Gp0Mode m={.textured=1,.depth=1,.tx=640,.ty=256,.clut_x=512,.clut_y=450};
     Gp0Vtx v[4]={{0,0,97,191,255,0,0},{96,0,97,191,255,96,0},
@@ -100,6 +123,7 @@ int main(int argc, char **argv) {
     (void)argv;
     targeted_checks();
     shadow_checks();
+    opaque_sprite_checks();
     for (unsigned i=0; i<1024*512; ++i)
         actual[i] = (i % 17 == 0) ? 0 : (i % 19 == 0) ? 0x8000 : random_value();
     memcpy(expected, actual, sizeof actual);

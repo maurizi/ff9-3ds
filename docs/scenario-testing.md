@@ -404,3 +404,14 @@ inspection JSON, matching `ff9ds_meltigemini_morph_spans` ROM/ELF).
 `ds_meltigemini_morph_spans_effects.mp4` records actual effect animation.
 This validates progress past the previous native routine gap on this route,
 not all morph effects, PSX phase/timing parity, victory, or the full encounter.
+
+Opaque cached-indexed sprites and raw/neutral direct-colour sprites now have
+a dedicated row path. It preserves live texture reads, CLUT feedback fallback,
+transparent/STP black, texture windows, clipped UV origins and mask writes.
+The 4096-case full-VRAM raster suite plus 36 focused opaque-feedback cases pass;
+both target builds and 65000-frame Ark/Meltigemini host runs pass. Matching
+native frame 1663 still has zero source/bitmap differences
+(`ark_opaque_frame1663_quality.json`). Rectangle cost drops 23.67 to 9.99 ms;
+total sampled interval is 116.61 ms versus the original 147.82 ms (about 21.1%
+less). Frame-time savings differ from summed CPU phase savings because VBlank
+waiting is quantized. Full uninstrumented combat-rate validation is pending.

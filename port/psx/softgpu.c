@@ -415,6 +415,45 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     }
 #endif
     prepare_palette(m, v, x0, y0, x1, y1);
+#ifndef PORT_SOFTGPU_REFERENCE
+    if(m->textured && !m->semi && !gp0_state.check_mask && !target.pixels &&
+       x0>=0 && y0>=0 && x1<=VRAM_W && y1<=VRAM_H &&
+       (palette_ready || (m->depth>=2 && (m->raw ||
+          (v->r==128 && v->g==128 && v->b==128))))) {
+        /* Opaque cached-indexed or unmodulated direct-colour sprites need no
+         * per-pixel colour clamp, destination lookup, or mode dispatch. Keep
+         * every texture read live: source and destination may overlap. */
+        unsigned keep_x=~gp0_state.twin_mask_x,keep_y=~gp0_state.twin_mask_y;
+        unsigned window_x=gp0_state.twin_off_x&gp0_state.twin_mask_x;
+        unsigned window_y=gp0_state.twin_off_y&gp0_state.twin_mask_y;
+        u16 mask=gp0_state.set_mask ? 0x8000 : 0;
+        for(int y=y0;y<y1;y++) {
+            unsigned tv=((((unsigned)v0+(unsigned)y)&keep_y)|window_y)&255;
+            const u16 *row=psx_vram+(((m->ty+tv)&511)*1024);
+            u16 *dst=psx_vram+y*1024+x0;
+            unsigned cursor=(unsigned)u0+(unsigned)x0;
+            if(m->depth==0) for(int x=x0;x<x1;x++,cursor++,dst++) {
+                unsigned u=((cursor&keep_x)|window_x)&255;
+                u16 packed=row[(m->tx+(u>>2))&1023];
+                u32 sample=shaded_palette[(packed>>((u&3)*4))&15];
+                if((u16)sample) *dst=(u16)(sample>>16)|mask;
+            }
+            else if(m->depth==1) for(int x=x0;x<x1;x++,cursor++,dst++) {
+                unsigned u=((cursor&keep_x)|window_x)&255;
+                u16 packed=row[(m->tx+(u>>1))&1023];
+                u32 sample=shaded_palette[(packed>>((u&1)*8))&255];
+                if((u16)sample) *dst=(u16)(sample>>16)|mask;
+            }
+            else for(int x=x0;x<x1;x++,cursor++,dst++) {
+                unsigned u=((cursor&keep_x)|window_x)&255;
+                u16 sample=row[(m->tx+u)&1023];
+                if(sample) *dst=sample|mask;
+            }
+        }
+        port_profile_draw_end(1,profile_start);
+        return;
+    }
+#endif
     for (int y = y0; y < y1; y++) {
         for (int x = x0; x < x1; x++) {
             plot(m, x, y, v->r, v->g, v->b, u0 + x, v0 + y);
