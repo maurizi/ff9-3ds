@@ -707,3 +707,37 @@ State inspection reports the actual protected range separately from the first
 16 KiB. The native guarded build boots and completes the tested candle route.
 Both normal DS/PC builds and all four GX fixtures pass. Unused melonDS instances
 are closed; captures, states and ROMs remain under ignored `build/`.
+
+
+### GX Ark resource and timing check (2026-10-14, still failing)
+
+The repaired allocator does not remove Ark's genuine working-set limit. In the
+fresh `ff9ds_gx_ark_profile_frame1663` run (`GXSHADOW=1`), the first terminal
+upload failure is submission 50: a 64x64 eight-bit texture needs 4096 bytes while
+158 pinned entries own 523,008 bytes. The frame-1663 state records 170,216 dropped
+primitives cumulatively; its visible image is largely absent. Its matched
+128-frame profile ending at frame 1633 takes 241.5861 ms per presentation interval,
+with 206.3701 ms in GP0 processing and 52.4559 ms in polygon shadow replay. This is
+an incomplete render and cannot support a speed claim against the correct
+116.6142 ms software reference. Both share the same 680.945 GP0 calls/frame.
+
+`GXSHARE=1` alone also fails natively: its corresponding interval is 257.3871 ms
+and its captured image remains incomplete. The host allocator likewise records
+real capacity failures for this direct-entry Ark route. Adding the existing atlas
+planner still drops textures. A temporary whole-indexed-page experiment worsens
+the host result (325,410 cumulative texture failures over 2000 frames), so that
+code and flag were removed rather than retained as another mode.
+
+A native shared-cache snapshot contains 316 pixel images occupying 522,752 bytes;
+294 are eight-bit images occupying 500,224 bytes. Many regions overlap within and
+across PSX texture pages. Only 35 of those eight-bit images use at most sixteen
+indices, so lossless four-bit packing alone would save about 56 KiB in that
+snapshot. Coordinated reuse of overlapping source regions remains necessary.
+The diagnostic byte accounting now counts shared images once and handles direct
+fallback after indexed palette upload failure.
+
+The battle timing and images are retained under `build/validation`, including
+`ds_gx_ark_profile_entrance.mp4`. They establish a remaining failure, not successful
+PSX parity or acceptable performance. The default software ROM is restored and
+all native emulators are closed. GX remains opt-in; full-game crashes, effects,
+text quality and performance work remain open.

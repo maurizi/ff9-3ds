@@ -583,6 +583,12 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
                 entries++; bytes_live += cache[i].vram_bytes;
                 if (frame - cache[i].frame <= 1) pinned++;
             }
+            for (int i = 0; i < CACHE; i++) if (images[i].used) {
+                unsigned int size = images[i].width * images[i].height;
+                if (images[i].format == GL_RGBA) size *= 2;
+                else if (images[i].format == GL_RGB16) size /= 2;
+                bytes_live += size;
+            }
             unsigned int *first = psx_gx_first_upload_failure;
             first[0] = frame;
             first[1] = (unsigned int)width;
@@ -607,6 +613,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
     e->used = 1;
     e->vram_bytes = width * height * (format == GL_RGBA ? 2u : 1u);
     if (format == GL_RGB16) e->vram_bytes = width * height / 2;
+    if (e->image) e->vram_bytes = 0; /* Pixel storage belongs to the shared image. */
     e->key = key;
     e->stamp = ++stamp;
     e->src_gen = gen;
@@ -729,7 +736,7 @@ static TexEntry *get_composite(int width, int height) {
         return NULL;
     }
     e->used = 1; e->key = key; e->window = 0;
-    e->vram_bytes = (unsigned int)(width * height) * (indexed ? (ncol <= 16 ? 1u : 2u) : 4u) / 2u;
+    e->vram_bytes = (unsigned int)(width * height) * (e->palette ? (ncol <= 16 ? 1u : 2u) : 4u) / 2u;
     e->stamp = ++stamp; e->frame = frame;
     /* A generated direct texture must never share a PSX CLUT. */
     e->palette_key = ~0u; e->palette_gen = 0;
