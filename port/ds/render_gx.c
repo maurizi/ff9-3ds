@@ -372,6 +372,46 @@ static int compact_indices(const u8 *src, size_t count, const u16 *palette,
     return 1;
 }
 
+/* Build an exact palette in linear time. GL_RGBA's bit 15 is opacity, so
+ * transparent RGB values share zero while opaque black remains distinct. */
+static int pack_direct_pixels(const u16 *src, size_t count, u8 *dst,
+                              u16 palette[256], int *transparent) {
+    static u16 keys[512], slots[512];
+    memset(slots, 0, sizeof slots);
+    memset(palette, 0, 256 * sizeof(u16));
+    int colours = 0, zero = -1;
+    *transparent = 0;
+    for (size_t i = 0; i < count; i++) {
+        u16 c = src[i] & 0x8000 ? src[i] : 0;
+        unsigned slot = ((unsigned)c * 2654435761u) >> 23;
+        while (slots[slot] && keys[slot] != c) slot = (slot + 1) & 511;
+        if (!slots[slot]) {
+            if (colours == 256) return 0;
+            keys[slot] = c; slots[slot] = ++colours;
+            palette[colours - 1] = c;
+            if (!c) zero = colours - 1;
+        }
+        dst[i] = slots[slot] - 1;
+    }
+    if (zero > 0) {
+        palette[zero] = palette[0]; palette[0] = 0;
+    }
+    *transparent = zero >= 0;
+    for (int i = 0; i < colours; i++) palette[i] &= 0x7FFF;
+    for (size_t i = 0; i < count; i++) {
+        unsigned index = dst[i];
+        if (zero > 0) {
+            if (!index) index = zero;
+            else if (index == (unsigned)zero) index = 0;
+        }
+        if (colours <= 16) {
+            if (!(i & 1)) dst[i / 2] = index;
+            else dst[i / 2] |= index << 4;
+        } else dst[i] = index;
+    }
+    return colours;
+}
+
 static int upload_palette(TexEntry *e, int count) {
     e->palette_count=count;
     const u16 *data = gpu_palette(e);
@@ -596,21 +636,32 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
     if (compact) {
         format = GL_RGB16; gpu_pixels = convbuf16; gpu_bytes /= 2;
     }
+    int gpu_params = params, gpu_transparent = 0;
+    int direct_colours = compact_regions_enabled && m->depth == 2 ?
+        pack_direct_pixels(pixels, (size_t)width * height, convbuf, pal, &gpu_transparent) : 0;
+    if (direct_colours) {
+        format = direct_colours <= 16 ? GL_RGB16 : GL_RGB256;
+        gpu_pixels = convbuf;
+        gpu_bytes = (size_t)width * height / (direct_colours <= 16 ? 2 : 1);
+        if (gpu_transparent) gpu_params |= GL_TEXTURE_COLOR0_TRANSPARENT;
+    }
+    int palette_colours = m->depth < 2 ? (compact ? 16 : ncol) : (direct_colours + 15) & ~15;
     /* Changed pixels get a new allocation: earlier polygons retain old bytes. */
     TexEntry *e = evictable_entry(0);
     if (!e) { psx_gx_fail_reason[0]++; return NULL; }
     free_entry(e);
     e->image = 0;
 #ifdef PORT_GX_SHARE_INDEXED
-    if (m->depth < 2) {
-        e->image = acquire_image(format, width, height, params, gpu_pixels, gpu_bytes);
+    if (m->depth < 2 || direct_colours) {
+        e->image = acquire_image(format, width, height, gpu_params, gpu_pixels, gpu_bytes);
         if (!e->image) { psx_gx_fail_reason[6]++; return NULL; }
-        e->pixels = compact ? malloc(bytes) : images[e->image - 1].pixels;
+        e->pixels = compact || direct_colours ? malloc(bytes) : images[e->image - 1].pixels;
     } else
 #endif
     e->pixels = malloc(bytes);
-    e->palette = m->depth < 2 ? malloc((ncol + (compact ? 16 : 0)) * sizeof(u16)) : NULL;
-    if (!e->pixels || (m->depth < 2 && !e->palette)) {
+    int palette_words = m->depth < 2 ? ncol + (compact ? 16 : 0) : palette_colours;
+    e->palette = palette_words ? malloc(palette_words * sizeof(u16)) : NULL;
+    if (!e->pixels || (palette_words && !e->palette)) {
         psx_gx_fail_reason[1]++;
         free_pixels(e); free(e->palette); e->palette = NULL;
         return NULL;
@@ -620,14 +671,14 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
         free_pixels(e); free(e->palette); e->palette = NULL;
         return NULL;
     }
-    if (!e->image || compact) memcpy(e->pixels, pixels, bytes);
-    if (e->palette) memcpy(e->palette, pal, ncol * sizeof(u16));
+    if (!e->image || compact || direct_colours) memcpy(e->pixels, pixels, bytes);
+    if (e->palette) memcpy(e->palette, pal, (m->depth < 2 ? ncol : palette_colours) * sizeof(u16));
     if (compact) memcpy(e->palette + ncol, compact_palette, sizeof compact_palette);
     e->key = key;
     glBindTexture(0, e->tex);
     int uploaded = e->image != 0;
     if (!uploaded) {
-        while (!(uploaded = glTexImage2D(0, 0, format, width, height, 0, params, gpu_pixels))) {
+        while (!(uploaded = glTexImage2D(0, 0, format, width, height, 0, gpu_params, gpu_pixels))) {
             psx_gx_fail_reason[5]++;
             TexEntry *old = evictable_entry(1);
             if (!old) break;
@@ -660,8 +711,27 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
             if (format == GL_RGB16) first[7] = (unsigned int)(width * height / 2);
         }
     }
-    if (uploaded && m->depth < 2) {
-        uploaded = upload_palette(e, compact ? 16 : ncol);
+    if (uploaded && e->palette) {
+        uploaded = upload_palette(e, palette_colours);
+        if (!uploaded && direct_colours) {
+            /* Packing is optional when palette RAM is exhausted. Keep the
+             * original direct pixels and fall back without dropping the draw. */
+            glDeleteTextures(1, &e->tex);
+            if (e->image) { release_image(e->image); e->image = 0; }
+            free(e->palette); e->palette = NULL; e->palette_count = 0;
+            if (!allocate_texture_name(&e->tex)) {
+                psx_gx_fail_reason[2]++;
+                free(e->pixels); e->pixels = NULL; cur_tex = -1;
+                return NULL;
+            }
+            glBindTexture(0, e->tex);
+            while (!(uploaded = glTexImage2D(0, 0, GL_RGBA, width, height, 0, params, pixels))) {
+                TexEntry *old = evictable_entry(1);
+                if (!old) break;
+                free_entry(old); glBindTexture(0, e->tex);
+            }
+            format = GL_RGBA;
+        }
         if (!uploaded) psx_gx_fail_reason[4]++;
     }
     if (!uploaded) {
@@ -670,7 +740,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
         return NULL;
     }
     e->used = 1;
-    if (compact) psx_gx_stats_compacted++;
+    if (compact || (direct_colours && e->palette)) psx_gx_stats_compacted++;
     e->vram_bytes = width * height * (format == GL_RGBA ? 2u : 1u);
     if (format == GL_RGB16) e->vram_bytes = width * height / 2;
     if (e->image) e->vram_bytes = 0; /* Pixel storage belongs to the shared image. */
@@ -713,35 +783,12 @@ static TexEntry *get_composite(int width, int height) {
     /* Many light tiles contain at most sixteen exact colours. Store those
      * as indexed pixels without reducing colour precision. Keep the original
      * direct pixels in the CPU cache for content comparison. */
-    u16 colours[256] = {0}, palette[256] = {0};
-    int ncol = 0, indexed = 1, transparent = 0;
-#ifndef PORT_GX_EXPERIMENTAL
-    indexed = 0;
+    u16 palette[256];
+    int ncol = 0, transparent = 0;
+#if defined(PORT_GX_EXPERIMENTAL) || defined(PORT_GX_SHARE_INDEXED)
+    ncol = pack_direct_pixels(convbuf16, (size_t)width * height, convbuf, palette, &transparent);
 #endif
-    size_t count = (size_t)width * height;
-    for (size_t i = 0; indexed && i < count; i++) {
-        u16 c = convbuf16[i];
-        int j = 0;
-        while (j < ncol && colours[j] != c) j++;
-        if (j == ncol) {
-            if (ncol == 256) { indexed = 0; break; }
-            colours[ncol++] = c;
-        }
-    }
-    if (indexed) {
-        for (int i = 0; i < ncol; i++) if (!colours[i]) {
-            u16 swap = colours[0]; colours[0] = 0; colours[i] = swap;
-            transparent = 1; break;
-        }
-        for (int i = 0; i < ncol; i++) palette[i] = colours[i] & 0x7FFF;
-        memset(convbuf, 0, ncol<=16 ? count/2 : count);
-        for (size_t i = 0; i < count; i++) {
-            int j = 0;
-            while (colours[j] != convbuf16[i]) j++;
-            if (ncol<=16) convbuf[i / 2] |= (u8)(j << ((i & 1) * 4));
-            else convbuf[i]=(u8)j;
-        }
-    }
+    int indexed = ncol != 0;
     TexEntry *e = evictable_entry(0);
     if (!e) return NULL;
     free_entry(e);

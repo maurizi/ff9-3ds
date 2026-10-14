@@ -998,3 +998,38 @@ the choice, lighting and room reveal. The emulator/private display are closed
 and normal SD paths restored after recording.
 Software remains default; missing draws, acceptable performance, remaining
 routines and full-game validation are unresolved.
+
+GX shared mode now also packs direct-colour textures and generated composites
+into exact 4-bit/8-bit palettes when they contain at most 256 colours. No colour
+quantization is used. Transparent RGB is normalized while opaque black remains
+distinct; larger images and palette-allocation failures retain RGBA storage.
+Original CPU pixels remain available for cache validation and PSX readback.
+A linear hash encoder replaces the composite encoder's quadratic colour search.
+
+Five GX sanitizer fixtures now include the actual SHADOW+SHARE configuration
+without EXPERIMENTAL. They check colour-count boundaries, transparency discovered
+last, immutable shared pixels with distinct palettes, source changes, palette
+failure fallback and 512 random encoder cases. Default DS/PC builds and the
+raster, ordering and allocator checks pass.
+
+The new `tools/verify_ds_gx_direct_textures.py` reads native texture/palette banks
+from complete melonDS states, using matching ELF/DWARF layouts and SDK handles.
+It compares resident direct/generated texels against their original CPU pixels
+and all shared image uploads against physical texture RAM. This verifies storage,
+not screen rendering or draw completeness. The prior RGBA candle control passes
+167,296 texels. The packed candle checkpoint passes 168,384 texels across 281
+materials (78 RGB16, 198 RGB256, 5 RGBA), with all 558 shared uploads identical.
+The Ark checkpoint passes 1,792 direct texels and all 1,039 shared uploads.
+The three generated-source regions also retain their exact software reference
+values across all 19,200 words.
+
+The 2000-frame Ark host route reduces texture failures from 57,559 to 54,803;
+direct-texture failures fall from 10,835 to 50, but indexed allocation pressure
+still dominates. Native frame 1663 records 42,138 texture failures and 451 budget
+failures. Its matched profiling window is 194.3136 ms, so this is a storage
+improvement, not a measured speed improvement. The battle still lacks floor/HUD
+pieces. Native candle footage shows the choice, lighting and room reveal against
+the PSX action reference; font/blend differences remain. Opening frame 9953 has
+zero resource drops, captured faults and protected ITCM changes. Artifacts use
+`gx_direct_palette_` / `ds_gx_direct_palette_` under ignored `build/validation`.
+The emulator/private display are closed and software remains the default.

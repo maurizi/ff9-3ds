@@ -125,6 +125,82 @@ static void reset(void) {
     reject_names = 0;
 }
 
+static void test_direct_colour_packing(void) {
+#ifdef PORT_GX_SHARE_INDEXED
+    const int counts[] = {1, 2, 15, 16, 17, 255, 256, 257, 300};
+    for (unsigned trial = 0; trial < sizeof counts / sizeof counts[0]; trial++)
+    for (int transparent = 0; transparent < 2; transparent++) {
+        reset(); compact_regions_enabled = 1;
+        int colours = counts[trial];
+        u16 expected[512];
+        for (int i = 0; i < 512; i++) {
+            u16 c = 0x8000 | (((i % colours) * 71) & 0x7FFF);
+            if (transparent && i == 511) c = 0; /* Transparent index discovered last. */
+            vram[(256 + i / 32) * 1024 + 640 + i % 32] = expected[i] = c;
+        }
+        Gp0Mode m = {.textured = 1, .raw = 1, .depth = 2, .tx = 640, .ty = 256};
+        TexEntry *e = get_texture(&m, 0, 0, 32, 16);
+        assert(e && bind_entry(e));
+        int ncol = colours + transparent;
+        assert(captured_type == (ncol <= 16 ? GL_RGB16 : ncol <= 256 ? GL_RGB256 : GL_RGBA));
+        for (int i = 0; i < 512; i++) assert(captured_pixel(i) == expected[i]);
+        assert(!memcmp(e->pixels, expected, sizeof expected));
+        assert(get_texture(&m, 0, 0, 32, 16) == e);
+        assert(bind_entry(e));
+        if (ncol <= 256) assert(e->palette_count == ((ncol + 15) & ~15));
+        else assert(!e->palette && !e->image);
+    }
+    reset(); compact_regions_enabled = 1;
+    for (int i = 0; i < 512; i++) {
+        vram[(256 + i / 32) * 1024 + 640 + i % 32] = 0x8000 | (i % 16);
+        vram[(256 + i / 32) * 1024 + 768 + i % 32] = 0x8400 | (i % 16);
+    }
+    Gp0Mode m = {.textured = 1, .raw = 1, .depth = 2, .tx = 640, .ty = 256};
+    TexEntry *first = get_texture(&m, 0, 0, 32, 16);
+    assert(first && first->palette_count == 16);
+    m.tx = 768;
+    TexEntry *second = get_texture(&m, 0, 0, 32, 16);
+    assert(second && second != first && first->image == second->image && uploads == 1);
+    assert(bind_entry(first));
+    for (int i = 0; i < 512; i++) assert(captured_pixel(i) == (0x8000 | (i % 16)));
+    assert(bind_entry(second));
+    for (int i = 0; i < 512; i++) assert(captured_pixel(i) == (0x8400 | (i % 16)));
+    vram[256 * 1024 + 768] = 0xFC00;
+    psx_vram_touch(768, 256, 1, 1);
+    TexEntry *changed = get_texture(&m, 0, 0, 32, 16);
+    assert(changed && changed != second && changed->palette_count == 32);
+    assert(bind_entry(changed) && captured_pixel(0) == 0xFC00);
+    assert(bind_entry(second) && captured_pixel(0) == 0x8400);
+    reset(); compact_regions_enabled = 1;
+    for (int i = 0; i < 256; i++) vram[(256 + i / 16) * 1024 + 640 + i % 16] = 0x8000 | (i % 16);
+    m.tx = 640; reject_palette = 1;
+    TexEntry *fallback = get_texture(&m, 0, 0, 16, 16);
+    assert(fallback && !fallback->palette && !fallback->image && bind_entry(fallback));
+    assert(captured_type == GL_RGBA);
+    for (int i = 0; i < 256; i++) assert(captured_pixel(i) == (0x8000 | (i % 16)));
+#endif
+    /* The common encoder must preserve RGBA opacity, including nonzero RGB
+     * under alpha zero, and cannot reserve zero when 256 opaque colours fit. */
+    u16 source[512], palette[256];
+    u8 packed[512];
+    unsigned seed = 1;
+    for (int trial = 0; trial < 512; trial++) {
+        int colours = 1 + trial % 300, transparent;
+        for (int i = 0; i < 512; i++) {
+            seed = seed * 1664525u + 1013904223u;
+            source[i] = 0x8000 | ((i % colours) * 97 & 0x7FFF);
+            if ((seed >> 28) == 0) source[i] &= 0x7FFF;
+        }
+        int count = pack_direct_pixels(source, 512, packed, palette, &transparent);
+        if (!count) continue;
+        for (int i = 0; i < 512; i++) {
+            unsigned index = count <= 16 ? (packed[i / 2] >> ((i & 1) * 4)) & 15 : packed[i];
+            u16 actual = transparent && !index ? 0 : 0x8000 | palette[index];
+            assert(actual == (source[i] & 0x8000 ? source[i] : 0));
+        }
+    }
+}
+
 static void test_compact_indexed_regions(void) {
 #ifdef PORT_GX_SHARE_INDEXED
     /* Compare every GPU texel with the original PSX CLUT, including index zero,
@@ -492,6 +568,7 @@ static void test_backbuffer_presentation(void) {
 }
 
 int main(void) {
+    test_direct_colour_packing();
     test_compact_indexed_regions();
     test_tight_indexed_regions();
     test_minimum_indexed_regions();
@@ -939,7 +1016,7 @@ int main(void) {
     assert(((u16 *)captured)[0]==0x83E0);
     reset();
 #endif
-#ifdef PORT_GX_EXPERIMENTAL
+#if defined(PORT_GX_EXPERIMENTAL) || defined(PORT_GX_SHARE_INDEXED)
     for (int i=0;i<256;i++) convbuf16[i]=0x8000|(i%16);
     assert(get_composite(16,16) && captured_type==GL_RGB16);
     for (int i=0;i<256;i++) assert(captured_pixel(i)==convbuf16[i]);

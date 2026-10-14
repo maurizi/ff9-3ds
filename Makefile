@@ -150,11 +150,12 @@ $(ds_PORTOBJS): $(BUILD)/ds/runtime-config
 .PHONY: test-gx test-libnds-allocator
 test-libnds-allocator:
 	$(PYTHON) tools/test_libnds_allocator.py
-test-gx: $(BUILD)/tests/gx_texture_shadow_test $(BUILD)/tests/gx_texture_test $(BUILD)/tests/gx_texture_default_test $(BUILD)/tests/gx_texture_merge_test
+test-gx: $(BUILD)/tests/gx_texture_shared_shadow_test $(BUILD)/tests/gx_texture_shadow_test $(BUILD)/tests/gx_texture_test $(BUILD)/tests/gx_texture_default_test $(BUILD)/tests/gx_texture_merge_test
 	@$(BUILD)/tests/gx_texture_test
 	@$(BUILD)/tests/gx_texture_default_test
 	@$(BUILD)/tests/gx_texture_merge_test
 	@$(BUILD)/tests/gx_texture_shadow_test
+	@$(BUILD)/tests/gx_texture_shared_shadow_test
 $(BUILD)/tests/gx_texture_test: tests/gx/texture_test.c tests/gx/nds.h port/ds/render_gx.c port/include/gp0.h port/psx/softgpu.c port/include/psx_raster.h
 	@mkdir -p $(dir $@)
 	$(CC) -DPORT_GX_EXPERIMENTAL -DPORT_GX_SHARE_INDEXED -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Itests/gx -Iport/include -I$(DECOMP)/include $< port/psx/softgpu.c -o $@
@@ -169,6 +170,10 @@ $(BUILD)/tests/gx_texture_merge_test: tests/gx/texture_test.c tests/gx/nds.h por
 $(BUILD)/tests/gx_texture_shadow_test: tests/gx/texture_test.c tests/gx/nds.h port/ds/render_gx.c port/include/gp0.h port/psx/softgpu.c port/include/psx_raster.h
 	@mkdir -p $(dir $@)
 	$(CC) -DPORT_GX_SHADOW -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Itests/gx -Iport/include -I$(DECOMP)/include $< port/psx/softgpu.c -o $@
+
+$(BUILD)/tests/gx_texture_shared_shadow_test: tests/gx/texture_test.c tests/gx/nds.h port/ds/render_gx.c port/include/gp0.h port/psx/softgpu.c port/include/psx_raster.h
+	@mkdir -p $(dir $@)
+	$(CC) -DPORT_GX_SHADOW -DPORT_GX_SHARE_INDEXED -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Itests/gx -Iport/include -I$(DECOMP)/include $< port/psx/softgpu.c -o $@
 
 # Match the production pointer width when exercising 24-bit OT links.
 .PHONY: test-gpu
