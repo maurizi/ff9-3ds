@@ -257,13 +257,17 @@ execution through defeat, not victory rewards or dismissal back to the title.
 
 Original PSX defeat was reached through ordinary combat after lowering only
 the living party units' HP to 1 (`psx_ark_defeat_hp_override.json`); executable
-bytes, statuses and enemy data were preserved. The transition video is
-`psx_ark_defeat_transition.mp4`, screenshot `psx_ark_gameover_reference.png`,
+bytes, statuses and enemy data were preserved. The screenshot is
+`psx_ark_gameover_reference.png`,
 and original state `disc3_ark_gameover_fixture`. The host's rendered Game Over
 frame at 15017 matches every pixel at native RGB15 precision. PNG channels
 differ by at most 7 because PSX expands the low channel bits while the host
 shifts by three (`gameover_psx_host_comparison.json`). This comparison covers
 the static Game Over composition, not all combat rendering.
+The file named `psx_ark_defeat_transition.mp4` was captured too late: it shows
+static Game Over with the emulator's debug UI, so it is not evidence of the
+defeat entrance animation. The subsequent GPU-only dismissal video below is
+the original PSX animation reference.
 
 Fresh DS execution with 63118/native Game Over buffers has reached frame 9751,
 including KO and subsequent Ark attacks, with no first-fault marker or changes
@@ -282,3 +286,31 @@ and Gouraud variants in 400 original-MIPS cases with a shared GTE model. Both
 targets build. Ark still passes 65000 host frames; Meltigemini advances to
 missing DF15C after frame 4000 (`scenarios_textured_strip/report.json`). The
 textured-strip addition requires native DS/PSX validation.
+
+## Native Ark defeat and dismissal validation
+
+The fresh DS run reaches Game Over at frame 14419 and returns to title/attract
+mode after confirmation, saved at frame 19591. Both states have a zero first
+fault marker and no changed bytes in the first 16 KiB of ITCM
+(`ds_ark_window_gameover_reached.ml8`, `ds_ark_gameover_dismissed.ml8`, their
+inspection JSON, matching `ff9ds_ark_window_gameover` ROM/ELF). Extracted DS
+source VRAM matches every original PSX RGB15 pixel; its active bitmap matches
+the production scaler replay exactly, with zero coverage rectangles in this
+static TIM scene (`ds_gameover_psx_scaler_comparison.json`). This rules out a
+source-image/presentation mismatch for this screen.
+
+`ds_ark_defeat_transition.mp4` records Annihilated-to-Game-Over on the DS.
+`ds_ark_gameover_dismissal.mp4` and the original GPU-only
+`psx_ark_gameover_dismissal.mp4` show the fade to black and return to the title.
+The contact sheets were visually reviewed. DS footage uses accelerated wall
+time; PSX GPU capture uses emulated time, so these clips do not establish
+timing parity. Original PSX has existing memory-card saves; the DS fixture
+does not share that memory-card context, so title menu availability/preselection
+is not compared here. Both emulators are closed and the normal DS SD config
+is restored after validation.
+
+The DS Ark interval from frames 3083 to 9751 takes 65012 emulated VBlanks:
+about 6.15 game frames/s at nominal 60 VBlanks/s
+(`ds_ark_window_combat_rate.json`). This includes pacing and rendering, not
+only raster work, and remains too slow. Victory/rewards, later content,
+remaining renderers and overall visual/performance correctness are incomplete.
