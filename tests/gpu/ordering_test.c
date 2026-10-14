@@ -17,7 +17,7 @@ void gp0_run(const unsigned int *words, unsigned int len) {
 void port_log(const char *fmt, ...) { (void)fmt; }
 void port_fatal(const char *fmt, ...) { (void)fmt; abort(); }
 extern u16 *psx_vram;
-static int read_calls, read_pending;
+static int read_calls, read_pending, touch_calls;
 void psx_vram_read(int x, int y, int w, int h) {
     read_calls++; read_pending = 0;
     for (int j = 0; j < h; j++) for (int i = 0; i < w; i++)
@@ -25,7 +25,7 @@ void psx_vram_read(int x, int y, int w, int h) {
             0x8000 | ((x + i + 3 * (y + j)) & 0x7FFF);
 }
 void psx_vram_touch(int x, int y, int w, int h) {
-    (void)x; (void)y; (void)w; (void)h; assert(!read_pending);
+    (void)x; (void)y; (void)w; (void)h; assert(!read_pending); touch_calls++;
 }
 void port_draw_ot_buffer(u32 *, const void *, unsigned int);
 
@@ -120,5 +120,26 @@ int main(void) {
     assert(read_calls == 2 && !read_pending);
     for (int y = 0; y < 48; y++) for (int x = 0; x < 32; x++)
         assert(bitmap[(432 + y) * 1024 + 960 + x] == (0x8000 | ((528 + x + 3 * (167 + y)) & 0x7FFF)));
+    source = (RECT){640, 1, 96, 190};
+    gp0_state.set_mask = 0;
+    bitmap[1024 + 640] = 0x1234;
+    int reads_before = read_calls, touches_before = touch_calls;
+    read_pending = 1;
+    MoveImage(&source, 640, 1);
+    MoveImage(&source, 640 + 1024, 1 + 512); /* Identical wrapped coordinates. */
+    assert(read_pending && read_calls == reads_before && touch_calls == touches_before);
+    assert(bitmap[1024 + 640] == 0x1234);
+    source.w = 0;
+    MoveImage(&source, 641, 1);
+    source.w = 96; source.h = 0;
+    MoveImage(&source, 641, 1);
+    assert(read_calls == reads_before && touch_calls == touches_before);
+    source.h = 190;
+    gp0_state.set_mask = 1;
+    MoveImage(&source, 640, 1);
+    assert(!read_pending && read_calls == reads_before + 1 && touch_calls == touches_before + 1);
+    gp0_state.set_mask = 0; read_pending = 1;
+    MoveImage(&source, 641, 1);
+    assert(!read_pending && read_calls == reads_before + 2 && touch_calls == touches_before + 2);
     return 0;
 }

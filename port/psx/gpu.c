@@ -68,9 +68,14 @@ static void vram_fill(int x, int y, int w, int h, u16 c) {
 }
 
 static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
-    if (!psx_vram) {
+    if (!psx_vram || w <= 0 || h <= 0) {
         return;
     }
+    /* Battle texture animation emits identity moves while its offset is zero.
+     * They change no pixels and must not dirty immutable texture generations
+     * or force deferred draws to rasterise. Preserve the ordinary path when
+     * force-mask could make an otherwise identical copy change destination bits. */
+    if (!gp0_state.set_mask && !((sx ^ dx) & 1023) && !((sy ^ dy) & 511)) return;
     psx_vram_read(sx, sy, w, h);
     psx_vram_touch(dx, dy, w, h);
     /* row buffer: overlapping copies behave as the GPU's line-by-line copy */

@@ -1073,3 +1073,14 @@ it and the final screenshot are reviewed against the original PSX Ark entrance
 and HUD references. Floor/HUD-name gaps, blending and text artifacts remain.
 Artifacts use `ds_gx_compatibility_profile_ark_`. The emulator/private display
 are closed, normal SD paths restored, and software is still the default.
+
+Battle texture animation (`o0b` C9040) repeatedly issues a 96x190 MoveImage
+from (640,1) to the same coordinates while its animation offset is zero.
+The copy now returns before materialising readback, copying rows or invalidating
+texture generations when source/destination addresses are identical after VRAM
+wrapping and force-mask is disabled. Empty rectangles also avoid those hooks.
+Force-mask operations and actual moves keep the existing path. The ordering
+fixture checks unchanged pixels, absent read/write notifications, wrapped
+identity moves, empty rectangles and the force-mask/non-identity exceptions.
+This removes unnecessary work; it does not resolve the remaining GX capacity,
+HUD routing, blend or performance issues.
