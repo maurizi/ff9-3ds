@@ -113,7 +113,7 @@ static void reset(void) {
     memset(&gp0_state, 0, sizeof gp0_state);
     frame = 2; stamp = 0; gen_counter = 1; polys = vertices = 0;
     clear_pending = 0; shadow_ready = 0; clear_rgb = 0;
-    frame_target_valid = 0;
+    frame_target_valid = 0; compact_regions_enabled = 0;
     rect_run.active = flushing_rect = 0;
     planning = plan_active = plan_count = buffered_count = buffer_executing = 0;
     draw_x = draw_y = draw_w = draw_h = 0;
@@ -123,6 +123,96 @@ static void reset(void) {
     uploads = deletes = flushes = palette_uploads = palette_shares = reject_upload = reject_palette = 0;
     max_upload_bytes = 0;
     reject_names = 0;
+}
+
+static void test_compact_indexed_regions(void) {
+#ifdef PORT_GX_SHARE_INDEXED
+    /* Compare every GPU texel with the original PSX CLUT, including index zero,
+     * high palette indices, opaque black, duplicate colours and palette changes. */
+    for (int transparent = 0; transparent < 2; transparent++) {
+        reset(); compact_regions_enabled = 1;
+        for (int i = 0; i < 256; i++) {
+            vram[300 * 1024 + i] = 0x8000 | i;
+            vram[301 * 1024 + i] = 0xC000 | i;
+        }
+        if (transparent) vram[300 * 1024] = vram[301 * 1024] = 0;
+        for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) {
+            unsigned c = ((x + 3 * y) % 16) * 17;
+            vram[y * 1024 + 640 + x / 2] |= c << ((x & 1) * 8);
+        }
+        Gp0Mode m = {.textured = 1, .raw = 1, .depth = 1, .tx = 640, .clut_y = 300};
+        TexEntry *a = get_texture(&m, 0, 0, 32, 32);
+        assert(a && a->palette_count == 16 && named_bytes[images[a->image - 1].tex] == 512);
+        assert(bind_entry(a) && captured_type == GL_RGB16);
+        for (int i = 0; i < 1024; i++) {
+            unsigned c = ((i % 32 + 3 * (i / 32)) % 16) * 17;
+            assert(captured_pixel(i) == (transparent && !c ? 0 : 0x8000 | c));
+        }
+        assert(get_texture(&m, 0, 0, 32, 32) == a);
+        m.clut_y = 301;
+        TexEntry *b = get_texture(&m, 0, 0, 32, 32);
+        assert(b && b != a && b->image == a->image && uploads == 1);
+        assert(bind_entry(b));
+        for (int i = 0; i < 1024; i++) {
+            unsigned c = ((i % 32 + 3 * (i / 32)) % 16) * 17;
+            assert(captured_pixel(i) == (transparent && !c ? 0 : 0xC000 | c));
+        }
+        /* A CLUT mutation must keep the submitted palette and pixels intact. */
+        vram[301 * 1024 + 17] = 0x7C00;
+        psx_vram_touch(17, 301, 1, 1);
+        TexEntry *c = get_texture(&m, 0, 0, 32, 32);
+        assert(c && c != b && bind_entry(c) && captured_pixel(1) == 0xFC00);
+        assert(bind_entry(b) && captured_pixel(1) == (0xC000 | 17));
+        /* Source changes can force the ordinary 256-colour representation. */
+        vram[640] = (vram[640] & 0xFF00) | 23;
+        psx_vram_touch(640, 0, 1, 1);
+        TexEntry *d = get_texture(&m, 0, 0, 32, 32);
+        assert(d && d->palette_count == 256 && bind_entry(d) && captured_type == GL_RGB256);
+        assert(captured_pixel(0) == (0xC000 | 23));
+        assert(bind_entry(a) && captured_type == GL_RGB16);
+    }
+    unsigned seed = 1;
+    for (int trial = 0; trial < 256; trial++) {
+        reset(); compact_regions_enabled = 1;
+        int choices = 1 + trial % 20;
+        for (int i = 0; i < 256; i++) {
+            seed = seed * 1664525u + 1013904223u;
+            vram[300 * 1024 + i] = trial & 1 && i % 13 == 0 ? 0 : 0x8000 | (seed & 0x7FFF);
+        }
+        for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) {
+            seed = seed * 1664525u + 1013904223u;
+            unsigned c = ((seed >> 16) % choices) * 11;
+            vram[y * 1024 + 640 + x / 2] |= c << ((x & 1) * 8);
+        }
+        if (trial & 2) gp0_state.twin_mask_x = gp0_state.twin_off_x = 8;
+        if (trial & 4) gp0_state.twin_mask_y = 8;
+        Gp0Mode m = {.textured = 1, .raw = 1, .depth = 1, .tx = 640, .clut_y = 300};
+        TexEntry *a = get_texture(&m, 0, 0, 32, 32);
+        assert(a && bind_entry(a));
+        for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) {
+            int u = (x & ~gp0_state.twin_mask_x) | gp0_state.twin_off_x;
+            int v = y & ~gp0_state.twin_mask_y;
+            unsigned c = (vram[v * 1024 + 640 + u / 2] >> ((u & 1) * 8)) & 255;
+            u16 colour = vram[300 * 1024 + c];
+            assert(captured_pixel(y * 32 + x) == (colour ? colour | 0x8000 : 0));
+        }
+    }
+    /* Sixteen opaque indices plus a reserved transparent zero cannot fit. */
+    reset(); compact_regions_enabled = 1;
+    for (int i = 1; i < 256; i++) vram[300 * 1024 + i] = i;
+    for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++)
+        vram[y * 1024 + 640 + x / 2] |= (x + 1) << ((x & 1) * 8);
+    Gp0Mode m = {.textured = 1, .raw = 1, .depth = 1, .tx = 640, .clut_y = 300};
+    TexEntry *a = get_texture(&m, 0, 0, 16, 16);
+    assert(a && a->palette_count == 256 && bind_entry(a) && captured_type == GL_RGB256);
+    /* Fifteen opaque indices, with transparency elsewhere, do fit. */
+    vram[640 + 7] = 0x0F0E;
+    for (int y = 0; y < 16; y++) vram[y * 1024 + 640 + 7] = 0x0F0E;
+    psx_vram_touch(640, 0, 8, 16);
+    a = get_texture(&m, 0, 0, 16, 16);
+    assert(a && a->palette_count == 16 && bind_entry(a) && captured_type == GL_RGB16);
+    for (int i = 0; i < 256; i++) assert(captured_pixel(i) != 0);
+#endif
 }
 
 static void test_texture_name_recovery(void) {
@@ -231,6 +321,7 @@ static void test_backbuffer_presentation(void) {
 }
 
 int main(void) {
+    test_compact_indexed_regions();
     test_tight_indexed_regions();
     test_texture_name_recovery();
     test_backbuffer_presentation();

@@ -794,3 +794,50 @@ frames) and was removed. Cache analysis shows substantial overlapping source dat
 region. More coordinated reuse is still needed for Ark; software remains default.
 Both default targets and renderer/OT/allocator regressions pass. Native emulators
 are closed after captures; no disc data, captures or ROMs are committed.
+
+
+### Lossless GX packing of sparse eight-bit regions (2026-10-14)
+
+`GXSHARE=1` now packs an eight-bit region into a four-bit GPU image when its
+converted indices, including a reserved transparent zero when needed, fit sixteen
+entries. This changes index representation without quantizing colours. Opaque
+black stays opaque. Regions that do not fit retain their eight-bit representation.
+Logical source bytes and all 256 logical CLUT colours remain available for dirty
+source/parent validation; compact GPU palettes are stored separately. Immutable
+shared images can use different compact palettes, and old submitted materials
+retain their original pixels and palette after source or CLUT changes.
+
+All four GX fixtures pass under ASan/UBSan. Added checks cover every pixel in
+256 deterministic regions with texture windows, transparent/opaque black, high
+indices, CLUT mutation, immutable submitted data, shared images across CLUTs and
+fallback when sixteen opaque indices need an additional transparent slot. The
+real-game 2000-frame Ark host probe records 97,688 cumulative failed texture
+requests versus 136,536 at the committed backbuffer/name fix, with no geometry
+budget or palette failures. This is a reduction of about 28%, not a rendering
+pass. The log is `gx_compact_no_views_ark_verified_pressure.log`.
+
+Two larger-image approaches were tested and removed: arbitrary resident subregion
+views did not improve the baseline; on-demand 64-word by 256-row columns increased
+failures to 157,873. The earlier proactive physical atlas trial also increased
+failures. None of those experimental modes or full-cache view scans remain in the
+renderer. Their ignored diagnostic diffs/logs are retained under `build/validation`.
+
+The native `ff9ds_gx_compact_ark_frame1663` replay reaches its capture point. The
+reviewed `ds_gx_compact_ark_entrance.mp4`, contact sheet and final screenshot show
+Ark's entrance/camera motion and more of the HUD, but still missing floor and HUD
+textures. They were compared with the original PSX
+`psx_direct_ark_entrance_combat.mp4`; inputs/animation phases are not synchronized.
+The frame-1087 savestate records no fault and no changed protected ITCM bytes.
+After emulator keyboard focus stopped responding, a separate stopped-process RAM
+read at frame 1663 verified matching RAM aliases and recorded 81,963 cumulative
+texture failures, no geometry-budget failure, 3,244 compact material entries and
+no ITCM fault marker. This RAM-only capture is not a loadable savestate; its
+report is `ds_gx_compact_ark_frame1663_live_report.json`.
+
+The matched instrumented 128-frame window ending at 1633 takes 180.8631 ms per
+presentation interval, including 144.3383 ms of GP0 work at the same 680.945 calls
+per frame. It still drops geometry and remains slower than the correct software
+reference. It establishes neither acceptable performance nor PSX image parity.
+Software remains the default. Native emulator instances are closed after capture
+and the normal SD configuration is restored. Battle texture pressure, remaining
+blend/font differences, missing routines and full-game validation remain open.

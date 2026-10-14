@@ -96,6 +96,7 @@ typedef struct {
 } TextureImage;
 static TextureImage images[CACHE];
 static u16 image_heads[CACHE_BUCKETS];
+static int compact_regions_enabled;
 
 static unsigned int stamp;
 static unsigned int frame = 2;
@@ -213,6 +214,7 @@ static u8 convbuf[256 * 256] __attribute__((aligned(4)));      /* conversion scr
 static u16 convbuf16[256 * 256] __attribute__((aligned(4)));   /* 15-bit page */
 int psx_gx_stats_polys, psx_gx_stats_dropped;
 int psx_gx_stats_texture_fail, psx_gx_stats_budget_fail;
+int psx_gx_stats_compacted;
 int psx_gx_stats_composited, psx_gx_stats_blend_fallback;
 /* Diagnostic counts for the native allocator; the host model can miss a libnds
  * resource limit even when its simulated VRAM capacity agrees. */
@@ -255,8 +257,10 @@ static void release_image(int id) {
 }
 
 static void free_pixels(TexEntry *e) {
-    if (e->image) release_image(e->image);
-    else free(e->pixels);
+    if (e->image) {
+        if (e->pixels != images[e->image - 1].pixels) free(e->pixels);
+        release_image(e->image);
+    } else free(e->pixels);
     e->image = 0; e->pixels = NULL;
 }
 
@@ -340,17 +344,46 @@ static int bind_entry(TexEntry *e) {
     return glAssignColorTable(0, e->tex);
 }
 
+/* Logical CPU colours stay complete for source validation. A compact eight-bit
+ * region keeps its sixteen GPU colours just after that logical 256-colour CLUT. */
+static const u16 *gpu_palette(const TexEntry *e) {
+    return e->palette + (e->palette_count == 16 && !(e->key >> 63) &&
+                        ((e->key >> 30) & 3) == 1 ? 256 : 0);
+}
+
+/* Recode indices, never colours. Reserve index zero when GX uses it for
+ * transparency, including when no transparent texel occurs in this region. */
+static int compact_indices(const u8 *src, size_t count, const u16 *palette,
+                           int params, u8 *dst, u16 out_palette[16]) {
+    u8 used[256] = {0}, map[256];
+    int colours = 0;
+    if (params & GL_TEXTURE_COLOR0_TRANSPARENT) { used[0] = 1; colours = 1; }
+    for (size_t i = 0; i < count; i++) if (!used[src[i]]) {
+        if (++colours > 16) return 0;
+        used[src[i]] = 1;
+    }
+    memset(out_palette, 0, 16 * sizeof(u16));
+    int next = 0;
+    for (int i = 0; i < 256; i++) if (used[i]) {
+        map[i] = next; out_palette[next++] = palette[i];
+    }
+    for (size_t i = 0; i < count; i += 2)
+        dst[i / 2] = map[src[i]] | (map[src[i + 1]] << 4);
+    return 1;
+}
+
 static int upload_palette(TexEntry *e, int count) {
-    unsigned int hash=2166136261u;
-    for (int i=0;i<count;i++) hash=(hash^e->palette[i])*16777619u;
-    e->palette_bucket=cache_bucket(hash,count);
     e->palette_count=count;
+    const u16 *data = gpu_palette(e);
+    unsigned int hash=2166136261u;
+    for (int i=0;i<count;i++) hash=(hash^data[i])*16777619u;
+    e->palette_bucket=cache_bucket(hash,count);
     for (unsigned int index=palette_heads[e->palette_bucket];index;index=cache[index-1].palette_next) {
         TexEntry *other=&cache[index-1];
-        if (other->palette_count==count && !gx_memdiff(other->palette,e->palette,count*sizeof(u16))
+        if (other->palette_count==count && !gx_memdiff(gpu_palette(other),data,count*sizeof(u16))
             && glAssignColorTable(0,other->tex)) return 1;
     }
-    while (!glColorTableEXT(0,0,count,0,0,e->palette)) {
+    while (!glColorTableEXT(0,0,count,0,0,data)) {
         TexEntry *old=evictable_entry(2);
         if (!old) return 0;
         free_entry(old);
@@ -555,6 +588,14 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
             }
         }
     }
+    const void *gpu_pixels = pixels;
+    size_t gpu_bytes = bytes;
+    u16 compact_palette[16];
+    int compact = compact_regions_enabled && m->depth == 1 &&
+        compact_indices(pixels, bytes, pal, params, (u8 *)convbuf16, compact_palette);
+    if (compact) {
+        format = GL_RGB16; gpu_pixels = convbuf16; gpu_bytes /= 2;
+    }
     /* Changed pixels get a new allocation: earlier polygons retain old bytes. */
     TexEntry *e = evictable_entry(0);
     if (!e) { psx_gx_fail_reason[0]++; return NULL; }
@@ -562,13 +603,13 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
     e->image = 0;
 #ifdef PORT_GX_SHARE_INDEXED
     if (m->depth < 2) {
-        e->image = acquire_image(format, width, height, params, pixels, bytes);
-        if (!e->image) return NULL;
-        e->pixels = images[e->image - 1].pixels;
+        e->image = acquire_image(format, width, height, params, gpu_pixels, gpu_bytes);
+        if (!e->image) { psx_gx_fail_reason[6]++; return NULL; }
+        e->pixels = compact ? malloc(bytes) : images[e->image - 1].pixels;
     } else
 #endif
     e->pixels = malloc(bytes);
-    e->palette = m->depth < 2 ? malloc(ncol * sizeof(u16)) : NULL;
+    e->palette = m->depth < 2 ? malloc((ncol + (compact ? 16 : 0)) * sizeof(u16)) : NULL;
     if (!e->pixels || (m->depth < 2 && !e->palette)) {
         psx_gx_fail_reason[1]++;
         free_pixels(e); free(e->palette); e->palette = NULL;
@@ -579,12 +620,14 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
         free_pixels(e); free(e->palette); e->palette = NULL;
         return NULL;
     }
-    if (!e->image) memcpy(e->pixels, pixels, bytes);
+    if (!e->image || compact) memcpy(e->pixels, pixels, bytes);
     if (e->palette) memcpy(e->palette, pal, ncol * sizeof(u16));
+    if (compact) memcpy(e->palette + ncol, compact_palette, sizeof compact_palette);
+    e->key = key;
     glBindTexture(0, e->tex);
     int uploaded = e->image != 0;
     if (!uploaded) {
-        while (!(uploaded = glTexImage2D(0, 0, format, width, height, 0, params, pixels))) {
+        while (!(uploaded = glTexImage2D(0, 0, format, width, height, 0, params, gpu_pixels))) {
             psx_gx_fail_reason[5]++;
             TexEntry *old = evictable_entry(1);
             if (!old) break;
@@ -618,7 +661,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
         }
     }
     if (uploaded && m->depth < 2) {
-        uploaded = upload_palette(e, ncol);
+        uploaded = upload_palette(e, compact ? 16 : ncol);
         if (!uploaded) psx_gx_fail_reason[4]++;
     }
     if (!uploaded) {
@@ -627,6 +670,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
         return NULL;
     }
     e->used = 1;
+    if (compact) psx_gx_stats_compacted++;
     e->vram_bytes = width * height * (format == GL_RGBA ? 2u : 1u);
     if (format == GL_RGB16) e->vram_bytes = width * height / 2;
     if (e->image) e->vram_bytes = 0; /* Pixel storage belongs to the shared image. */
@@ -702,6 +746,7 @@ static TexEntry *get_composite(int width, int height) {
     if (!e) return NULL;
     free_entry(e);
     e->image = 0;
+    e->key = key;
     e->pixels = malloc(bytes); e->palette = NULL;
     if (!e->pixels || !allocate_texture_name(&e->tex)) {
         free(e->pixels); e->pixels = NULL;
@@ -1489,6 +1534,9 @@ static void gx_frame(void) {
 static const Gp0Backend gx_backend = {gx_poly, gx_line, gx_rect, gx_fill, gx_frame};
 
 void render_gx_init(void) {
+#ifdef PORT_GX_SHARE_INDEXED
+    compact_regions_enabled = 1;
+#endif
     videoSetMode(MODE_0_3D);
     glInit();
     vramSetBankA(VRAM_A_TEXTURE);
