@@ -1084,3 +1084,86 @@ fixture checks unchanged pixels, absent read/write notifications, wrapped
 identity moves, empty rectangles and the force-mask/non-identity exceptions.
 This removes unnecessary work; it does not resolve the remaining GX capacity,
 HUD routing, blend or performance issues.
+
+An opt-in `GXLAZY=1` renderer now retains two independent framebuffer histories
+and replays only queried 8x8 tiles. A tile's command progress preserves ordering
+and avoids applying a blend twice. Source writes rasterise each dependent draw's
+whole destination footprint and retire it, leaving unrelated geometry deferred.
+The bounded 4096-command queues have an exact full-replay fallback. Partial CPU
+destination writes first preserve the outstanding framebuffer, while complete
+replacement can discard its previous pixels. Texture windows, CLUTs, dirty
+source generations, mask bits and failed GPU allocations retain PSX semantics.
+After a partial CPU write, importing its pixels preserves the previous unknown
+coverage mask; a line unsupported by the shadow compositor must not become a
+known background merely because another part of the framebuffer was written.
+The new `psx_softgpu_shadow_poly_region` API preserves the original fixed-point
+interpolation anchor while limiting traversal: changing GP0 clipping alone
+introduced rounding differences, caught by the full-buffer differential test.
+
+The source-write investigation also identifies an actual HUD routing bug:
+F4A00/ContinueDraw installs E3/E4/E5 commands for the other backbuffer without
+updating the cached DRAWENV. The old hardware route classifies those draws as
+offscreen. GXLAZY tracks the two full-size targets and uses the live clip to
+select their parent, including narrow HUD DRAWENVs. This depends on its separate
+CPU histories; the legacy eager path remains available for comparison.
+
+Six GX sanitizer variants pass. Added coverage includes 360 mixed draws across
+three framebuffer locations, repeated overlapping reads, source/CLUT mutations,
+partial CPU writes, cache/source ordering and queue overflow. The raster suite
+adds 256 shuffled-region comparisons with the generic full-primitive reference;
+the existing 4096 mixed-primitive and 96 forced-upload-failure tests still pass.
+`CAPTURE_READBACK=1` supplies an explicit full readback at a diagnostic halt,
+after timing publication, so native deferred pixels can be compared completely.
+
+The native Ark frame-1663 checkpoint matches both complete 320x218 software
+backbuffers (139,520 words) and all three previously traced source/cache regions
+word for word. Its 1066 uploaded images and 1792 resident direct texels also
+match physical GPU banks. No captured fault, protected ITCM changes, heap/name
+or palette failures occur. Its 128-interval window ending 1633 measures
+162.5809 ms, including 19.8911 ms polygon and 10.8591 ms rectangle replay.
+The preceding full-drain prototype took 226.0462 ms; its source writes incorrectly
+forced unrelated pending geometry to render. There are no queue overflow drains
+in this Ark checkpoint; 11,469 source-dependent draws have been retired.
+These are instrumented diagnostics, not an uninstrumented FPS result.
+
+The fresh eager control with the identity-copy fix measures 184.1278 ms in the
+same window (58.035 ms polygons, 14.8543 ms rectangles). Its full readback also
+matches both software backbuffers exactly. Deferred replay measures 162.5809 ms
+while additionally routing HUD draws that the control skips on the GPU. This is
+an improvement over that hardware path, not over the 116.6142 ms software
+reference. The difference does not establish a finished renderer or 60 fps.
+
+This is not full screen parity or adequate performance. Ark still records 43,958
+texture failures and 34,524 vertex/polygon budget failures. The newly routed HUD
+draws expose limits previously hidden by skipping them. Reviewed native motion
+against the PSX entrance/HUD references still shows missing floor/name elements,
+HUD clipping/flicker, font and blend differences. Native material preparation
+and a batched/native HUD remain necessary. Native artifacts use
+`ds_gx_lazy_retire_` / `gx_lazy_retire_`; default software output is unchanged.
+
+The opening route also reaches the candle choice, lighting animation, room
+reveal and naming screen in melonDS. The 60-second
+`ds_gx_lazy_retire_candle_complete_action.mp4` replay starts at game frame 5101
+from the saved prelight state. Its sampled reveal and naming frames were
+compared with `psx_geometry_shadow_light_action_contact.png`; the GPU text edges
+remain visibly rough. The candle/naming GPU-bank checks report zero differences
+across 167,872 and 15,040 resident texels respectively, which establishes stored
+texture correctness rather than screen parity. Captured opening states have no
+fault, protected ITCM changes or GPU resource failures.
+
+One continuous uninstrumented run stays on the naming screen from frame 12,726
+at guest VBlank 56,333 to frame 19,980 at VBlank 70,841: exactly 30 game frames
+per emulated second. This is a static naming-screen measurement, not a battle
+or whole-game rate. A separate ten-second naming recording has no large motion
+in the sampled static “Pick a name” text region; it does not establish that all
+font instability has been fixed.
+
+The final partial-write coverage fix was rerun with the matching
+`ff9ds_gx_lazy_refresh_readback_ark` ROM/ELF. At frame 1663, both full
+backbuffers and the three source regions still have zero differing words; all
+1066 uploaded images and 1792 direct texels still match GPU banks. The guard
+and fault checks remain clear. The same 128-frame window ending 1633 measures
+161.7974 ms (19.8913 ms polygon replay, 10.8595 ms rectangles, 66.2501 ms material
+preparation), with the same texture/budget failure counts. Both DS and PC default
+builds pass after this fix. The diagnostic emulator was closed and the normal
+SD configuration and default software build restored.

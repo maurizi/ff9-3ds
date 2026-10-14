@@ -352,3 +352,24 @@ comparisons against the software renderer now match after restoring offscreen
 writes, backbuffer readback and original-primitive shadow interpolation. This
 is source/port-runtime evidence, not a new original-PSX breakpoint claim. No
 decomp source was edited.
+
+### F11 (2026-10-14). Embedded HUD state bypasses the cached DRAWENV
+
+The F4A00 insertion sets E6000001 (force-mask), E1000600 plus a texture window,
+and the draw offset/area from `g_drawBufs.unk0 ^ 1`, then restores embedded state
+through `D_80105160`. It does not call PutDrawEnv to update a host-side cached
+DRAWENV. In the native port trace, the cache names buffer (0,0) while actual GP0
+E3/E4/E5 select (320,0), 320x218. A 48x4 HUD draw at (592,157) is therefore still
+on screen. The GX size/origin check previously misclassified it as offscreen.
+The experimental renderer now resolves these commands against separate buffer
+histories. Please distinguish the cached PsyQ DRAWENV from the GPU's active
+embedded area/offset when naming the HUD packet arrays and restore routine.
+
+`o0b` C9040 advances texture animations: nonzero `unk1` selects fixed-point frame
+indices with a cached previous frame; the `unk0 & 4` branch scrolls rows with two
+MoveImage operations, including wraparound. With scroll frame zero, Ark repeatedly
+moves (640,1), 96x190, onto itself and emits a zero-height wrap copy. The port
+can omit these operations when mask settings cannot change pixels, avoiding
+false texture invalidations. A blanket guard in matching PSX code is not needed.
+These are decomp-source and port-runtime findings; no new original-PSX breakpoint
+or decomp modification is claimed.

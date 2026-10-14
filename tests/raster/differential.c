@@ -58,6 +58,9 @@ static void shadow_checks(void) {
                                        uint16_t *, uint8_t *, int, int, int, int);
     extern void psx_softgpu_reference_shadow_poly(const Gp0Mode *, const Gp0Vtx *, int,
                                        uint16_t *, uint8_t *, int, int, int, int);
+    extern void psx_softgpu_shadow_poly_region(const Gp0Mode *, const Gp0Vtx *, int,
+                                              uint16_t *, uint8_t *, int, int, int, int,
+                                              int, int, int, int);
     extern void psx_softgpu_shadow_rect(const Gp0Mode *, const Gp0Vtx *, int, int,
                                        uint16_t *, uint8_t *, int, int, int, int);
     extern void psx_softgpu_reference_shadow_rect(const Gp0Mode *, const Gp0Vtx *, int, int,
@@ -84,6 +87,31 @@ static void shadow_checks(void) {
         memcpy(known[1],known[0],sizeof known[0]);
         psx_softgpu_shadow_rect(&m,v,64,64,pixels[0],known[0],0,0,64,64);
         psx_softgpu_reference_shadow_rect(&m,v,64,64,pixels[1],known[1],0,0,64,64);
+        assert(memcmp(pixels[0],pixels[1],sizeof pixels[0])==0);
+        assert(memcmp(known[0],known[1],sizeof known[0])==0);
+    }
+    /* Independent clipping areas must not move a triangle's fixed-point
+     * interpolation anchor. Compare disjoint, shuffled region replays with
+     * one complete draw through the generic reference implementation. */
+    for (int trial=0;trial<256;trial++) {
+        Gp0Mode m={.textured=trial&1,.raw=(trial>>1)&1,.gouraud=(trial>>2)&1,
+            .semi=(trial>>3)&1,.abr=(trial>>4)&3,.depth=trial%3,
+            .tx=640,.ty=256,.clut_x=0,.clut_y=10};
+        Gp0Vtx v[4];
+        for (int i=0;i<4;i++) v[i]=(Gp0Vtx){.x=(int)(random_value()%96)-16,
+            .y=(int)(random_value()%96)-16,.r=random_value()%256,.g=random_value()%256,
+            .b=random_value()%256,.u=random_value()%256,.v=random_value()%256};
+        for(unsigned i=0;i<64*64;i++) {pixels[0][i]=random_value();known[0][i]=i%3!=0;}
+        memcpy(pixels[1],pixels[0],sizeof pixels[0]);
+        memcpy(known[1],known[0],sizeof known[0]);
+        gp0_state=(Gp0State){.area_x0=3,.area_y0=5,.area_x1=61,.area_y1=59,
+                            .set_mask=(trial>>6)&1,.check_mask=(trial>>7)&1};
+        psx_softgpu_reference_shadow_poly(&m,v,3+(trial&1),pixels[1],known[1],0,0,64,64);
+        for (int region=0;region<16;region++) {
+            int index=region^5;
+            psx_softgpu_shadow_poly_region(&m,v,3+(trial&1),pixels[0],known[0],0,0,64,64,
+                                          (index%4)*16,(index/4)*16,16,16);
+        }
         assert(memcmp(pixels[0],pixels[1],sizeof pixels[0])==0);
         assert(memcmp(known[0],known[1],sizeof known[0])==0);
     }

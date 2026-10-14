@@ -24,6 +24,7 @@ static struct {
     u16 *pixels;
     u8 *known;
     int x, y, w, h;
+    int clip_active, clip_x, clip_y, clip_w, clip_h;
 } target;
 
 static inline u16 *px(int x, int y) {
@@ -271,6 +272,21 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
         vrow = AT(a->v, b->v, c->v);
     }
 #undef AT
+    if (target.clip_active) {
+        int skip_x = target.clip_x > minx ? target.clip_x - minx : 0;
+        int skip_y = target.clip_y > miny ? target.clip_y - miny : 0;
+        if (maxx > target.clip_x + target.clip_w) maxx = target.clip_x + target.clip_w;
+        if (maxy > target.clip_y + target.clip_h) maxy = target.clip_y + target.clip_h;
+        minx += skip_x; miny += skip_y;
+        if (minx >= maxx || miny >= maxy) return;
+        w0row += A0 * skip_x + B0 * skip_y;
+        w1row += A1 * skip_x + B1 * skip_y;
+        w2row += A2 * skip_x + B2 * skip_y;
+#define ADVANCE(value, dx, dy) ((int)((unsigned)(value) + (unsigned)(dx) * (unsigned)skip_x + (unsigned)(dy) * (unsigned)skip_y))
+        rrow = ADVANCE(rrow, drdx, drdy); grow = ADVANCE(grow, dgdx, dgdy); brow = ADVANCE(brow, dbdx, dbdy);
+        urow = ADVANCE(urow, dudx, dudy); vrow = ADVANCE(vrow, dvdx, dvdy);
+#undef ADVANCE
+    }
     for (int y = miny; y < maxy; y++) {
         int w0 = w0row, w1 = w1row, w2 = w2row;
         int r = rrow, g = grow, bl = brow, u = urow, v = vrow;
@@ -357,6 +373,15 @@ void psx_softgpu_shadow_poly(const Gp0Mode *m, const Gp0Vtx *v, int n,
     sg_poly(m, v, n);
     gp0_state = saved;
     target.pixels = NULL;
+}
+
+void psx_softgpu_shadow_poly_region(const Gp0Mode *m, const Gp0Vtx *v, int n,
+                                  u16 *pixels, u8 *known, int x, int y, int w, int h,
+                                  int clip_x, int clip_y, int clip_w, int clip_h) {
+    target.clip_active = 1;
+    target.clip_x = clip_x; target.clip_y = clip_y; target.clip_w = clip_w; target.clip_h = clip_h;
+    psx_softgpu_shadow_poly(m, v, n, pixels, known, x, y, w, h);
+    target.clip_active = 0;
 }
 
 static SG_HOT void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {

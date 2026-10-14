@@ -99,6 +99,11 @@ void glFlush(int mode) { (void)mode; flushes++; }
 #include "../../port/ds/render_gx.c"
 
 static void reset(void) {
+#ifdef PORT_GX_LAZY
+    memset(shadow_contexts, 0, sizeof shadow_contexts);
+    shadow_current = shadow_stamp = 0; shadow_sync_owner = NULL;
+    memset(backbuffer_targets, 0, sizeof backbuffer_targets); backbuffer_next = 0;
+#endif
     for (int i = 0; i < CACHE; i++) free_entry(&cache[i]);
     memset(cache, 0, sizeof cache);
     memset(cache_heads, 0, sizeof cache_heads);
@@ -114,6 +119,7 @@ static void reset(void) {
     frame = 2; stamp = 0; gen_counter = 1; polys = vertices = 0;
     clear_pending = 0; shadow_ready = 0; clear_rgb = 0;
     frame_target_valid = 0; compact_regions_enabled = 0;
+    origin_x = origin_y = 0; target_w = SHADOW_W; target_h = SHADOW_H;
     rect_run.active = flushing_rect = 0;
     planning = plan_active = plan_count = buffered_count = buffer_executing = 0;
     draw_x = draw_y = draw_w = draw_h = 0;
@@ -123,6 +129,94 @@ static void reset(void) {
     uploads = deletes = flushes = palette_uploads = palette_shares = reject_upload = reject_palette = 0;
     max_upload_bytes = 0;
     reject_names = 0;
+}
+
+static void test_lazy_shadow_ordering(void) {
+#ifdef PORT_GX_LAZY
+    static u16 expected[1024 * 512];
+    reset();
+    unsigned int seed = 0x51AD09;
+    for (int y=0;y<32;y++) for (int x=0;x<64;x++) {
+        seed=seed*1664525u+1013904223u;
+        vram[(256+y)*1024+768+x]=seed>>16;
+    }
+    for (int y=240;y<242;y++) for (int x=0;x<256;x++)
+        vram[y*1024+x]=x%17 ? 0x8000|(x*97&0x7FFF) : 0;
+    memcpy(expected,vram,sizeof vram);
+    for (int step=0;step<360;step++) {
+        int ci=(step/17)%3;
+        origin_x=draw_x=ci*320; origin_y=draw_y=0;
+        target_w=draw_w=320; target_h=draw_h=218;
+        gp0_state=(Gp0State){.area_x0=origin_x+2,.area_x1=origin_x+317,
+            .area_y0=3,.area_y1=215,.set_mask=(step>>2)&1,.check_mask=(step>>3)&1};
+        Gp0Mode mode={.textured=step&1,.raw=(step>>1)&1,.semi=(step>>2)&1,
+            .gouraud=(step>>3)&1,.abr=(step>>4)&3,.depth=step%3,
+            .tx=768,.ty=256,.clut_y=240+(step&1)};
+        Gp0Vtx vertices[4];
+        for(int i=0;i<4;i++) {
+            seed=seed*1664525u+1013904223u;
+            vertices[i]=(Gp0Vtx){.x=origin_x-10+(int)(seed%340),
+                .y=-8+(int)((seed>>16)%234),.r=(seed>>8)&255,
+                .g=(seed>>16)&255,.b=(seed>>24)&255,.u=(seed>>4)&31,.v=(seed>>9)&31};
+        }
+        int rect=step%3==0, n=rect ? 1 : 3+(step&1);
+        psx_vram=expected;
+        if(rect) psx_softgpu.rect(&mode,vertices,17,19);
+        else psx_softgpu.poly(&mode,vertices,n);
+        psx_vram=vram;
+        shadow_record(rect ? 2 : 0,&mode,vertices,n,rect ? 17 : 0,rect ? 19 : 0);
+        if(step%13==0) {
+            int x=((step/13)%3)*320+(step*19)%270, y=(step*7)%180;
+            for(int repeat=0;repeat<2;repeat++) {
+                psx_vram_read(x,y,37,29);
+                for(int py=y;py<y+29;py++) for(int px=x;px<x+37;px++)
+                    assert(vram[py*1024+px]==expected[py*1024+px]);
+            }
+        }
+        if(step%29==0) {
+            int x=768+(step%32), y=256+(step%32);
+            psx_vram_touch(x,y,1,1);
+            vram[y*1024+x]=expected[y*1024+x]=(u16)(step*173+0x8410);
+        }
+        if(step%31==0) {
+            int x=step%256,y=240+(step&1);
+            psx_vram_touch(x,y,1,1);
+            vram[y*1024+x]=expected[y*1024+x]=(u16)(step*97+0x8000);
+        }
+        if(step%47==0) {
+            int x=origin_x+113,y=57;
+            psx_vram_touch(x,y,1,1);
+            vram[y*1024+x]=expected[y*1024+x]=0x801F;
+        }
+    }
+    psx_vram_read(0,0,960,218);
+    for(int y=0;y<218;y++) for(int x=0;x<960;x++)
+        assert(vram[y*1024+x]==expected[y*1024+x]);
+    /* Bounded queues finish exactly before reuse, without losing blends. */
+    origin_x=draw_x=0;origin_y=draw_y=0;target_w=draw_w=320;target_h=draw_h=218;
+    gp0_state=(Gp0State){.area_x1=319,.area_y1=217};
+    int flushes_before=psx_gx_stats_shadow_flush;
+    for(int i=0;i<SHADOW_COMMANDS+7;i++) {
+        Gp0Mode m={.semi=1,.abr=i%4};
+        Gp0Vtx v={.x=16,.y=16,.r=16,.g=24,.b=32};
+        psx_vram=expected;psx_softgpu.rect(&m,&v,2,2);psx_vram=vram;
+        shadow_record(2,&m,&v,1,2,2);
+    }
+    assert(psx_gx_stats_shadow_flush>flushes_before);
+    psx_vram_read(16,16,2,2);
+    for(int y=16;y<18;y++) for(int x=16;x<18;x++)
+        assert(vram[y*1024+x]==expected[y*1024+x]);
+    /* Importing a CPU write elsewhere must not turn previously unknown line
+     * coverage into invented framebuffer data or make it blendable. */
+    shadow_invalidate(40,40,2,2);
+    psx_vram_read(40,40,2,2);
+    assert(!sprite_known[40*SHADOW_W+40]);
+    psx_vram_touch(80,80,1,1);
+    vram[80*1024+80]=0x8123;
+    shadow_start();
+    assert(sprite_shadow[80*SHADOW_W+80]==0x8123 && !sprite_known[40*SHADOW_W+40]);
+    assert(!shadow_rect_known(&(Gp0Vtx){.x=40,.y=40},2,2));
+#endif
 }
 
 static void test_direct_colour_packing(void) {
@@ -345,7 +439,11 @@ static void test_failed_draw_readback(void) {
     }
     psx_vram_read(320, 0, 320, 218);
     for (int y = 0; y < 218; y++) for (int x = 320; x < 640; x++)
-        assert(vram[y * 1024 + x] == expected[y * 1024 + x]);
+        if (vram[y * 1024 + x] != expected[y * 1024 + x]) {
+            fprintf(stderr, "failed draw readback at %d,%d: %04x != %04x\n", x, y,
+                    vram[y * 1024 + x], expected[y * 1024 + x]);
+            abort();
+        }
 #endif
 }
 
@@ -373,7 +471,11 @@ static void test_rendered_readback(void) {
     /* Completed backbuffers remain available after swapping and starting a
      * different target, including when global origin changes offscreen. */
     gx_frame();
+#ifdef PORT_GX_LAZY
+    assert(shadow_ready && vram[167 * 1024 + 528] == 0x801F);
+#else
     assert(!shadow_ready && vram[167 * 1024 + 528] == 0x801F);
+#endif
     draw_x = 0;
     gp0_state = (Gp0State){.area_x1 = 319, .area_y1 = 217};
     gx_fill(0, 0, 320, 218, 0x00FF00);
@@ -514,13 +616,43 @@ static void test_backbuffer_presentation(void) {
     Gp0Mode plain = {0};
     Gp0Vtx scene[3] = {{330,10,248,0,0}, {350,10,248,0,0}, {330,30,248,0,0}};
     gx_poly_now(&plain, scene, 3);
+#ifdef PORT_GX_LAZY
+    /* A narrow HUD DRAWENV updates the same backbuffer and must be submitted
+     * on the GPU, while its original GP0 clipping area remains in force. */
+    draw_x = 592; draw_y = 157; draw_w = 48; draw_h = 4;
+    gp0_state.area_x0 = 592; gp0_state.area_x1 = 639;
+    gp0_state.area_y0 = 157; gp0_state.area_y1 = 160;
+    Gp0Vtx bar = {.x = 592, .y = 157, .g = 248};
+    int offscreen_before = psx_gx_stats_offscreen;
+    gx_rect(&plain, &bar, 48, 4);
+    assert(psx_gx_stats_offscreen == offscreen_before && polys == 2);
+    assert(frame_target[0] == 320 && frame_target[1] == 0);
+    /* E3/E4/E5 can point at this buffer while the cached DRAWENV points at
+     * the other full-size buffer. This is ContinueDraw's actual HUD route. */
+    draw_x = 0; draw_y = 0; draw_w = 320; draw_h = 218;
+    gx_rect(&plain, &bar, 48, 4);
+    assert(psx_gx_stats_offscreen == offscreen_before && polys == 3);
+    psx_vram_read(592, 157, 48, 4);
+    assert(vram[157 * 1024 + 592] == 0x03E0);
+    draw_x = 320; draw_y = 0; draw_w = 320; draw_h = 218;
+    gp0_state.area_x0 = 320; gp0_state.area_x1 = 639;
+    gp0_state.area_y0 = 0; gp0_state.area_y1 = 217;
+#endif
     unsigned initial_frame = frame;
     gx_frame(); gx_frame();
+#ifdef PORT_GX_LAZY
+    assert(!flushes && polys == 3 && vertices == 11 && frame == initial_frame);
+#else
     assert(!flushes && polys == 1 && vertices == 3 && frame == initial_frame);
+#endif
     display_x = 320;
     Gp0Vtx hud = {.x = 340, .y = 180, .g = 248};
     gx_rect_now(&plain, &hud, 8, 8);
+#ifdef PORT_GX_LAZY
+    assert(polys == 4 && vertices == 15);
+#else
     assert(polys == 2 && vertices == 7);
+#endif
     gx_frame();
     assert(flushes == 1 && !polys && !vertices && !frame_target_valid);
     assert(frame == initial_frame + 1);
@@ -568,6 +700,7 @@ static void test_backbuffer_presentation(void) {
 }
 
 int main(void) {
+    test_lazy_shadow_ordering();
     test_direct_colour_packing();
     test_compact_indexed_regions();
     test_tight_indexed_regions();
@@ -632,6 +765,9 @@ int main(void) {
             sprite_shadow[y * SHADOW_W + x] = 0x1234;
         }
         shadow_rect(&opaque, &shade, width, height);
+#ifdef PORT_GX_LAZY
+        shadow_materialize(&shadow_contexts[shadow_current], shade.x, shade.y, width, height);
+#endif
         for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
             u16 t = vram[300 * 1024 + (y * width + x) % colours];
             int r = (t & 31) * 64 >> 7;
@@ -774,12 +910,12 @@ int main(void) {
     gx_plan(-1);
 
     reset();
-    m = (Gp0Mode){.textured = 1, .raw = 1, .depth = 1, .clut_y = 255};
+    m = (Gp0Mode){.textured = 1, .raw = 1, .depth = 1, .tx = 512, .clut_y = 255};
     draw_w = 320; draw_h = 224; gp0_state.area_x1 = 319; gp0_state.area_y1 = 223;
     planned = (Gp0Vtx){.x = 10, .y = 10};
     for (int i = 1; i <= 64; i++) vram[255 * 1024 + i] = i;
     for (int y = 0; y < 16; y++) for (int x = 0; x < 32; x++)
-        vram[y * 1024 + x] = (1 + x * 2) | ((2 + x * 2) << 8);
+        vram[y * 1024 + 512 + x] = (1 + x * 2) | ((2 + x * 2) << 8);
     queue_primitive(2, &m, &planned, 1, 32, 16, 0);
     queue_primitive(2, &m, &planned, 1, 64, 16, 0);
     assert(uploads == 0 && polys == 0);
@@ -789,9 +925,9 @@ int main(void) {
     queue_primitive(2, &m, &planned, 1, 32, 16, 0);
     psx_vram_touch(800, 400, 1, 1); /* unrelated writes can retain the full batch */
     assert(buffered_count == 1);
-    psx_vram_touch(0, 0, 1, 1); /* flush before the source changes */
+    psx_vram_touch(512, 0, 1, 1); /* flush before the source changes */
     assert(!buffered_count && captured_pixel(0) == 0x8001);
-    vram[0] = 0x0240;
+    vram[512] = 0x0240;
     queue_primitive(2, &m, &planned, 1, 32, 16, 0);
     flush_buffer();
     assert(uploads == 2 && captured_pixel(0) == 0x8040 && deletes == 0);
@@ -944,6 +1080,7 @@ int main(void) {
     gx_frame();
     memcpy(convbuf16, expected, sizeof expected);
     assert(get_composite(16, 16) == composed && uploads == 1); /* cache reuses identical results */
+    gx_fill(0, 0, 320, 224, 0); /* Begin the following scene with an explicit clear. */
     shadow_start();
     Gp0Vtx obstruct[3] = {{32, 32, 248, 16, 16}, {40, 32, 248, 16, 16}, {32, 40, 248, 16, 16}};
     gx_poly(&plain, obstruct, 3);

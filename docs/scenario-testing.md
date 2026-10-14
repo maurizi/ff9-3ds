@@ -371,6 +371,24 @@ ordering-table time includes decoded draws and their renderer work; it is not
 the cost of traversing links alone. Software builds report zero GX material and
 upload time. All instrumentation is disabled without `PROFILE=1`.
 
+`GXLAZY=1 GXSHADOW=1 GXSHARE=1 SOFTDISPLAY=0` enables the experimental
+demand-driven framebuffer shadow. Two PSX backbuffers retain decoded primitives;
+8x8 tile progress prevents double blending. Reads replay the requested pixels,
+and texture/CLUT writes finish and retire affected draws before their source
+changes. Full queue/destination replacement paths preserve the other pixels.
+The mode also resolves embedded HUD clipping commands to their actual backbuffer
+when the cached DRAWENV still names the other one. It requires geometry shadows
+and uses roughly 2.5 MiB of static framebuffer/command storage. It does not solve
+GX allocation, vertex-budget or blending limitations; software remains default.
+
+For a checkpoint that explicitly tests complete framebuffer readback, add
+`CAPTURE_FRAME=1663 CAPTURE_READBACK=1`. This runs `psx_vram_read` across VRAM
+after publishing the timing window and before entering the capture halt loop.
+Use a fresh matching state after the capture message appears. Without this
+option, a deferred framebuffer's unqueried pixels legitimately remain pending
+in its shadow; its raw VRAM bytes are not a complete framebuffer comparison.
+Do not derive FPS from a checkpoint's ever-increasing VBlank counter after halt.
+
 The first fresh Ark sample ends at frame 1377: 142.08 ms/interval, including
 91.41 ms GPU (64.3%), 11.65 ms GTE (8.2%), 16.12 ms scaling (11.3%),
 10.15 ms VBlank waiting (7.1%), and no effect callbacks in that window

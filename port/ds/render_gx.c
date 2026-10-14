@@ -133,12 +133,18 @@ static unsigned int gen_counter = 1;
 static void flush_rect(void);
 static void flush_buffer(void);
 static int buffer_depends(int x, int y, int w, int h);
+#ifdef PORT_GX_LAZY
+static void shadow_before_write(int x, int y, int w, int h);
+#endif
 
 /* gpu.c: VRAM area written (uploads, fills, copies) */
 void psx_vram_touch(int x, int y, int w, int h) {
     /* gpu.c calls this before changing pixels or palettes. */
     if (buffer_depends(x, y, w, h)) flush_buffer();
     flush_rect();
+#ifdef PORT_GX_LAZY
+    shadow_before_write(x, y, w, h);
+#endif
     if (w <= 0 || h <= 0) {
         return;
     }
@@ -197,6 +203,9 @@ static int tex_u0, tex_v0;
 static int texture_origin_u, texture_origin_v;
 static int origin_x, origin_y;
 static int target_w, target_h;
+#ifdef PORT_GX_LAZY
+static int backbuffer_targets[2][4], backbuffer_next;
+#endif
 static void retain_frame_target(void) {
     if (frame_target_valid) return;
     frame_target[0] = origin_x; frame_target[1] = origin_y;
@@ -207,10 +216,14 @@ static void retain_frame_target(void) {
  * the shadow unless the experimental geometry replay is enabled. */
 #define SHADOW_W 320
 #define SHADOW_H 224
+static u16 clear_rgb;
+#ifdef PORT_GX_LAZY
+#include "gx_shadow_lazy.h"
+#else
 static u16 sprite_shadow[SHADOW_W * SHADOW_H];
 static u8 sprite_known[SHADOW_W * SHADOW_H];
 static int shadow_ready;
-static u16 clear_rgb;
+#endif
 static u8 convbuf[256 * 256] __attribute__((aligned(4)));      /* conversion scratch (8-bit page) */
 static u16 convbuf16[256 * 256] __attribute__((aligned(4)));   /* 15-bit page */
 int psx_gx_stats_polys, psx_gx_stats_dropped;
@@ -884,14 +897,21 @@ static TexEntry *get_composite(int width, int height) {
     return result;
 }
 
+#ifndef PORT_GX_LAZY
 static void shadow_start(void) {
     if (shadow_ready) return;
     for (int i = 0; i < SHADOW_W * SHADOW_H; i++) sprite_shadow[i] = clear_rgb;
     memset(sprite_known, 1, sizeof sprite_known);
     shadow_ready = 1;
 }
+#endif
 
 static void shadow_invalidate(int x, int y, int w, int h) {
+#ifdef PORT_GX_LAZY
+    Gp0Mode mode = {0};
+    Gp0Vtx vertex = {.x = x, .y = y};
+    shadow_record(1, &mode, &vertex, 1, w, h);
+#else
     shadow_start();
     x -= origin_x; y -= origin_y;
     int x1 = x + w, y1 = y + h;
@@ -901,6 +921,7 @@ static void shadow_invalidate(int x, int y, int w, int h) {
     if (y1 > SHADOW_H) y1 = SHADOW_H;
     if (x >= x1 || y >= y1) return;
     for (; y < y1; y++) memset(sprite_known + y * SHADOW_W + x, 0, x1 - x);
+#endif
 }
 
 static u16 sprite_sample(const Gp0Mode *m, int u, int v, const u16 *palette) {
@@ -947,6 +968,9 @@ static u16 sprite_pixel(const Gp0Mode *m, const Gp0Vtx *v, int u, int vv, u16 ba
 
 static int shadow_rect_known(const Gp0Vtx *v, int w, int h) {
     shadow_start();
+#ifdef PORT_GX_LAZY
+    shadow_materialize(&shadow_contexts[shadow_current], v->x, v->y, w, h);
+#endif
     int x = v->x - origin_x, y = v->y - origin_y;
     if (x < 0 || y < 0 || x + w > SHADOW_W || y + h > SHADOW_H) return 0;
     for (int j = 0; j < h; j++) {
@@ -956,14 +980,22 @@ static int shadow_rect_known(const Gp0Vtx *v, int w, int h) {
 }
 
 static void shadow_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
+#ifdef PORT_GX_LAZY
+    shadow_record(2, m, v, 1, w, h);
+#else
     shadow_start();
     psx_softgpu_shadow_rect(m, v, w, h, sprite_shadow, sprite_known,
                            origin_x, origin_y, SHADOW_W, SHADOW_H);
+#endif
 }
 
 /* Readbacks consume original PSX pixels, including their mask/STP bits. Unknown
  * pixels are left untouched; an approximated GX primitive cannot invent data. */
 static void sync_shadow_region(int x, int y, int w, int h) {
+#ifdef PORT_GX_LAZY
+    if (!psx_vram || w <= 0 || h <= 0) return;
+    for (int ci = 0; ci < 2; ci++) shadow_sync_context(&shadow_contexts[ci], x, y, w, h);
+#else
     if (!psx_vram || !shadow_ready || !frame_target_valid || w <= 0 || h <= 0) return;
     int ox = frame_target[0], oy = frame_target[1];
     int x0 = x > ox ? x : ox, y0 = y > oy ? y : oy;
@@ -981,6 +1013,7 @@ static void sync_shadow_region(int x, int y, int w, int h) {
         int at = (row - oy) * SHADOW_W + col - ox;
         if (sprite_known[at]) psx_vram[row * 1024 + col] = sprite_shadow[at];
     }
+#endif
 }
 
 void psx_vram_read(int x, int y, int w, int h) {
@@ -1033,7 +1066,8 @@ static int buffer_depends(int x, int y, int w, int h) {
     return 0;
 }
 
-/* Small GP0 clipping areas inside a full-size DRAWENV include dialogue glyphs. */
+/* HUD updates also install small DRAWENVs inside an existing backbuffer.
+ * They still belong to its screen draw list, not to an offscreen texture. */
 static int drawing_to_screen(void) {
     int w, h;
     if (flushing_rect) {
@@ -1049,6 +1083,39 @@ static int drawing_to_screen(void) {
         w = gp0_state.area_x1 - origin_x + 1;
         h = gp0_state.area_y1 - origin_y + 1;
     }
+#ifdef PORT_GX_LAZY
+    if (w >= 256 && h >= 192) {
+        int slot = -1;
+        for (int i = 0; i < 2; i++)
+            if (backbuffer_targets[i][2] && backbuffer_targets[i][0] == origin_x &&
+                backbuffer_targets[i][1] == origin_y) slot = i;
+        if (slot < 0) { slot = backbuffer_next; backbuffer_next ^= 1; }
+        backbuffer_targets[slot][0] = origin_x; backbuffer_targets[slot][1] = origin_y;
+        backbuffer_targets[slot][2] = w; backbuffer_targets[slot][3] = h;
+    } else if (w > 0 && h > 0) {
+        const int *parent = NULL;
+        for (int i = 0; i < 2; i++) {
+            const int *candidate = backbuffer_targets[i];
+            if (candidate[2] && origin_x >= candidate[0] && origin_y >= candidate[1] &&
+                origin_x + w <= candidate[0] + candidate[2] && origin_y + h <= candidate[1] + candidate[3])
+                parent = candidate;
+        }
+        if (parent) {
+            origin_x = parent[0]; origin_y = parent[1]; w = parent[2]; h = parent[3];
+        }
+    }
+    /* ContinueDraw's embedded E3/E4/E5 commands can select the other buffer
+     * without calling PutDrawEnv. The live GPU clip is authoritative. */
+    for (int i = 0; i < 2; i++) {
+        const int *candidate = backbuffer_targets[i];
+        if (candidate[2] && gp0_state.area_x0 >= candidate[0] && gp0_state.area_y0 >= candidate[1] &&
+            gp0_state.area_x1 < candidate[0] + candidate[2] &&
+            gp0_state.area_y1 < candidate[1] + candidate[3]) {
+            origin_x = candidate[0]; origin_y = candidate[1]; w = candidate[2]; h = candidate[3];
+            break;
+        }
+    }
+#endif
     target_w = w; target_h = h;
     return w >= 256 && h >= 192 && gp0_state.area_x0 < origin_x + w && gp0_state.area_x1 >= origin_x
            && gp0_state.area_y0 < origin_y + h && gp0_state.area_y1 >= origin_y;
@@ -1170,13 +1237,18 @@ static int frame_target_displayed(void) {
 
 static void submit_frame(void) {
     /* PSX readback must survive even when GX could not allocate a draw. */
+#ifndef PORT_GX_LAZY
     sync_shadow_region(frame_target[0], frame_target[1], frame_target[2], frame_target[3]);
+#endif
     if (polys || clear_pending) {
         psx_gx_stats_polys = polys;
         glFlush(GL_TRANS_MANUALSORT);
         frame++;
     }
-    z = polys = vertices = clear_pending = frame_target_valid = shadow_ready = 0;
+    z = polys = vertices = clear_pending = frame_target_valid = 0;
+#ifndef PORT_GX_LAZY
+    shadow_ready = 0;
+#endif
     cur_tex = -1;
 }
 
@@ -1365,9 +1437,13 @@ static void gx_poly_now(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         prepare_frame_target();
         retain_frame_target();
 #if defined(PORT_GX_EXPERIMENTAL) || defined(PORT_GX_SHADOW)
+#ifdef PORT_GX_LAZY
+        shadow_record(0, m, v, n, 0, 0);
+#else
         shadow_start();
         psx_softgpu_shadow_poly(m, v, n, sprite_shadow, sprite_known,
                                origin_x, origin_y, SHADOW_W, SHADOW_H);
+#endif
 #else
         int x0 = v[0].x, y0 = v[0].y, x1 = x0, y1 = y0;
         for (int i = 1; i < n; i++) {
@@ -1434,6 +1510,9 @@ static void gx_rect_now(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
      * first to give their shadow pixels and texture pins the correct frame. */
     prepare_frame_target();
     retain_frame_target();
+#ifdef PORT_GX_LAZY
+    shadow_require_texture(m, v, 1, w, h);
+#endif
     Gp0Mode composite_mode;
     int composite = 0;
     if (m->semi && m->abr == 2 && !gp0_state.set_mask && !gp0_state.check_mask
@@ -1542,8 +1621,18 @@ static void gx_fill_now(int x, int y, int w, int h, unsigned int rgb) {
         glClearColor((u8)((rgb & 0xFF) >> 3), (u8)(((rgb >> 8) & 0xFF) >> 3), (u8)(((rgb >> 16) & 0xFF) >> 3), 31);
         clear_rgb = (u16)(((rgb & 255) >> 3) | (((rgb >> 8) & 255) >> 3) << 5
                           | (((rgb >> 16) & 255) >> 3) << 10);
+#ifdef PORT_GX_LAZY
+        shadow_start();
+        ShadowContext *context = &shadow_contexts[shadow_current];
+        context->count = context->reload = 0;
+        memset(context->progress, 0, sizeof context->progress);
+        memset(context->source_blocks, 0, sizeof context->source_blocks);
+        for (int i = 0; i < SHADOW_W * SHADOW_H; i++) sprite_shadow[i] = clear_rgb;
+        memset(sprite_known, 1, sizeof sprite_known);
+#else
         shadow_ready = 0;
         shadow_start();
+#endif
         clear_pending = 1;
         retain_frame_target();
         return;
@@ -1624,6 +1713,9 @@ static int render_offscreen(int kind, const Gp0Mode *m, const Gp0Vtx *v,
     if (x1 > 1023) x1 = 1023;
     if (y1 > 511) y1 = 511;
     if (x1 < x0 || y1 < y0) return 1;
+#ifdef PORT_GX_LAZY
+    shadow_require_texture(m, v, n, kind == 2 ? w : 0, kind == 2 ? h : 0);
+#endif
     psx_vram_touch(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
     if (kind == 0) psx_softgpu.poly(m, v, n);
     else if (kind == 1) psx_softgpu.line(m, v, v + 1);

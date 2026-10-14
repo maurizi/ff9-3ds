@@ -43,6 +43,12 @@ void plat_wait_frame(void) {
     port_profile_frame(g_gameState ? g_gameState[8] : ~0u,(unsigned int)frames);
 #ifdef PORT_CAPTURE_FRAME
     if(frames==PORT_CAPTURE_FRAME) {
+#ifdef PORT_CAPTURE_READBACK
+        /* A diagnostic checkpoint can explicitly exercise full PSX readback.
+         * Published timing windows end before this operation. */
+        extern void psx_vram_read(int, int, int, int);
+        psx_vram_read(0, 0, 1024, 512);
+#endif
         status_row(19,"capture frame %ld",frames);
         for(;;) swiWaitForVBlank();
     }
