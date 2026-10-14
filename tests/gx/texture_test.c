@@ -233,6 +233,40 @@ static void test_texture_name_recovery(void) {
     assert(bind_entry(pinned) && captured_pixel(0) == 0x8002);
 }
 
+static void test_minimum_indexed_regions(void) {
+    for (int depth = 0; depth < 2; depth++) {
+        reset();
+        draw_w = 320; draw_h = 224;
+        gp0_state.area_x1 = 319; gp0_state.area_y1 = 223;
+        Gp0Mode m = {.textured = 1, .raw = 1, .depth = depth, .tx = 640, .clut_y = 300};
+        for (int i = 1; i < 256; i++) vram[300 * 1024 + i] = i;
+        for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) {
+            unsigned colour = 1 + (x + y * 3) % 15;
+            int shift = depth == 0 ? 2 : 1, bits = depth == 0 ? 4 : 8;
+            vram[y * 1024 + 640 + (x >> shift)] |= colour << ((x & ((1 << shift) - 1)) * bits);
+        }
+        Gp0Vtx v = {.x = 10, .y = 10, .u = 6, .v = 3};
+        assert(begin_prim(&m, &v, 1, 7, 5));
+        assert(tex_u0 == 6 && tex_v0 == 3);
+        int texture_name = bound_name;
+        assert(named_bytes[texture_name] == (depth ? 64 : 32));
+        for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
+            assert(captured_pixel(y * 8 + x) == (0x8000 | (1 + (6 + x + (3 + y) * 3) % 15)));
+        TexEntry *small = get_texture(&m, 6, 3, 8, 8);
+        assert(small && get_texture(&m, 6, 3, 8, 8) == small);
+        TexEntry *tall = get_texture(&m, 6, 3, 8, 16);
+        assert(tall && tall != small);
+        TexEntry *wide = get_texture(&m, 6, 3, 16, 8);
+        assert(wide && wide != small && wide != tall);
+        assert(bind_entry(tall));
+        for (int y = 0; y < 16; y++) for (int x = 0; x < 8; x++)
+            assert(captured_pixel(y * 8 + x) == (0x8000 | (1 + (6 + x + (3 + y) * 3) % 15)));
+        /* A full page still encodes 256, and can satisfy contained requests. */
+        TexEntry *page = get_texture(&m, 0, 0, 256, 256);
+        assert(page && get_texture(&m, 128, 128, 8, 8) == page);
+    }
+}
+
 static void test_tight_indexed_regions(void) {
     for (int depth = 0; depth < 2; depth++) for (int window = 0; window < 2; window++) {
         reset();
@@ -323,6 +357,7 @@ static void test_backbuffer_presentation(void) {
 int main(void) {
     test_compact_indexed_regions();
     test_tight_indexed_regions();
+    test_minimum_indexed_regions();
     test_texture_name_recovery();
     test_backbuffer_presentation();
     reset();

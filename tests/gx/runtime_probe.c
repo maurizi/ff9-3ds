@@ -16,7 +16,7 @@ static struct { int refs, offset, blocks; } palettes[NAMES];
 static int pal_live, pal_peak, pal_failures;
 static int bound, live_bytes, peak_bytes, submission, failures;
 extern int psx_gx_stats_polys, psx_gx_stats_texture_fail, psx_gx_stats_budget_fail;
-extern int psx_gx_stats_compacted;
+extern int psx_gx_stats_compacted, psx_gx_fail_reason[8];
 
 int glGenTextures(int n, int *names) {
     assert(n == 1);
@@ -104,6 +104,9 @@ void glFlush(int mode) {
                 submission, psx_gx_stats_polys, psx_gx_stats_texture_fail,
                 psx_gx_stats_budget_fail, live_bytes, peak_bytes,pal_live,pal_peak,pal_failures,
                 psx_gx_stats_compacted);
+        fprintf(stderr, "gx failure reasons: cache %d heap %d names %d direct %d palette %d retry %d shared %d\n",
+                psx_gx_fail_reason[0], psx_gx_fail_reason[1], psx_gx_fail_reason[2],
+                psx_gx_fail_reason[3], psx_gx_fail_reason[4], psx_gx_fail_reason[5], psx_gx_fail_reason[6]);
         last_fail = fail;
     }
 }

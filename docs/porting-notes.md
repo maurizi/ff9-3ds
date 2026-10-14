@@ -841,3 +841,37 @@ reference. It establishes neither acceptable performance nor PSX image parity.
 Software remains the default. Native emulator instances are closed after capture
 and the normal SD configuration is restored. Battle texture pressure, remaining
 blend/font differences, missing routines and full-game validation remain open.
+
+
+### Eight-texel GX allocations (2026-10-14)
+
+Indexed face/glyph regions and generated subtractive composites now use the
+hardware's 8x8 minimum instead of 16x16. Logical texture keys encode dimensions
+in eight-texel units with six bits per dimension, keeping 8x8, 8x16, 16x8 and
+256x256 allocations distinct. Parent/source validation and direct-image content
+lookups decode the updated dimensions. The optional batch planner's region keys
+also distinguish those sizes. Direct texture alignment remains unchanged.
+
+All four GX fixtures pass under ASan/UBSan, including added byte/pixel checks for
+small four/eight-bit regions, tall/wide key separation and a contained request in
+a full page. In the same 2000-frame Ark host probe, texture failures fall from
+97,688 to 55,011. Successful additional draws now expose 380 cumulative geometry
+budget failures. Detailed host reasons show no cache, heap, name or palette
+exhaustion: remaining texture failures are direct/shared GPU allocations.
+This is still an incomplete rendering result.
+
+The native `ff9ds_gx_eight_texel_ark_frame1663` replay and matching fresh state
+record 44,297 cumulative texture failures and the same 380 budget failures, with
+3,859 compact material entries, no first fault and no changed protected ITCM bytes.
+The matched instrumented window ending at 1633 takes 155.0068 ms per interval,
+including 118.6631 ms of GP0 work and 40.3619 ms of polygon shadow replay. Phase
+costs overlap. This remains slower than the correct software reference and does
+not establish acceptable performance. The reviewed entrance video/contact sheet
+and screenshot still show missing floor/HUD textures against the original PSX
+reference. Native artifacts use the `ds_gx_eight_texel_ark_` prefix.
+
+This replay ran on a temporary private Xvfb display, which allowed reliable input
+and fresh state capture without taking desktop keyboard focus. The emulator and
+temporary X server are closed, and normal SD paths are restored after validation.
+The software renderer remains default. Resource failures, blending/font quality,
+remaining routines and full-game validation are still unresolved.

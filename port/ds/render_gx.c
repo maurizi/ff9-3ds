@@ -401,7 +401,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
     texture_origin_u = u0;
     texture_origin_v = v0;
     u64 key = tex_key(m) | ((u64)u0 << 32) | ((u64)v0 << 40)
-              | ((u64)(width / 16) << 48) | ((u64)(height / 16) << 53);
+              | ((u64)(width / 8) << 48) | ((u64)(height / 8) << 54);
     unsigned int gen = source_gen(m, u0, v0, width, height);
     unsigned int window = (gp0_state.twin_mask_x >> 3) | ((gp0_state.twin_mask_y >> 3) << 5)
                           | ((gp0_state.twin_off_x >> 3) << 10) | ((gp0_state.twin_off_y >> 3) << 15);
@@ -434,7 +434,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
         if (parent && e > parent) continue;
         if (!e->used || (unsigned int)e->key != tex_key(m) || e->window != window || (e->key >> 63)) continue;
         int ex = (e->key >> 32) & 255, ey = (e->key >> 40) & 255;
-        int ew = ((e->key >> 48) & 31) * 16, eh = ((e->key >> 53) & 31) * 16;
+        int ew = ((e->key >> 48) & 63) * 8, eh = ((e->key >> 54) & 63) * 8;
         if (ex <= u0 && ey <= v0 && ex + ew >= u0 + width && ey + eh >= v0 + height
             && e->src_gen == source_gen(m, ex, ey, ew, eh)) {
             parent = e;
@@ -542,7 +542,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
         if (!e->used || (unsigned int)e->key != tex_key(m) || e->window != window
             || (e->key >> 63) || e->params != params) continue;
         int ex = (e->key >> 32) & 255, ey = (e->key >> 40) & 255;
-        int ew = ((e->key >> 48) & 31) * 16, eh = ((e->key >> 53) & 31) * 16;
+        int ew = ((e->key >> 48) & 63) * 8, eh = ((e->key >> 54) & 63) * 8;
         if (ex > u0 || ey > v0 || ex + ew < u0 + width || ey + eh < v0 + height) continue;
         if (m->depth < 2 && gx_memdiff(e->palette, pal, ncol * sizeof(u16))) continue;
         int row_bytes = width * (m->depth == 2 ? 2 : 1) / (m->depth == 0 ? 2 : 1);
@@ -581,7 +581,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
         content_bucket = cache_bucket(hash, width | (height << 10));
         for (unsigned int index = content_heads[content_bucket]; index; index = cache[index - 1].content_next) {
             TexEntry *same = &cache[index - 1];
-            int sw = ((same->key >> 48) & 31) * 16, sh = ((same->key >> 53) & 31) * 16;
+            int sw = ((same->key >> 48) & 63) * 8, sh = ((same->key >> 54) & 63) * 8;
             if (sw == width && sh == height && same->params == params && !gx_memdiff(same->pixels, pixels, bytes)) {
                 same->stamp = ++stamp; same->frame = frame;
                 return same;
@@ -989,7 +989,7 @@ static void texture_bounds(const Gp0Vtx *v, int n, int w, int h,
     if (h) max_v = min_v + h - 1;
     *u0 = min_u & ~(alignment - 1);
     *v0 = alignment == 16 ? min_v & ~15 : min_v;
-    *width = *height = 16;
+    *width = *height = alignment == 16 ? 16 : 8;
     while (*width < max_u - *u0 + 1 && *width < 256) *width *= 2;
     while (*height < max_v - *v0 + 1 && *height < 256) *height *= 2;
     if (max_u > 255) { *u0 = 0; *width = 256; }
@@ -1030,7 +1030,7 @@ static void collect_region(const Gp0Mode *m, int u, int v, int w, int h) {
     if (v < texture_plans[i].y0) texture_plans[i].y0 = v;
     if (u + w > texture_plans[i].x1) texture_plans[i].x1 = u + w;
     if (v + h > texture_plans[i].y1) texture_plans[i].y1 = v + h;
-    u64 key = ((u64)(i + 1) << 32) | u | ((u64)v << 8) | ((u64)(w / 16) << 16) | ((u64)(h / 16) << 21);
+    u64 key = ((u64)(i + 1) << 32) | u | ((u64)v << 8) | ((u64)(w / 8) << 16) | ((u64)(h / 8) << 22);
     unsigned int slot = cache_bucket(key, 0);
     unsigned int guard = 0;
     while (planned_regions[slot] && planned_regions[slot] != key && guard++ < PLAN_REGIONS)
@@ -1333,7 +1333,7 @@ static void gx_rect_now(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (m->semi && m->abr == 2 && !gp0_state.set_mask && !gp0_state.check_mask
         && w <= 256 && h <= 256 && shadow_rect_known(v, w, h)
         && polys < MAX_POLYS && vertices + 4 <= MAX_VERTICES) {
-        int tw = 16, th = 16;
+        int tw = 8, th = 8;
         while (tw < w) tw *= 2;
         while (th < h) th *= 2;
         memset(convbuf16, 0, tw * th * sizeof(u16));
