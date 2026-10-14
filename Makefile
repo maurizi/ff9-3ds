@@ -284,6 +284,14 @@ $(BUILD)/tests/window_probe: tests/battle/window_probe.c port/game/window_tween.
 test-window: $(BUILD)/tests/window_probe
 	$(PYTHON) tools/test_window_tween.py
 
+$(BUILD)/tests/battle_morph_probe: tests/battle/morph_probe.c port/game/battle_morph.c tests/gte/oracle.c port/psx/gte.c
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/morph_probe.c port/game/battle_morph.c tests/gte/oracle.c -Wl,--defsym=psx_ram=0x02000000 -Wl,--defsym=g_vtxScreenXY=0x020711a8 -Wl,--defsym=g_vtxScreenZ=0x02070520 -o $@
+
+.PHONY: test-battle-morph
+test-battle-morph: $(BUILD)/tests/gte_oracle.so $(BUILD)/tests/battle_morph_probe
+	$(PYTHON) tools/test_battle_morph.py
+
 $(BUILD)/tests/gte_oracle.so: tests/gte/oracle.c port/psx/gte.c port/include/gte.h
 	@mkdir -p $(dir $@)
 	$(CC) -shared -fPIC -std=gnu17 -O2 -Iport/include $< -o $@

@@ -314,3 +314,14 @@ about 6.15 game frames/s at nominal 60 VBlanks/s
 (`ds_ark_window_combat_rate.json`). This includes pacing and rendering, not
 only raster work, and remains too slow. Victory/rewards, later content,
 remaining renderers and overall visual/performance correctness are incomplete.
+
+DF15C now interpolates morph-model vertices, composes each bone with the camera
+matrix, and projects the original in-place triples. The final speculative GTE
+vector loads and rounded-up vertex-tail writes are preserved. Three hundred
+randomized cases compare both vertex arrays and GTE state against original
+MIPS using the production GTE model. Only C4's upper padding bits are normalized:
+original assembly loads uninitialized matrix-stack padding there, while commands
+ignore it and CFC2 sign-extends the low 16-bit matrix element. This is not a
+hardware GTE verification. Both target builds pass. Ark and Meltigemini now
+complete 65000 host frames (`scenarios_morph_projection/report.json`); DF15C still
+requires native DS and original PSX morph-animation validation.
