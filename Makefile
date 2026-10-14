@@ -276,6 +276,14 @@ $(BUILD)/tests/battle_trails_probe: tests/battle/trails_probe.c port/game/battle
 test-battle-trails: $(BUILD)/tests/battle_trails_probe
 	$(PYTHON) tools/test_battle_trails.py
 
+$(BUILD)/tests/window_probe: tests/battle/window_probe.c port/game/window_tween.c
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $^ -Wl,--defsym=psx_ram=0x02000000 -o $@
+
+.PHONY: test-window
+test-window: $(BUILD)/tests/window_probe
+	$(PYTHON) tools/test_window_tween.py
+
 $(BUILD)/tests/gte_oracle.so: tests/gte/oracle.c port/psx/gte.c port/include/gte.h
 	@mkdir -p $(dir $@)
 	$(CC) -shared -fPIC -std=gnu17 -O2 -Iport/include $< -o $@

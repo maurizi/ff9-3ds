@@ -237,3 +237,13 @@ named `ds_ark_positions_models_combat.mp4` was captured after failure and is
 not evidence of combat animation. The earlier trail-writer videos remain the
 last verified live combat recordings. These encounters, post-battle UI,
 graphics and performance still need further work.
+
+The native 63118 entry now sets a window's tween/delay/frame and optionally
+rewinds coordinates by signed animation deltas. It is the non-BIOS entry
+inside the original 63108 assembly body. Four hundred cases compare the
+complete window record against original MIPS, with a shared signed-delta sum,
+including NULL animations/delta arrays, negative counts, byte-masked flags,
+and coordinate wraparound. Both targets build. Ark's longer host routes now
+reach `gameover_main`, which submits ordering tables and packets from two
+stack-local `DispBuf` structures; DrawOTagEnv's ordinary arena-only link
+resolution rejects those native stack links (`pc_window_setup_ot_fault.log`).
