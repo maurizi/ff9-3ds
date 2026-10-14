@@ -25,7 +25,19 @@ void ds_scale_display_text_pair(uint16_t *dst, const uint16_t *vram,
     for(int oy=0;oy<out_h;++oy) {
         const uint16_t *src=vram+((y+oy*5/4)&511)*1024;
         uint16_t *out=dst+oy*256;
-        for(int ox=0;ox<out_w;++ox) out[ox]=src[(x+ox*5/4)&1023]|0x8000;
+        unsigned base_x=(unsigned)x&1023;
+        int ox=0;
+        if(base_x+(unsigned)width<=1024 && !((uintptr_t)out&3)) {
+            const uint16_t *in=src+base_x;
+            uint32_t *pairs=(uint32_t *)out;
+            /* Four nearest samples consume five source pixels. Pair stores
+             * reduce bitmap bus writes without changing sampling or opacity. */
+            for(;ox+4<=out_w;ox+=4,in+=5) {
+                pairs[ox/2]=(in[0]|((uint32_t)in[1]<<16))|0x80008000u;
+                pairs[ox/2+1]=(in[2]|((uint32_t)in[3]<<16))|0x80008000u;
+            }
+        }
+        for(;ox<out_w;++ox) out[ox]=src[(base_x+ox*5/4)&1023]|0x8000;
     }
     if (!count && !previous_count) return;
     memset(text_mask,0,sizeof text_mask);
@@ -42,8 +54,18 @@ void ds_scale_display_text_pair(uint16_t *dst, const uint16_t *vram,
         int y1=(ry+rect->h)*4/5+1;
         if(x1>out_w) x1=out_w;
         if(y1>out_h) y1=out_h;
-        for(int oy=y0;oy<y1;++oy) for(int ox=x0;ox<x1;++ox)
-            text_mask[oy][ox>>5]|=1u<<(ox&31);
+        if(x0>=x1 || y0>=y1) continue;
+        unsigned first=(unsigned)x0>>5,last=(unsigned)(x1-1)>>5;
+        uint32_t low=~0u<<(x0&31),high=~0u>>(31-((x1-1)&31));
+        for(int oy=y0;oy<y1;++oy) {
+            uint32_t *row=text_mask[oy];
+            if(first==last) row[first]|=low&high;
+            else {
+                row[first]|=low;
+                for(unsigned group=first+1;group<last;++group) row[group]=~0u;
+                row[last]|=high;
+            }
+        }
     }
     for(int oy=0;oy<out_h;++oy) {
         int sy=oy*5/4, fy=oy&3;

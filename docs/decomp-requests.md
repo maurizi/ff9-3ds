@@ -320,4 +320,17 @@ absent motion header (`lw` at 800AB8F8) and relocates its low-RAM fields. The
 port maps the local dereference, preserving the model's NULL state. Please
 document this optional default motion alongside optional texture animations.
 
+### R1 follow-up (2026-10-13). Morph interpolation/projection entry DF15C
+
+The port now supplies DF15C, exercised by the disc-3 Meltigemini effect path.
+Original assembly chooses 40-byte descriptors for a masked mesh index from
+model+8 and model+5C, reads per-part vertex counts and eight-byte vertex arrays,
+composes model+20's 32-byte matrices with GameData+18's camera matrix, then
+interpolates the two vertex arrays through INTPL and projects in-place triples.
+Projection rounds writes up to three vertices and preloads a final next triple;
+these tail/register effects are retained in the port. Please name the model
+and descriptor fields from this evidence rather than removing the apparent
+extra loads/writes in matching code. Three hundred original-MIPS comparisons
+use the production GTE; only the ignored upper padding of C4 is normalized.
+
 Native DS first-fault capture identifies `func_800BD5A0` when Marcus dies. Marcus and Blank have no texture-animation set (`BtlUnit9C.unk50 == NULL`). Original disc MIPS at 0x800BD5E0/600/614/628 performs unconditional stores at +0x2c, +4, +0xc and +0x12. Low RAM is valid on PSX; on DS these addresses alias IRQ/raster instructions. This extends F4 beyond Baku's initialization. The port maps reviewed texture-animation dereferences into its low-RAM shadow while preserving the NULL loader state and matching decomp source. Related status, revival, script and summon accesses are inventoried together (36 dereferences across ten routines). Please annotate the optional animation-set/low-RAM behavior when naming these routines; do not insert guards into matching PSX code merely to make native execution safe.

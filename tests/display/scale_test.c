@@ -58,5 +58,25 @@ int main(void) {
     DsTextRect border[]={{-5,-5,8,13},{320,100,10,13},{0,511,10,13}};
     ds_scale_display_text(output,vram,0,0,320,224,border,3);
     assert(output[179*256]==0x5a5a);
+    /* Exercise paired nearest stores and their two-byte-aligned fallback,
+     * odd output widths, camera offsets, and physical VRAM wrap boundaries. */
+    const int origins[]={-5,0,319,640,1023};
+    for(unsigned origin=0;origin<sizeof origins/sizeof origins[0];origin++)
+    for(unsigned unaligned=0;unaligned<2;unaligned++) {
+        uint16_t *out=output+unaligned;
+        ds_scale_display_text(out,vram,origins[origin],509,319,217,NULL,0);
+        for(int oy=0;oy<217*4/5;oy++) for(int ox=0;ox<319*4/5;ox++)
+            assert(out[oy*256+ox]==(vram[((509+oy*5/4)&511)*1024+((origins[origin]+ox*5/4)&1023)]|0x8000));
+    }
+    /* Literal coverage bounds cross words 31/32 and 63/64 and the right edge.
+     * Compare selected cells with the independent full-area scaler. */
+    DsTextRect glyphs[]={{40,30,15,10},{78,30,20,10},{310,30,10,10},{-5,-5,8,13}};
+    ds_scale_display(full,vram,0,0,320,218);
+    ds_scale_display_text_pair(output,vram,0,0,320,218,glyphs,4,glyphs,4);
+    for(int oy=0;oy<218*4/5;oy++) for(int ox=0;ox<256;ox++) {
+        int covered=(oy>=23 && oy<33 && ((ox>=31 && ox<45)||(ox>=61 && ox<79)||ox>=247)) || (oy<7 && ox<3);
+        uint16_t expected=covered ? full[oy*256+ox] : vram[(oy*5/4)*1024+ox*5/4]|0x8000;
+        assert(output[oy*256+ox]==expected);
+    }
     puts("DS area scale: strokes, channels, wrapping and cropped borders pass");
 }

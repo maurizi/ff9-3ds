@@ -378,3 +378,29 @@ Original Meltigemini was entered and visually confirmed on PSX
 DF15C produced an internal Redux event-listener exception and unresponsive
 controls; that instance was closed. This does not validate morph animation
 parity or establish a game/port crash.
+
+The scaler now groups four nearest samples (five source pixels) into paired
+bitmap stores when aligned and not crossing the source-row wrap. The scalar
+fallback preserves odd widths, wrap and two-byte alignment. Glyph rectangles
+mark coverage a word at a time rather than updating every pixel's bit. The
+coverage filter and source samples are unchanged. Added tests cover paired
+stores, unaligned fallback, odd widths, wrap, word boundaries and overlapping
+current/previous glyph rectangles against independent nearest/full-area results.
+Both target builds and display regressions pass.
+
+At the same 128-frame Ark window ending 1633, scaler time drops from 16.12 to
+9.86 ms and interval time from 136.33 to 124.97 ms after the span change.
+Against the original 147.82 ms interval, the combined reduction is about 15.5%.
+These are diagnostic measurements with overhead and VBlank quantization, not
+an uninstrumented full-battle rate claim. Both source RGB15 and active bitmap
+comparisons at frame 1663 are exact (`ark_scaler_frame1663_quality.json`).
+`tools/compare_ds_display.py` provides this comparison reproducibly from two
+states and matching ELFs, retaining frame numbers and viewport metadata.
+
+Fresh uninstrumented DS Meltigemini with morph projection and covered spans
+reaches frames 4056 and 6557, with zero first-fault markers and no changes in
+the first 16 KiB of ITCM (`ds_meltigemini_morph_spans_current/late.ml8` and
+inspection JSON, matching `ff9ds_meltigemini_morph_spans` ROM/ELF).
+`ds_meltigemini_morph_spans_effects.mp4` records actual effect animation.
+This validates progress past the previous native routine gap on this route,
+not all morph effects, PSX phase/timing parity, victory, or the full encounter.
