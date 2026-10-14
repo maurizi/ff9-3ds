@@ -78,6 +78,7 @@ typedef struct {
     u8 *pixels;
     u16 *palette;
     int params;
+    unsigned int vram_bytes;
 } TexEntry;
 
 static TexEntry cache[CACHE];
@@ -206,6 +207,10 @@ static u16 convbuf16[256 * 256] __attribute__((aligned(4)));   /* 15-bit page */
 int psx_gx_stats_polys, psx_gx_stats_dropped;
 int psx_gx_stats_texture_fail, psx_gx_stats_budget_fail;
 int psx_gx_stats_composited, psx_gx_stats_blend_fallback;
+/* Diagnostic counts for the native allocator; the host model can miss a libnds
+ * resource limit even when its simulated VRAM capacity agrees. */
+int psx_gx_fail_reason[8];
+unsigned int psx_gx_first_upload_failure[8];
 
 /* Adjacent opaque tiles with contiguous UVs can share one GX rectangle. */
 static struct {
@@ -536,7 +541,7 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
     }
     /* Changed pixels get a new allocation: earlier polygons retain old bytes. */
     TexEntry *e = evictable_entry(0);
-    if (!e) return NULL;
+    if (!e) { psx_gx_fail_reason[0]++; return NULL; }
     free_entry(e);
     e->image = 0;
 #ifdef PORT_GX_SHARE_INDEXED
@@ -548,7 +553,13 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
 #endif
     e->pixels = malloc(bytes);
     e->palette = m->depth < 2 ? malloc(ncol * sizeof(u16)) : NULL;
-    if (!e->pixels || (m->depth < 2 && !e->palette) || !glGenTextures(1, &e->tex)) {
+    if (!e->pixels || (m->depth < 2 && !e->palette)) {
+        psx_gx_fail_reason[1]++;
+        free_pixels(e); free(e->palette); e->palette = NULL;
+        return NULL;
+    }
+    if (!glGenTextures(1, &e->tex)) {
+        psx_gx_fail_reason[2]++;
         free_pixels(e); free(e->palette); e->palette = NULL;
         return NULL;
     }
@@ -558,18 +569,44 @@ static TexEntry *get_texture(const Gp0Mode *m, int u0, int v0, int width, int he
     int uploaded = e->image != 0;
     if (!uploaded) {
         while (!(uploaded = glTexImage2D(0, 0, format, width, height, 0, params, pixels))) {
+            psx_gx_fail_reason[5]++;
             TexEntry *old = evictable_entry(1);
             if (!old) break;
             free_entry(old); glBindTexture(0, e->tex);
         }
     }
-    if (uploaded && m->depth < 2) uploaded = upload_palette(e, ncol);
+    if (!uploaded) {
+        psx_gx_fail_reason[3]++;
+        if (!psx_gx_first_upload_failure[0]) {
+            unsigned int entries = 0, bytes_live = 0, pinned = 0;
+            for (int i = 0; i < CACHE; i++) if (cache[i].used) {
+                entries++; bytes_live += cache[i].vram_bytes;
+                if (frame - cache[i].frame <= 1) pinned++;
+            }
+            unsigned int *first = psx_gx_first_upload_failure;
+            first[0] = frame;
+            first[1] = (unsigned int)width;
+            first[2] = (unsigned int)height;
+            first[3] = (unsigned int)format;
+            first[4] = entries;
+            first[5] = bytes_live;
+            first[6] = pinned;
+            first[7] = (unsigned int)(width * height) * (format == GL_RGBA ? 2u : 1u);
+            if (format == GL_RGB16) first[7] = (unsigned int)(width * height / 2);
+        }
+    }
+    if (uploaded && m->depth < 2) {
+        uploaded = upload_palette(e, ncol);
+        if (!uploaded) psx_gx_fail_reason[4]++;
+    }
     if (!uploaded) {
         glDeleteTextures(1, &e->tex);
         free_pixels(e); free(e->palette); e->palette = NULL; cur_tex = -1;
         return NULL;
     }
     e->used = 1;
+    e->vram_bytes = width * height * (format == GL_RGBA ? 2u : 1u);
+    if (format == GL_RGB16) e->vram_bytes = width * height / 2;
     e->key = key;
     e->stamp = ++stamp;
     e->src_gen = gen;
@@ -692,6 +729,7 @@ static TexEntry *get_composite(int width, int height) {
         return NULL;
     }
     e->used = 1; e->key = key; e->window = 0;
+    e->vram_bytes = (unsigned int)(width * height) * (indexed ? (ncol <= 16 ? 1u : 2u) : 4u) / 2u;
     e->stamp = ++stamp; e->frame = frame;
     /* A generated direct texture must never share a PSX CLUT. */
     e->palette_key = ~0u; e->palette_gen = 0;
@@ -1053,7 +1091,7 @@ static void gx_poly_unclipped(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (!begin_prim(m, v, n, 0, 0)) {
         return;
     }
-#ifdef PORT_GX_EXPERIMENTAL
+#if defined(PORT_GX_EXPERIMENTAL) || defined(PORT_GX_SHADOW)
     shadow_start();
     psx_softgpu_shadow_poly(m, v, n, sprite_shadow, sprite_known,
                            origin_x, origin_y, SHADOW_W, SHADOW_H);

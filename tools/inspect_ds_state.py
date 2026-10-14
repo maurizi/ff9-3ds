@@ -63,9 +63,18 @@ for line in subprocess.check_output(['nm', '-a', str(a.elf)], text=True).splitli
         symbols[fields[2]] = int(fields[0], 16)
 ram = sections[b'NDSG']
 for name, count in [('frames', 1), ('g_primPtr', 1), ('g_ot', 1),
-                    ('exceptionRegisters', 16), ('port_itcm_first_fault', 21)]:
+                    ('exceptionRegisters', 16), ('port_itcm_first_fault', 21),
+                    ('port_itcm_guard_bytes', 1),
+                    ('psx_gx_stats_texture_fail', 1), ('psx_gx_stats_budget_fail', 1),
+                    ('psx_gx_stats_dropped', 1), ('psx_gx_fail_reason', 8),
+                    ('psx_gx_first_upload_failure', 8)]:
     address = symbols.get(name)
     if address is not None and 0x02000000 <= address < 0x03000000:
         offset = 20 + address - 0x02000000
         result[name] = [f'{x:08x}' for x in struct.unpack_from(f'<{count}I', ram, offset)]
+guard_bytes = int(result.get('port_itcm_guard_bytes', ['0'])[0], 16)
+if guard_bytes and 'itcm_first_16k_changes' in result:
+    result['itcm_protected_changes'] = [
+        change for change in result['itcm_first_16k_changes']
+        if int(change['address'], 16) < 0x01000000 + guard_bytes]
 print(json.dumps(result, indent=2))

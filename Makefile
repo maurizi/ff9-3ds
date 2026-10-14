@@ -129,11 +129,12 @@ PORT_ARCH_ds_psx/softgpu := -marm -DPORT_RASTER_ITCM
 PORT_ARCH_ds_ds/display_scale := -marm -DPORT_SCALE_ITCM
 PORT_ARCH_ds_ds/itcm_guard := -marm
 $(BUILD)/ds/port/psx/softgpu.o: Makefile
+$(BUILD)/ds/port/ds/video_gl.o: third_party/libnds/videoGL.c
 SPECS    := $(BLOCKSDS)/sys/crts/dsi_arm9.specs
 DS_ARCH  := -mcpu=arm946e-s -mthumb -mthumb-interwork
 PORT_EXTRA_ds := -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include $(if $(AUTORUN),-DPORT_AUTORUN) \
                  $(if $(CAPTURE_FRAME),-DPORT_CAPTURE_FRAME=$(CAPTURE_FRAME)) \
-                 $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') $(if $(filter 1,$(SOFTDISPLAY)),-DPORT_SOFT_DISPLAY) $(if $(filter 0,$(GXMERGE)),-DPORT_GX_NO_MERGE) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) $(if $(filter 1,$(GXEXPERIMENTAL)),-DPORT_GX_EXPERIMENTAL) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1,$(ITCMGUARD)),-DPORT_ITCM_GUARD) $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE)
+                 $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') $(if $(filter 1,$(SOFTDISPLAY)),-DPORT_SOFT_DISPLAY) $(if $(filter 0,$(GXMERGE)),-DPORT_GX_NO_MERGE) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) $(if $(filter 1,$(GXEXPERIMENTAL)),-DPORT_GX_EXPERIMENTAL) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1,$(ITCMGUARD)),-DPORT_ITCM_GUARD) $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE)
 $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH),ds,arm,\
 	-specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib -Wl$(,)--gc-sections,-lnds9 -lc))
 
@@ -141,16 +142,19 @@ $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH)
 .PHONY: FORCE_DS_CONFIG
 $(BUILD)/ds/runtime-config: FORCE_DS_CONFIG
 	@mkdir -p $(dir $@)
-	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' > $@.tmp
+	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(ds_PORTOBJS): $(BUILD)/ds/runtime-config
 
-.PHONY: test-gx
-test-gx: $(BUILD)/tests/gx_texture_test $(BUILD)/tests/gx_texture_default_test $(BUILD)/tests/gx_texture_merge_test
+.PHONY: test-gx test-libnds-allocator
+test-libnds-allocator:
+	$(PYTHON) tools/test_libnds_allocator.py
+test-gx: $(BUILD)/tests/gx_texture_shadow_test $(BUILD)/tests/gx_texture_test $(BUILD)/tests/gx_texture_default_test $(BUILD)/tests/gx_texture_merge_test
 	@$(BUILD)/tests/gx_texture_test
 	@$(BUILD)/tests/gx_texture_default_test
 	@$(BUILD)/tests/gx_texture_merge_test
+	@$(BUILD)/tests/gx_texture_shadow_test
 $(BUILD)/tests/gx_texture_test: tests/gx/texture_test.c tests/gx/nds.h port/ds/render_gx.c port/include/gp0.h port/psx/softgpu.c port/include/psx_raster.h
 	@mkdir -p $(dir $@)
 	$(CC) -DPORT_GX_EXPERIMENTAL -DPORT_GX_SHARE_INDEXED -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Itests/gx -Iport/include -I$(DECOMP)/include $< port/psx/softgpu.c -o $@
@@ -161,6 +165,10 @@ $(BUILD)/tests/gx_texture_default_test: tests/gx/texture_test.c tests/gx/nds.h p
 $(BUILD)/tests/gx_texture_merge_test: tests/gx/texture_test.c tests/gx/nds.h port/ds/render_gx.c port/include/gp0.h port/psx/softgpu.c port/include/psx_raster.h
 	@mkdir -p $(dir $@)
 	$(CC) -DPORT_GX_MERGE -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Itests/gx -Iport/include -I$(DECOMP)/include $< port/psx/softgpu.c -o $@
+
+$(BUILD)/tests/gx_texture_shadow_test: tests/gx/texture_test.c tests/gx/nds.h port/ds/render_gx.c port/include/gp0.h port/psx/softgpu.c port/include/psx_raster.h
+	@mkdir -p $(dir $@)
+	$(CC) -DPORT_GX_SHADOW -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Itests/gx -Iport/include -I$(DECOMP)/include $< port/psx/softgpu.c -o $@
 
 # Match the production pointer width when exercising 24-bit OT links.
 .PHONY: test-gpu
@@ -211,7 +219,7 @@ $(BUILD)/tests/gx_runtime.o: tests/gx/runtime_probe.c tests/gx/nds.h
 	$(CC) $(PC_ARCH) $(PORT_CFLAGS) -Itests/gx -c $< -o $@
 $(BUILD)/tests/gx_backend.o: port/ds/render_gx.c tests/gx/nds.h $(BUILD)/ds/runtime-config
 	@mkdir -p $(dir $@)
-	$(CC) $(PC_ARCH) $(PORT_CFLAGS) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) -Itests/gx -c $< -o $@
+	$(CC) $(PC_ARCH) $(PORT_CFLAGS) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) -Itests/gx -c $< -o $@
 
 ARM7ELF  := $(BLOCKSDS)/sys/arm7/main_core/arm7_minimal.elf
 NDSTOOL  := $(BLOCKSDS)/tools/ndstool/ndstool

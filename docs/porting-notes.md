@@ -661,3 +661,49 @@ not be used as combat animation evidence. The reviewed Meltigemini effects clip
 does show changing effects, but synchronized PSX morph-phase validation remains
 pending.
 
+
+
+### Native GX allocator recovery (2026-10-14)
+
+The isolated `GXSHADOW=1` option enables polygon shadow replay without enabling
+indexed generated textures, rectangle merging, or atlas planning. Four GX
+fixtures cover that configuration independently. It did not fix native image
+quality by itself: the actual candle approach/reveal clip
+`ds_gx_shadow_isolated_candle_action.mp4` shows missing room tiles and large
+rectangular light boundaries. The original PSX reference
+`psx_geometry_shadow_light_action.mp4` shows the rounded light pool and reveal.
+These clips show the corresponding actions, without synchronized positions/timing.
+
+Native failure counters identify texture upload failures, with no heap, cache,
+texture-name, or palette failures in the tested route. At the first failure,
+submission 2970, a 16x16 four-bit texture (128 bytes) fails with only 154,624 bytes
+in 453 pinned textures. Inspection of libnds' actual allocator from the matching
+savestate shows `firstEmpty == NULL` despite 378,368 bytes free, including a
+345,856-byte contiguous hole. The allocator loses its empty-list head when the
+heap is completely filled and the first texture is then freed. The host bitmap
+allocator recovers normally, explaining the earlier disagreement.
+
+The project now compiles the matching libnds v1.24.0 videoGL implementation with
+the single empty-list repair; provenance and license are in `third_party/libnds`.
+The installed SDK is untouched. `test-libnds-allocator` extracts the actual
+allocator functions and checks full-heap eviction, refill, coalescing and 20,000
+allocation operations under ASan/UBSan. Removing the fix reproduces the failed
+empty-list invariant. Host mocks now use the SDK texture-name limit and clear
+texture names on deletion, matching the native API.
+
+A fresh DS build with the allocator repair, `GXSHADOW=1` and `ITCMGUARD=1` reaches
+frame 6066/naming with zero dropped draws or terminal upload failures. The reviewed
+`ds_gx_allocator_fixed_candle_action.mp4` and contact sheet show the round light
+pool restored and the room reveal, replacing the earlier missing tiles. The
+matching state has no captured fault and no changed bytes in its protected code.
+This is an opening regression check; later GX scenes, blending and text quality,
+and acceptable performance remain unproven. The software path remains default.
+
+The guard's earlier GX startup failure was a diagnostic layout error: the smaller
+GX executable puts writable libnds IRQ/thread state inside the fixed first 16 KiB
+of ITCM. The guard now selects the largest power-of-two prefix (up to 16 KiB)
+before `irq_nesting_level`; this GX build protects 8 KiB plus the low-address alias.
+State inspection reports the actual protected range separately from the first
+16 KiB. The native guarded build boots and completes the tested candle route.
+Both normal DS/PC builds and all four GX fixtures pass. Unused melonDS instances
+are closed; captures, states and ROMs remain under ignored `build/`.

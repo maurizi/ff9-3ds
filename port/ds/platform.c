@@ -32,6 +32,7 @@ extern unsigned char *g_gameState; /* PS1 0x8006794C: GameState * */
 extern int psx_gx_stats_polys, psx_gx_stats_dropped;
 extern int psx_gx_stats_texture_fail, psx_gx_stats_budget_fail;
 extern int psx_gx_stats_composited, psx_gx_stats_blend_fallback;
+extern int psx_gx_fail_reason[8];
 
 void plat_wait_frame(void) {
 #ifndef PORT_SOFT_DISPLAY
@@ -48,6 +49,8 @@ void plat_wait_frame(void) {
 #endif
     if (frames % 30 == 0) {
 #ifndef PORT_SOFT_DISPLAY
+        status_row(18, "gxerr %d/%d/%d/%d/%d", psx_gx_fail_reason[0], psx_gx_fail_reason[1],
+                   psx_gx_fail_reason[2], psx_gx_fail_reason[3], psx_gx_fail_reason[4]);
         status_row(19, "texfail %d budget %d", psx_gx_stats_texture_fail, psx_gx_stats_budget_fail);
         status_row(20, "gx %d polys drop %d", psx_gx_stats_polys, psx_gx_stats_dropped);
         status_row(21, "blend %d exact %d approx", psx_gx_stats_composited, psx_gx_stats_blend_fallback);
@@ -128,8 +131,9 @@ int main(void) {
 #endif
 #ifdef PORT_ITCM_GUARD
     void port_itcm_guard_init(void);
+    extern volatile unsigned port_itcm_guard_bytes;
     port_itcm_guard_init();
-    printf("ITCM code write guard enabled\n");
+    printf("ITCM guard: %u bytes\n",port_itcm_guard_bytes);
 #endif
 #ifdef PORT_AUTOPRESS
     input_script_add_list(PORT_AUTOPRESS);

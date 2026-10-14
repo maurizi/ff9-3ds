@@ -57,7 +57,7 @@ void glVertex3v16(v16 x, v16 y, v16 z);
 #define glOrthof32(...) ((void)0)
 int glGenTextures(int n, int *names);
 void glBindTexture(int target, int name);
-void glDeleteTextures(int n, const int *names);
+int glDeleteTextures(int n, int *names);
 int glTexImage2D(int target, int level, GL_TEXTURE_TYPE_ENUM type, int w, int h, int border, int params, const void *data);
 int glColorTableEXT(int target, int unused, size_t count, int a, int b, const void *palette);
 int glAssignColorTable(int target, int name);

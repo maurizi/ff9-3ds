@@ -49,12 +49,15 @@ void glBindTexture(int target, int name) {
     }
     memcpy(captured_palette, named_palettes[name], sizeof captured_palette);
 }
-void glDeleteTextures(int n, const int *names) {
+int glDeleteTextures(int n, int *names) {
     for (int i = 0; i < n; i++) {
         free(named_pixels[names[i]]); named_pixels[names[i]] = NULL;
         memset(named_palettes[names[i]], 0, sizeof named_palettes[names[i]]);
+        if (bound_name == names[i]) bound_name = 0;
+        names[i] = 0;
     }
     deletes += n;
+    return 1;
 }
 int glTexImage2D(int target, int level, GL_TEXTURE_TYPE_ENUM type, int w, int h, int border, int params, const void *data) {
     (void)target; (void)level; (void)border; (void)params;
@@ -481,7 +484,7 @@ int main(void) {
     shadow_start();
     Gp0Vtx obstruct[3] = {{32, 32, 248, 16, 16}, {40, 32, 248, 16, 16}, {32, 40, 248, 16, 16}};
     gx_poly(&plain, obstruct, 3);
-#ifdef PORT_GX_EXPERIMENTAL
+#if defined(PORT_GX_EXPERIMENTAL) || defined(PORT_GX_SHADOW)
     assert(shadow_rect_known(&sprite, 16, 16));
     assert(sprite_shadow[34 * SHADOW_W + 34] == (31 | (2 << 5) | (2 << 10)));
     for (int j=0; j<16; j++) memset(vram+j*1024+512,0,16*sizeof(u16));

@@ -6,7 +6,7 @@
 #include <string.h>
 #include "nds.h"
 
-#define NAMES 16384
+#define NAMES 2048
 #define BLOCKS (512 * 1024 / 8)
 static unsigned char occupied[BLOCKS];
 #define PAL_BLOCKS (64*1024/16)
@@ -19,7 +19,8 @@ extern int psx_gx_stats_polys, psx_gx_stats_texture_fail, psx_gx_stats_budget_fa
 
 int glGenTextures(int n, int *names) {
     assert(n == 1);
-    for (int i = 1; i < NAMES; i++) if (!textures[i].used) {
+    /* libnds reserves zero and rejects texCount + n >= MAX_TEXTURES. */
+    for (int i = 1; i < NAMES - 1; i++) if (!textures[i].used) {
         textures[i].used = 1; textures[i].blocks = 0; textures[i].palette=0; *names = i; return 1;
     }
     return 0;
@@ -35,7 +36,7 @@ static void release_palette(int name) {
     }
     textures[name].palette=0;
 }
-void glDeleteTextures(int n, const int *names) {
+int glDeleteTextures(int n, int *names) {
     assert(n == 1);
     int name = *names;
     assert(name > 0 && name < NAMES && textures[name].used);
@@ -43,6 +44,9 @@ void glDeleteTextures(int n, const int *names) {
     live_bytes -= textures[name].blocks * 8;
     release_palette(name);
     textures[name].used = 0; textures[name].blocks = 0;
+    if (bound == name) bound = 0;
+    *names = 0;
+    return 1;
 }
 int glTexImage2D(int target, int level, GL_TEXTURE_TYPE_ENUM type, int w, int h,
                  int border, int params, const void *data) {

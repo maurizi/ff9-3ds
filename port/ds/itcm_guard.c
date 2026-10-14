@@ -1,7 +1,7 @@
 /* Debug-only MPU guard: catch the first write into raster instructions.
  * Region 7 normally covers DTCM, which also has RW coverage from region 6.
- * Reusing it preserves DTCM access while overriding region 4 for the first
- * 16 KiB of ITCM. IRQ tables after this range remain writable. */
+ * Reusing it preserves DTCM access while overriding region 4 for an immutable
+ * prefix of ITCM. Its size follows the link layout so IRQ data stays writable. */
 #include <nds.h>
 #include <stdio.h>
 
@@ -9,6 +9,8 @@
  * Preserve the first exception before any decoder/console fault can replace
  * libnds' shared register array. This is only installed in guard builds. */
 volatile unsigned port_itcm_first_fault[21];
+volatile unsigned port_itcm_guard_bytes;
+extern unsigned short irq_nesting_level;
 
 static void guard_exception(void) {
     if (!port_itcm_first_fault[0]) {
@@ -33,6 +35,15 @@ static void guard_exception(void) {
 
 void port_itcm_guard_init(void) {
     unsigned data, instruction;
+    /* libnds places its first mutable IRQ word after the raster instructions.
+     * GX links fewer raster functions, so this word can fall below 16 KiB.
+     * The ARM946 MPU permits power-of-two regions: choose the largest prefix
+     * up to 16 KiB that stops before that word. */
+    unsigned immutable=(unsigned)&irq_nesting_level-0x01000000u;
+    unsigned bytes=16384, region=0x0100001b;
+    while(bytes>immutable && bytes>4096) { bytes>>=1; region-=2; }
+    sassert(immutable>=4096,"ITCM alias guard overlaps mutable IRQ data");
+    port_itcm_guard_bytes=bytes;
     unsigned ime=enterCriticalSection();
     __asm__ volatile("mrc p15, 0, %0, c5, c0, 2\n"
                      "mrc p15, 0, %1, c5, c0, 3"
@@ -43,7 +54,6 @@ void port_itcm_guard_init(void) {
      * but disallow writes through that alias as well. */
     data=(data & 0x0ffff0ff) | 0x60000600;
     instruction=(instruction & 0x0fffffff) | 0x60000000;
-    unsigned region=0x0100001b; /* 16 KiB, enabled */
     __asm__ volatile("mcr p15, 0, %0, c5, c0, 2\n"
                      "mcr p15, 0, %1, c5, c0, 3\n"
                      "mcr p15, 0, %2, c6, c7, 0\n"
