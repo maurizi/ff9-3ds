@@ -628,3 +628,36 @@ The audit also scanned 27 equivalent/draft C files (114 parsed bodies, eight rou
 
 
 The controlled DS defeat route returns to the field, showing Baku's “You're lookin' a lot better!” dialogue (`ds_null_texanim_fix_after_defeat_dialogue.png`, `ds_null_texanim_fix_defeat_exit.mp4`, matched field-return state). The latest normal manual software ROM/ELF is preserved as `ff9ds_nullable_animation_family`; the full family and single-evaluation helper also pass the repeated 65000-frame PC KO regression (`pc_nullable_animation_family_ko.log`). Fresh DS validation of that expanded family, other audit candidates, graphics fidelity and performance remain outstanding.
+### Additional disc-three fixtures and renderer priority (2026-10-13)
+
+Metadata-only direct battle fixtures now cover Valia Pira (525), Taharka (871),
+Garland (890), and the Kuja encounter bundle (891). The latter does not establish
+the canonical story-dependent Trance Kuja formation. The CF5F8 vector helper
+preserves the original unusual SQR register inputs and low-RAM reads; 1,200
+original-CPU angle cases pass with the shared GTE/atan model. Seven-word custom
+pool callbacks now enter the MIPS interpreter, and the offscreen renderer's fifth
+argument is decoded as an OT pointer while scalar arguments remain unchanged.
+The 360-case effect VM suite and both DS/PC builds pass.
+
+The six-fixture host batch completes Ark and Meltigemini at 65,000 frames. The
+four added fixtures all stop at the remaining DD27C implementation, rather than
+the earlier raw callback or offscreen OT pointer crashes. Native validation of
+these four routes remains pending; these are not completed boss tests.
+
+The optimized, uninstrumented Ark battle interval measures 8.064 presentation
+frames per emulated second (5,420 frames over 40,326 guest VBlanks). The controlled
+128-frame profiling window measures 70.499 ms in GPU emulation alone, versus
+16.667 ms for an entire 60 Hz frame. Full-quality software rendering is therefore
+not a credible general 60 fps target on this hardware. Hardware renderer recovery
+is the priority, retaining software as the image reference and fallback. Known GX
+texture/geometry drops and blending artifacts must be resolved and checked on DS;
+hardware acceleration by itself does not establish a 60 fps result.
+
+The latest Ark native run reaches Game Over with no captured fault and no changes
+in the guarded first 16 KiB of ITCM. Its static Game Over source and active bitmap
+match the earlier validated output. The file named
+`ds_ark_performance_live_late_combat.mp4` actually shows static Game Over and must
+not be used as combat animation evidence. The reviewed Meltigemini effects clip
+does show changing effects, but synchronized PSX morph-phase validation remains
+pending.
+

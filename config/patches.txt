@@ -28,6 +28,9 @@ src/ovl_0b/ovl_0b_2.c | n = ((Unk800D1494 *)p)->unk2; | p = (u8 *)port_effect_da
 # Particle motion and element hooks are also callbacks into loaded modules.
 src/ovl_0b/ovl_0b_2.c | m->unk8(e, owner, &pos, func_800E0134(e, owner), frame, frames) | port_effect_call_words((u32)m->unk8, (u32[]){(u32)e, (u32)owner, (u32)&pos, (u32)func_800E0134(e, owner), frame, frames}, 6) | 1
 src/ovl_0b/ovl_0b_2.c | el->unk24(e, owner, &pos, vp, &scale, &alpha, &cnt, frame, frames); | port_effect_call_words((u32)el->unk24, (u32[]){(u32)e, (u32)owner, (u32)&pos, (u32)vp, (u32)&scale, (u32)&alpha, (u32)&cnt, frame, frames}, 9); | 1
+# Custom work-pool setup/update functions also reside in loaded MIPS modules.
+src/ovl_0b/ovl_0b_2.c | pool->unk4(1, d, D_800F78A4, pool->unk8, 0, pool, pool->unk8->unkC); | port_effect_call_words((u32)pool->unk4, (u32[]){1, (u32)d, (u32)D_800F78A4, (u32)pool->unk8, 0, (u32)pool, pool->unk8->unkC}, 7); | 1
+src/ovl_0b/ovl_0b_2.c | fn(2, p + 2, D_800F78A4, pool->unk8, p[1], pool, pool->unk8->unkC) | port_effect_call_words((u32)fn, (u32[]){2, (u32)(p + 2), (u32)D_800F78A4, (u32)pool->unk8, (u32)(s32)p[1], (u32)pool, pool->unk8->unkC}, 7) | 1
 
 # Battle sound panning accepts unit IDs 0..17 or an SVECTOR pointer. The PS1
 # address-bit test misses native ARM stack pointers (DS crash SystemError S/310).

@@ -29,7 +29,8 @@ static void position_bridge_test(void) {
     u32 *context=(u32 *)(psx_ram+0x170000),*table=(u32 *)(psx_ram+0x170100);
     static const unsigned entries[][2]={{0x1f8,2},{0x1fc,2},{0x200,4},
         {0x204,2},{0x20c,2},{0x214,6},{0x2a0,2},{0x2a8,2},{0x2b8,4},
-        {0x60,7},{0x64,7},{0x28c,7},{0x31c,7},{0x254,4},{0x290,4}};
+        {0x60,7},{0x64,7},{0x28c,7},{0x31c,7},{0x254,4},{0x290,4},
+        {0xcc,3},{0x17c,3},{0x184,1},{0x188,1}};
     u32 words[]={0x27bdffc0,0xafbf003c,0x3c048000,0x34848000,
                  0x3c058018,0x34a50000,0x3c068018,0x34c60004,
                  0x3c190000|(target>>16),0x37390000|(target&65535),
@@ -61,6 +62,23 @@ static void pointer_bridge_test(void) {
     if(port_effect_data(0)!=0 || port_effect_data(0x80180000)!=(u32)(psx_ram+0x180000) ||
        port_effect_data((u32)(psx_ram+0x180000))!=(u32)(psx_ram+0x180000)) abort();
 }
+static u32 offscreen_export(u32 x,u32 y,u32 width,u32 height,u32 ot,u32 scalar) {
+    if(x!=640 || y!=256 || width!=112 || height!=112 ||
+       ot!=(u32)(psx_ram+0x180000) || scalar!=0x80181234) abort();
+    *(u32 *)ot=0xabcdef01;return 0x76543210;
+}
+static void offscreen_bridge_test(void) {
+    u32 *code=(u32 *)(psx_ram+0x1e7700),target=(u32)offscreen_export;
+    u32 *context=(u32 *)(psx_ram+0x170000),*table=(u32 *)(psx_ram+0x170100);
+    *(u32 *)(psx_ram+0xf78a4)=(u32)context;context[4]=(u32)table;table[0x2f4/4]=target;
+    u32 words[]={0x27bdffc0,0xafbf003c,0x24040280,0x24050100,
+                 0x24060070,0x24070070,0x3c088018,0xafa80010,
+                 0x35081234,0xafa80014,0x3c190000|(target>>16),0x37390000|(target&65535),
+                 0x0320f809,0,0x8fbf003c,0,0x03e00008,0x27bd0040};
+    __builtin_memcpy(code,words,sizeof words);
+    if(port_effect_call(0x801e7700,0,0,0,0,0)!=0x76543210 || *(u32 *)(psx_ram+0x180000)!=0xabcdef01) abort();
+    table[0x2f4/4]=0;*(u32 *)(psx_ram+0xf78a4)=0;
+}
 static void bridge_test(void) {
     u32 *code=(u32 *)(psx_ram+0x1e7700),target=(u32)exported;
     /* Save RA, prepare 12 stack arguments, and call a native 16-word export. */
@@ -77,7 +95,7 @@ static void incoming_words_test(void) {
     u32 *code=(u32 *)(psx_ram+0x1e7700);
     u32 args[16];
     for(unsigned i=0;i<16;i++) args[i]=0x87654321u+i*0x1234567u;
-    for(unsigned count=6;count<=9;count+=3) {
+    for(unsigned count=6;count<=9;count++) {
         unsigned n=0;u32 sum=0,weighted=0;
         code[n++]=0x00851021; /* addu v0,a0,a1 */
         code[n++]=0x00461021;code[n++]=0x00471021;
@@ -98,6 +116,7 @@ int main(void) {
     pointer_bridge_test();
     incoming_words_test();
     position_bridge_test();
+    offscreen_bridge_test();
     u32 args[5],size;
     while(fread(&size,4,1,stdin)==1) {
         if(size>0x5000 || fread(args,20,1,stdin)!=1 || fread(psx_ram+0x1e7700,size,1,stdin)!=1 || fread(psx_ram+0x180000,128,1,stdin)!=1 || fread(g,sizeof g,1,stdin)!=1) abort();

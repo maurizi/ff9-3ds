@@ -48,6 +48,9 @@ static u32 native_call(u32 target,u32 *r) {
         /* Draw-model wrappers carry scale pointers as s32 before DCA68. */
         [0x60/4]=7,[0x64/4]=7,[0x28c/4]=7,[0x31c/4]=7,
         [0x254/4]=4,[0x290/4]=4,
+        /* Vector metric and custom work-pool APIs; callback words stay code. */
+        [0xcc/4]=3,[0x17c/4]=3,[0x184/4]=1,[0x188/4]=1,
+        [0x2f4/4]=16, /* E6E1C: stack argument 4 is the offscreen OT. */
     };
     u32 ctx=read32((u32)PSX_ADDR(0x800f78a4));
     if(ctx) {

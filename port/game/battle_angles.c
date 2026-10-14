@@ -12,6 +12,17 @@ static s32 radial_root(u32 remainder) {
     }
     return (s32)root >> 2;
 }
+s32 o0b_func_800CF5F8(const SVECTOR *from,const SVECTOR *to) {
+    from=PSX_NZ(from);to=PSX_NZ(to);
+    /* Preserve the handwritten register selection: IR2 receives from.x,
+     * not dz. The assembly computes dz but never uses it in the square sum. */
+    gte_mtc2(9,(u32)((s32)to->vx-from->vx));
+    gte_mtc2(10,(u32)(s32)from->vx);
+    gte_mtc2(11,(u32)((s32)to->vy-from->vy));
+    gte_cmd(0xa00428);
+    s32 root=radial_root(gte_mfc2(25)+gte_mfc2(26)+gte_mfc2(27));
+    return root ? root : 1;
+}
 void o0b_func_800CF808(const s16 *from, const s16 *to, s16 *rotation) {
     s32 dx = (s32)to[0] - from[0], dz = (s32)to[2] - from[2];
     s32 dy = (s32)to[1] - from[1];
