@@ -28,7 +28,7 @@ static void position_bridge_test(void) {
     u32 *code=(u32 *)(psx_ram+0x1e7700),target=(u32)position_export;
     u32 *context=(u32 *)(psx_ram+0x170000),*table=(u32 *)(psx_ram+0x170100);
     static const unsigned entries[][2]={{0x1f8,2},{0x1fc,2},{0x200,4},
-        {0x204,2},{0x20c,2},{0x214,6},{0x2a0,2},{0x2a8,2},{0x2b8,4},
+        {0x204,2},{0x20c,2},{0x214,6},{0x2a0,2},{0x2a4,2},{0x2a8,2},{0x2b8,4},
         {0x60,7},{0x64,7},{0x28c,7},{0x31c,7},{0x254,4},{0x290,4},
         {0xcc,3},{0x17c,3},{0x184,1},{0x188,1}};
     u32 words[]={0x27bdffc0,0xafbf003c,0x3c048000,0x34848000,
@@ -91,6 +91,44 @@ static void bridge_test(void) {
     for(unsigned i=1;i<=16;i++) want+=i*i;
     if(got!=want) abort();
 }
+static unsigned declared_mask;
+static u32 declared_export(u32 a0,u32 a1,u32 a2,u32 a3,u32 a4,u32 a5,u32 a6,u32 a7,
+                           u32 a8,u32 a9,u32 a10,u32 a11,u32 a12,u32 a13,u32 a14,u32 a15) {
+    u32 a[]={a0,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14,a15};
+    for(unsigned i=0;i<16;i++) {
+        u32 expected=i==13 ? 0x801e8178 : 0x80180000+i*32;
+        if(declared_mask&(1u<<i)) expected=(u32)PSX_ADDR(expected);
+        if(a[i]!=expected) abort();
+    }
+    return 0x76543210;
+}
+static void declared_bridge_test(void) {
+    /* Reviewed signatures cover fixed pointers, high stack arguments, and
+     * E6764's raw function callback at argument 13. Other scalar words look
+     * like guest pointers deliberately: the bridge must leave them intact. */
+    static const unsigned entries[][2]={{0x0,3},{0x48,19},{0x50,1},{0xf8,39},
+        {0x108,0xc02},{0x208,14},{0x248,0xe00},{0x340,11}};
+    u32 *code=(u32 *)(psx_ram+0x1e7700),target=(u32)declared_export;
+    u32 *context=(u32 *)(psx_ram+0x170000),*table=(u32 *)(psx_ram+0x170100);
+    *(u32 *)(psx_ram+0xf78a4)=(u32)context;context[4]=(u32)table;
+    unsigned n=0;code[n++]=0x27bdffb0;code[n++]=0xafbf004c;
+    for(unsigned i=0;i<16;i++) {
+        u32 value=i==13 ? 0x801e8178 : 0x80180000+i*32;
+        unsigned reg=i<4 ? 4+i : 8;
+        code[n++]=0x3c000000|(reg<<16)|(value>>16);
+        code[n++]=0x34000000|(reg<<21)|(reg<<16)|(value&65535);
+        if(i>=4) code[n++]=0xafa80000|i*4;
+    }
+    code[n++]=0x3c190000|(target>>16);code[n++]=0x37390000|(target&65535);
+    code[n++]=0x0320f809;code[n++]=0;
+    code[n++]=0x8fbf004c;code[n++]=0;code[n++]=0x03e00008;code[n++]=0x27bd0050;
+    for(unsigned i=0;i<sizeof entries/sizeof entries[0];i++) {
+        declared_mask=entries[i][1];table[entries[i][0]/4]=target;
+        if(port_effect_call(0x801e7700,0,0,0,0,0)!=0x76543210) abort();
+        table[entries[i][0]/4]=0;
+    }
+    *(u32 *)(psx_ram+0xf78a4)=0;
+}
 static void incoming_words_test(void) {
     u32 *code=(u32 *)(psx_ram+0x1e7700);
     u32 args[16];
@@ -117,6 +155,7 @@ int main(void) {
     incoming_words_test();
     position_bridge_test();
     offscreen_bridge_test();
+    declared_bridge_test();
     u32 args[5],size;
     while(fread(&size,4,1,stdin)==1) {
         if(size>0x5000 || fread(args,20,1,stdin)!=1 || fread(psx_ram+0x1e7700,size,1,stdin)!=1 || fread(psx_ram+0x180000,128,1,stdin)!=1 || fread(g,sizeof g,1,stdin)!=1) abort();

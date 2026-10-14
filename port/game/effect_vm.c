@@ -44,13 +44,85 @@ static u32 native_call(u32 target,u32 *r) {
         [0x1d4/4]=3,[0x1d8/4]=3,
         /* Unit IDs stay scalar; position/rotation/vector buffers are pointers. */
         [0x1f8/4]=2,[0x1fc/4]=2,[0x200/4]=4,[0x204/4]=2,
-        [0x20c/4]=2,[0x214/4]=6,[0x2a0/4]=2,[0x2a8/4]=2,[0x2b8/4]=4,
+        [0x20c/4]=2,[0x214/4]=6,[0x2a0/4]=2,[0x2a4/4]=2,[0x2a8/4]=2,[0x2b8/4]=4,
         /* Draw-model wrappers carry scale pointers as s32 before DCA68. */
         [0x60/4]=7,[0x64/4]=7,[0x28c/4]=7,[0x31c/4]=7,
         [0x254/4]=4,[0x290/4]=4,
         /* Vector metric and custom work-pool APIs; callback words stay code. */
         [0xcc/4]=3,[0x17c/4]=3,[0x184/4]=1,[0x188/4]=1,
         [0x2f4/4]=16, /* E6E1C: stack argument 4 is the offscreen OT. */
+        /* Declared data pointers from the generated export table and native
+         * DWARF signatures. Function callbacks remain guest code addresses.
+         * Recheck with tools/audit_effect_exports.py after signature changes. */
+        [0x50/4]=1, /* printf: fixed format parameter; variadic tail stays raw. */
+        [0x0/4]=0x3, /* LoadImage */
+        [0x4/4]=0x3, /* StoreImage */
+        [0xc/4]=0x600, /* o0b_func_800D12C4 */
+        [0x18/4]=0x1, /* o0b_Hi_RegisterGouEffModel */
+        [0x1c/4]=0x3, /* SetDrawMove */
+        [0x24/4]=0x7, /* CompMatrix */
+        [0x28/4]=0x1, /* SetRotMatrix */
+        [0x34/4]=0x1, /* SetTransMatrix */
+        [0x48/4]=0x13, /* LoadAverageShort12 */
+        [0x4c/4]=0x7, /* o0b_Hi_RegisterTexListModel */
+        [0x54/4]=0x1, /* o0b_Hi_RegisterSolidEffModel */
+        [0x58/4]=0x1, /* o0b_Hi_RegisterTexEffModel */
+        [0x5c/4]=0x3, /* o0b_Hi_RegisterSummonModel */
+        [0x68/4]=0x1, /* o0b_Hi_SetSummonMotion */
+        [0x6c/4]=0x1, /* o0b_func_800E8854 */
+        [0x80/4]=0x4, /* o0b_func_800DC818 */
+        [0x84/4]=0x4, /* o0b_func_800DC858 */
+        [0xd0/4]=0x1, /* o0b_func_800CF788 */
+        [0xe4/4]=0x3, /* o0b_func_800D006C */
+        [0xe8/4]=0x3, /* o0b_func_800D0130 */
+        [0xec/4]=0x7, /* o0b_func_800D01D4 */
+        [0xf4/4]=0x3, /* o0b_func_800D0580 */
+        [0xf8/4]=0x27, /* o0b_func_800D0674 */
+        [0x100/4]=0x1, /* o0b_func_800D0A0C */
+        [0x108/4]=0xc02, /* o0b_func_800D0E14 */
+        [0x10c/4]=0x600, /* o0b_func_800D0FFC */
+        [0x118/4]=0x3, /* o0b_func_800D198C */
+        [0x11c/4]=0x2, /* o0b_func_800D1BC4 */
+        [0x120/4]=0x7, /* o0b_func_800D1D74 */
+        [0x124/4]=0x7, /* o0b_func_800D1FFC */
+        [0x128/4]=0x7, /* o0b_func_800D23D8 */
+        [0x12c/4]=0x7, /* o0b_func_800D2938 */
+        [0x130/4]=0x1, /* o0b_func_800D2DBC */
+        [0x138/4]=0x3, /* o0b_func_800D3B6C */
+        [0x140/4]=0x3, /* o0b_func_800E0134 */
+        [0x144/4]=0x1, /* o0b_func_800E0168 */
+        [0x150/4]=0x1, /* o0b_func_800E1708 */
+        [0x154/4]=0x3, /* o0b_func_800E1810 */
+        [0x158/4]=0x3, /* o0b_func_800E1874 */
+        [0x15c/4]=0x1, /* o0b_func_800E1F90 */
+        [0x160/4]=0x3, /* o0b_func_800E2000 */
+        [0x164/4]=0xf, /* o0b_func_800E2F84 */
+        [0x16c/4]=0x1, /* o0b_func_800D6D8C */
+        [0x180/4]=0x1, /* o0b_func_800DA1B8 */
+        [0x1bc/4]=0x1, /* o0b_func_800E3B34 */
+        [0x1c0/4]=0x1, /* o0b_func_800E3B70 */
+        [0x1c4/4]=0x1, /* o0b_func_800E3BF8 */
+        [0x1c8/4]=0x1, /* o0b_func_800E3C50 */
+        [0x1dc/4]=0x1, /* o0b_func_800E3D54 */
+        [0x1e0/4]=0x1, /* o0b_func_800E701C */
+        [0x208/4]=0xe, /* o0b_func_800E82CC */
+        [0x218/4]=0x4, /* o0b_func_800E7BA0 */
+        [0x22c/4]=0x4, /* o0b_func_800D08C4 */
+        [0x238/4]=0x3, /* o0b_func_800E651C */
+        [0x23c/4]=0x6, /* o0b_func_800D07B4 */
+        [0x248/4]=0xe00, /* o0b_func_800E6764 */
+        [0x250/4]=0x1, /* o0b_func_800E6C58 */
+        [0x264/4]=0x40, /* o0b_func_800D0B18 */
+        [0x294/4]=0x1, /* ClearImage */
+        [0x298/4]=0x1, /* MoveImage */
+        [0x2ac/4]=0x7, /* o0b_Hi_RegisterTexPtrModel */
+        [0x2c4/4]=0x4, /* o0b_func_800DC8AC */
+        [0x2c8/4]=0x4, /* o0b_func_800DC8EC */
+        [0x2e0/4]=0x2, /* o0b_func_800E871C */
+        [0x310/4]=0x8, /* o0b_func_800DF738 */
+        [0x330/4]=0x20, /* o0b_func_800CFC2C */
+        [0x340/4]=0xb, /* o0b_func_800E9000 */
+        [0x35c/4]=0x3, /* o0b_func_800DD120 */
     };
     u32 ctx=read32((u32)PSX_ADDR(0x800f78a4));
     if(ctx) {

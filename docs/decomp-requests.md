@@ -373,3 +373,24 @@ can omit these operations when mask settings cannot change pixels, avoiding
 false texture invalidations. A blanket guard in matching PSX code is not needed.
 These are decomp-source and port-runtime findings; no new original-PSX breakpoint
 or decomp modification is claimed.
+
+### F12 (2026-10-14). Effect mesh variant and module export argument types
+
+`o0b` DD27C is C58E4's eight-list mesh packet emitter with an extra signed OT
+bucket bias. Its textured faces use the model's page directly rather than
+OR-ing in source flag bits 5–7. Untextured Gouraud faces emit a leading E1 draw
+mode and a length-bearing NOP inside the same OT packet; their semitransparency
+flag is also propagated. The culled untextured Gouraud triangle has a different
+delay-slot write from C58E4. The port shares the packing core and checks both
+variants against the original instructions; no matching source was changed.
+
+Kuja encounter 891 reaches export table offset 0x2A4, E7ACC, with a raw module
+pointer to a three-word scale vector. Its unit ID remains scalar. This was an
+omitted data-pointer argument in the port's effect VM bridge. A broader audit of
+the generated 216-function export table against PC/ARM DWARF finds 68 further
+entries with omitted declared data pointers, plus printf's fixed format pointer.
+The port now decodes those arguments, including stack words 9–11, while leaving
+function callbacks as guest code addresses. Scalar-typed pointer parameters and
+embedded struct pointers still require explicit semantic review; C prototypes
+alone do not establish the entire module ABI. `tools/audit_effect_exports.py`
+provides a repeatable read-only check of the declared data-pointer subset.

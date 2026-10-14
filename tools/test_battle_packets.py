@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Battle packet CPU equivalence, all eight primitive formats; shared simple
+"""Both battle packet emitters, all eight primitive formats; shared simple
 NCLIP/AVSZ3 model. Real GTE precision and rasterisation are separate checks."""
 import importlib.util
 from pathlib import Path
@@ -19,10 +19,14 @@ class Cpu(e.Cpu):
         elif op&63==0x2d: g[7]=(((g[17]+g[18]+g[19])&0xffffffff)>>4)&65535
         else: raise AssertionError(hex(op))
 formats=[(24,4,21,8,16,19),(20,3,18,12,8,6),(32,4,28,8,16,29),(24,3,15,6,16,22),(24,4,20,0,8,0),(20,3,19,0,8,0),(16,4,13,0,8,0),(12,3,11,0,8,0)]
-asm=ROOT/'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_4/func_800C58E4.s'
-image=b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',asm.read_text()))
+variants=[(0x800C58E4,0x800C6528,'ovl_0b_4/func_800C58E4.s'),
+          (0x800DD27C,0x800DDF10,'ovl_0b_2/func_800DD27C.s')]
+images=[b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',
+        (ROOT/'decomp/asm/us/ovl_0b/nonmatchings'/path).read_text())) for _,_,path in variants]
 rng=random.Random(0xc58e4); cases=[]; expected=[]
-for trial in range(160):
+for trial in range(352):
+    variant=int(trial>=160);start,end,_=variants[variant];image=images[variant]
+    ot_bias=rng.randrange(-32,33) if variant else 0
     blob=bytearray(8192); mesh=trial%2; base=384+mesh*40
     ptrs={8:256,24:3584,256+16:384,base+28:1024,base+32:2560,base+36:3072,3968+28:3840}
     if trial%3==0: ptrs[16]=0x10100
@@ -49,14 +53,14 @@ for trial in range(160):
             blob[at+flags]=rng.randrange(256)
             if t<4: blob[at+tex]=rng.randrange(32)
             at+=stride
-    cases.append(struct.pack('<I',mesh)+blob)
+    cases.append(struct.pack('<IIi',variant,mesh,ot_bias)+blob)
     original=bytearray(blob)
     for off,value in ptrs.items(): struct.pack_into('<I',original,off,0x80180000+value)
     struct.pack_into('<2I',original,3840+16,0x80188100,0x80189100)
-    mem=e.Mem(trial,[(0x800C58E4,image),(0x80180000,original),(0x80188000,bytes(16384)),(0x80190000,bytes(4096)),(0x800711A8,blob[512:640]),(0x80070520,blob[640:768])])
+    mem=e.Mem(trial,[(start,image),(0x80180000,original),(0x80188000,bytes(16384)),(0x80190000,b'\xa5'*4096),(0x800711A8,blob[512:640]),(0x80070520,blob[640:768])])
     mem.write(0x8006794C,0x80180F80,4)
-    cpu=Cpu(mem,0x800C58E4,0x800C6528,{}, {},trial,[0x80180000,mesh,0x80190000,0]); cpu.g=[0]*64
-    cpu.run(0x800C58E4); assert not cpu.events and not cpu.calls,(trial,cpu.events,cpu.calls)
+    cpu=Cpu(mem,start,end,{}, {},trial,[0x80180000,mesh,0x80190000,ot_bias]); cpu.g=[0]*64
+    cpu.run(start); assert not cpu.events and not cpu.calls,(trial,cpu.events,cpu.calls)
     output=struct.pack('<2I64I',(cpu.r[2]-0x80190000)&0xffffffff,mem.read(0x80180010,4)&0xffffff,*cpu.g)
     for base,size in ((0x80188000,16384),(0x80190000,4096)): output+=bytes(mem.read(base+i,1) for i in range(size))
     expected.append(output)
@@ -68,4 +72,4 @@ for trial,want in enumerate(expected):
     if got!=want:
         at=next(i for i,(a,b) in enumerate(zip(got,want)) if a!=b)
         raise AssertionError((trial,at,got[at:at+16].hex(),want[at:at+16].hex()))
-print(f'Battle packets match original CPU logic in {len(cases)} cases (eight formats, shared GTE model)')
+print(f'Battle packets match original CPU logic in {len(cases)} cases (both emitters, eight formats, shared GTE model)')

@@ -147,6 +147,24 @@ exit paths, visual fidelity, or performance. The host batch still reports Ark
 and its low-HP variant as missing D4228, and Meltigemini as a later segmentation
 fault (`scenarios_after_ribbons/report.json`).
 
+## Effect-module ABI audit
+
+Effect-module ABI checks can now be run independently of playthroughs:
+
+```sh
+python3 tools/audit_effect_exports.py > build/validation/effect_export_audit.json
+python3 tools/audit_effect_exports.py --elf build/ds/ff9ds.elf > build/validation/effect_export_audit_ds.json
+```
+
+Build matching PC/DS targets first. The tool reads the generated 216-function
+export table and compares the bridge masks with native DWARF argument types.
+It returns nonzero for missing data-pointer bits or unresolved signatures.
+Callback pointers are reported separately and remain raw guest code addresses.
+Six optimized scalar wrappers are checked against their reviewed source
+declarations; printf's fixed format parameter comes from stdio.h. This checks
+declared data pointers, not scalar-typed pointers, nested structures, variadic
+arguments or complete callback behavior. Keep the JSON reports for review.
+
 ## Matching original PSX encounters
 
 The original PSX also enters Ark directly from a disc-3 field baseline using

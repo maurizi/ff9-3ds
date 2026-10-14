@@ -1191,3 +1191,52 @@ or DS timing. Probe artifacts are `gx_lazy_material_occupancy*`,
 `gx_lazy_next_material_runtime.log`, `gx_lazy_plan_comparison*` and
 `gx_lazy_plan_compact_cost*`. Native model material layout and HUD batching still
 need implementation and screen validation.
+
+### Effect mesh variant and systematic export argument audit (2026-10-14)
+
+DD27C now shares the native eight-list mesh emitter with C58E4. It preserves the
+extra signed OT bias, the variant's page/flag handling, untextured Gouraud E1
+prefixes and semitransparency, and its different culled-triangle delay slot.
+The expanded 352-case original-instruction differential checks both emitters,
+all eight formats, complete packet/OT buffers, returned offsets, model output
+pointers and GTE state. Output buffers begin with a nonzero sentinel to expose
+unintended writes to culled packets. The shared GTE model does not independently
+validate GTE hardware accuracy or rendered pixels.
+
+The four previously blocked fixtures pass DD27C. Valia Pira, Taharka and Garland
+then stop at missing D59D0. Kuja initially exposed a raw module scale-vector
+pointer passed to E7ACC (export +0x2A4); its unit ID must remain scalar. After
+fixing that argument, Kuja reaches missing D5568 instead of SIGSEGV.
+
+`tools/audit_effect_exports.py` independently checks the generated 216-function
+table against native DWARF signatures. This identified 68 further entries with
+omitted declared data pointers, plus printf's fixed format pointer. Including
+the Kuja fix, 70 exports gain 120 mapped argument positions. Callback arguments
+remain raw code addresses, and scalar bit patterns are preserved. The bridge
+tests additionally cover pointer arguments on the stack, including positions
+9–11, alongside E6764's unmodified callback word at position 13. The 360-case
+VM differential and bridge checks pass. Both PC and ARM audits report zero
+missing bits and zero unresolved signatures. Six optimized scalar wrappers use
+source-checked reviewed declarations; printf uses its stdio.h fixed parameter.
+Removing E7ACC's pointer bit in a temporary copy makes the audit fail as expected.
+This is not an audit of scalar-typed pointers, nested structures or varargs.
+
+Both default builds pass. The six-fixture 65,000-frame host batch retains Ark
+and Meltigemini passes and reports the four explicit missing emitters above
+(`scenarios_dd27c_export_audit/report.json`). Garland's native software run
+reaches frame 2875 with clear fault/ITCM checks and records Flare, the arena and
+subsequent combat in `ds_dd27c_garland_entrance.mp4`. Recovered original PSX
+clips `psx_garland_reference_recovered_motion.mp4` and
+`psx_garland_flare_finish.mp4` show the corresponding arena and full Flare
+sequence. The synthetic fixtures choose different targets/timing; these are
+motion/layout comparisons, not pixel-aligned or timing-parity proof. A prior
+4.9-second PSX recording interrupted by display-server shutdown is explicitly
+named `psx_garland_reference_motion_interrupted.mp4` and is not a complete clip.
+
+Native Kuja passes the prior pointer crash and reaches the missing D5568 stop
+at frame 2539 (`ds_dd27c_kuja_stop.ml8`, screenshot and inspection JSON), with
+zero first-fault markers or protected ITCM changes. Two short actual videos
+cover the route. The stopped close-up exposes a suspicious vertical pattern
+along the arena's top edge; matching original PSX validation is still needed.
+Neither four-boss completion nor visual parity is established. The test
+emulators were closed and the normal SD configuration/default build restored.

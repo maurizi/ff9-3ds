@@ -1,4 +1,4 @@
-/* Battle mesh packet emitter, 800C58E4. Source meshes contain eight consecutive
+/* Battle mesh packet emitters, 800C58E4 and 800DD27C. Source meshes contain eight consecutive
  * primitive lists. Vertex projection/lighting is performed by the existing C
  * path; this routine packs those results and links them into the active OT. */
 #include "psyq_port.h"
@@ -16,14 +16,14 @@ static const struct Format formats[8] = {
     {24,36,4,20,0,8,0,0x38}, {20,28,3,19,0,8,0,0x30},
     {16,24,4,13,0,8,0,0x28}, {12,20,3,11,0,8,0,0x20}
 };
-static u8 *emit_mesh_packets(void *model, u8 mesh_index, u8 *out) {
+static u8 *emit_mesh_packets(void *model, u8 mesh_index, u8 *out, int blend_variant, s32 ot_bias) {
     if (!(h(model, 0) & 0x10)) {
         if (!w(model, 16)) putw(model, 16, (u32)out);
         const u8 *mesh = (const u8 *)ptr(ptr(model, 8), 16) + mesh_index * 40;
         const u8 *src = ptr(mesh, 28), *uv = ptr(mesh, 32), *colors = ptr(mesh, 36);
         const u8 *pages = ptr(model, 24);
         const u8 *gs = *(u8 **)(void *)PSX_ADDR(0x8006794C), *gd = ptr(gs, 28);
-        u8 *ot = (u8 *)ptr(gd, 16 + gd[8] * 4) - (s8)mesh[19] * 4;
+        u8 *ot = (u8 *)ptr(gd, 16 + gd[8] * 4) - (s8)mesh[19] * 4 + ot_bias * 4;
         for (unsigned type = 0; type < 8; type++) {
             const struct Format *f = &formats[type];
             unsigned count = h(mesh, 2 + type * 2);
@@ -36,8 +36,9 @@ static u8 *emit_mesh_packets(void *model, u8 mesh_index, u8 *out) {
                     unsigned index = h(src, i * 2);
                     xy[i] = g_vtxScreenXY[index]; z[i] = g_vtxScreenZ[index];
                 }
-                /* Every triangle cull branch has SW xy0 in its delay slot. */
-                if (f->vertices == 3) putw(out, 8, xy[0]);
+                /* DD27C's untextured Gouraud triangle instead saves its prefix
+                 * address in this delay slot, leaving culled output untouched. */
+                if (f->vertices == 3 && !(blend_variant && type == 5)) putw(out, 8, xy[0]);
                 if (!(flags & 2)) {
                     for (unsigned i = 0; i < 3; i++) gte_mtc2(12 + i, xy[i]);
                     gte_cmd(0x400006);
@@ -51,8 +52,16 @@ static u8 *emit_mesh_packets(void *model, u8 mesh_index, u8 *out) {
                     bucket = gte_mfc2(7) & ~3u;
                 }
                 u32 command = (u32)f->command << 24;
-                if (textured && (flags & 1)) command |= 0x02000000;
+                if ((textured || (blend_variant && gouraud)) && (flags & 1)) command |= 0x02000000;
                 u32 page = textured ? w(pages, src[f->texture] * 4) : 0;
+                u8 *prefix = NULL;
+                if (blend_variant && !textured && gouraud) {
+                    /* The original emits one OT packet containing E1, a NOP
+                     * word bearing the polygon length, and the polygon words. */
+                    prefix = out;
+                    putw(prefix, 4, 0xE1000000u | (flags & 0xE0));
+                    out += 8;
+                }
                 for (unsigned i = 0; i < f->vertices; i++) {
                     putw(out, 8 + i * step, xy[i]);
                     if (gouraud || !i) {
@@ -64,13 +73,17 @@ static u8 *emit_mesh_packets(void *model, u8 mesh_index, u8 *out) {
                     if (textured) {
                         u32 pair = h(uv, h(src, f->uv + i * 2) * 2);
                         if (!i) pair |= page & 0xFFFF0000;
-                        if (i == 1) pair |= (page | (flags & 0xE0)) << 16;
+                        if (i == 1) pair |= (page | (blend_variant ? 0 : flags & 0xE0)) << 16;
                         putw(out, 12 + i * step, pair);
                     }
                 }
                 u32 *entry = (u32 *)(ot + bucket);
-                putw(out, 0, *entry | ((f->packet_size / 4 - 1u) << 24));
-                *entry = (u32)out & 0xFFFFFF;
+                u32 length = f->packet_size / 4 - 1u;
+                if (prefix) {
+                    putw(prefix, 0, *entry | ((length + 2u) << 24));
+                    putw(out, 0, length << 24);
+                } else putw(out, 0, *entry | (length << 24));
+                *entry = (u32)(prefix ? prefix : out) & 0xFFFFFF;
                 out += f->packet_size;
             }
         }
@@ -81,7 +94,14 @@ static u8 *emit_mesh_packets(void *model, u8 mesh_index, u8 *out) {
 
 u8 *o0b_func_800C58E4(void *model, u8 mesh_index, u8 *out) {
     unsigned int profile_start = port_profile_begin();
-    u8 *result = emit_mesh_packets(model, mesh_index, out);
+    u8 *result = emit_mesh_packets(model, mesh_index, out, 0, 0);
+    port_profile_detail_end(PORT_PROFILE_MESH_PACKETS, profile_start);
+    return result;
+}
+
+u8 *o0b_func_800DD27C(void *model, u8 mesh_index, u8 *out, s32 ot_bias) {
+    unsigned int profile_start = port_profile_begin();
+    u8 *result = emit_mesh_packets(model, mesh_index, out, 1, ot_bias);
     port_profile_detail_end(PORT_PROFILE_MESH_PACKETS, profile_start);
     return result;
 }
