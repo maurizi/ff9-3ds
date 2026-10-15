@@ -31,6 +31,7 @@ src/ovl_0b/ovl_0b_2.c | el->unk24(e, owner, &pos, vp, &scale, &alpha, &cnt, fram
 # Custom work-pool setup/update functions also reside in loaded MIPS modules.
 src/ovl_0b/ovl_0b_2.c | pool->unk4(1, d, D_800F78A4, pool->unk8, 0, pool, pool->unk8->unkC); | port_effect_call_words((u32)pool->unk4, (u32[]){1, (u32)d, (u32)D_800F78A4, (u32)pool->unk8, 0, (u32)pool, pool->unk8->unkC}, 7); | 1
 src/ovl_0b/ovl_0b_2.c | fn(2, p + 2, D_800F78A4, pool->unk8, p[1], pool, pool->unk8->unkC) | port_effect_call_words((u32)fn, (u32[]){2, (u32)(p + 2), (u32)D_800F78A4, (u32)pool->unk8, (u32)(s32)p[1], (u32)pool, pool->unk8->unkC}, 7) | 1
+src/ovl_0b/ovl_0b_2.c | ((EffTailSpawn *)e->unk24)->unk3C(&off, &rot, frame, dur) | port_effect_call_words((u32)((EffTailSpawn *)e->unk24)->unk3C, (u32[]){(u32)&off, (u32)&rot, (u32)frame, (u32)dur}, 4) | 1
 
 # Battle sound panning accepts unit IDs 0..17 or an SVECTOR pointer. The PS1
 # address-bit test misses native ARM stack pointers (DS crash SystemError S/310).

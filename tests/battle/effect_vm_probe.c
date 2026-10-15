@@ -148,6 +148,19 @@ static void incoming_words_test(void) {
         if(port_effect_call_words((u32)exported,args,count)!=weighted) abort();
     }
 }
+static void tail_spawn_callback_test(void) {
+    /* The callback writes two SVECTOR outputs and returns whether its frame
+     * has reached the duration. Both native and module pointer words work. */
+    u32 words[]={0x24080001,0xa4880006,0xa4a60000,0x00c7102a,0x38420001,0x03e00008,0};
+    __builtin_memcpy(psx_ram+0x1e7700,words,sizeof words);
+    for(unsigned raw=0;raw<2;raw++) {
+        memset(psx_ram+0x180000,0,16);
+        u32 base=raw ? 0x80180000 : (u32)(psx_ram+0x180000);
+        u32 frame=raw ? 5 : 17,args[]={base,base+8,frame,16};
+        if(port_effect_call_words(0x801e7700,args,4)!=(frame>=16) ||
+           *(u16 *)(psx_ram+0x180006)!=1 || *(u16 *)(psx_ram+0x180008)!=frame) abort();
+    }
+}
 int main(void) {
     if(mmap(psx_ram,PSX_RAM_SIZE,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0)!=psx_ram) abort();
     bridge_test();
@@ -156,6 +169,7 @@ int main(void) {
     position_bridge_test();
     offscreen_bridge_test();
     declared_bridge_test();
+    tail_spawn_callback_test();
     u32 args[5],size;
     while(fread(&size,4,1,stdin)==1) {
         if(size>0x5000 || fread(args,20,1,stdin)!=1 || fread(psx_ram+0x1e7700,size,1,stdin)!=1 || fread(psx_ram+0x180000,128,1,stdin)!=1 || fread(g,sizeof g,1,stdin)!=1) abort();

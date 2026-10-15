@@ -394,3 +394,25 @@ function callbacks as guest code addresses. Scalar-typed pointer parameters and
 embedded struct pointers still require explicit semantic review; C prototypes
 alone do not establish the entire module ABI. `tools/audit_effect_exports.py`
 provides a repeatable read-only check of the declared data-pointer subset.
+
+### F13 (2026-10-14). Gouraud frame fan and circular-line effects
+
+D59D0 is D57D0's untextured Gouraud sibling, emitting three triangles followed
+by a draw-mode packet. Its first RTPT's MAC0 value gates the entire fan without
+NCLIP, and its SZ3 supplies the depth bucket for all three triangles and the
+mode. The later triangles update only selected input GTE registers. D597C is
+an internal linking helper using the caller's registers, not a normal C entry.
+The original PSX Wave route reaches D59D0 from D2938, independently of the port
+instruction comparison.
+
+D5568 walks the circular position buffer as Gouraud lines, while D50A0/D5C30
+derive ribbon widths. It nudges the previous projected endpoint by one pixel
+toward the new point on each nonzero axis, fades each segment with DPCS and
+links a draw-mode packet before that segment. Please preserve those distinctions
+when naming these emitters and their shared context fields.
+
+E2000's `EffTailSpawn.unk3C` callback receives two writable SVECTORs, frame and
+duration, and returns a value used to stop the animation. Kuja's loaded module
+supplies guest code at 0x801E8C84 here. This call now enters the effect VM in
+the portified copy, retaining raw stored callback words and scalar arguments.
+It is separate from the six/nine-word element and seven-word pool callbacks.

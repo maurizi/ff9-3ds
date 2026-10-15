@@ -117,6 +117,88 @@ static void effect_link(u8 *packet, u32 *ot, u32 length) {
     *(u32 *)packet = length << 24 | (previous & 0xffffff);
     *ot = (previous & 0xff000000) | ((u32)packet & 0xffffff);
 }
+/* Three Gouraud triangles form the untextured sibling of D57D0's frame.
+ * Keep the first RTPT's MAC0 cull/depth and the subsequent partial vertex
+ * register updates: this routine does not issue NCLIP or reproject all inputs. */
+void o0b_func_800D59D0(const u8 *points, const void *context, u8 *out, u32 *ot) {
+    u32 code=word(context,0),bias=word(context,4),fade=word(context,8);
+    u32 negative=0-word(context,16);
+    u32 x0=(u32)(s32)*(const s16 *)points*4+negative;
+    u32 y0=(u32)(s32)*(const s16 *)(points+2)*4;
+    u32 x1=(u32)(s32)*(const s16 *)(points+4)*4+negative;
+    u32 y1=(u32)(s32)*(const s16 *)(points+6)*4;
+    u32 z1=(u32)(s32)*(const s16 *)(points+8)*4+negative;
+    const u8 *colors=points+12+word(context,20)*8;
+    u32 color0=*(const u16 *)colors|((u32)colors[2]<<16)|code;
+    u32 color1=*(const u16 *)(colors+4)|((u32)colors[6]<<16)|code;
+    for(unsigned i=0;i<3;i++) gte_ctc2(21+i,0);
+    if((s32)fade>=0) {
+        gte_mtc2(8,4096-fade);gte_mtc2(6,code);
+        gte_mtc2(20,color0);gte_mtc2(21,color1);gte_cmd(0xf8002a);
+        color0=gte_mfc2(20);color1=gte_mfc2(21);
+    }
+    u32 depth=0;
+    for(unsigned part=0;part<3;part++,out+=28) {
+        if(!part) {
+            gte_mtc2(0,0);gte_mtc2(2,(0-y0)&65535);gte_mtc2(4,(0-y1)&65535);
+            gte_mtc2(1,negative);gte_mtc2(3,x1);gte_mtc2(5,z1);
+        } else if(part==1) {
+            gte_mtc2(0,(0-y0)&65535);gte_mtc2(2,y0&65535);
+            gte_mtc2(1,x1);gte_mtc2(3,x0);
+        } else {
+            gte_mtc2(0,(0-y1)&65535);gte_mtc2(4,0);
+            gte_mtc2(1,z1);gte_mtc2(5,negative);
+        }
+        *(u32 *)(out+4)=part==2 ? color1 : code;
+        *(u32 *)(out+20)=part==2 ? color0 : color1;
+        gte_cmd(0x280030);
+        *(u32 *)(out+12)=0;
+        for(unsigned i=0;i<3;i++) *(u32 *)(out+8+i*8)=gte_mfc2(12+i);
+        if(!part) {
+            if(!gte_mfc2(24)) return;
+            depth=gte_mfc2(19);
+        }
+        u32 bucket=(u32)((s32)((u32)((s32)depth>>2)-bias)>>2);
+        if(bucket<4096) effect_link(out,ot+bucket,6);
+    }
+    *(u32 *)(out+4)=0xe1000200|word(context,12);
+    u32 bucket=(u32)((s32)((u32)((s32)depth>>2)-bias)>>2);
+    if(bucket<4096) effect_link(out,ot+bucket,1);
+}
+/* Project the circular position trail as Gouraud line segments. The original
+ * adjusts the previous endpoint by one pixel toward the current point and
+ * links a draw-mode packet before each line in its depth bucket. */
+void o0b_func_800D5568(s32 count, const void *context, u8 *out, u32 *ot) {
+    const u8 *ring=(const u8 *)PSX_ADDR(word(context,4));
+    unsigned size=ring[0]+1u,index=ring[1];ring+=4;
+    u32 fade=word(context,8),color=word(context,12),previous=color,target=word(context,16);
+    gte_ctc2(21,(target&255)<<4);gte_ctc2(22,(target>>4)&0xff0);gte_ctc2(23,(target>>12)&0xff0);
+    gte_mtc2(0,word(ring,index*8));gte_mtc2(1,word(ring,index*8+4));gte_cmd(0x180001);
+    if(++index==size) index=0;
+    s32 segment=0;
+    do {
+        gte_mtc2(0,word(ring,index*8));gte_mtc2(1,word(ring,index*8+4));gte_cmd(0x180001);
+        *(u32 *)(out+24)=0xe1000200|word(context,40);
+        if(segment+1>=count) fade=4096;
+        *(u32 *)(out+4)=previous;
+        u32 current=gte_mfc2(14),last=gte_mfc2(13);
+        *(u32 *)(out+8)=current;
+        s32 dx=(s16)current-(s16)last,dy=(s16)(current>>16)-(s16)(last>>16);
+        *(u16 *)(out+16)=(u16)((s16)last+(dx>0)-(dx<0));
+        *(u16 *)(out+18)=(u16)((s16)(last>>16)+(dy>0)-(dy<0));
+        u32 depth=gte_mfc2(18);
+        gte_mtc2(8,fade);gte_mtc2(6,color);gte_cmd(0x780010);
+        u32 bucket=(u32)((s32)((u32)((s32)depth>>2)-word(context,0))>>2);
+        if(bucket<4096) {
+            effect_link(out,ot+bucket,4);
+            effect_link(out+20,ot+bucket,1);
+        }
+        previous=gte_mfc2(22);fade+=word(context,32);
+        *(u32 *)(out+12)=previous;
+        if(++index==size) index=0;
+        out+=28;
+    } while(++segment<count);
+}
 /* Ten-byte source sprites and a separate stream of draw-mode packets. The
  * previous page's mode is linked when the page changes, before the next
  * sprite; page zero deliberately emits no mode packet. */

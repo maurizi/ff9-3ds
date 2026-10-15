@@ -1240,3 +1240,43 @@ cover the route. The stopped close-up exposes a suspicious vertical pattern
 along the arena's top edge; matching original PSX validation is still needed.
 Neither four-boss completion nor visual parity is established. The test
 emulators were closed and the normal SD configuration/default build restored.
+
+### Gouraud effect fan, line trail and tail-spawn callback (2026-10-14)
+
+D59D0 now emits its three Gouraud triangles and final E1 packet, preserving the
+first RTPT's MAC0 early return and depth, partial vertex-register updates,
+DPCT color fade, bucket bounds and OT tag bits. D5568 projects the circular
+position stream into Gouraud line segments, preserving endpoint adjustment,
+per-segment DPCS fade, wraparound and preceding draw-mode packets. It decodes
+the ring pointer explicitly at its native dereference boundary. The effect
+primitive differential suite now covers 900 cases across rectangles, fans and
+lines, including both raw guest and native ring pointers. Complete packet/OT
+buffers and GTE state match the original instructions with the shared GTE model.
+The fan's internal D597C helper executes as original instructions in the oracle.
+
+Passing D5568 exposed a native jump into module code (0x801E8C84) from E2000's
+`EffTailSpawn.unk3C` callback. That four-word callback now enters the effect VM,
+preserving its two SVECTOR output buffers and return value. The counted source
+patch changes only the portified copy. A bridge fixture exercises output writes
+and frame/duration return behavior with both native and guest pointer words;
+the existing 360-case VM suite still passes.
+
+Taharka and Garland now reach the 65,000-frame host limit; Kuja does too after
+the tail callback fix (`scenarios_d59d0`, `scenarios_fan_line_tail_final`). Their
+idle-input routes eventually reach Game Over; these are not boss-victory tests.
+Valia Pira advances to missing D50A0 and remains blocked. A premature host probe
+launched before the updated binary linked is preserved as
+`scenarios_fan_line_before_link` and is not validation of the callback fix.
+
+The matching D59D0-only Garland DS run advances from frame 4815 to 6575 through
+Wave without a fault or protected ITCM changes. Its 45-second actual recording
+`ds_d59d0_garland_fan.mp4` includes the cast and subsequent combat. The original
+PSX breakpoint reaches D59D0 from D2938, and `psx_garland_wave_action.mp4`
+records the corresponding 12-second original sequence. The native Kuja build
+with both emitters and the callback fix records Thundaga and subsequent combat
+in `ds_fan_line_tail_kuja_action.mp4`. It progresses beyond the old frame-2539
+stop and eventually reaches Game Over with clear fault/ITCM checks. The later
+frame-502513 checkpoint is predominantly idle Game Over time and must not be
+used as a combat-duration or FPS result. Its top-edge close-up pattern remains
+an open comparison item. Native artifacts retain matching ROMs, ELFs and states.
+Both default targets build and the declared export signature audit stays clear.
