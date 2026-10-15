@@ -495,3 +495,16 @@ field. Nine indexed consumers across ovl_0b.c, ovl_0b_2.c, ovl_0b_3.c and
 ovl_0b_o1.c share this array contract (height queries and bone attachments).
 Please annotate the optional pose-array state when naming these paths; a NULL
 check inserted into matching PSX code would change the original behavior.
+
+### F18 (2026-10-15). BIOS string append in battle rewards
+
+`func_80063108` starts with a BIOS A0(15h) `strcat` trampoline, not a
+game-specific text operation. Player-input victory in disc-1 encounter 21
+(Black Waltz/Sealion) reaches it in the reward path; idle defeat does not.
+Please name this entry as the BIOS append wrapper. The remaining instructions
+in its current assembly chunk belong to the following animation routine and
+must not be treated as part of the string operation.
+
+The port supplies zero-terminated byte append, preserving high-byte game text,
+the original destination return value and BIOS NULL refusal. Nonzero low-RAM
+arguments are mapped before access; NULL is checked before mapping.

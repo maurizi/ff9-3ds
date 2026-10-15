@@ -2,6 +2,7 @@
  * (memcpy, memset, strcmp, sprintf, ... come from libc: same results.)
  */
 #include "psx_runtime.h"
+#include "psx_mem.h"
 
 /* A(2Fh) rand / A(30h) srand (psx-spx "BIOS Memory/String Functions").
  * The seed's power-on value isn't documented; it only matters for lockstep comparisons, which seed both sides. */
@@ -24,8 +25,23 @@ long func_80065208(unsigned long ev) {
 
 /* A(19h) strcpy (func_80065238) */
 char *func_80065238(char *dst, const char *src) {
+    if (!dst || !src) return 0;
+    char *original = dst;
+    dst = PSX_PTR(dst); src = PSX_PTR(src);
     char *d = dst;
     while ((*d++ = *src++)) {
     }
-    return dst;
+    return original;
+}
+
+/* A(15h) strcat (80063108): BIOS strings end at zero, including when their
+ * payload contains FF9 high-byte glyph/control values. NULL inputs refuse
+ * the copy; nonzero KUSEG pointers address the PSX RAM image. */
+char *func_80063108(char *dst, const char *src) {
+    if (!dst || !src) return 0;
+    char *original = dst;
+    dst = PSX_PTR(dst); src = PSX_PTR(src);
+    while (*dst) dst++;
+    while ((*dst++ = *src++)) {}
+    return original;
 }

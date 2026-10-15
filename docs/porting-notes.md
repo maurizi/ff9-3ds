@@ -1471,3 +1471,20 @@ targets and all battle, effect VM, GPU/raster, display and low-RAM suites pass.
 Both 216-export signature audits are clear. All emulators are closed and
 ordinary builds/configuration restored. Full-game rendering, sound, performance
 and remaining routine coverage are still open.
+## BIOS append reached by battle victory (2026-10-15)
+
+Disc-1 encounter 21 with solo level-99 Zidane and repeated real CROSS input
+reached victory, then stopped at missing `func_80063108`. Its original entry
+is the BIOS A0(15h) `strcat` trampoline. The replacement appends through the
+zero byte, including high-byte glyph/control payloads, and returns the incoming
+destination. Both it and the existing A0(19h) copy wrapper refuse NULL before
+mapping nonzero low-RAM arguments. These contracts follow the
+[PSX BIOS string reference](https://psx-spx.consoledev.net/kernelbios/).
+
+`make test-bios` checks append/copy behavior, sentinels, high bytes, NULL
+refusal and low-RAM pointers under ASan/UBSan. Both targets build. The actual
+host process now exits zero after 65000 frames and returns to field mode
+(`build/validation/black_waltz_victory_process.json` and matching log).
+The debugger trace retains attack commands and the victory flag; its trailing
+post-exit backtrace error is not a game failure. This is host reward-path
+coverage; native DS and original PSX victory motion comparison remains due.
