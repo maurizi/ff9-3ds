@@ -1303,3 +1303,42 @@ addresses within the arena; the original-instruction oracle retains its own
 guest ring location. The strip probe discards unused emitter/VM sections, while
 the effect primitive probe links the production decoder itself. This correction
 does not change the already-captured route's in-arena ring addresses.
+
+
+### PsyQ environment clears and Kuja texture corruption (2026-10-15)
+
+The stopped Kuja state's sky texture at VRAM x896..1023, y28..55 contains
+3,584 copies of 0x0082. Background-OT replay reproduces the visible black/blue
+bars on the host, establishing that the resident texture is already damaged.
+A host breakpoint traces the overwrite to PutDrawEnv after E6E1C renders an
+112x112 offscreen effect. Its saved environment produces a negative width;
+the port's unconditional absolute fill masks that into a large positive span.
+Original MIPS confirms the unusual saved-environment copy, so game sources
+remain unchanged.
+
+Original SetDrawEnv (80013EF0) always emits a clipped TILE for its background.
+PutDrawEnv calls 800140E8, which uses an absolute fill only when both the
+original X and clamped width are multiples of 64. Both clamp signed dimensions
+and drawing-area corners to the GPU limits; TILE coordinates subtract the
+DRAWENV offset with 16-bit wrapping. The port now follows these two builders.
+A 1,024-case original-instruction comparison executes their real helper code
+and checks all 64 packet bytes, including untouched bytes. A production
+GP0/software-raster regression checks aligned/unaligned clears and preservation
+of all VRAM for a negative-width saved environment. This also exposed signed
+left-shift UB in GP0's 11-bit coordinate extension; equivalent masked arithmetic
+now passes sanitizers.
+
+The host frame-2539 silhouette stripes disappear. Native DS Kuja advances from
+checkpoint 2435 to 3051 through Thundaga and subsequent Demi without protected
+ITCM changes or a recorded ITCM fault. The formerly overwritten sky region now
+matches all 3,584 original PSX texture words exactly (zero differences), and
+its blue/black bars disappear. Artifacts: ds_drawenv_fix_kuja_action.mp4 (30s
+actual animation), matching archived ROM/ELF, before/after states,
+ds_drawenv_fix_kuja_texture_comparison.json, and pc_kuja_drawenv_fix_2539.png.
+The clip was inspected alongside psx_kuja_thundaga_action.mp4; their targets,
+RNG and action phases differ, so this establishes the texture fix and effect
+progress, not whole-animation pixel or timing parity. The capture precedes
+the equivalent coordinate-UB cleanup. Both default targets, test-gpu,
+test-raster (4,096 primitives), test-display and five 65,000-frame host battle
+fixtures pass. The replay diagnostic prototype is retained under ignored
+build/validation; it is not a supported test interface yet.

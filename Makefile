@@ -184,8 +184,18 @@ $(BUILD)/tests/gx_texture_shared_shadow_test: tests/gx/texture_test.c tests/gx/n
 
 # Match the production pointer width when exercising 24-bit OT links.
 .PHONY: test-gpu
-test-gpu: $(BUILD)/tests/gpu_ordering_test
+test-gpu: $(BUILD)/tests/gpu_ordering_test $(BUILD)/tests/gpu_env_probe $(BUILD)/tests/gpu_env_render
 	@$<
+	@$(BUILD)/tests/gpu_env_render
+	@python3 tools/test_gpu_env.py
+
+$(BUILD)/tests/gpu_env_render: tests/gpu/env_render.c port/psx/gpu.c port/psx/gp0.c port/psx/softgpu.c port/include/gp0.h port/include/psyq_port.h port/include/psx_raster.h
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $< port/psx/gpu.c port/psx/gp0.c port/psx/softgpu.c -Wl,--gc-sections -o $@
+
+$(BUILD)/tests/gpu_env_probe: tests/gpu/env_probe.c tests/gpu/ordering_test.c port/psx/gpu.c port/include/gp0.h port/include/psyq_port.h
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $< port/psx/gpu.c -Wl,--gc-sections -o $@
 $(BUILD)/tests/gpu_ordering_test: tests/gpu/ordering_test.c port/psx/gpu.c port/include/gp0.h port/include/psyq_port.h
 	@mkdir -p $(dir $@)
 	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/gpu/ordering_test.c port/psx/gpu.c -Wl,--gc-sections -o $@

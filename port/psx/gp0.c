@@ -13,7 +13,7 @@ __attribute__((weak)) void psx_display_glyph(int x, int y, int w, int h) {}
 __attribute__((weak)) void psx_display_drawing(void) {}
 
 static inline int sext11(int v) {
-    return (v << 21) >> 21;
+    return (v & 0x7FF) - ((v & 0x400) << 1);
 }
 
 static Gp0Vtx vtx(unsigned int xy, unsigned int col) {

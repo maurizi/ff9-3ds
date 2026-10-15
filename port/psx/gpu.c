@@ -199,12 +199,18 @@ DISPENV *SetDefDispEnv(DISPENV *env, int x, int y, int w, int h) {
     return env;
 }
 
+static int env_limit(int value, int limit) {
+    value = (s16)value;
+    return value < 0 ? 0 : value >= limit ? limit - 1 : value;
+}
+
 static u32 area_tl(const RECT *r) {
-    return 0xE3000000 | ((r->y & 0x3FF) << 10) | (r->x & 0x3FF);
+    return 0xE3000000 | (env_limit(r->y, VRAM_H) << 10) | env_limit(r->x, VRAM_W);
 }
 
 static u32 area_br(const RECT *r) {
-    return 0xE4000000 | (((r->y + r->h - 1) & 0x3FF) << 10) | ((r->x + r->w - 1) & 0x3FF);
+    return 0xE4000000 | (env_limit(r->y + r->h - 1, VRAM_H) << 10)
+        | env_limit(r->x + r->w - 1, VRAM_W);
 }
 
 static u32 offset_word(int x, int y) {
@@ -215,7 +221,7 @@ static inline void set_len(void *p, unsigned int len) /* via P_TAG: psx_ram is a
     ((P_TAG *)p)->len = len;
 }
 
-void SetDrawEnv(DR_ENV *dr, DRAWENV *env) {
+static void make_draw_env(DR_ENV *dr, DRAWENV *env, int immediate) {
     unsigned int n = 0;
     dr->code[n++] = area_tl(&env->clip);
     dr->code[n++] = area_br(&env->clip);
@@ -224,17 +230,30 @@ void SetDrawEnv(DR_ENV *dr, DRAWENV *env) {
     dr->code[n++] = get_tw(&env->tw);
     dr->code[n++] = 0xE6000000;
     if (env->isbg) {
-        dr->code[n++] = 0x02000000 | (env->b0 << 16) | (env->g0 << 8) | env->r0;
-        dr->code[n++] = ((u32)env->clip.y << 16) | (u16)env->clip.x;
-        dr->code[n++] = ((u32)env->clip.h << 16) | (u16)env->clip.w;
+        int w = env_limit(env->clip.w, VRAM_W), h = env_limit(env->clip.h, VRAM_H);
+        /* PsyQ SetDrawEnv always clears with a clipped TILE. PutDrawEnv's
+         * internal builder uses an absolute fill only for 64-pixel alignment.
+         * In particular, an unaligned saved environment must never fill VRAM
+         * outside its drawing area and overwrite resident texture pages. */
+        int fill = immediate && !(env->clip.x & 63) && !(w & 63);
+        int x = env->clip.x - (fill ? 0 : env->ofs[0]);
+        int y = env->clip.y - (fill ? 0 : env->ofs[1]);
+        dr->code[n++] = (fill ? 0x02000000 : 0x60000000)
+            | (env->b0 << 16) | (env->g0 << 8) | env->r0;
+        dr->code[n++] = ((u32)(u16)y << 16) | (u16)x;
+        dr->code[n++] = ((u32)h << 16) | (u16)w;
     }
     set_len(dr, n);
+}
+
+void SetDrawEnv(DR_ENV *dr, DRAWENV *env) {
+    make_draw_env(dr, env, 0);
 }
 
 static void draw_packet(u32 *p);
 
 DRAWENV *PutDrawEnv(DRAWENV *env) {
-    SetDrawEnv(&env->dr_env, env);
+    make_draw_env(&env->dr_env, env, 1);
     ((P_TAG *)&env->dr_env)->addr = OT_END;
     __builtin_memcpy(&draw_env, env, sizeof draw_env);
     draw_packet((u32 *)&env->dr_env);
