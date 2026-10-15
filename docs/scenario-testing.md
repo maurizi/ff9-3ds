@@ -73,6 +73,7 @@ Fixtures use `key=value`, with comments beginning with `#`:
 | `enemy_hp.SLOT` | Battle-only current HP 1–65535 for enemy unit ID 4+SLOT (SLOT 0–3), bounded by its initialized maximum |
 | `equip.SLOT` | Five equipment item IDs, 0–255 |
 | `item.ID` | Set inventory quantity 0–99, preserving other items |
+| `gil` | Optional money 0–9999999; otherwise retain the initializer/baseline value |
 | `story` | Set the 16-bit event story counter |
 | `summons_seen` | 16-bit first-use summon mask (GameData+0x55e), defaults to New Game's 0 |
 | `event.OFFSET` | Set an individual event byte, offsets 0–0x7ff |
@@ -285,6 +286,9 @@ It requires an observed player effect call, a zero inferior exit and the
 requested frame limit. A signal, missing effect or timeout fails, even if the
 debugger itself exits successfully. It does not prove learned abilities,
 legal menu availability, animation completion or graphical/audio equivalence.
+`--actor ID` restricts queue replacement and effect observations to that
+character (0–8), allowing multiple party members without selecting the wrong
+caster. Without it, the first player Attack remains the probe seam.
 Targets are a unit mask (default 0x10); use the appropriate actor/command and
 target type for each ability. The synthetic Ark arena disables magic in its
 normal menu; dispatch probes there deliberately bypass selection restrictions.
@@ -381,6 +385,24 @@ tools/docker.sh python3 tools/scenario_command_probe.py \
   --data build/validation/kernel_data --out build/validation/vivi_ko_regression
 ```
 
+A subsequent 60-case dispatch sweep covers Blue Magic (77–100), Zidane's
+normal skills (101–108), Freya's Dragon skills (117–124), Amarant's Flair
+(125–132), and Steiner's Sword Art (141–152). There are no signals or fatal
+errors. 59 observe their effects and finish 12000 frames directly
+(`extended_commands/report.json`); Spare Change is rejected for insufficient
+money in the New Game baseline. The funded, multi-actor fixture
+`tests/scenarios/disc3_spare_change.cfg` passes with `--actor 7 --command 28
+--ability 126` (`spare_change_actor_gil/report.json`). A separate debugger
+probe records gil changing from 100000 to 90001, matching the computed 9999
+cost. This avoids treating a correctly rejected move as effect coverage.
+The optional `gil` fixture value is also supported by the original PSX helper.
+`gil_boundary_checks_verified.log` checks the unchanged default 500, zero,
+the maximum 9999999, and rejection of negative/overflow values. An absent
+actor produces no replaced command/effect and fails the probe, while the
+unfiltered Vivi/Thundaga regression still passes. The full opening input
+route also reaches 60000 frames with the BIOS asset and returns from battle
+to field mode (`opening_with_boot_kernel.log`).
+
 Native validation uses the archived `ff9ds_ifrit_kernel_ko_field` ROM/ELF.
 `ds_ifrit_kernel_ko_field_runtime.json` confirms the BIOS instruction window
 is loaded on DS; the 60-second `ds_ifrit_kernel_ko_field_action.mp4` shows
@@ -391,6 +413,14 @@ at frame 4148 has no exception/first-fault markers or protected ITCM changes
 (`ds_ifrit_kernel_ko_field_after_inspection.json`). The captured asset is
 installed in the local normal and scenario SD roots; both emulators were
 closed after validation and the normal melonDS SD configuration restored.
+
+A separate disc-1 SD image validates Beatrix's previously failing field return
+on the same archived native code (`ff9ds_beatrix_kernel_return` ROM/ELF).
+The 30-second `ds_beatrix_kernel_return.mp4` shows the dark opening field and
+its dialogue after the battle. Its frame-9518 checkpoint has no exception or
+first-fault marker and no protected ITCM changes
+(`ds_beatrix_kernel_after_return_inspection.json`). This establishes native
+execution of the corrected field path, not pixel parity for every field.
 
 ## Cached HUD text and subsequent effect interfaces
 

@@ -13,7 +13,7 @@ void o14_func_800A741C(void);
 void port_scenario_set_enemy_hp(const int *values);
 s32 func_80033C48(s32,s32,u8);
 static struct {
-    int enabled,consumed,kind,disc,field,battle,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen;
+    int enabled,consumed,kind,disc,field,battle,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil;
     unsigned seed;
     int party[4],hp[4],enemy_hp[4],equip[4][5],events[0x800],items[256];
     char characters[256],event_blob[256];
@@ -28,7 +28,7 @@ void port_scenario_load(const char *path) {
     if(!f) port_fatal("scenario: cannot open %s",path);
     __builtin_memset(&scenario,0,sizeof scenario);
     scenario.disc=1;scenario.field=70;scenario.battle=-1;
-    scenario.level=-1;scenario.story=-1;scenario.seed=1;
+    scenario.level=-1;scenario.story=-1;scenario.gil=-1;scenario.seed=1;
     for(int i=0;i<4;++i) {scenario.party[i]=i;scenario.hp[i]=scenario.enemy_hp[i]=-1;for(int j=0;j<5;++j) scenario.equip[i][j]=-1;}
     for(int i=0;i<0x800;++i) scenario.events[i]=-1;
     for(int i=0;i<256;++i) scenario.items[i]=-1;
@@ -50,6 +50,7 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"battle")) scenario.battle=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"level")) scenario.level=number(eq,1,99);
         else if(!__builtin_strcmp(s,"story")) scenario.story=number(eq,0,65535);
+        else if(!__builtin_strcmp(s,"gil")) scenario.gil=number(eq,0,9999999);
         else if(!__builtin_strcmp(s,"summons_seen")) scenario.summons_seen=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"seed")) scenario.seed=(unsigned)number(eq,0,0x7fffffff);
         else if(!__builtin_strcmp(s,"party")) {
@@ -162,6 +163,7 @@ void port_scenario_bootstrap(void) {
     func_80012900(0);o14_func_800A7578();
     GameData *d=g_gameState->unk1C;
     d->unk55E=(u16)scenario.summons_seen;
+    if(scenario.gil>=0) d->gil=(u32)scenario.gil;
     _Static_assert(sizeof(Character)==0x90,"scenario character layout");
     load_blob(scenario.characters,d->characters,sizeof d->characters);
     load_blob(scenario.event_blob,&D_8007AEF0,sizeof D_8007AEF0);

@@ -17,6 +17,7 @@ def main():
     parser.add_argument('scenario', type=Path)
     parser.add_argument('--command', type=int, required=True)
     parser.add_argument('--ability', type=int, required=True)
+    parser.add_argument('--actor', type=int, choices=range(9), help='only replace an Attack from this character ID')
     parser.add_argument('--targets', type=lambda s: int(s, 0), default=0x10)
     parser.add_argument('--frames', type=int, default=12000)
     parser.add_argument('--timeout', type=float, default=60)
@@ -40,6 +41,7 @@ def main():
         return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
     scenario = quote(args.scenario)
     data = '--data ' + quote(args.data) if args.data else ''
+    actor = f' && ((arg0->unk4->unk68 >> 1) & 15)=={args.actor}' if args.actor is not None else ''
     args.out.mkdir(parents=True)
     script = args.out / 'probe.gdb'
     presses = ' '.join(f'--press CROSS@{frame}+4'
@@ -50,19 +52,19 @@ set $cast=0
 break o0b_btl_setCmd
 commands
 silent
-if (arg0->unk4->unk68 & 1) && arg1==1 && $cast==0
+if (arg0->unk4->unk68 & 1) && arg1==1 && $cast==0{actor}
 set arg1={args.command}
 set arg2={args.ability}
 set arg3={args.targets}
 set $cast=1
-printf "PROBE_QUEUE cmd=%u ability=%u targets=%x\\n",arg1,arg2,arg3
+printf "PROBE_QUEUE cmd=%u ability=%u targets=%x actor=%u\\n",arg1,arg2,arg3,(arg0->unk4->unk68 >> 1) & 15
 end
 continue
 end
 break o0b_func_800C2598
 commands
 silent
-if (arg0->unk4->unk68 & 1) && arg0->cmdNo=={args.command} && arg0->subNo=={args.ability}
+if (arg0->unk4->unk68 & 1) && arg0->cmdNo=={args.command} && arg0->subNo=={args.ability}{actor}
 printf "PROBE_EFFECT cmd=%u ability=%u effect=%u\\n",arg0->cmdNo,arg0->subNo,arg1
 end
 continue
@@ -85,6 +87,7 @@ end
             code = None
     text = log.read_text(errors='replace')
     result = dict(scenario=str(args.scenario), command=args.command, ability=args.ability,
+                  actor=args.actor,
                   data=str(args.data) if args.data else None,
                   targets=args.targets, returncode=code, queued='PROBE_QUEUE ' in text,
                   effect_started='PROBE_EFFECT ' in text,

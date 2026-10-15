@@ -91,6 +91,8 @@ def main():
     try:
         summons_seen=int(config.get('summons_seen','0'),0)
         if not 0<=summons_seen<=65535:raise ValueError('summons_seen must be 0..65535')
+        gil=int(config['gil'],0) if 'gil' in config else None
+        if gil is not None and not 0<=gil<=9999999:raise ValueError('gil must be 0..9999999')
         for key,value in config.items():
             if key.startswith('enemy_hp.'):
                 slot=int(key[9:],0);hp=int(value,0)
@@ -104,7 +106,7 @@ def main():
     characters=args.characters.read_bytes();events=args.events.read_bytes()
     if len(characters)!=9*0x90 or len(events)!=0x800:p.error('invalid canonical blob length')
     sectors,lengths=ranges(ROOT/f'disks/us/disc{disc}/FF9.IMG',encounter)
-    print(json.dumps({'disc':disc,'battle':encounter,'sectors':sectors,'lengths':lengths,'party':party,'enemy_hp':enemy_hp,'summons_seen':summons_seen}))
+    print(json.dumps({'disc':disc,'battle':encounter,'sectors':sectors,'lengths':lengths,'party':party,'enemy_hp':enemy_hp,'summons_seen':summons_seen,'gil':gil}))
     if args.dry_run:return
     spec=importlib.util.spec_from_file_location('ff9_emu',args.decomp/'tools/emu.py')
     emu=importlib.util.module_from_spec(spec);spec.loader.exec_module(emu)
@@ -137,6 +139,7 @@ def main():
     # The host uses New Game's unseen-summon state unless explicitly overridden.
     # A late-game field baseline otherwise silently selects different animations.
     emu.bridge('write',gd+0x55e,struct.pack('<H',summons_seen).hex())
+    if gil is not None:word(gd+0x560,gil)
     for i,ch in enumerate(party):word(gd+0x54c+i*4,0 if ch<0 else gd+0x3c+ch*0x90)
     for i in range(2):
         word(gd+0x7ec+i*4,emu.bridge('r32',gd+0x7fc+i*4))
