@@ -1280,3 +1280,26 @@ frame-502513 checkpoint is predominantly idle Game Over time and must not be
 used as a combat-duration or FPS result. Its top-edge close-up pattern remains
 an open comparison item. Native artifacts retain matching ROMs, ELFs and states.
 Both default targets build and the declared export signature audit stays clear.
+
+The original Kuja trail breakpoint reaches D5568 from D0FFC; the completed
+`psx_kuja_thundaga_action.mp4` clip records the original lightning sequence and
+subsequent Demi cast. `psx_kuja_trail_entry.png` shows a corresponding close-up
+without the DS top-edge vertical pattern. Both DS source framebuffers in the
+stopped frame-2539 state contain the pattern, so it precedes bitmap scaling.
+The host frame-2539 image has a separate striped silhouette detail; these two
+patterns have not been proven to share a cause. A trial polygon UV clamp
+changes zero pixels in that host frame. A half-texel interpolation-bias trial
+changes 28,686 pixels without removing the silhouette pattern. Both trials were
+removed, and the regular PC binary rebuilt. Raw PSX/DS VRAM dumps are retained
+for diagnosis but come from different action phases and do not establish
+source-texture corruption. All reference/test emulators are now closed.
+
+Review of D5568's new ring decoding also caught a port-side narrowing error:
+PSX_ADDR masks every address into the 2 MB arena, including native heap pointers.
+The emitter now uses the existing `port_effect_data` boundary, retaining native
+pointers outside that arena while decoding raw module addresses. The 900-case
+effect suite includes ring data at native 0x02400080 as well as native/guest
+addresses within the arena; the original-instruction oracle retains its own
+guest ring location. The strip probe discards unused emitter/VM sections, while
+the effect primitive probe links the production decoder itself. This correction
+does not change the already-captured route's in-arena ring addresses.

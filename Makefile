@@ -269,13 +269,13 @@ $(BUILD)/tests/battle_motion_probe: tests/battle/motion_probe.c tests/battle/pos
 	@mkdir -p $(dir $@)
 	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/motion_probe.c port/game/battle_motion.c port/game/battle_pose.c port/game/anim_key.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
 
-$(BUILD)/tests/battle_quads_probe: tests/battle/quads_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c
+$(BUILD)/tests/battle_quads_probe: tests/battle/quads_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_vm.c
 	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/quads_probe.c port/game/battle_quads.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/quads_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_vm.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
 
 $(BUILD)/tests/battle_strips_probe: tests/battle/strips_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c
 	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/strips_probe.c port/game/battle_quads.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/strips_probe.c port/game/battle_quads.c port/game/battle_background.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
 
 .PHONY: test-battle-strips
 test-battle-strips: $(BUILD)/tests/battle_strips_probe

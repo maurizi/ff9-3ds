@@ -30,7 +30,7 @@ for kind,address in enumerate((0x800D4478,0x800D40CC,0x800D45FC,0x800D3ED4,0x800
         struct.pack_into('<I',data,248,rng.choice([0,0xffffffff,0xfffff000,0x1000]))
         if kind==8:
             struct.pack_into('<11I',data,224,rng.choice((0,0xffffffff,0xfffff000,0x1000)),
-                             0x80180080 if trial&1 else 0x02180080,rng.randrange(4097),rng.getrandbits(24)|0x50000000,
+                             (0x02180080,0x80180080,0x02400080)[trial%3],rng.randrange(4097),rng.getrandbits(24)|0x50000000,
                              rng.getrandbits(24),0,0,0,rng.randrange(4097),0,rng.randrange(4)<<5)
             struct.pack_into('<I',data,268,1+trial%6)
             size=3+trial%6;data[128:132]=bytes((size-1,trial%size,0,0))

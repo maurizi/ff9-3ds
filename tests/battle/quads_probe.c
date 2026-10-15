@@ -9,6 +9,7 @@ void gte_cmd(u32 op) {
     } else background_gte_cmd(op);
 }
 void gte_ctc2(int r, u32 v) { g[32+r]=v; }
+u32 gte_cfc2(int r) { return g[32+r]; }
 void o0b_func_800D40CC(const u8 *, const void *, u8 *, u32 *);
 void o0b_func_800D4478(const u8 *, const void *, u8 *, u32 *);
 u8 *o0b_func_800D45FC(const u8 *, const void *, u8 *, u32 *);
@@ -20,11 +21,16 @@ void o0b_func_800D59D0(const u8 *,const void *,u8 *,u32 *);
 void o0b_func_800D5568(s32,const void *,u8 *,u32 *);
 int main(void) {
     if (mmap(psx_ram, PSX_RAM_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != psx_ram) abort();
+    if (mmap((void *)0x02400000, 4096, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) != (void *)0x02400000) abort();
     u8 *data=psx_ram+0x180000, *out=data+0x1000; u32 *ot=(u32 *)(data+0x8000);
     u32 kind;
     while (fread(&kind,4,1,stdin)==1) {
         if (fread(data,288,1,stdin)!=1 || fread(out,256,1,stdin)!=1 || fread(ot,16384,1,stdin)!=1 || fread(g,sizeof g,1,stdin)!=1) abort();
-        if (kind==8) o0b_func_800D5568(*(s32 *)(data+268),data+224,out,ot);
+        if (kind==8) {
+            if (*(u32 *)(data+228)==0x02400080) memcpy((void *)0x02400080,data+128,128);
+            o0b_func_800D5568(*(s32 *)(data+268),data+224,out,ot);
+        }
         else if (kind==7) o0b_func_800D59D0(data,data+224,out,ot);
         else if (kind==6) o0b_func_800D57D0(data,data+224,out,ot);
         else if (kind==5) o0b_func_800D437C(data,data+224,out,ot);

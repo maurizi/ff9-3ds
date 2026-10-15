@@ -3,6 +3,7 @@
  * the entire batch when it is zero; do not substitute a new NCLIP operation. */
 #include "psyq_port.h"
 #include "gte.h"
+#include "effect_vm.h"
 static u32 word(const void *p, unsigned offset) { return *(const u32 *)((const u8 *)p + offset); }
 /* Single textured effect rectangle. Preserve MAC0's existing cull decision;
  * the original RTPT sequence does not issue NCLIP. */
@@ -169,7 +170,7 @@ void o0b_func_800D59D0(const u8 *points, const void *context, u8 *out, u32 *ot) 
  * adjusts the previous endpoint by one pixel toward the current point and
  * links a draw-mode packet before each line in its depth bucket. */
 void o0b_func_800D5568(s32 count, const void *context, u8 *out, u32 *ot) {
-    const u8 *ring=(const u8 *)PSX_ADDR(word(context,4));
+    const u8 *ring=(const u8 *)port_effect_data(word(context,4));
     unsigned size=ring[0]+1u,index=ring[1];ring+=4;
     u32 fade=word(context,8),color=word(context,12),previous=color,target=word(context,16);
     gte_ctc2(21,(target&255)<<4);gte_ctc2(22,(target>>4)&0xff0);gte_ctc2(23,(target>>12)&0xff0);
