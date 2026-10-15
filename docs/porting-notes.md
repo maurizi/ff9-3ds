@@ -1376,3 +1376,23 @@ Valia Pira subsequently exposes a separate null-coordinate read at frame 8043
 and model-split pointer handling at frame 8219. Those remain separate work;
 the new emitter does not establish full encounter completion. The five prior
 host battle fixtures still pass 65,000 frames, and both targets build.
+
+
+Valia's subsequent host crashes are now corrected: E0168's null plane vector
+at frame 8043 maps into the PSX low-RAM shadow, and Hi_SplitMdlVertex's scalar
+buffer argument is converted before DF940 dereferences it. A second fault at
+8219 exposed hidden count returns in void wrappers: DF738 forwards DF7A0's
+primitive count, and DD0DC forwards DD10C's mesh count; DD0B0 shares the latter
+pattern. All three now return explicit full 32-bit counts in portified C.
+The original PSX breakpoint confirms the null +2 read with height zero;
+psx_valia_null_plane_action.mp4 records the following eight seconds. These
+changes preserve the original source and stored null flags.
+
+The 216-export audits pass for both targets and reject the previous ELF's
+three void return contracts. The VM's 360 instruction cases and native bridge
+checks include the new scalar buffer argument. Both targets and low-RAM checks
+pass; the five existing host fixtures still reach 65,000 frames. Valia advances
+beyond frame 14,000 to missing D4D6C. This does not establish full encounter
+completion or native DS coverage of the new late route. Batch failure reports
+now identify signal exits explicitly, including SIGSEGV, rather than just
+printing "exited".

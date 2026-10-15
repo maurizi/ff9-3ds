@@ -430,3 +430,29 @@ existing MAC0 after RTPT without NCLIP. Please retain these distinctions when
 naming the ribbon emitters/context fields. Original-instruction comparisons
 cover full context/packet/OT/GTE state; native and original PSX Holy videos
 are retained under the port's ignored build/validation directory.
+
+
+### F15 (2026-10-15). Particle low-RAM vectors and module count returns
+
+Valia Pira reaches E0168's plane modes with Pool6CEntry.unk64 == NULL. The
+original PSX breakpoint at 800E0B7C shows v0=0 before its unconditional lhu at
++2; the original low-RAM height is zero. E0C88 repeats the read in another mode.
+Related attraction modes read all three coordinates or forward unk64/unk68 to
+CF5F8, D0674, CFCA8 and D044C. The port applies PSX_NZ at all 16/5 reviewed
+read/pass sites, preserving stored NULL values. Please annotate these optional
+vectors and their low-RAM dependence rather than adding matching-source guards.
+
+Hi_SplitMdlVertex's third s32 argument is a writable vertex-buffer pointer.
+It reaches DF940's SPLIT_PRIMS and is retained in BtlMesh.unk18. The effect
+export at +0x304 needs pointer conversion even though its declaration is scalar.
+
+Loaded MIPS also consumes DF738's forwarded primitive count and DD0DC's
+forwarded mesh count. The wrappers are declared void in C, but original MIPS
+leaves their callees' v0 results intact (DF7A0 and DD10C). Native optimization
+can discard those results. This caused Valia's module to interpret a pointer
+as a mesh count and walk beyond its vertex buffer. DD0B0 has the same mesh-count
+wrapper pattern. The portified versions explicitly return full 32-bit counts;
+please investigate matching return declarations/forwarding for all three.
+Changing the decomp itself still requires PSX make verify. The export audit now
+checks these return contracts and the source-reviewed scalar buffer argument;
+an old ELF fails all three return checks. Both current target ELFs pass.

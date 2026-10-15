@@ -32,6 +32,16 @@ src/ovl_0b/ovl_0b_2.c | el->unk24(e, owner, &pos, vp, &scale, &alpha, &cnt, fram
 src/ovl_0b/ovl_0b_2.c | pool->unk4(1, d, D_800F78A4, pool->unk8, 0, pool, pool->unk8->unkC); | port_effect_call_words((u32)pool->unk4, (u32[]){1, (u32)d, (u32)D_800F78A4, (u32)pool->unk8, 0, (u32)pool, pool->unk8->unkC}, 7); | 1
 src/ovl_0b/ovl_0b_2.c | fn(2, p + 2, D_800F78A4, pool->unk8, p[1], pool, pool->unk8->unkC) | port_effect_call_words((u32)fn, (u32[]){2, (u32)(p + 2), (u32)D_800F78A4, (u32)pool->unk8, (u32)(s32)p[1], (u32)pool, pool->unk8->unkC}, 7) | 1
 src/ovl_0b/ovl_0b_2.c | ((EffTailSpawn *)e->unk24)->unk3C(&off, &rot, frame, dur) | port_effect_call_words((u32)((EffTailSpawn *)e->unk24)->unk3C, (u32[]){(u32)&off, (u32)&rot, (u32)frame, (u32)dur}, 4) | 1
+# Loaded effects consume DF738's forwarded primitive count in v0. Its void
+# C declaration lets native inlining discard the count calculation entirely.
+src/ovl_0b/ovl_0b_2.c | void func_800DF738(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) | u32 func_800DF738(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) | 1
+src/ovl_0b/ovl_0b_2.c | func_800DF7A0(func_800DCFB0(arg0, D_800A825C)->unk0, arg1, arg2, arg3, arg4); | return func_800DF7A0(func_800DCFB0(arg0, D_800A825C)->unk0, arg1, arg2, arg3, arg4); | 1
+# Mesh-count wrappers likewise forward DD10C's v0; promote narrow values to
+# the effect bridge's full 32-bit result on both host and ARM ABIs.
+src/ovl_0b/ovl_0b_2.c | void func_800DD0B0(s32 arg0) | u32 func_800DD0B0(s32 arg0) | 1
+src/ovl_0b/ovl_0b_2.c | void func_800DD0DC(s32 arg0) | u32 func_800DD0DC(s32 arg0) | 1
+src/ovl_0b/ovl_0b_2.c | func_800DD10C(func_800E716C(arg0)->unk9C); | return func_800DD10C(func_800E716C(arg0)->unk9C); | 1
+src/ovl_0b/ovl_0b_2.c | func_800DD10C(func_800DCFB0(arg0, D_800A81A8)->unk0); | return func_800DD10C(func_800DCFB0(arg0, D_800A81A8)->unk0); | 1
 
 # Battle sound panning accepts unit IDs 0..17 or an SVECTOR pointer. The PS1
 # address-bit test misses native ARM stack pointers (DS crash SystemError S/310).
@@ -56,6 +66,11 @@ src/ovl_0b/ovl_0b_3.c | if ((u32)f > 0x80000000) { | if (PORT_IS_RAM_PTR(f)) { |
 
 # Reads through a NULL pointer: on the PS1 they read low kernel RAM instead of faulting. PSX_NZ maps NULL to the
 # start of psx_ram (zeros), as the closest stand-in.
+# Particle attraction/plane modes accept absent position/direction vectors.
+# Original E0B7C/E0C88 read +2 unconditionally; preserve all nine modes' low-RAM
+# inputs at the access boundary, retaining the stored NULL and native pointers.
+src/ovl_0b/ovl_0b_2.c | owner->unk64 | PSX_NZ(owner->unk64) | 16
+src/ovl_0b/ovl_0b_2.c | owner->unk68 | PSX_NZ(owner->unk68) | 5
 # akao_tick -> func_800589F0 with D_8007F790 == NULL (the AKAO init leaves it NULL) and flag 0x100 set
 src/main/main.c | D_8007F790->unk3C, | PSX_NZ(D_8007F790)->unk3C, | 1
 src/main/main.c | D_8007F790->unk40, | PSX_NZ(D_8007F790)->unk40, | 1

@@ -7,6 +7,7 @@ This checks execution only; native DS video/PSX comparisons remain necessary.
 """
 import argparse
 import json
+import signal
 from pathlib import Path
 import subprocess
 import time
@@ -35,7 +36,8 @@ def main():
             try:
                 completed = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=args.timeout)
                 code = completed.returncode
-                reason = 'exited'
+                reason = (f'signal {-code} ({signal.strsignal(-code)})' if code < 0
+                          else f'exit {code}')
             except subprocess.TimeoutExpired:
                 code, reason = None, 'timeout'
         text = log.read_text(errors='replace')

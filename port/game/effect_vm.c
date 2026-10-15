@@ -51,6 +51,9 @@ static u32 native_call(u32 target,u32 *r) {
         /* Vector metric and custom work-pool APIs; callback words stay code. */
         [0xcc/4]=3,[0x17c/4]=3,[0x184/4]=1,[0x188/4]=1,
         [0x2f4/4]=16, /* E6E1C: stack argument 4 is the offscreen OT. */
+        /* SplitMdlVertex's scalar-typed third word is a writable vertex
+         * buffer, retained by DF940 and dereferenced by SPLIT_PRIMS. */
+        [0x304/4]=4,
         /* Declared data pointers from the generated export table and native
          * DWARF signatures. Function callbacks remain guest code addresses.
          * Recheck with tools/audit_effect_exports.py after signature changes. */

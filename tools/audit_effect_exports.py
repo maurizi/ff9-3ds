@@ -58,7 +58,8 @@ for name in NAMES:
    if a.code==gdb.TYPE_CODE_PTR:
     if a.target().strip_typedefs().code==gdb.TYPE_CODE_FUNC: callbacks|=1<<i
     else: pointers|=1<<i
-  row.update(data_pointer_mask=pointers,callback_mask=callbacks)
+  row.update(data_pointer_mask=pointers,callback_mask=callbacks,
+             return_type=str(t.target().strip_typedefs()))
  except Exception as exc: row['unresolved']=str(exc)
  rows.append(row)
 print('EXPORT_SIGNATURES='+json.dumps(rows))
@@ -77,6 +78,7 @@ print('EXPORT_SIGNATURES='+json.dumps(rows))
         ('o0b_func_800DF938', []), ('o0b_func_800DF928', []),
         ('o0b_func_800DF920', []), ('o0b_func_800DF930', []))}
     scalar_source = args.scalar_source.read_text()
+    scalar_pointer_masks = {'o0b_Hi_SplitMdlVertex': 4}
     for row in rows:
         if row['symbol'] == 'printf' and 'unresolved' in row:
             del row['unresolved']
@@ -95,12 +97,18 @@ print('EXPORT_SIGNATURES='+json.dumps(rows))
         mask = masks.get(i*4, 0)
         row.update(offset=hex(i*4), bridge_mask=mask)
         if 'data_pointer_mask' in row:
-            row['missing_data_bits'] = row['data_pointer_mask'] & ~mask
-            row['additional_bridge_bits'] = mask & ~row['data_pointer_mask']
+            reviewed = scalar_pointer_masks.get(row['symbol'], 0)
+            row['reviewed_scalar_pointer_mask'] = reviewed
+            required = row['data_pointer_mask'] | reviewed
+            row['missing_data_bits'] = required & ~mask
+            row['additional_bridge_bits'] = mask & ~required
+        if row['symbol'] in ('o0b_func_800DF738', 'o0b_func_800DD0B0', 'o0b_func_800DD0DC') and row.get('return_type') != 'unsigned int':
+            row['return_contract_error'] = 'effect modules consume the forwarded count as a full 32-bit result'
     print(json.dumps({'elf': str(args.elf), 'scope': __doc__, 'exports': rows,
                       'missing': [r for r in rows if r.get('missing_data_bits')],
-                      'unresolved': [r for r in rows if 'unresolved' in r]}, indent=2))
-    return int(any(r.get('missing_data_bits') or 'unresolved' in r for r in rows))
+                      'unresolved': [r for r in rows if 'unresolved' in r],
+                      'return_contract_errors': [r for r in rows if 'return_contract_error' in r]}, indent=2))
+    return int(any(r.get('missing_data_bits') or 'unresolved' in r or 'return_contract_error' in r for r in rows))
 
 
 if __name__ == '__main__':
