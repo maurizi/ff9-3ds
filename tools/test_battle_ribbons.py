@@ -74,46 +74,47 @@ def main():
                         bytes(mem.read(0x80188000+i,1) for i in range(16384))+state.raw)
     # The 3D sibling preserves diagonal rotation words and joins projected
     # +/- normal edges. Its nested ring word may be guest or native heap data.
-    ribbon3d=asm.parent/'func_800D50A0.s'
-    image3d=b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',ribbon3d.read_text()))
-    for trial in range(300):
-        count=0 if trial%29==0 else -1 if trial%31==0 else rng.randint(1,8)
-        size=rng.randint(1,8);data=bytearray(rng.randbytes(512))
-        pointer=(0x02180080,0x80180080,0x02400080)[trial%3]
-        values=[rng.choice((0,100,0xffffffff,0x10000)),pointer,
-                rng.choice((0,0xffffffff,512,4096)),
-                rng.getrandbits(24)|rng.choice((0x3c000000,0x3e000000)),rng.getrandbits(24)]
-        struct.pack_into('<5I',data,0,*values)
-        struct.pack_into('<2H3I2H4h',data,20,rng.randrange(65536),rng.randrange(65536),
-                         rng.getrandbits(32),rng.getrandbits(32),rng.choice((0,512,0xffffffff)),
-                         rng.randrange(65536),rng.randrange(65536),
-                         rng.randrange(-2000,2001),rng.randrange(-2000,2001),
-                         rng.randrange(-2000,2001),rng.randrange(-2000,2001))
-        data[128:132]=bytes((size-1,rng.randrange(size),0,0))
-        for i in range(size):
-            struct.pack_into('<4h',data,132+8*i,rng.randrange(-200,201),rng.randrange(-150,151),
-                             rng.randrange(-4096,4096),rng.randrange(-4096,4096))
-        if trial%7==0:data[140:148]=data[132:140]  # Coincident/zero-length segments.
-        regs=[rng.getrandbits(32) for _ in range(64)]
-        regs[32:37]=[4096,0,4096,0,4096]
-        regs[37:40]=[rng.randrange(-100,101)&0xffffffff,rng.randrange(-100,101)&0xffffffff,rng.randrange(128,1024)]
-        regs[56:59]=[160<<16,112<<16,256]
-        if trial%5==0:regs[24]=0
-        out,ot=rng.randbytes(1024),rng.randbytes(16384)
-        cases.append(struct.pack('<2I',3,count&0xffffffff)+data+out+ot+struct.pack('<64I',*regs))
-        original=bytearray(data);struct.pack_into('<I',original,4,0x80180080)
-        mem=e.Mem(trial,[(0x800d50a0,image3d),(0x80180000,bytes(original)),
-                         (0x80181000,out),(0x80188000,ot),(0x800cfa00,table)])
-        cpu=Cpu(mem,0x800d50a0,0x800d50a0+len(image3d),{}, {},trial,
-                [count&0xffffffff,0x80180000,0x80181000,0x80188000])
-        state=ctypes.create_string_buffer(struct.pack('<64I',*regs),256)
-        lib.oracle_set(state);cpu.g=Registers();cpu.run(0x800d50a0)
-        assert not cpu.events and not cpu.calls,(trial,cpu.events,cpu.calls)
-        lib.oracle_get(state)
-        result=bytearray(mem.read(0x80180000+i,1) for i in range(512))
-        struct.pack_into('<I',result,4,pointer)
-        expected.append(result+bytes(mem.read(0x80181000+i,1) for i in range(1024))+
-                        bytes(mem.read(0x80188000+i,1) for i in range(16384))+state.raw)
+    for kind,address in ((3,0x800d50a0),(4,0x800d4d6c)):
+        ribbon3d=asm.parent/f'func_{address:08X}.s'
+        image3d=b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',ribbon3d.read_text()))
+        for trial in range(300):
+            count=0 if trial%29==0 else -1 if trial%31==0 else rng.randint(1,8)
+            size=rng.randint(1,8);data=bytearray(rng.randbytes(512))
+            pointer=(0x02180080,0x80180080,0x02400080)[trial%3]
+            values=[rng.choice((0,100,0xffffffff,0x10000)),pointer,
+                    rng.choice((0,0xffffffff,512,4096)),
+                    rng.getrandbits(24)|rng.choice((0x3c000000,0x3e000000)),rng.getrandbits(24)]
+            struct.pack_into('<5I',data,0,*values)
+            struct.pack_into('<2H3I2H4h',data,20,rng.randrange(65536),rng.randrange(65536),
+                             rng.getrandbits(32),rng.getrandbits(32),rng.choice((0,512,0xffffffff)),
+                             rng.randrange(65536),rng.randrange(65536),
+                             rng.randrange(-2000,2001),rng.randrange(-2000,2001),
+                             rng.randrange(-2000,2001),rng.randrange(-2000,2001))
+            data[128:132]=bytes((size-1,rng.randrange(size),0,0))
+            for i in range(size):
+                struct.pack_into('<4h',data,132+8*i,rng.randrange(-200,201),rng.randrange(-150,151),
+                                 rng.randrange(-4096,4096),rng.randrange(-4096,4096))
+            if trial%7==0:data[140:148]=data[132:140]  # Coincident/zero-length segments.
+            regs=[rng.getrandbits(32) for _ in range(64)]
+            regs[32:37]=[4096,0,4096,0,4096]
+            regs[37:40]=[rng.randrange(-100,101)&0xffffffff,rng.randrange(-100,101)&0xffffffff,rng.randrange(128,1024)]
+            regs[56:59]=[160<<16,112<<16,256]
+            if trial%5==0:regs[24]=0
+            out,ot=rng.randbytes(1024),rng.randbytes(16384)
+            cases.append(struct.pack('<2I',kind,count&0xffffffff)+data+out+ot+struct.pack('<64I',*regs))
+            original=bytearray(data);struct.pack_into('<I',original,4,0x80180080)
+            mem=e.Mem(trial,[(address,image3d),(0x80180000,bytes(original)),
+                             (0x80181000,out),(0x80188000,ot),(0x800cfa00,table)])
+            cpu=Cpu(mem,address,address+len(image3d),{}, {},trial,
+                    [count&0xffffffff,0x80180000,0x80181000,0x80188000])
+            state=ctypes.create_string_buffer(struct.pack('<64I',*regs),256)
+            lib.oracle_set(state);cpu.g=Registers();cpu.run(address)
+            assert not cpu.events and not cpu.calls,(trial,cpu.events,cpu.calls)
+            lib.oracle_get(state)
+            result=bytearray(mem.read(0x80180000+i,1) for i in range(512))
+            struct.pack_into('<I',result,4,pointer)
+            expected.append(result+bytes(mem.read(0x80181000+i,1) for i in range(1024))+
+                            bytes(mem.read(0x80188000+i,1) for i in range(16384))+state.raw)
     asmroot=asm.parent
     particle_image=b''.join(bytes.fromhex(w) for address in (0x800dff5c,0x800dff64)
                            for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',
@@ -133,6 +134,27 @@ def main():
             expected.append(bytes(mem.read(0x80180000+i,1) for i in range(512))+
                             bytes(mem.read(0x80181000+i,1) for i in range(1024))+
                             bytes(mem.read(0x80188000+i,1) for i in range(16384))+state.raw)
+    particle_address=0x800e0014
+    particle_image=b''.join(bytes.fromhex(w) for w in re.findall(
+        r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',
+        (asmroot/'func_800E0014.s').read_text()))
+    for trial in range(200):
+        data=rng.randbytes(512);out=rng.randbytes(1024);ot=rng.randbytes(16384)
+        gravity=rng.getrandbits(32);regs=[rng.getrandbits(32) for _ in range(64)]
+        cases.append(struct.pack('<2I',5,gravity)+data+out+ot+struct.pack('<64I',*regs))
+        mem=e.Mem(trial,[(particle_address,particle_image),(0x80180000,data),
+                         (0x80181000,out),(0x80188000,ot),(0,bytes(8))])
+        cpu=Cpu(mem,particle_address,particle_address+len(particle_image),{}, {},trial,
+                [0x80180000,gravity,
+                 0x80180000+(0,128,12,0)[data[511]&3] if data[511]&3 else 0,
+                 0x80180000+((data[510]&3)-1)*8 if data[510]&3 else 0x80181000])
+        state=ctypes.create_string_buffer(struct.pack('<64I',*regs),256)
+        lib.oracle_set(state);cpu.g=Registers();cpu.run(particle_address)
+        assert not cpu.events and not cpu.calls,(trial,cpu.events,cpu.calls)
+        lib.oracle_get(state)
+        expected.append(bytes(mem.read(0x80180000+i,1) for i in range(512))+
+                        bytes(mem.read(0x80181000+i,1) for i in range(1024))+
+                        bytes(mem.read(0x80188000+i,1) for i in range(16384))+state.raw)
     result=subprocess.run([ROOT/'build/tests/battle_ribbons_probe'],input=table+b''.join(cases),capture_output=True)
     assert result.returncode==0,result.stderr.decode()
     size=len(expected[0]);assert len(result.stdout)==size*len(cases),(len(result.stdout),size*len(cases))

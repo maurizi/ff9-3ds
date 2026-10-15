@@ -32,6 +32,7 @@ static u32 native_call(u32 target,u32 *r) {
      * carried as s32; scalar flags must never be guessed to be pointers. */
     /* 216 function exports precede the pool/data pointers at table +0x360. */
     static const u16 pointer_mask[216]={
+        [0x8/4]=0xd, /* E0014: particle, position bias, output vector. */
         [0x14/4]=3,[0x20/4]=3,[0xbc/4]=11,[0xd4/4]=7,
         [0xf0/4]=11,[0x110/4]=0x85,[0x114/4]=7,[0x134/4]=1,
         [0x234/4]=4,[0x27c/4]=1,

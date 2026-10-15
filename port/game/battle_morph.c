@@ -14,6 +14,41 @@ static void load_vertices(unsigned first) {
         gte_mtc2(i*2+1,g_vtxScreenZ[first+i]);
     }
 }
+/* Transform each bone's vertices, clamp them to the model's Y plane, then
+ * project with the camera. Upper depth bits retain the plane-clipping tag. */
+void o0b_func_800DDF10(const void *model,u8 mesh_index) {
+    const u8 *header=pointer(model,8),*mesh=pointer(header,16)+(unsigned)mesh_index*40;
+    const u8 *bone=pointer(model,32),*vertices=pointer(mesh,24);
+    const u16 *counts=(const u16 *)pointer(mesh,20);
+    const u8 *gs=*(const u8 **)(void *)PSX_ADDR(0x8006794c),*data=pointer(gs,28);
+    s32 ceiling=*(const s16 *)((const u8 *)model+90);
+    gte_ctc2(26,*(const u16 *)(data+10));
+    unsigned first=0;
+    for(unsigned part=0;part<header[2];part++,bone+=32) {
+        unsigned count=counts[part];
+        if(!count) continue;
+        load_matrix(bone);
+        for(unsigned i=0;i<count;i++,vertices+=8) {
+            gte_mtc2(0,word(vertices,0));gte_mtc2(1,word(vertices,4));
+            gte_cmd(0x480012);
+            u32 x=gte_mfc2(9),y=gte_mfc2(10),z=gte_mfc2(11)&65535;
+            if((s32)y>=ceiling) {y=(u32)ceiling;z|=0x10000000;}
+            g_vtxScreenXY[first+i]=(x&65535)|(y<<16);
+            g_vtxScreenZ[first+i]=z;
+        }
+        load_matrix(data+24);
+        for(unsigned i=0;i<count;i+=3) {
+            load_vertices(first+i);gte_cmd(0x280030);
+            for(unsigned j=0;j<3;j++) {
+                g_vtxScreenXY[first+i+j]=gte_mfc2(12+j);
+                /* Original SH stores preserve both clipping tags and the
+                 * untouched upper halves of padded final-triple entries. */
+                *(u16 *)&g_vtxScreenZ[first+i+j]=(u16)gte_mfc2(17+j);
+            }
+        }
+        first+=count;
+    }
+}
 void o0b_func_800DF15C(const void *model,u32 mesh_index,u32 factor) {
     const u8 *header=pointer(model,8);
     unsigned offset=(mesh_index&255)*40;

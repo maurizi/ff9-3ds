@@ -1396,3 +1396,52 @@ beyond frame 14,000 to missing D4D6C. This does not establish full encounter
 completion or native DS coverage of the new late route. Batch failure reports
 now identify signal exits explicitly, including SIGSEGV, rather than just
 printing "exited".
+
+
+### Further battle effects and framebuffer-warp callbacks (2026-10-15)
+
+D4D6C now emits the fixed-X/Z-width ribbon used by Valia Pira's Firaga. It
+preserves Y, keeps projected joins in local state, leaves its context intact,
+and retains the original GPF/DPCS/RTPT sequence and MAC0 cull. Native Valia
+reaches frame 18070 without recorded faults or protected ITCM changes. A
+replay from the matching frame-12123 checkpoint records Firaga at frames
+13975 onward (ds_valia_d4d6c_ribbon_retry.mp4, 30 seconds); the following
+checkpoint is frame 16435. The first late capture monitor terminated before
+recording, so its waiting log is not a completed capture. The original PSX
+D4D6C breakpoint and psx_valia_d4d6c_action.mp4 (12 seconds) supply the motion
+reference. The preceding Freeze/model-split sequence also has native and
+original recordings. Targets, HP and action phases differ; no whole-animation
+pixel/timing parity is claimed.
+
+DDF10 transforms bone vertices, clamps their Y coordinate to the model plane,
+sets depth bit 28 for clipped vertices, then projects triples with the camera.
+Its halfword depth stores preserve tags and padded final-triple upper halves.
+The projection test now checks 600 original-instruction cases: 300 morph and
+300 plane-clipped cases, including zero-sized bones and partial triples.
+Only the existing morph variant normalizes ignored C4 stack padding.
+
+E0014 attenuates particle velocity with GPF, integrates with GPL, and applies
+the original cyclic Z/X/Y position bias. New Y acceleration affects velocity
+for the next tick rather than the current integration. Store ordering preserves
+aliased input/output buffers. The ribbon/particle test now checks 1200 complete
+context/packet/OT/GTE cases, including 200 new particle cases with null bias
+and aliased buffers. Its newly typed native export requires pointer mask 0xD
+at table +0x8; the bridge regression checks that mask.
+
+The broader sweep found Silver/Nova Dragon calling raw MIPS from E6764's
+fourteenth argument. A counted patch routes the per-vertex callback through
+port_effect_call_words without changing the stored callback word. The nested
+bridge test exercises module -> native grid export -> module callback, mutates
+three vector components and preserves padding. Both Dragon host fixtures now
+reach 65000 frames. Native Silver Dragon advances from frame 3423 through the
+previous frame-3559 failure, the warp, subsequent combat and Game Over; its
+frame-8943 checkpoint has no recorded fault or protected ITCM changes.
+ds_silver_dragon_warp_action.mp4 (30 seconds) was inspected alongside the
+original 12-second psx_silver_dragon_warp_action.mp4. The first flash/warp is
+visually comparable; subsequent targets and phases differ. All matching
+ROMs/ELFs, states and captures remain under ignored build/validation.
+
+Both targets, rendering/display regressions, effect bridge checks and the
+battle CPU/original-instruction suites pass. A 25-fixture sweep reaches 65000
+frames for 23 cases after these effect fixes; Beatrix's return-field context
+and Black Waltz's missing bone array are separate follow-up findings.

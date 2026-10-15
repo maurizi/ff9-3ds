@@ -456,3 +456,29 @@ please investigate matching return declarations/forwarding for all three.
 Changing the decomp itself still requires PSX make verify. The export audit now
 checks these return contracts and the source-reviewed scalar buffer argument;
 an old ELF fails all three return checks. Both current target ELFs pass.
+
+
+### F16 (2026-10-15). Ribbon, plane projection, particle integration and warp hooks
+
+D4D6C is the fixed-X/Z-width counterpart of D50A0: ring widths scale a packed
+2D direction at context +0x28, Y stays fixed, and projected joins are retained
+in registers rather than written to the context. Valia's Firaga reaches it
+through D0FFC/D1494. Original and native motion captures are retained.
+
+DDF10 transforms each bone's vertices and clamps Y to model +0x5a, tagging
+clipped entries with depth bit 28 before camera projection. Halfword SZ writes
+preserve those flags and padded triple tails. Tantarian, Kraken and Lich use
+this path. The port's original-instruction projection oracle compares raw GTE
+state and both full vertex arrays.
+
+E0014 scales particle velocities at +0xc..10 by the coefficient at +0x12, uses
+GPF/GPL to integrate position, and adds the supplied bias in Z/X/Y order. New
+Y acceleration is stored for the next tick; it is not included in that tick's
+GPL inputs. Please preserve these details when naming the particle fields.
+The port covers null bias and aliases with original-instruction comparisons.
+
+E6764's arg13 is a per-vertex deformation callback supplied by Silver/Nova
+Dragon's loaded MIPS module. It must remain a code word across export +0x248
+and execute via the module bridge when called. The port's counted callback
+patch fixes direct jumps to 0x801e7704. Native/original clips cover the warp;
+module/native/module recursion has a focused vector mutation regression.

@@ -106,7 +106,7 @@ static void declared_bridge_test(void) {
     /* Reviewed signatures cover fixed pointers, high stack arguments, and
      * E6764's raw function callback at argument 13. Other scalar words look
      * like guest pointers deliberately: the bridge must leave them intact. */
-    static const unsigned entries[][2]={{0x0,3},{0x48,19},{0x50,1},{0xf8,39},
+    static const unsigned entries[][2]={{0x0,3},{0x8,13},{0x48,19},{0x50,1},{0xf8,39},
         {0x108,0xc02},{0x208,14},{0x248,0xe00},{0x340,11}};
     u32 *code=(u32 *)(psx_ram+0x1e7700),target=(u32)declared_export;
     u32 *context=(u32 *)(psx_ram+0x170000),*table=(u32 *)(psx_ram+0x170100);
@@ -161,6 +161,30 @@ static void tail_spawn_callback_test(void) {
            *(u16 *)(psx_ram+0x180006)!=1 || *(u16 *)(psx_ram+0x180008)!=frame) abort();
     }
 }
+static u32 warp_export(u32 a0,u32 a1,u32 a2,u32 a3,u32 a4,u32 a5,u32 a6,u32 a7,
+                       u32 a8,u32 vector,u32 a10,u32 a11,u32 a12,u32 callback) {
+    if(vector!=(u32)(psx_ram+0x180000) || callback!=0x801e8100) abort();
+    return port_effect_call_words(callback,&vector,1);
+}
+static void warp_callback_test(void) {
+    /* Loaded module -> native grid export -> loaded per-vertex callback.
+     * Only the vector is translated; the callback remains a guest code word. */
+    u32 target=(u32)warp_export;
+    u32 jump[]={0x3c190000|(target>>16),0x37390000|(target&65535),0x03200008,0};
+    u32 callback[]={0x84880000,0,0x25080007,0xa4880000,
+                    0x84890002,0,0x2529fff7,0xa4890002,
+                    0x848a0004,0,0x254a000b,0xa48a0004,
+                    0x2402002a,0x03e00008,0};
+    __builtin_memcpy(psx_ram+0x1e7700,jump,sizeof jump);
+    __builtin_memcpy(psx_ram+0x1e8100,callback,sizeof callback);
+    u32 *context=(u32 *)(psx_ram+0x170000),*table=(u32 *)(psx_ram+0x170100);
+    *(u32 *)(psx_ram+0xf78a4)=(u32)context;context[4]=(u32)table;table[0x248/4]=target;
+    s16 *v=(s16 *)(psx_ram+0x180000);v[0]=12;v[1]=-34;v[2]=56;v[3]=1234;
+    u32 args[14]={0};args[9]=0x80180000;args[13]=0x801e8100;
+    if(port_effect_call_words(0x801e7700,args,14)!=42 ||
+       v[0]!=19 || v[1]!=-43 || v[2]!=67 || v[3]!=1234) abort();
+    table[0x248/4]=0;*(u32 *)(psx_ram+0xf78a4)=0;
+}
 int main(void) {
     if(mmap(psx_ram,PSX_RAM_SIZE,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0)!=psx_ram) abort();
     bridge_test();
@@ -170,6 +194,7 @@ int main(void) {
     offscreen_bridge_test();
     declared_bridge_test();
     tail_spawn_callback_test();
+    warp_callback_test();
     u32 args[5],size;
     while(fread(&size,4,1,stdin)==1) {
         if(size>0x5000 || fread(args,20,1,stdin)!=1 || fread(psx_ram+0x1e7700,size,1,stdin)!=1 || fread(psx_ram+0x180000,128,1,stdin)!=1 || fread(g,sizeof g,1,stdin)!=1) abort();

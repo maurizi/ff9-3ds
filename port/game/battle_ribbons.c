@@ -31,6 +31,26 @@ void o0b_func_800DFF5C(u8 *particle,s32 speed,const s16 *direction,s16 *out) {
 void o0b_func_800DFF64(u8 *particle,s32 speed,const s16 *direction,s16 *out) {
     advance_particle(particle,speed,direction,out,36);
 }
+/* Attenuate velocity, integrate its previous Y acceleration, then apply the
+ * original cyclic Z/X/Y position bias. New gravity affects the next tick. */
+void o0b_func_800E0014(u8 *particle,s32 gravity,const s16 *bias,s16 *out) {
+    particle=PSX_NZ(particle);bias=PSX_NZ(bias);out=PSX_NZ(out);
+    gte_mtc2(8,(u32)(s32)*(s16 *)(particle+18));
+    gte_mtc2(9,(u32)(s32)*(s16 *)(particle+12));
+    gte_mtc2(10,(u32)(s32)*(s16 *)(particle+14));gte_mtc2(11,load(particle,16));
+    gte_cmd(0x198003d);
+    u32 velocity[3]={gte_mfc2(9),gte_mfc2(10)+(u32)gravity,gte_mfc2(11)};
+    gte_mtc2(8,4096);
+    for(unsigned i=0;i<3;i++) gte_mtc2(25+i,load(particle,i*4));
+    gte_cmd(0x1a0003e);
+    for(unsigned i=0;i<3;i++) *(s16 *)(particle+12+i*2)=(s16)velocity[i];
+    /* Read all bias components before writing potentially aliased outputs. */
+    u32 delta[3]={(u32)(s32)bias[2]<<6,(u32)(s32)bias[0]<<6,(u32)(s32)bias[1]<<6};
+    u32 value[3];
+    for(unsigned i=0;i<3;i++) value[i]=gte_mfc2(25+i)+delta[i];
+    for(unsigned i=0;i<3;i++) *(u32 *)(particle+i*4)=value[i];
+    for(unsigned i=0;i<3;i++) out[i]=(s16)((s32)value[i]>>12);
+}
 /* 3D ribbon: the width direction is the normalized cross product of each
  * segment and its view vector. Preserve OP/SQR/GPF register side effects and
  * the original RTPT's existing MAC0 cull; it never issues NCLIP. */
@@ -103,6 +123,60 @@ void o0b_func_800D50A0(s32 count,void *context,u8 *out,u32 *ot) {
         *(u16 *)(out+48)=(u16)(uv|*(u16 *)((u8 *)c+38));
         *(u32 *)(out+32)=c[15]=gte_mfc2(12);
         *(u32 *)(out+44)=c[16]=gte_mfc2(13);
+        index=next;
+        u32 cull=gte_mfc2(24),depth=gte_mfc2(19);
+        u32 bucket=(u32)((s32)((u32)((s32)depth>>2)-c[0])>>2);
+        if(cull && bucket<4096) {
+            u32 previous=ot[bucket];*(u32 *)out=0x0c000000|(previous&0xffffff);
+            ot[bucket]=(previous&0xff000000)|((u32)out&0xffffff);
+        }
+        fade+=c[8];
+    }
+}
+/* Fixed X/Z width direction, with Y unchanged. The projected join lives in
+ * registers in the original, so this variant leaves its context untouched. */
+void o0b_func_800D4D6C(s32 count,const void *context,u8 *out,u32 *ot) {
+    const u32 *c=context;
+    const u8 *ring=(const u8 *)port_effect_data(c[1]);
+    u32 fade=c[2],color=c[3],previous_color=color;
+    u32 uvbase=*(const u16 *)((const u8 *)c+20),uv=uvbase;
+    u32 edge0=0,edge1=0;
+    unsigned size=ring[0]+1,index=ring[1];ring+=4;
+    gte_ctc2(21,(c[4]&255)<<4);
+    gte_ctc2(22,(c[4]>>4)&0xff0);
+    gte_ctc2(23,(c[4]>>12)&0xff0);
+    for(s32 segment=0;!segment || segment<count;segment++,out+=52) {
+        unsigned next=index+1==size ? 0 : index+1;
+        const u8 *a=ring+index*8,*b=ring+next*8;
+        gte_mtc2(9,(u32)(s32)(s16)c[10]);gte_mtc2(10,(u32)((s32)c[10]>>16));
+        gte_mtc2(8,*(const u16 *)(a+6));gte_cmd(0x198003d);
+        u32 nx=gte_mfc2(9),nz=gte_mfc2(10);
+        if(!segment) {
+            u32 xy=load(a,0),z=(u32)(s32)*(const s16 *)(a+4);
+            gte_mtc2(0,(xy&0xffff0000)|(((u32)(s32)(s16)xy+nx)&65535));
+            gte_mtc2(1,z+nz);
+            gte_mtc2(2,(xy&0xffff0000)|(((u32)(s32)(s16)xy-nx)&65535));
+            gte_mtc2(3,z-nz);gte_cmd(0x280030);
+            *(u32 *)(out+8)=gte_mfc2(12);*(u32 *)(out+20)=gte_mfc2(13);
+        } else {
+            *(u32 *)(out+8)=edge0;*(u32 *)(out+20)=edge1;
+        }
+        u32 xy=load(b,0),z=(u32)(s32)*(const s16 *)(b+4);
+        u32 positive=(xy&0xffff0000)|(((u32)(s32)(s16)xy+nx)&65535);
+        u32 negative=(xy&0xffff0000)|(((u32)(s32)(s16)xy-nx)&65535);
+        if(segment+1>=count) fade=4096;
+        gte_mtc2(8,fade);gte_mtc2(6,color);gte_cmd(0x780010);
+        *(u32 *)(out+4)=previous_color;*(u32 *)(out+16)=previous_color;
+        *(u32 *)(out+12)=uv|*(const u16 *)((const u8 *)c+36)|c[7];
+        *(u32 *)(out+24)=uv|*(const u16 *)((const u8 *)c+38)|c[6];
+        uv=uvbase+((fade*(u32)*(const u16 *)((const u8 *)c+22))>>12);
+        previous_color=gte_mfc2(22);
+        gte_mtc2(0,positive);gte_mtc2(1,z+nz);
+        gte_mtc2(2,negative);gte_mtc2(3,z-nz);vertex(4,a);gte_cmd(0x280030);
+        *(u32 *)(out+28)=previous_color;*(u32 *)(out+40)=previous_color;
+        *(u16 *)(out+36)=(u16)(uv|*(const u16 *)((const u8 *)c+36));
+        *(u16 *)(out+48)=(u16)(uv|*(const u16 *)((const u8 *)c+38));
+        *(u32 *)(out+32)=edge0=gte_mfc2(12);*(u32 *)(out+44)=edge1=gte_mfc2(13);
         index=next;
         u32 cull=gte_mfc2(24),depth=gte_mfc2(19);
         u32 bucket=(u32)((s32)((u32)((s32)depth>>2)-c[0])>>2);
