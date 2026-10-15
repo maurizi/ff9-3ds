@@ -34,6 +34,7 @@ void psx_load_image(const PsxImageChunk *img);
 void psx_run_game(void);
 void port_scenario_load(const char *path);
 void port_scenario_bootstrap(void);
+void port_scenario_validate_return(void);
 int port_scenario_seed(int ordinary_seed);
 
 /* Print to the debug console. */

@@ -480,3 +480,37 @@ native frame 1663 still has zero source/bitmap differences
 total sampled interval is 116.61 ms versus the original 147.82 ms (about 21.1%
 less). Frame-time savings differ from summed CPU phase savings because VBlank
 waiting is quantized. Full uninstrumented combat-rate validation is pending.
+
+
+## Return fields for direct battle fixtures (2026-10-15)
+
+Direct battle entry now initializes the saved field ranges used by ordinary
+battle cleanup. The launcher resolves field= on the selected disc, uses the
+original title-overlay directory resolver to populate the area/field sectors,
+and saves them in GameData.unk7EC/unk7F4 before installing the encounter ranges.
+Beatrix's scripted battle exit previously restored uninitialized ranges and
+issued a CD copy past the PSX image; it now returns to the configured field
+and reaches the 65000-frame limit in field mode. CD wrapping was not changed.
+
+The default return field is 70. That field is present on discs 1/2 and absent
+on discs 3/4. A battle-only fixture may still run without a return field when
+its route ends at Game Over. An explicit field= must be present on the selected
+disc; a missing selection fails during bootstrap with a diagnostic. If a
+battle fixture without valid return context actually transitions into field
+mode, it stops with an explanation rather than attempting an invalid CD read.
+Choose an on-disc field for fixtures intended to test escape or scripted exits.
+This establishes valid loading ranges; canonical story/party/field script state
+still requires appropriate event/character blobs and fixture values.
+
+Validation artifacts include scenarios_return_context (Beatrix returns to field
+mode), boss_sweep_return_bones (all 30 host fixtures pass 65000 frames), and
+invalid_return_field.log (explicit missing disc-3 field 32767 rejected during
+bootstrap). The earlier 10-frame negative probe ended before bootstrap and is
+retained as invalid_return_field_before_bootstrap.log, not used as validation.
+The separate Black Waltz entry failure was its null bone array, not a CD exit.
+
+The catalogue-driven sweep's generated fixtures, full manifest, per-case logs
+and reports stay under ignored build/validation. These are synthetic party/story
+probes. Original PSX motion references currently cover selected routes, including
+Valia's Holy/Freeze/Firaga and Silver Dragon's framebuffer warp; they do not
+establish visual equivalence for every entry in the 30-case host sweep.

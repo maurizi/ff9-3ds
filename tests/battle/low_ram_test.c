@@ -35,5 +35,17 @@ int main(void) {
     assert(live[0].speed==123 && memcmp(psx_ram,expected,sizeof expected)==0);
     const Animation *c=live;
     assert(PSX_NZ(c)==c);
-    puts("PSX low RAM: KO stores, live pointers and single evaluation pass");
+    /* Map a missing bone array before adding a nonzero bone index. Mapping
+     * only the final &NULL[index] would retain a low native/ITCM address. */
+    typedef struct {uint8_t rotation[0x14];int32_t x,y,z;} Bone;
+    _Static_assert(sizeof(Bone)==0x20,"bone stride");
+    Bone *bones=NULL;
+    PSX_NZ(bones)[3].y=0x12345678;
+    int32_t height;
+    memcpy(&height,psx_ram+3*0x20+0x18,4);
+    assert(bones==NULL && height==0x12345678);
+    static Bone ready[4];ready[3].y=-123;
+    bones=ready;
+    assert(PSX_NZ(bones)[3].y==-123);
+    puts("PSX low RAM: KO stores, bone array indices, live pointers and single evaluation pass");
 }

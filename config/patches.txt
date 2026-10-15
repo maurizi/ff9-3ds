@@ -6,6 +6,7 @@
 
 # Optional test scenario enters after normal engine initialization, before mode dispatch.
 src/main/main.c | func_8001D268(); | func_8001D268(); port_scenario_bootstrap(); | 1
+src/main/main.c | func_80012900(1); | port_scenario_validate_return(); func_80012900(1); | 1
 src/main/main.c | rand_init(GetRCnt(2)); | rand_init(port_scenario_seed(GetRCnt(2))); | 1
 
 # CD-loaded battle-effect modules retain raw PSX pointers and MIPS code.
@@ -74,6 +75,13 @@ src/ovl_0b/ovl_0b_3.c | if ((u32)f > 0x80000000) { | if (PORT_IS_RAM_PTR(f)) { |
 # inputs at the access boundary, retaining the stored NULL and native pointers.
 src/ovl_0b/ovl_0b_2.c | owner->unk64 | PSX_NZ(owner->unk64) | 16
 src/ovl_0b/ovl_0b_2.c | owner->unk68 | PSX_NZ(owner->unk68) | 5
+# Bone matrices can be absent while an enemy is entering. Preserve the NULL
+# field, mapping the array base before indexing (C585C reads bone*32+0x18).
+src/ovl_0b/ovl_0b_o1.c | arg0->unk9C->unk20[ | PSX_NZ(arg0->unk9C->unk20)[ | 1
+src/ovl_0b/ovl_0b_2.c | arg0->unk9C->unk20[ | PSX_NZ(arg0->unk9C->unk20)[ | 2
+src/ovl_0b/ovl_0b.c | arg0->unk9C->unk20[ | PSX_NZ(arg0->unk9C->unk20)[ | 1
+src/ovl_0b/ovl_0b.c | u->unk9C->unk20[ | PSX_NZ(u->unk9C->unk20)[ | 4
+src/ovl_0b/ovl_0b_3.c | u->unk9C->unk20[ | PSX_NZ(u->unk9C->unk20)[ | 1
 # akao_tick -> func_800589F0 with D_8007F790 == NULL (the AKAO init leaves it NULL) and flag 0x100 set
 src/main/main.c | D_8007F790->unk3C, | PSX_NZ(D_8007F790)->unk3C, | 1
 src/main/main.c | D_8007F790->unk40, | PSX_NZ(D_8007F790)->unk40, | 1

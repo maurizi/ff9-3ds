@@ -12,7 +12,7 @@ void o14_func_800A7578(void);
 void o14_func_800A741C(void);
 s32 func_80033C48(s32,s32,u8);
 static struct {
-    int enabled,consumed,kind,disc,field,battle,level,story;
+    int enabled,consumed,kind,disc,field,battle,level,story,field_explicit,return_field_ready;
     unsigned seed;
     int party[4],hp[4],equip[4][5],events[0x800],items[256];
     char characters[256],event_blob[256];
@@ -45,7 +45,7 @@ void port_scenario_load(const char *path) {
             else if(!__builtin_strcmp(eq,"battle")) scenario.kind=2;
             else port_fatal("scenario: kind must be field or battle");
         } else if(!__builtin_strcmp(s,"disc")) scenario.disc=number(eq,1,4);
-        else if(!__builtin_strcmp(s,"field")) scenario.field=number(eq,0,32767);
+        else if(!__builtin_strcmp(s,"field")) {scenario.field=number(eq,0,32767);scenario.field_explicit=1;}
         else if(!__builtin_strcmp(s,"battle")) scenario.battle=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"level")) scenario.level=number(eq,1,99);
         else if(!__builtin_strcmp(s,"story")) scenario.story=number(eq,0,65535);
@@ -86,6 +86,30 @@ static void load_blob(const char *path,void *data,size_t size) {
 /* Field/battle initialization normally reseeds from a hardware counter. */
 s32 port_scenario_seed(s32 ordinary_seed) {
     return scenario.enabled ? (s32)scenario.seed : ordinary_seed;
+}
+static void prepare_return_field(GameData *d) {
+    typedef struct {u16 field,area;u32 sector;} FieldEntry;
+    _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
+    FileDirEntry *dirs=(FileDirEntry *)g_gameState->unk14;
+    const FieldEntry *entries=(const FieldEntry *)(D_80067944+0x14c700+(dirs[4].unk8<<11));
+    int found=0;
+    for(int i=0;i<dirs[4].unk4;i++) if(entries[i].field==scenario.field) {found=1;break;}
+    if(!found) {
+        if(scenario.field_explicit) port_fatal("scenario: return field %d absent on disc %d",scenario.field,scenario.disc);
+        return;
+    }
+    u8 mode=g_gameState->mode;
+    g_gameState->mode=1;o14_func_800A741C();g_gameState->mode=mode;
+    for(int i=0;i<2;i++) {
+        d->unk7EC[i]=d->unk7FC[i];d->unk7F4[i]=d->unk804[i];
+    }
+    scenario.return_field_ready=1;
+}
+/* Battle-only fixtures may omit a field unavailable on their disc, but an
+ * actual return requires valid saved ranges instead of an unbounded CD read. */
+void port_scenario_validate_return(void) {
+    if(scenario.enabled && scenario.consumed && scenario.kind==2 && !scenario.return_field_ready)
+        port_fatal("scenario: battle returned to field %d without valid return-field context; set field= to an on-disc field",scenario.field);
 }
 static void prepare_battle_resources(GameData *d) {
     /* The ordinary field/world transition supplies these two CD ranges.
@@ -150,6 +174,6 @@ void port_scenario_bootstrap(void) {
     g_gameState->unkA=1; /* ordinary battle entry from a field */
     d->fieldId=(u16)scenario.field;
     if(scenario.kind==1) o14_func_800A741C();
-    else {prepare_battle_resources(d);d->unkE=(u16)scenario.battle;}
+    else {prepare_return_field(d);prepare_battle_resources(d);d->unkE=(u16)scenario.battle;}
     port_log("scenario entered without title/intro: mode %d, disc %d, id %d\n",scenario.kind,scenario.disc,scenario.kind==1?scenario.field:scenario.battle);
 }

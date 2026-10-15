@@ -482,3 +482,16 @@ Dragon's loaded MIPS module. It must remain a code word across export +0x248
 and execute via the module bridge when called. The port's counted callback
 patch fixes direct jumps to 0x801e7704. Native/original clips cover the warp;
 module/native/module recursion has a focused vector mutation regression.
+
+
+### F17 (2026-10-15). Absent bone arrays during enemy entry
+
+Disc-1 battle 21 (Sealion/Black Waltz <01>) reaches C57A4 at frame 691 with a
+valid BtlUnit9C but unk20 == NULL. The camera-height query indexes the missing
+bone array before the model's pose matrices are ready. Original MIPS at
+C5850..5C loads the base, adds boneIndex*32, and unconditionally reads +0x18.
+The port maps the array base to low RAM before indexing, preserving the NULL
+field. Nine indexed consumers across ovl_0b.c, ovl_0b_2.c, ovl_0b_3.c and
+ovl_0b_o1.c share this array contract (height queries and bone attachments).
+Please annotate the optional pose-array state when naming these paths; a NULL
+check inserted into matching PSX code would change the original behavior.

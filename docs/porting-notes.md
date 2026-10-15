@@ -1445,3 +1445,29 @@ Both targets, rendering/display regressions, effect bridge checks and the
 battle CPU/original-instruction suites pass. A 25-fixture sweep reaches 65000
 frames for 23 cases after these effect fixes; Beatrix's return-field context
 and Black Waltz's missing bone array are separate follow-up findings.
+
+
+### Broader direct-entry regression sweep and bone arrays (2026-10-15)
+
+A catalogue-driven sweep under build/validation adds 24 boss probes across
+all four discs. After the effect fixes, 23/25 probes (including Valia) reach
+65000 frames. Beatrix then exposes missing return-field fixture state; Black
+Waltz exposes a separate, earlier null bone array. The latter reaches C57A4
+at frame 691 with a valid model and absent pose matrices. Original C585C reads
+boneIndex*32+0x18 even with a zero base. Nine reviewed indexed bone consumers
+now apply PSX_NZ to the base before indexing; stored NULL flags remain intact.
+The low-RAM regression covers nonzero bone indices as well as existing KO
+stores and native pointers.
+
+With return-field setup and bone mapping, all 30 host fixtures pass 65000
+frames: the 24 added probes plus Ark, Meltigemini, Taharka, Garland, Kuja and
+Valia Pira. The authoritative report is
+build/validation/boss_sweep_return_bones/report.json; generated fixtures and
+catalogue provenance remain under build/validation/boss_sweep_fixtures and
+boss_sweep_manifest.json. Passing includes idle Game Over or returned-field
+frames; this does not mean 65000 combat frames per boss, all AI branches,
+victory/phase coverage, or native visual validation of every fixture. Both
+targets and all battle, effect VM, GPU/raster, display and low-RAM suites pass.
+Both 216-export signature audits are clear. All emulators are closed and
+ordinary builds/configuration restored. Full-game rendering, sound, performance
+and remaining routine coverage are still open.
