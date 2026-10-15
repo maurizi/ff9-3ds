@@ -17,6 +17,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('scenarios', nargs='+', type=Path)
     p.add_argument('--exe', default='build/pc/ff9ds')
+    p.add_argument('--data', type=Path, help='runtime data root')
     p.add_argument('--frames', type=int, default=12000)
     p.add_argument('--timeout', type=float, default=60)
     p.add_argument('--out', type=Path, default=Path('build/validation/scenarios'))
@@ -29,6 +30,8 @@ def main():
     for index, scenario in enumerate(args.scenarios):
         log = args.out / f'{index:02d}_{scenario.stem}.log'
         command = [args.exe, '--scenario', str(scenario), '--frames', str(args.frames), '--status', '1000']
+        if args.data:
+            command += ['--data', str(args.data)]
         for press in args.press:
             command += ['--press', press]
         started = time.monotonic()
@@ -42,7 +45,7 @@ def main():
                 code, reason = None, 'timeout'
         text = log.read_text(errors='replace')
         passed = code == 0 and f'frame limit {args.frames} reached' in text
-        row = {'scenario': str(scenario), 'pass': passed, 'returncode': code,
+        row = {'scenario': str(scenario), 'data': str(args.data) if args.data else None, 'pass': passed, 'returncode': code,
                'reason': reason, 'seconds': round(time.monotonic()-started, 3), 'log': str(log),
                'fatal': next((line for line in text.splitlines() if 'FATAL:' in line), None)}
         results.append(row)

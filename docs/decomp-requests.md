@@ -532,3 +532,30 @@ drive. This preserves progress without imposing a measured physical seek model.
 The low-RAM BIOS contents remain a separate fidelity gap, explicitly tracked
 in scenario-testing.md; successful execution does not establish matching final
 particle positions.
+
+
+### F20 (2026-10-15). BIOS data changes null field-animation behavior
+
+Original BIOS boot initializes low RAM word zero to 3. The game retains it
+through normal field and battle execution. AB3CC reads the absent animation
+header count through NULL, then AB988/AB994/AB9A0 write the inline third-entry
+flags, position and speed at low RAM +0x2c/+0x34/+0x3a. The original field probe
+stops with v1 == 0 at AB988 and completes those stores. Please annotate this
+behavior: the earlier port assumption that the count is zero was wrong.
+The port maps all three writes without changing the optional stored pointer;
+AB0B0 and BB090 must still receive NULL for their explicit guards.
+
+The optional BIOS boot-image asset now reproduces Ifrit's F19 instruction
+window at 40a4. Capture must occur after BIOS boot, not by copying ROM alone;
+startup modifies 1066 bytes of the copied kernel. This verifies the queried
+data and position result, not complete summon graphics parity.
+
+### F21 (2026-10-15). KO motion checks without a current command
+
+B8FF8, B9418 and B97A0 compare the KO unit against curCmd->unk4 with no NULL
+check. Original MIPS B915C/B9514/B986C read +4 unconditionally. The expanded
+spell corpus reaches B97A0 through BDD24/BFAF4 with curCmd == NULL after Sleep,
+Thundaga and Comet; this also reproduces without the new BIOS image. The port
+maps only the dereference, retaining the NULL and low-RAM owner word rather
+than skipping the motion transition. Please preserve/document the original
+access when naming these related KO helpers.

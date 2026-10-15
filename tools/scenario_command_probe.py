@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--frames', type=int, default=12000)
     parser.add_argument('--timeout', type=float, default=60)
     parser.add_argument('--exe', type=Path, default=Path('build/pc/ff9ds.elf'))
+    parser.add_argument('--data', type=Path, help='runtime data root, including optional BIOS RAM image')
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     if not 1 <= args.command <= 0x30 or not 0 <= args.ability < 192:
@@ -38,6 +39,7 @@ def main():
             parser.error('control character in path')
         return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
     scenario = quote(args.scenario)
+    data = '--data ' + quote(args.data) if args.data else ''
     args.out.mkdir(parents=True)
     script = args.out / 'probe.gdb'
     presses = ' '.join(f'--press CROSS@{frame}+4'
@@ -65,7 +67,7 @@ printf "PROBE_EFFECT cmd=%u ability=%u effect=%u\\n",arg0->cmdNo,arg0->subNo,arg
 end
 continue
 end
-run --scenario {scenario} --frames {args.frames} --status 1000 {presses}
+run {data} --scenario {scenario} --frames {args.frames} --status 1000 {presses}
 if $_isvoid($_exitcode)
 backtrace 20
 quit 3
@@ -83,6 +85,7 @@ end
             code = None
     text = log.read_text(errors='replace')
     result = dict(scenario=str(args.scenario), command=args.command, ability=args.ability,
+                  data=str(args.data) if args.data else None,
                   targets=args.targets, returncode=code, queued='PROBE_QUEUE ' in text,
                   effect_started='PROBE_EFFECT ' in text,
                   frame_limit=f'frame limit {args.frames} reached' in text,

@@ -16,6 +16,7 @@
 extern unsigned char psx_ram[PSX_RAM_SIZE];
 extern unsigned char psx_scratchpad[0x400];
 extern unsigned short psx_spu_regs[0x200];
+void psx_load_low_ram(void);
 
 /* KSEG0/KUSEG address (0x80xxxxxx / 0x00xxxxxx) -> pointer into psx_ram, as an integer like the literal was. */
 #define PSX_ADDR(a) ((unsigned int)psx_ram + ((unsigned int)(a) & (PSX_RAM_SIZE - 1)))

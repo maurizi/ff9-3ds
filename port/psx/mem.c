@@ -57,6 +57,7 @@ static void psx_mem_init(void) {
 }
 
 void psx_run_game(void) {
+    psx_load_low_ram();
     psx_mem_init();
     plat_video_init();
     psx_load_image(psximg_main);

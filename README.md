@@ -49,6 +49,11 @@ tools/docker.sh make test-gx         # host texture/cache/compositing checks wit
 `tools/docker.sh` runs the BlocksDS container (`skylyrac/blocksds:slim-v1.24.0` plus Python). The build never
 writes game data outside `build/`.
 
+For BIOS-dependent low-RAM reads, install a captured `psx_low_ram.bin` beside the
+runtime data. The [capture and validation instructions](docs/scenario-testing.md)
+use your own BIOS and original game; missing assets retain the older zero-filled
+fallback, which differs from PSX behavior.
+
 The DS defaults to software rendering to preserve textures and framebuffer effects. It is still CPU-bound.
 Use `tools/docker.sh make ds SOFTDISPLAY=0` for the experimental GX path, which has known missing textures,
 geometry drops and lighting artifacts. Changing renderer or scripted-input options rebuilds the DS port

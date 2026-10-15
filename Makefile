@@ -347,7 +347,14 @@ $(BUILD)/tests/gte_probe: tests/gte/probe.c port/psx/gte.c port/include/gte.h
 	$(CC) -std=gnu17 -O1 -g -fsanitize=address,undefined -Iport/include $< -o $@
 
 .PHONY: test-raster
-.PHONY: test-low-ram test-bios test-cd
+.PHONY: test-low-ram test-bios test-cd test-kernel
+test-kernel: $(BUILD)/tests/kernel
+	@$<
+
+$(BUILD)/tests/kernel: tests/bios/kernel.c port/psx/kernel.c port/include/psx_mem.h
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Iport/include $< port/psx/kernel.c -o $@
+
 test-cd: $(BUILD)/tests/cd_sectors
 	@$<
 

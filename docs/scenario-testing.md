@@ -332,13 +332,65 @@ against the PSX full-summon capture. The reference uses Ark as its target and
 forced command words; the DS uses Meltigemini and menu input. This supports
 model/effect progression comparison, not synchronized pixels or damage values.
 
-Remaining fidelity gap: the original low-RAM query reads BIOS kernel words at
-0x40a4 (retained in the reference probe); the port's low-RAM image does not yet
-reproduce that kernel code. Address mapping and successful execution do not
-prove those final particle positions match. No BIOS/game bytes are embedded
-in these tests or documentation.
-The queried instruction sequence was found in the supplied SCPH1001 BIOS at
-ROM offset 0x13ba4; deriving a proper boot-kernel image remains follow-up work.
+The optional `psx_low_ram.bin` runtime asset supplies the original BIOS low-RAM
+contents. `tools/capture_psx_kernel.py` captures the first 64 KiB at the original
+executable entry after a cold BIOS boot. It verifies the stopped PC and executable
+bytes before capture. A raw ROM copy is insufficient: the boot process modifies
+1066 bytes of the copied kernel region with the supplied SCPH1001 BIOS.
+The port checks the PXR1 header, exact length and FNV-1a checksum before use;
+the bytes remain guest data and are never executed as native code.
+
+Start the original emulator cold and paused with `--no-fastboot`, then run:
+
+```sh
+python3 tools/capture_psx_kernel.py --out build/validation/psx_low_ram.bin
+```
+
+Install this asset as `psx_low_ram.bin` in the runtime data directory (beside
+`raw/` on host, or inside `ff9ds/` on the DS SD card). Both scenario runners
+accept `--data` for isolated roots. Without the asset the port logs that it
+retains zero-filled low RAM; this fallback does not reproduce BIOS-derived
+reads. No BIOS/game bytes are committed.
+
+`psx_runtime_low_ram_sample.json` confirms the original game retains count 3
+at address zero and the same instruction window at 0x40a4 during Ifrit.
+`ifrit_kernel_bone_output.log` verifies the native bone-35 query reads those
+exact twelve bytes and produces the expected three halfwords. This resolves
+that specific data mismatch; it does not establish full effect pixel parity.
+
+The initialized image also exposed a previously hidden field-return write:
+`psx_field_null_animation.json` stops the original at AB988 with the animation
+pointer zero, then verifies the inline third-entry stores through AB9A0. The
+port now maps the writes as well as the count read. The 64-command corpus
+also exposed KO motion checks reading a null current command in B97A0 (Sleep,
+Thundaga and Comet runs). All three equivalent KO helpers now map that read,
+preserving the stored NULL and original motion-selection behavior.
+
+The archived `ff9ds_kernel_ko_field.elf` completes all 30 boss fixtures through
+65000 frames (`boss_sweep_kernel_ko_field/report.json`) and all 64 white/black
+magic and summon probes through 12000 (`kernel_commands_ko_field/report.json`).
+These are execution checks with synthetic single-actor parties, not proof of
+menu legality, all battle phases, effect pixels or audio. Thundaga also passes
+without the BIOS image, where the older binary reproduced the same KO crash.
+The tracked regression fixture is `tests/scenarios/disc3_vivi_ko_motion.cfg`;
+run it with command 22 and ability 28, 35 or 42, for example:
+
+```sh
+tools/docker.sh python3 tools/scenario_command_probe.py \
+  tests/scenarios/disc3_vivi_ko_motion.cfg --command 22 --ability 35 \
+  --data build/validation/kernel_data --out build/validation/vivi_ko_regression
+```
+
+Native validation uses the archived `ff9ds_ifrit_kernel_ko_field` ROM/ELF.
+`ds_ifrit_kernel_ko_field_runtime.json` confirms the BIOS instruction window
+is loaded on DS; the 60-second `ds_ifrit_kernel_ko_field_action.mp4` shows
+Ifrit's model, fire blast and return to combat. Six motion samples were
+reviewed against `psx_ifrit_first_summon_action.mp4`. As above, the enemy and
+timing differ, so this is not a synchronized pixel comparison. The checkpoint
+at frame 4148 has no exception/first-fault markers or protected ITCM changes
+(`ds_ifrit_kernel_ko_field_after_inspection.json`). The captured asset is
+installed in the local normal and scenario SD roots; both emulators were
+closed after validation and the normal melonDS SD configuration restored.
 
 ## Cached HUD text and subsequent effect interfaces
 
