@@ -559,3 +559,25 @@ Thundaga and Comet; this also reproduces without the new BIOS image. The port
 maps only the dereference, retaining the NULL and low-RAM owner word rather
 than skipping the motion transition. Please preserve/document the original
 access when naming these related KO helpers.
+
+
+### F22 (2026-10-15). Shared guest/main character records and trance fixtures
+
+New Game's records 5/6/7 use presets 8/10/12 and flags 0x15 (Cinna/Marcus/Blank).
+Their main-character variants are presets 5/6/7 (Quina/Eiko/Amarant), with flags
+from 33A50 and model indices from 33280. Please name Character.unkA's 0x10 guest
+variant flag and unk34.row's preset/ability row; conflating record index with
+character model produced misleading synthetic ability coverage in the port.
+The 0xFE event opcode sets flags/row before 333B0's equipment/stat update.
+
+The fixture loader now checks 33964(preset) against D_8006CAA4[id][guest], uses
+33A50/33A1C/33D38/33D8C for flags and default name/equipment, then recalculates
+stats. Explicit presets are optional so canonical records and guest tests keep
+their existing semantics. Corrected model observations are Quina 9, Eiko 10 and
+Amarant 13; the ordinary transformation paths pass for all eight main characters.
+
+Event byte D_8007AEF0.b[0x10] enables trance in BB4A0; Character.trance at +0x20
+initializes BtlUnit.unk78. Enemy damage in B81C4 saturates that gauge and calls
+btl_addStatus(0x4000), which queues command 0x3b through the normal path.
+Please name these gates together. A full saved gauge alone does not force a
+transformation when the global flag or guest variant disables it.

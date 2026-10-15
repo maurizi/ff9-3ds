@@ -87,13 +87,21 @@ def main():
         if not line or line.startswith('#'):continue
         key,value=line.split('=',1);config[key.strip()]=value.strip()
     if config.get('kind')!='battle':p.error('requires battle scenario')
-    enemy_hp={}
+    enemy_hp={};trance={};presets={}
     try:
         summons_seen=int(config.get('summons_seen','0'),0)
         if not 0<=summons_seen<=65535:raise ValueError('summons_seen must be 0..65535')
         gil=int(config['gil'],0) if 'gil' in config else None
         if gil is not None and not 0<=gil<=9999999:raise ValueError('gil must be 0..9999999')
         for key,value in config.items():
+            if key.startswith('preset.'):
+                slot=int(key[7:],0);preset=int(value,0)
+                if not 0<=slot<4 or not 0<=preset<=19:raise ValueError('preset requires slot 0..3 and value 0..19')
+                presets[slot]=preset
+            if key.startswith('trance.'):
+                slot=int(key[7:],0);gauge=int(value,0)
+                if not 0<=slot<4 or not 0<=gauge<=255:raise ValueError('trance requires slot 0..3 and gauge 0..255')
+                trance[slot]=gauge
             if key.startswith('enemy_hp.'):
                 slot=int(key[9:],0);hp=int(value,0)
                 if not 0<=slot<4 or not 1<=hp<=65535:raise ValueError('enemy_hp requires slot 0..3 and HP 1..65535')
@@ -103,10 +111,20 @@ def main():
     party=[int(v) for v in config.get('party','0,1,2,3').split(',')]
     if len(party)!=4 or party[0]<0 or any(v<-1 or v>8 for v in party):p.error('invalid party')
     if len({v for v in party if v>=0})!=sum(v>=0 for v in party):p.error('duplicate party')
-    characters=args.characters.read_bytes();events=args.events.read_bytes()
+    characters=bytearray(args.characters.read_bytes());events=args.events.read_bytes()
     if len(characters)!=9*0x90 or len(events)!=0x800:p.error('invalid canonical blob length')
+    for slot,preset in presets.items():
+        if party[slot]<0:continue
+        offset=party[slot]*0x90
+        row=(struct.unpack_from('<I',characters,offset+0x34)[0]>>12)&31
+        guest=bool(characters[offset+0xa]&0x10)
+        if row!=preset or guest!=(preset>=8 and preset!=16):
+            p.error('export canonical characters after the host applies the requested preset')
+    # Character.trance is a saved gauge byte, not the live battle status bit.
+    for slot,gauge in trance.items():
+        if party[slot]>=0:characters[party[slot]*0x90+0x20]=gauge
     sectors,lengths=ranges(ROOT/f'disks/us/disc{disc}/FF9.IMG',encounter)
-    print(json.dumps({'disc':disc,'battle':encounter,'sectors':sectors,'lengths':lengths,'party':party,'enemy_hp':enemy_hp,'summons_seen':summons_seen,'gil':gil}))
+    print(json.dumps({'disc':disc,'battle':encounter,'sectors':sectors,'lengths':lengths,'party':party,'enemy_hp':enemy_hp,'summons_seen':summons_seen,'gil':gil,'trance':trance,'presets':presets}))
     if args.dry_run:return
     spec=importlib.util.spec_from_file_location('ff9_emu',args.decomp/'tools/emu.py')
     emu=importlib.util.module_from_spec(spec);spec.loader.exec_module(emu)

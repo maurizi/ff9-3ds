@@ -69,6 +69,8 @@ Fixtures use `key=value`, with comments beginning with `#`:
 | `battle` | Required encounter ID for battles, resolved against that disc |
 | `party` | Four character indices, 0–8 or -1 for empty; first slot occupied |
 | `level` | Optional level 1–99, rebuilding stats and healing |
+| `preset.SLOT` | Optional compatible preset/ability row 0–19; applies default flags, name and equipment, then rebuilds/heals stats |
+| `trance.SLOT` | Optional saved gauge 0–255; the ordinary damage/status path still triggers transformation |
 | `hp.SLOT` | Override current HP after leveling, bounded by maximum HP |
 | `enemy_hp.SLOT` | Battle-only current HP 1–65535 for enemy unit ID 4+SLOT (SLOT 0–3), bounded by its initialized maximum |
 | `equip.SLOT` | Five equipment item IDs, 0–255 |
@@ -421,6 +423,66 @@ its dialogue after the battle. Its frame-9518 checkpoint has no exception or
 first-fault marker and no protected ITCM changes
 (`ds_beatrix_kernel_after_return_inspection.json`). This establishes native
 execution of the corrected field path, not pixel parity for every field.
+
+## Character presets, trance and Sword Magic
+
+New Game initializes records 5–7 as Cinna, Marcus and Blank (presets 8/10/12,
+models 14/15/16, flags 0x15), not Quina, Eiko and Amarant. Selecting those
+record indices alone therefore tests abilities on guest models. This limits
+the earlier 64- and 60-case reports above: they established ability dispatch
+and execution, not the intended main-character models for those records.
+`inspect_roster.log` records the original baseline.
+
+Use explicit `preset.SLOT` overrides for synthetic main-character parties:
+0–7 are the corresponding main character presets. Record 8 is Beatrix;
+other guest/alternate presets remain available only for their compatible
+record. The loader validates compatibility against the game's own tables,
+uses the game's default flags/name/equipment helpers and recalculates stats.
+Explicit equipment, level, gauge and HP overrides follow that initialization.
+Without a preset override, imported/New Game records remain unchanged.
+The PSX helper requires exported canonical records with matching presets and
+guest flags; it rejects a mismatched guest blob instead of silently using it.
+
+`trance.SLOT=255` initializes the saved gauge, not a live status bit.
+The synthetic trance fixture also sets `event.0x10=1`, the game's global
+trance enable flag; subsequent enemy damage calls the normal status and
+transformation-command paths. `--require-trance` waits for an Attack from an
+actor with status 0x4000. Success also requires observing that actor's ordinary
+trance-entry effect, the requested ability effect and the frame limit.
+A disabled global trance flag correctly gives no transition/replaced command
+(`trance_disabled_rejection/report.json`). Gauge bounds, invalid slot/preset
+values and incompatible characters are checked in `preset_trance_validation.log`.
+
+The corrected preset sweeps use the archived `ff9ds_preset_trance.elf`:
+
+- `magic_summon_presets/report.json`: all 64 probes pass with intended presets.
+- `extended_commands_presets/report.json`: 59/60 pass; Spare Change is correctly
+  rejected at New Game's 500 gil. The funded tracked fixture passes on actual
+  Amarant (`spare_change_real_amarant/report.json`).
+- `trance_sweep_presets/report.json`: all 22 pass (eight Dyne moves, eight Elan
+  moves, and trance attacks for the other six main characters).
+- `sword_magic_baseline/report.json`: all eleven Sword Magic abilities pass
+  with Steiner and Vivi together. `tests/scenarios/disc3_sword_magic.cfg`
+  retains the explicit party/presets; select actor 3, command 31, ability 50
+  for Fire Sword (other IDs: 52/54/56/57/59/61/63/65/75/76).
+
+Targeted reports additionally record the actual model/preset/flags selected:
+Quina 9/5/5, Eiko 10/6/6 and Amarant 13/7/5. Future probes retain this metadata
+beside command/effect evidence so guest substitutions are visible. These
+remain dispatch checks rather than proof of learned abilities or menu legality.
+
+Native validation uses `ff9ds_zidane_trance` ROM/ELF, the tracked Zidane fixture
+and no scripted battle inputs. The 60-second `ds_zidane_trance_action.mp4`
+shows the transformation flash/rays, the trance model and subsequent combat.
+The frame-3759 checkpoint has zero exception/first-fault markers and no
+protected ITCM changes (`ds_zidane_trance_after_inspection.json`).
+The same party/gauge/events were imported through the original PSX field
+cleanup and battle loader. `psx_zidane_trance_entry.json` records the original
+entry effect 257 and status 0x4004; `psx_zidane_trance_action.mp4` records its
+next 20 emulated seconds. Six sampled motion frames were compared with the
+DS clip. Enemy action/RNG timing differs, so this checks transformation and
+model progression, not synchronized effect pixels or combat values.
+Both emulators were closed and normal melonDS configuration restored.
 
 ## Cached HUD text and subsequent effect interfaces
 

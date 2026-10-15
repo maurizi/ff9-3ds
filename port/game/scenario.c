@@ -15,7 +15,7 @@ s32 func_80033C48(s32,s32,u8);
 static struct {
     int enabled,consumed,kind,disc,field,battle,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil;
     unsigned seed;
-    int party[4],hp[4],enemy_hp[4],equip[4][5],events[0x800],items[256];
+    int party[4],hp[4],enemy_hp[4],trance[4],preset[4],equip[4][5],events[0x800],items[256];
     char characters[256],event_blob[256];
 } scenario;
 static int number(const char *s,int low,int high) {
@@ -29,7 +29,7 @@ void port_scenario_load(const char *path) {
     __builtin_memset(&scenario,0,sizeof scenario);
     scenario.disc=1;scenario.field=70;scenario.battle=-1;
     scenario.level=-1;scenario.story=-1;scenario.gil=-1;scenario.seed=1;
-    for(int i=0;i<4;++i) {scenario.party[i]=i;scenario.hp[i]=scenario.enemy_hp[i]=-1;for(int j=0;j<5;++j) scenario.equip[i][j]=-1;}
+    for(int i=0;i<4;++i) {scenario.party[i]=i;scenario.hp[i]=scenario.enemy_hp[i]=scenario.trance[i]=scenario.preset[i]=-1;for(int j=0;j<5;++j) scenario.equip[i][j]=-1;}
     for(int i=0;i<0x800;++i) scenario.events[i]=-1;
     for(int i=0;i<256;++i) scenario.items[i]=-1;
     char line[512];
@@ -66,6 +66,8 @@ void port_scenario_load(const char *path) {
             if(__builtin_strlen(eq)>=256) port_fatal("scenario: blob path too long");
             __builtin_strcpy(dst,eq);
         } else if(!__builtin_strncmp(s,"enemy_hp.",9)) scenario.enemy_hp[number(s+9,0,3)]=number(eq,1,65535);
+        else if(!__builtin_strncmp(s,"trance.",7)) scenario.trance[number(s+7,0,3)]=number(eq,0,255);
+        else if(!__builtin_strncmp(s,"preset.",7)) scenario.preset[number(s+7,0,3)]=number(eq,0,19);
         else if(!__builtin_strncmp(s,"hp.",3)) scenario.hp[number(s+3,0,3)]=number(eq,0,9999);
         else if(!__builtin_strncmp(s,"event.",6)) scenario.events[number(s+6,0,0x7ff)]=number(eq,0,255);
         else if(!__builtin_strncmp(s,"item.",5)) scenario.items[number(s+5,0,255)]=number(eq,0,99);
@@ -181,9 +183,21 @@ void port_scenario_bootstrap(void) {
     for(int i=0;i<4;++i) {
         int ch=scenario.party[i];func_80033AF4(i,ch);if(ch<0) continue;
         Character *c=&d->characters[ch];
+        if(scenario.preset[i]>=0) {
+            int preset=scenario.preset[i];
+            u8 flags=func_80033A50(preset);
+            if(func_80033964(preset)!=D_8006CAA4[ch][(flags>>4)&1])
+                port_fatal("scenario: preset %d incompatible with character %d",preset,ch);
+            c->unk34.b.row=preset;
+            c->unkA=flags;
+            int defaults=func_80033A1C(c);
+            func_80033D38(c->unk0,defaults);
+            func_80033D8C(c->equip,defaults);
+        }
         for(int j=0;j<5;++j) if(scenario.equip[i][j]>=0) c->equip[j]=(u8)scenario.equip[i][j];
         c->unk34.b.unk4=func_80033280(c->unk34.b.id,(c->unkA>>4)&1,c->equip);
-        if(scenario.level>0) func_80033C48(ch,scenario.level,1);
+        if(scenario.level>0 || scenario.preset[i]>=0) func_80033C48(ch,scenario.level>0?scenario.level:c->level,1);
+        if(scenario.trance[i]>=0) c->trance=(u8)scenario.trance[i];
         if(scenario.hp[i]>=0) {if(scenario.hp[i]>c->maxHp) port_fatal("scenario: HP exceeds maximum");c->hp=(u16)scenario.hp[i];}
     }
     rand_init((s32)scenario.seed);g_gameState->mode=(u8)scenario.kind;
