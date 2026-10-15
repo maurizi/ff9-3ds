@@ -10,11 +10,12 @@
 void psx_cd_select_disc(unsigned);
 void o14_func_800A7578(void);
 void o14_func_800A741C(void);
+void port_scenario_set_enemy_hp(const int *values);
 s32 func_80033C48(s32,s32,u8);
 static struct {
-    int enabled,consumed,kind,disc,field,battle,level,story,field_explicit,return_field_ready;
+    int enabled,consumed,kind,disc,field,battle,level,story,field_explicit,return_field_ready,enemy_hp_applied;
     unsigned seed;
-    int party[4],hp[4],equip[4][5],events[0x800],items[256];
+    int party[4],hp[4],enemy_hp[4],equip[4][5],events[0x800],items[256];
     char characters[256],event_blob[256];
 } scenario;
 static int number(const char *s,int low,int high) {
@@ -28,7 +29,7 @@ void port_scenario_load(const char *path) {
     __builtin_memset(&scenario,0,sizeof scenario);
     scenario.disc=1;scenario.field=70;scenario.battle=-1;
     scenario.level=-1;scenario.story=-1;scenario.seed=1;
-    for(int i=0;i<4;++i) {scenario.party[i]=i;scenario.hp[i]=-1;for(int j=0;j<5;++j) scenario.equip[i][j]=-1;}
+    for(int i=0;i<4;++i) {scenario.party[i]=i;scenario.hp[i]=scenario.enemy_hp[i]=-1;for(int j=0;j<5;++j) scenario.equip[i][j]=-1;}
     for(int i=0;i<0x800;++i) scenario.events[i]=-1;
     for(int i=0;i<256;++i) scenario.items[i]=-1;
     char line[512];
@@ -62,7 +63,8 @@ void port_scenario_load(const char *path) {
             char *dst=!__builtin_strcmp(s,"characters")?scenario.characters:scenario.event_blob;
             if(__builtin_strlen(eq)>=256) port_fatal("scenario: blob path too long");
             __builtin_strcpy(dst,eq);
-        } else if(!__builtin_strncmp(s,"hp.",3)) scenario.hp[number(s+3,0,3)]=number(eq,0,9999);
+        } else if(!__builtin_strncmp(s,"enemy_hp.",9)) scenario.enemy_hp[number(s+9,0,3)]=number(eq,1,65535);
+        else if(!__builtin_strncmp(s,"hp.",3)) scenario.hp[number(s+3,0,3)]=number(eq,0,9999);
         else if(!__builtin_strncmp(s,"event.",6)) scenario.events[number(s+6,0,0x7ff)]=number(eq,0,255);
         else if(!__builtin_strncmp(s,"item.",5)) scenario.items[number(s+5,0,255)]=number(eq,0,99);
         else if(!__builtin_strncmp(s,"equip.",6)) {
@@ -74,6 +76,8 @@ void port_scenario_load(const char *path) {
     if(ferror(f)) port_fatal("scenario: error reading %s",path);
     fclose(f);
     if(!scenario.kind || (scenario.kind==2 && scenario.battle<0)) port_fatal("scenario: kind and battle ID required");
+    if(scenario.kind!=2) for(int i=0;i<4;i++) if(scenario.enemy_hp[i]>=0)
+        port_fatal("scenario: enemy_hp requires kind=battle");
     scenario.enabled=1;psx_cd_select_disc((unsigned)scenario.disc);
     port_log("scenario configured: disc %d, %s %d\n",scenario.disc,scenario.kind==1?"field":"battle",scenario.kind==1?scenario.field:scenario.battle);
 }
@@ -86,6 +90,14 @@ static void load_blob(const char *path,void *data,size_t size) {
 /* Field/battle initialization normally reseeds from a hardware counter. */
 s32 port_scenario_seed(s32 ordinary_seed) {
     return scenario.enabled ? (s32)scenario.seed : ordinary_seed;
+}
+void port_scenario_battle_ready(void) {
+    if(!scenario.enabled || !scenario.consumed || scenario.kind!=2 || scenario.enemy_hp_applied) return;
+    scenario.enemy_hp_applied=1;
+    for(int i=0;i<4;i++) if(scenario.enemy_hp[i]>=0) {
+        port_scenario_set_enemy_hp(scenario.enemy_hp);
+        return;
+    }
 }
 static void prepare_return_field(GameData *d) {
     typedef struct {u16 field,area;u32 sector;} FieldEntry;

@@ -70,6 +70,7 @@ Fixtures use `key=value`, with comments beginning with `#`:
 | `party` | Four character indices, 0–8 or -1 for empty; first slot occupied |
 | `level` | Optional level 1–99, rebuilding stats and healing |
 | `hp.SLOT` | Override current HP after leveling, bounded by maximum HP |
+| `enemy_hp.SLOT` | Battle-only current HP 1–65535 for enemy unit ID 4+SLOT (SLOT 0–3), bounded by its initialized maximum |
 | `equip.SLOT` | Five equipment item IDs, 0–255 |
 | `item.ID` | Set inventory quantity 0–99, preserving other items |
 | `story` | Set the 16-bit event story counter |
@@ -92,6 +93,35 @@ does not by itself guarantee deterministic wall-clock/input behavior.
 Canonical save-data extraction and scripted action/phase assertions will
 extend these fixtures; loading a boss is not equivalent to covering all of
 its attacks, victory, defeat, or cutscene transitions.
+
+Enemy HP overrides run once when entrance animations finish and the loader
+enters combat, before the entry event script. They change current HP only;
+maximum HP, status and scripts remain intact. Requested absent units or HP
+above their initialized maximum fail explicitly. Boss scripts may subsequently
+replace HP or use HP thresholds for scripted exits, so an override does not
+establish coverage of a phase or a normal victory by itself. Gizamaluke with
+synthetic story=10000 has maximum HP 65535 at this point and exits without a
+player command when set to 1 HP; it is unsuitable as an ordinary kill test.
+
+`tests/scenarios/disc1_black_waltz_rewards.cfg` instead reaches ordinary attack
+commands against both enemies, victory/rewards, then field mode on the host.
+To reproduce the input route, run this inside the build container:
+
+```python
+import subprocess
+command = ['build/pc/ff9ds.elf', '--scenario',
+           'tests/scenarios/disc1_black_waltz_rewards.cfg',
+           '--frames', '65000', '--status', '3000']
+for frame in range(1000, 30000, 40):
+    command += ['--press', f'CROSS@{frame}+4']
+subprocess.run(command, check=True)
+```
+
+Host validation retained under `build/validation/enemy_hp_report.json` checks
+one-time application to both enemies (1/472 and 1/229), return to field,
+and rejection of absent slots, excessive HP and zero HP. The original attack
+trace is `black_waltz_low_hp.log`. This does not prove native DS or original
+PSX reward-screen fidelity.
 
 Verified: opening field 70 entered directly on the host; disc-3 Ark entered
 directly on both host and melonDS, revealing optional null default-motion

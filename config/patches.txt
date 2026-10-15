@@ -8,6 +8,8 @@
 src/main/main.c | func_8001D268(); | func_8001D268(); port_scenario_bootstrap(); | 1
 src/main/main.c | func_80012900(1); | port_scenario_validate_return(); func_80012900(1); | 1
 src/main/main.c | rand_init(GetRCnt(2)); | rand_init(port_scenario_seed(GetRCnt(2))); | 1
+# Apply optional enemy HP once units and entry animations are initialized, before combat.
+src/ovl_0b/ovl_0b.c | b->unkD80 = 4; | b->unkD80 = 4; port_scenario_battle_ready(); | 1
 
 # CD-loaded battle-effect modules retain raw PSX pointers and MIPS code.
 src/ovl_0b/ovl_0b_2.c | fh = *(u8 **)dst; | fh = (u8 *)PSX_ADDR(*(u32 *)dst); | 1
