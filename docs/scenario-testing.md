@@ -123,6 +123,25 @@ and rejection of absent slots, excessive HP and zero HP. The original attack
 trace is `black_waltz_low_hp.log`. This does not prove native DS or original
 PSX reward-screen fidelity.
 
+Subsequent native validation of the Black Waltz reward route retains matching
+`ff9ds_black_waltz_rewards` ROM/ELF, a pre-reward state at game frame 3175 and
+a returned-field state at 4633. Both states have zero first-fault markers and
+no protected ITCM changes. `ds_black_waltz_rewards_action.mp4` records 60
+wall-clock seconds through the victory pose, item/gil page and field return.
+`psx_black_waltz_rewards_action.mp4` records 12 emulated seconds from original
+victory handling through rewards and field return. Sampled motion frames were
+reviewed on both platforms; reward windows/layout and exit behavior agree.
+Reading final GameData.gil gives 839 on both platforms. RNG phases and input
+timings differ (including item ordering); this is not pixel/timing equivalence
+or audio validation. All artifacts remain under ignored build/validation.
+
+An additional six-case host input probe (`reward_sweep/report.json`) reaches
+65000 frames without process failure for Antlion, Ark, Garland, Meltigemini,
+Taharka and Deathguise. All except Antlion reach field mode; Antlion reaches
+the title and is not counted as reward coverage. These synthetic
+fixtures lower enemy slot 0 only and use return field 350 on discs 3/4.
+Attack/phase assertions and native/PSX comparisons remain due for this sweep.
+
 Verified: opening field 70 entered directly on the host; disc-3 Ark entered
 directly on both host and melonDS, revealing optional null default-motion
 handling and missing battle effect emitters without playing the opening.
@@ -230,6 +249,18 @@ original entrance/combat video is `psx_direct_ark_entrance_combat.mp4`; the
 Photon HUD screenshot is `psx_direct_ark_hud_reference.png`. Party/story data
 match; input timing and RNG phases are not synchronized, and inventory is not
 imported by this PSX helper.
+
+When `enemy_hp.SLOT` is present, the helper also runs the ordinary battle
+loader to original PC 800AF3A0: AF2E0 has just selected combat state 4 and
+has not invoked the entry event script. It validates active enemy IDs and
+their maximum HP before writing only their current HP halfwords. It then
+leaves the original paused at that point. Fixtures without enemy HP retain
+the earlier stop before battle loading. Later scripts can replace HP on both
+platforms; this hook does not bypass them.
+The Black Waltz fixture was run through this automatic reference hook:
+`build/validation/psx_black_waltz_fixture_auto_hp.log` records 1/472 and 1/229,
+and the reference remains paused at 800AF3A0. This verifies the live loader
+path independently of `--dry-run`.
 
 ## Cached HUD text and subsequent effect interfaces
 

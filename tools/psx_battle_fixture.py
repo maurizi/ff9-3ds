@@ -16,6 +16,39 @@ from scenario_catalog import block, SECTOR
 ROOT=Path(__file__).resolve().parents[1]
 
 
+def apply_enemy_hp(emu, values):
+    """Match the native fixture hook after entrance, before its entry script."""
+    address=0x800af3a0  # AF2E0: immediately after storing combat state 4.
+    bp=emu.bridge('addBp',address,'Exec',4,'break',1,'fixture_enemy_hp')
+    try:
+        emu.run_frames(12000)
+        if emu.bridge('status')['pc']!=address:
+            raise ValueError('battle did not reach initialized enemy HP hook')
+    finally:
+        emu.bridge('removeBp',bp)
+    read=emu.bridge
+    gs=read('r32',0x8006794c);gd=read('r32',gs+0x1c)
+    battle=read('r32',gd+0x8e4);unit=read('r32',battle+0x6f8)
+    pending={};seen=set()
+    while unit:
+        if unit in seen or not 0x80010000<=unit<0x801fff00:
+            raise ValueError('invalid initialized battle unit list')
+        seen.add(unit)
+        flags=read('r32',unit+0x68);slot=((flags>>5)&7)-4
+        if not flags&1 and slot in values:
+            maximum=read('r32',unit+0x24)
+            if not 0x80010000<=maximum<0x801ffffe:
+                raise ValueError('invalid enemy maximum HP pointer')
+            hp=struct.unpack('<H',bytes.fromhex(read('read',maximum,2)))[0]
+            if values[slot]>hp:raise ValueError(f'enemy {slot} HP exceeds initialized maximum {hp}')
+            pending[slot]=(unit,hp)
+        unit=read('r32',unit)
+    if values.keys()-pending.keys():raise ValueError('requested enemy is absent from initialized formation')
+    for slot,(unit,hp) in sorted(pending.items()):
+        emu.bridge('write',unit+0x28,struct.pack('<H',values[slot]).hex())
+        print(f'scenario: enemy {slot} HP {values[slot]}/{hp}',flush=True)
+
+
 def ranges(path, encounter):
     with path.open('rb') as image:
         header=image.read(SECTOR)
@@ -54,6 +87,14 @@ def main():
         if not line or line.startswith('#'):continue
         key,value=line.split('=',1);config[key.strip()]=value.strip()
     if config.get('kind')!='battle':p.error('requires battle scenario')
+    enemy_hp={}
+    try:
+        for key,value in config.items():
+            if key.startswith('enemy_hp.'):
+                slot=int(key[9:],0);hp=int(value,0)
+                if not 0<=slot<4 or not 1<=hp<=65535:raise ValueError('enemy_hp requires slot 0..3 and HP 1..65535')
+                enemy_hp[slot]=hp
+    except ValueError as error:p.error(str(error))
     disc=int(config.get('disc','1'),0);encounter=int(config['battle'],0)
     party=[int(v) for v in config.get('party','0,1,2,3').split(',')]
     if len(party)!=4 or party[0]<0 or any(v<-1 or v>8 for v in party):p.error('invalid party')
@@ -61,7 +102,7 @@ def main():
     characters=args.characters.read_bytes();events=args.events.read_bytes()
     if len(characters)!=9*0x90 or len(events)!=0x800:p.error('invalid canonical blob length')
     sectors,lengths=ranges(ROOT/f'disks/us/disc{disc}/FF9.IMG',encounter)
-    print(json.dumps({'disc':disc,'battle':encounter,'sectors':sectors,'lengths':lengths,'party':party}))
+    print(json.dumps({'disc':disc,'battle':encounter,'sectors':sectors,'lengths':lengths,'party':party,'enemy_hp':enemy_hp}))
     if args.dry_run:return
     spec=importlib.util.spec_from_file_location('ff9_emu',args.decomp/'tools/emu.py')
     emu=importlib.util.module_from_spec(spec);spec.loader.exec_module(emu)
@@ -99,7 +140,11 @@ def main():
     field=int(config.get('field','70'),0)
     emu.bridge('write',gd+12,struct.pack('<2H',field,encounter).hex())
     emu.bridge('write',gs+8,'02');emu.bridge('write',gs+10,'01')
-    print('Field cleanup completed; resume/step the original battle loader.')
+    if enemy_hp:
+        apply_enemy_hp(emu,enemy_hp)
+        print('Enemy HP applied; original battle paused before its entry event script.')
+    else:
+        print('Field cleanup completed; resume/step the original battle loader.')
 
 
 if __name__=='__main__':main()
