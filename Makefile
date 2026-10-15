@@ -327,9 +327,9 @@ $(BUILD)/tests/gte_oracle.so: tests/gte/oracle.c port/psx/gte.c port/include/gte
 	@mkdir -p $(dir $@)
 	$(CC) -shared -fPIC -std=gnu17 -O2 -Iport/include $< -o $@
 
-$(BUILD)/tests/battle_ribbons_probe: tests/battle/ribbons_probe.c port/game/battle_ribbons.c port/psx/gte.c
+$(BUILD)/tests/battle_ribbons_probe: tests/battle/ribbons_probe.c port/game/battle_ribbons.c port/psx/gte.c port/game/effect_vm.c
 	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/ribbons_probe.c port/game/battle_ribbons.c -Wl,--defsym=psx_ram=0x02000000 -o $@
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/ribbons_probe.c port/game/battle_ribbons.c port/game/effect_vm.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
 
 .PHONY: test-battle-ribbons
 test-battle-ribbons: $(BUILD)/tests/gte_oracle.so $(BUILD)/tests/battle_ribbons_probe

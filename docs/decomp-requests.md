@@ -416,3 +416,17 @@ duration, and returns a value used to stop the animation. Kuja's loaded module
 supplies guest code at 0x801E8C84 here. This call now enters the effect VM in
 the portified copy, retaining raw stored callback words and scalar arguments.
 It is separate from the six/nine-word element and seven-word pool callbacks.
+
+
+### F14 (2026-10-15). D50A0 projects joined 3D effect ribbons
+
+Valia Pira's Holy route reaches D50A0 through D0E14/D1494. Compared with the
+screen-space D5C30 ribbon, this routine computes segment/view cross products
+with OP/SQR, normalizes via CFA80, applies signed ring-entry width with GPF,
+and projects joined +/- edges into GT4 packets. Context +0x28 is the reference
+vector, +0x30..38 saves diagonal rotation words, +0x3c/40 caches the previous
+projected edges, and +0x44..58 holds current/next signed coordinates. It tests
+existing MAC0 after RTPT without NCLIP. Please retain these distinctions when
+naming the ribbon emitters/context fields. Original-instruction comparisons
+cover full context/packet/OT/GTE state; native and original PSX Holy videos
+are retained under the port's ignored build/validation directory.

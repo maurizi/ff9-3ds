@@ -1342,3 +1342,37 @@ the equivalent coordinate-UB cleanup. Both default targets, test-gpu,
 test-raster (4,096 primitives), test-display and five 65,000-frame host battle
 fixtures pass. The replay diagnostic prototype is retained under ignored
 build/validation; it is not a supported test interface yet.
+
+
+### Valia Pira Holy ribbon emitter (2026-10-15)
+
+The direct Valia Pira fixture first stops at missing D50A0, reached at host
+frame 5673 from D0E14/D1494. The native implementation projects joined GT4
+ribbons in 3D: OP/SQR and the reciprocal-root table normalize the segment/view
+cross product, GPF applies signed width, and DPCS fades the two edge colours.
+It restores the three saved diagonal rotation words before RTPT, preserves
+cached joined edges and halfword-only UV stores, and retains the original
+existing-MAC0 cull without adding NCLIP. Nested ring words use the production
+mixed guest/native data boundary, including native heap addresses beyond 2 MB.
+
+The expanded ribbon test executes original MIPS with the production GTE and
+compares context, all 1,024 packet bytes, the full OT and raw GTE registers in
+700 cases: 300 new 3D ribbon cases plus the existing 400 ribbon/particle cases.
+New cases cover ring wrap, raw/native pointers, external native heap data,
+coincident segments, signed widths, UV/fade wrapping, culling, and the original
+first iteration even for nonpositive counts. This is a CPU/packet comparison
+with a shared GTE, rather than an independent PSX hardware GTE validation.
+
+The native DS checkpoint advances from 5119 to 6463 with zero recorded ITCM
+faults or protected changes. ds_d50a0_valia_action.mp4 records 30 seconds of
+actual Holy animation, including blue ribbons, particles and the flash. The
+original PSX breakpoint reaches D50A0 at VBlank 7169 from D0E14; the 12-second
+psx_d50a0_valia_holy.mp4 records the corresponding original sequence. Both were
+inspected in motion/contact sheets. Targets, HP and RNG differ, so these clips
+establish effect progress and visual comparison, not frame-aligned parity.
+Matching ROM/ELF, states, logs and captures remain under build/validation.
+
+Valia Pira subsequently exposes a separate null-coordinate read at frame 8043
+and model-split pointer handling at frame 8219. Those remain separate work;
+the new emitter does not establish full encounter completion. The five prior
+host battle fixtures still pass 65,000 frames, and both targets build.
