@@ -1,11 +1,15 @@
 /* libcd: a virtual CD drive that reads the user's raw disc image (2352-byte sectors, as the decomp's disks/).
  *
- * The game's own CD module (main: cd_startRequest, cd_onSectorReady, g_cdLoad ...) runs unchanged on top. It is
+ * The game's CD module (main: cd_startRequest, cd_onSectorReady, g_cdLoad ...) runs on top with loader-poll hooks. It is
  * an interrupt-driven state machine: it issues a command, and the drive's interrupt calls back the sync callback
  * (command complete) or the ready callback (a sector is ready, fetched with CdGetSector). It also busy-waits on
- * its own state with no library call inside the loop, so the work has to be finished before control returns to
- * the game: psx_cd_pump() runs at the end of every libcd call and executes commands and delivers sectors,
- * re-entrantly, until the game stops reading ("fast CD"). Commands issued from inside a callback are queued.
+ * its own state with no library call inside the loop. Reviewed loader polling
+ * sites therefore service the drive, as do frame boundaries and libcd calls.
+ * Each pump completes queued commands but delivers at most one sector. Draining
+ * a whole read immediately can overwrite a released summon model while its
+ * final callbacks still query it (Ifrit). Commands issued inside a callback
+ * are queued and processed after it returns, without recursive sector delivery.
+ * This preserves asynchronous progress; it does not model physical seek time.
  *
  * Disc layout: Mode 2 Form 1, user data at offset 24 of each raw sector. Disc swaps: TODO (M4).
  */
@@ -17,7 +21,7 @@
 
 #define RAW_SECTOR 2352
 #define USER_OFFSET 24
-#define MAX_SECTORS_PER_PUMP 4096 /* a streaming read that never pauses continues next frame */
+#define MAX_SECTORS_PER_PUMP 1 /* keep data delivery separate from command completion */
 
 /* libcd command numbers (libcd.h CdlXxx) */
 enum {

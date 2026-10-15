@@ -14,7 +14,7 @@
 void psx_frame(void);           /* one 60 Hz frame: CD, root counters, pad, VSync callback, then wait */
 void psx_drawsync_pending(void); /* gpu.c: a DrawSyncCallback is owed */
 
-/* CD (cd.c): run queued commands and deliver sectors until the game stops asking. */
+/* CD (cd.c): service queued commands and at most one sector event. */
 void psx_cd_pump(void);
 
 /* Pad (pad.c): refresh the buffers PadInitDirect registered (called once per frame). */

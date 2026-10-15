@@ -74,6 +74,7 @@ Fixtures use `key=value`, with comments beginning with `#`:
 | `equip.SLOT` | Five equipment item IDs, 0–255 |
 | `item.ID` | Set inventory quantity 0–99, preserving other items |
 | `story` | Set the 16-bit event story counter |
+| `summons_seen` | 16-bit first-use summon mask (GameData+0x55e), defaults to New Game's 0 |
 | `event.OFFSET` | Set an individual event byte, offsets 0–0x7ff |
 | `characters` | Exact 9 × 0x90-byte canonical character records |
 | `events` | Exact 0x800-byte canonical event variables |
@@ -261,6 +262,83 @@ The Black Waltz fixture was run through this automatic reference hook:
 `build/validation/psx_black_waltz_fixture_auto_hp.log` records 1/472 and 1/229,
 and the reference remains paused at 800AF3A0. This verifies the live loader
 path independently of `--dry-run`.
+
+The reference helper also sets `summons_seen` (default 0) after field cleanup,
+matching the host's New Game state. A late-game field baseline otherwise
+retains its first-use flags and silently selects a different summon animation.
+Setting 65535 removes first-use forcing; normal summon RNG still applies.
+
+## Commands and first-use summon coverage (2026-10-15)
+
+Use a command probe to exercise an ability's ordinary queue and effect loader
+without navigating its menu for every case:
+
+```sh
+tools/docker.sh python3 tools/scenario_command_probe.py \
+  tests/scenarios/disc3_ifrit_first.cfg --command 16 --ability 51 \
+  --out build/validation/ifrit_command_probe
+```
+
+The tool generates a GDB script, replaces the first player Attack's command,
+ability and target words, and retains the real actor, ATB and command slot.
+It requires an observed player effect call, a zero inferior exit and the
+requested frame limit. A signal, missing effect or timeout fails, even if the
+debugger itself exits successfully. It does not prove learned abilities,
+legal menu availability, animation completion or graphical/audio equivalence.
+Targets are a unit mask (default 0x10); use the appropriate actor/command and
+target type for each ability. The synthetic Ark arena disables magic in its
+normal menu; dispatch probes there deliberately bypass selection restrictions.
+
+The first-use Ifrit fixture reproduces a model/bank-buffer lifetime crash.
+The repeated-use fixture passes with seed 1's short animation. On PSX, matching
+the first-use mask reaches the full model; leaving the baseline mask 0x5686
+instead gives the short animation and cannot validate that failure.
+The PSX full-animation video and callback/CD trace are
+`psx_ifrit_first_summon_action.mp4` and `psx_ifrit_first_summon_trace.json`.
+The conditional reference probe `psx_ifrit_low_ram_probe.json` confirms a
+bone-35 query through base 0x3c30 after the model header is overwritten.
+
+Native low-RAM mapping alone passed that first access but then crashed on
+sample bytes interpreted as base 0xad8c996f at frame 3095. Single-sector CD
+events preserve asynchronous ordering; the first-use command probe then
+reaches 12000 frames (`ifrit_command_sector_step_current/report.json`).
+The initial staged-drive Beatrix test hung in main's blocking field-loader
+wait; both waits now service the drive explicitly. Keep the earlier failed
+logs as regression evidence. The final broad sweep uses an archived executable
+to avoid mixing builds (`boss_sweep_sector_wait_verified/`): all 30 cases
+reach 65000 frames with exit code zero. Many end through defeat/title;
+this establishes execution coverage, not all attacks or rewards.
+
+Seventeen spell/summon dispatch probes now observe their player effects and
+reach 12000 frames (`spell_sector_step_sweep.log`). The generated catalogue,
+fixtures and reports remain under build/validation. This includes Fire,
+Firaga, Blizzaga, Thundaga, Comet, Meteor, Flare, Doomsday, Shiva, Ifrit,
+Leviathan, Bahamut, Ark, Fenrir, Carbuncle, Phoenix and Madeen; it is not all
+commands, alternate summon forms, targets or phases.
+
+An ordinary menu route on the host also selects Ifrit (command 16, ability 51)
+against Meltigemini, observes effect 445 and reaches 12000 frames
+(`ifrit_real_menu_meltigemini.log`). Its generated canonical character blob
+sets each learned AP slot to that character's actual mastery requirement.
+The earlier Ark menu attempt correctly offered disabled magic and queued no
+spell; it is not a successful cast test.
+
+Native DS verification uses the archived `ff9ds_ifrit_sector_events` ROM/ELF
+and the same ordinary menu sequence against Meltigemini. The 60-second clip
+`ds_ifrit_sector_events_action.mp4` contains the full model animation, fire
+blast and return to combat. Its frame-4119 checkpoint has zero first-fault
+markers and no protected ITCM changes. Sampled motion frames were reviewed
+against the PSX full-summon capture. The reference uses Ark as its target and
+forced command words; the DS uses Meltigemini and menu input. This supports
+model/effect progression comparison, not synchronized pixels or damage values.
+
+Remaining fidelity gap: the original low-RAM query reads BIOS kernel words at
+0x40a4 (retained in the reference probe); the port's low-RAM image does not yet
+reproduce that kernel code. Address mapping and successful execution do not
+prove those final particle positions match. No BIOS/game bytes are embedded
+in these tests or documentation.
+The queried instruction sequence was found in the supplied SCPH1001 BIOS at
+ROM offset 0x13ba4; deriving a proper boot-kernel image remains follow-up work.
 
 ## Cached HUD text and subsequent effect interfaces
 

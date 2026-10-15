@@ -508,3 +508,27 @@ must not be treated as part of the string operation.
 The port supplies zero-terminated byte append, preserving high-byte game text,
 the original destination return value and BIOS NULL refusal. Nonzero low-RAM
 arguments are mapped before access; NULL is checked before mapping.
+
+### F19 (2026-10-15). First-use summons and Ifrit's released bone data
+
+GameData.unk55E (u16 at +0x55e) records first-use summon bits consumed by
+ovl_0b D6188 and D_800F72A0. A clear bit upgrades the short effect to the full
+first-use effect. Please name this field/table: importing characters/events
+from a native fixture while retaining a late-game PSX baseline's mask selected
+different Ifrit animations. Both fixture launchers now set this mask explicitly.
+
+Original PSX full Ifrit reaches DC940/DC9D0 with model 8014c090, bone 35 and
+bone base 00003c30 after CD sound-bank data overwrites the released model.
+The low-RAM read at 40a4 is real (BIOS kernel words, not zero). The native
+query must map nonzero KUSEG before indexing, in addition to the earlier NULL
+bone cases. The port patches DC9D0's three position reads and DCA18's matrix
+copy, retaining the stored base word. Please document this lifetime rather
+than adding source guards that alter original PSX behavior.
+
+The port's old immediate full-read delivery advanced to a subsequent bank
+overwrite while queries still ran, producing base ad8c996f and a native crash.
+Sector events are now staged and reviewed blocking loader waits pump the
+drive. This preserves progress without imposing a measured physical seek model.
+The low-RAM BIOS contents remain a separate fidelity gap, explicitly tracked
+in scenario-testing.md; successful execution does not establish matching final
+particle positions.

@@ -47,5 +47,14 @@ int main(void) {
     static Bone ready[4];ready[3].y=-123;
     bones=ready;
     assert(PSX_NZ(bones)[3].y==-123);
+    /* Ifrit's released model is overwritten by a sound bank. Its surviving
+     * bone queries use a nonzero KUSEG base, which PSX_NZ alone cannot map. */
+    bones=(Bone *)0x3c30;
+    Bone sample={0};sample.x=123;sample.y=-456;sample.z=789;
+    memcpy(psx_ram+0x3c30+35*sizeof(Bone),&sample,sizeof sample);
+    Bone *mapped=PSX_PTR(bones);
+    assert(bones==(Bone *)0x3c30 && !memcmp(&mapped[35],&sample,sizeof sample));
+    mapped=PSX_PTR(ready);
+    assert(mapped==ready && mapped[3].y==-123);
     puts("PSX low RAM: KO stores, bone array indices, live pointers and single evaluation pass");
 }

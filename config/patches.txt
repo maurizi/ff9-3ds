@@ -8,6 +8,9 @@
 src/main/main.c | func_8001D268(); | func_8001D268(); port_scenario_bootstrap(); | 1
 src/main/main.c | func_80012900(1); | port_scenario_validate_return(); func_80012900(1); | 1
 src/main/main.c | rand_init(GetRCnt(2)); | rand_init(port_scenario_seed(GetRCnt(2))); | 1
+# Blocking loader polls must service the virtual drive between sector events.
+src/main/main.c | return g_cdLoad.unk0; | psx_cd_pump(); return g_cdLoad.unk0; | 1
+src/main/main.c | while (func_80021FB4() > 0) { | while (func_80021FB4() > 0) { psx_cd_pump(); | 2
 # Apply optional enemy HP once units and entry animations are initialized, before combat.
 src/ovl_0b/ovl_0b.c | b->unkD80 = 4; | b->unkD80 = 4; port_scenario_battle_ready(); | 1
 
@@ -84,6 +87,9 @@ src/ovl_0b/ovl_0b_2.c | arg0->unk9C->unk20[ | PSX_NZ(arg0->unk9C->unk20)[ | 2
 src/ovl_0b/ovl_0b.c | arg0->unk9C->unk20[ | PSX_NZ(arg0->unk9C->unk20)[ | 1
 src/ovl_0b/ovl_0b.c | u->unk9C->unk20[ | PSX_NZ(u->unk9C->unk20)[ | 4
 src/ovl_0b/ovl_0b_3.c | u->unk9C->unk20[ | PSX_NZ(u->unk9C->unk20)[ | 1
+# Ifrit's final bone queries outlive its model buffer. The original also reads
+# the sound-bank-overwritten bone base 0x3c30 as KUSEG, not only a NULL base.
+src/ovl_0b/ovl_0b_2.c | arg0->unk20[arg1] | ((BtlBone *)PSX_PTR(arg0->unk20))[arg1] | 4
 # akao_tick -> func_800589F0 with D_8007F790 == NULL (the AKAO init leaves it NULL) and flag 0x100 set
 src/main/main.c | D_8007F790->unk3C, | PSX_NZ(D_8007F790)->unk3C, | 1
 src/main/main.c | D_8007F790->unk40, | PSX_NZ(D_8007F790)->unk40, | 1
