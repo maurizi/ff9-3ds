@@ -1,7 +1,8 @@
 /* Sample-clocked envelope arithmetic; validation/scope in audio-validation.md. */
 #include "psx_spu_envelope.h"
+#include "spu_hot.h"
 
-void psx_spu_envelope_configure(PsxSpuEnvelope *env, uint8_t rate, uint8_t hold_mask,
+SPU_HOT void psx_spu_envelope_configure(PsxSpuEnvelope *env, uint8_t rate, uint8_t hold_mask,
                                 int decrease, int exponential, int negative) {
     rate &= 0x7f;
     unsigned shift = rate >> 2;
@@ -18,7 +19,7 @@ void psx_spu_envelope_configure(PsxSpuEnvelope *env, uint8_t rate, uint8_t hold_
     if (!env->increment && (rate & hold_mask) != hold_mask) env->increment = 1;
 }
 
-int psx_spu_envelope_tick(PsxSpuEnvelope *env, int16_t *level) {
+SPU_HOT int psx_spu_envelope_tick(PsxSpuEnvelope *env, int16_t *level) {
     uint32_t increment = env->increment;
     int step = env->step;
     if (env->exponential) {
@@ -50,7 +51,7 @@ int psx_spu_envelope_tick(PsxSpuEnvelope *env, int16_t *level) {
     return value > 0;
 }
 
-void psx_spu_volume_write(PsxSpuVolume *volume, uint16_t value) {
+SPU_HOT void psx_spu_volume_write(PsxSpuVolume *volume, uint16_t value) {
     if (!(value & 0x8000)) {
         int level = value & 0x7fff;
         if (level & 0x4000) level -= 0x8000;
@@ -63,12 +64,12 @@ void psx_spu_volume_write(PsxSpuVolume *volume, uint16_t value) {
     volume->active = volume->envelope.increment != 0;
 }
 
-void psx_spu_volume_tick(PsxSpuVolume *volume) {
+SPU_HOT void psx_spu_volume_tick(PsxSpuVolume *volume) {
     if (volume->active)
         volume->active = psx_spu_envelope_tick(&volume->envelope, &volume->level);
 }
 
-static void adsr_phase(PsxSpuAdsr *adsr, PsxSpuAdsrPhase phase) {
+static SPU_HOT void adsr_phase(PsxSpuAdsr *adsr, PsxSpuAdsrPhase phase) {
     unsigned rate = 0, mask = 0x7f;
     int decrease = 0, exponential = 0;
     adsr->phase = phase;
@@ -104,29 +105,29 @@ static void adsr_phase(PsxSpuAdsr *adsr, PsxSpuAdsrPhase phase) {
     psx_spu_envelope_configure(&adsr->envelope, rate, mask, decrease, exponential, 0);
 }
 
-void psx_spu_adsr_set_registers(PsxSpuAdsr *adsr, uint16_t adsr1, uint16_t adsr2) {
+SPU_HOT void psx_spu_adsr_set_registers(PsxSpuAdsr *adsr, uint16_t adsr1, uint16_t adsr2) {
     adsr->adsr1 = adsr1;
     adsr->adsr2 = adsr2;
     adsr_phase(adsr, adsr->phase);
 }
 
-void psx_spu_adsr_key_on(PsxSpuAdsr *adsr) {
+SPU_HOT void psx_spu_adsr_key_on(PsxSpuAdsr *adsr) {
     adsr->level = 0;
     adsr_phase(adsr, PSX_SPU_ADSR_ATTACK);
 }
 
-void psx_spu_adsr_key_off(PsxSpuAdsr *adsr) {
+SPU_HOT void psx_spu_adsr_key_off(PsxSpuAdsr *adsr) {
     if (adsr->phase != PSX_SPU_ADSR_OFF && adsr->phase != PSX_SPU_ADSR_RELEASE)
         adsr_phase(adsr, PSX_SPU_ADSR_RELEASE);
 }
 
-void psx_spu_adsr_force_off(PsxSpuAdsr *adsr) {
+SPU_HOT void psx_spu_adsr_force_off(PsxSpuAdsr *adsr) {
     if (adsr->phase == PSX_SPU_ADSR_OFF) return;
     adsr->level = 0;
     adsr_phase(adsr, PSX_SPU_ADSR_OFF);
 }
 
-void psx_spu_adsr_tick(PsxSpuAdsr *adsr) {
+SPU_HOT void psx_spu_adsr_tick(PsxSpuAdsr *adsr) {
     if (adsr->phase == PSX_SPU_ADSR_OFF) return;
     if (adsr->envelope.increment) psx_spu_envelope_tick(&adsr->envelope, &adsr->level);
     if (adsr->phase == PSX_SPU_ADSR_SUSTAIN) return;

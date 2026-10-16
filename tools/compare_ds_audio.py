@@ -26,6 +26,16 @@ def main():
     if state[:4] != b'MELN' or state[16:20] != b'NDSG' or len(state) < 36 + 16*1024*1024:
         parser.error('expected an uncompressed melonDS DSi state')
     ram = state[36:36+16*1024*1024]
+    chunks = {}
+    cursor = 16
+    while cursor < len(state):
+        if cursor + 16 > len(state):
+            parser.error('truncated state section header')
+        size = struct.unpack_from('<I',state,cursor+4)[0]
+        if size < 16 or cursor+size > len(state):
+            parser.error('invalid state section length')
+        chunks[state[cursor:cursor+4]] = state[cursor:cursor+size]
+        cursor += size
     symbols = {p[2]: int(p[0],16) for row in subprocess.check_output(['nm','-a',str(args.elf)],text=True).splitlines()
                if len(p := row.split()) == 3}
     elf = args.elf.read_bytes()
@@ -45,7 +55,14 @@ def main():
             section = struct.unpack_from('<10I',elf,shoff+i*shsize)
             if section[1] == 1 and section[3] <= address and address+64 <= section[3]+section[5]:
                 pos = section[4]+address-section[3]
-                if ram[address-0x02000000:address-0x02000000+64] != elf[pos:pos+64]:
+                if 0x02000000 <= address <= 0x03000000-64:
+                    loaded = ram[address-0x02000000:address-0x02000000+64]
+                elif 0x01000000 <= address <= 0x01008000-64 and b'CP15' in chunks:
+                    offset = 28+address-0x01000000
+                    loaded = chunks[b'CP15'][offset:offset+64]
+                else:
+                    parser.error(f'{name} code is outside supported RAM/ITCM')
+                if loaded != elf[pos:pos+64]:
                     parser.error(f'loaded {name} code differs from supplied ELF')
                 break
         else:

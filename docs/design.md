@@ -17,6 +17,28 @@ hard-coded RAM addresses (`0x801EDF00`, `0x801FCB00`, ...).
 
 ## 2. Target hardware
 
+### Original timing baseline
+
+Preserve the original NTSC-U timing before considering interpolated 60 FPS
+scene rendering. In the matching decompilation, field initialization
+(`ovl_0a`, `func_800A8198`) sets `g_gameState->unk9 = 2`, battle initialization
+(`ovl_0b`, `func_800A8CD4`) sets 4, and world-map initialization
+(`ovl_0c`, `func_800A8B14`) sets 3. These correspond to approximately 30, 15,
+and 20 scene updates per second at 60 Hz, respectively. These are scheduling
+intervals, not guarantees against slowdown. The world-map presentation function
+`func_800AC5C8` selects 2, 0 or 3 according to state; do not cap all world scenes
+at 15 FPS. Battle code can also change the interval (`func_800E8F40`).
+
+VBlank callbacks, input, music timers and sample production must continue at
+their original cadence between scene updates. The battle UI inserts GPU work
+through `BreakDraw`/`ContinueDraw` (`func_800F4A00`); its exact element-by-element
+update rates still need synchronized PSX recordings. The PSX has no separate
+hardware text overlay plane. Count scene submissions and UI updates separately
+from virtual VBlanks, DS scanout and emulator wall-clock FPS. A lower scene
+update rate must not slow game time or reduce audio production.
+
+### Hardware budget
+
 **Default target: DSi mode** (DSi, 3DS/2DS via TWiLight Menu++ or nds-bootstrap, flashcarts that support DSi
 mode): 134 MHz ARM9, 16 MB RAM, SD access from the ARM7. Original DS mode (67 MHz, 4 MB) is a stretch goal: see
 §8 and `decisions.md` D1.
@@ -258,6 +280,10 @@ renderer reproduces the opcode interpreter's layout (R15).
   default (`AUDIO=0` is a diagnostic baseline); default host mixing stays disabled until a sink
   is selected. DS source PCM matches a captured title interval on the host, but gameplay still
   produces audible gaps because rendering/mixing cannot keep pace. See `audio-validation.md`.
+- **ARM9 DSP placement**: `SPUARM=1 SPUITCM=1` compiles the seven shared sound-core
+  modules as ARM instructions in ITCM. The normal link currently uses 16,488 of
+  32,768 ITCM bytes including raster/scaler and SDK code/data. Diagnostic switches
+  permit Thumb/main-RAM comparisons without changing sound arithmetic.
 - FMV audio must preserve its original stream timing; the planned FastVideoDS integration is not implemented.
 
 ## 8. Memory map (DSi mode)

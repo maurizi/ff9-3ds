@@ -1,10 +1,12 @@
 /* Register/timing integration for the shared SPU voice stage. Streamed
  * CD input and IRQ delivery remain unfinished; see audio-validation.md. */
 #include "psx_spu.h"
+#include "spu_hot.h"
 #include "psx_spu_voice.h"
 #include "psx_spu_reverb.h"
 #include "psx_spu_trace.h"
 #include "platform.h"
+#include "profile.h"
 #include <string.h>
 
 extern unsigned short psx_spu_regs[0x200];
@@ -17,17 +19,17 @@ static uint32_t key_on, key_off, ended;
 static unsigned sample_fraction, capture_offset;
 static int rendering;
 
-static int16_t clamp16(int32_t value) {
+static SPU_HOT int16_t clamp16(int32_t value) {
     return value > 32767 ? 32767 : value < -32768 ? -32768 : value;
 }
 
-static uint32_t flags(unsigned offset) {
+static SPU_HOT uint32_t flags(unsigned offset) {
     return psx_spu_regs[offset / 2] | ((uint32_t)psx_spu_regs[offset / 2 + 1] << 16);
 }
 
-void psx_spu_set_rendering(int enabled) { rendering = !!enabled; }
+SPU_HOT void psx_spu_set_rendering(int enabled) { rendering = !!enabled; }
 
-void psx_spu_reset(void) {
+SPU_HOT void psx_spu_reset(void) {
     psx_spu_trace(PSX_SPU_TRACE_RESET, 0, 0, NULL);
     memset(voices, 0, sizeof voices);
     memset(main_volume, 0, sizeof main_volume);
@@ -38,7 +40,7 @@ void psx_spu_reset(void) {
     psx_spu_write(0x1aa, 0xc000); /* libspu initializes enabled/unmuted */
 }
 
-uint16_t psx_spu_read(unsigned offset) {
+SPU_HOT uint16_t psx_spu_read(unsigned offset) {
     if ((offset & 1) || offset >= 0x400) return 0xffff;
     if (offset < 0x180) return psx_spu_voice_read(&voices[offset / 16], (offset & 15) / 2);
     if (offset == 0x19c) return ended;
@@ -49,11 +51,11 @@ uint16_t psx_spu_read(unsigned offset) {
     return psx_spu_regs[offset / 2];
 }
 
-void psx_spu_voice_register(unsigned voice, unsigned offset, uint16_t value) {
+SPU_HOT void psx_spu_voice_register(unsigned voice, unsigned offset, uint16_t value) {
     if (voice < PSX_SPU_VOICES && offset < 16) psx_spu_write(voice * 16 + offset, value);
 }
 
-void psx_spu_write(unsigned offset, uint16_t value) {
+SPU_HOT void psx_spu_write(unsigned offset, uint16_t value) {
     if ((offset & 1) || offset >= 0x400) return;
     if (offset == 0x19c || offset == 0x19e || offset == 0x1ae) return;
     psx_spu_trace(PSX_SPU_TRACE_WRITE, offset, value, NULL);
@@ -81,7 +83,7 @@ void psx_spu_write(unsigned offset, uint16_t value) {
     }
 }
 
-static void sync_readbacks(void) {
+static SPU_HOT void sync_readbacks(void) {
     for (unsigned i = 0; i < PSX_SPU_VOICES; ++i) {
         psx_spu_regs[i * 8 + 6] = psx_spu_voice_read(&voices[i], 6);
         psx_spu_regs[i * 8 + 7] = psx_spu_voice_read(&voices[i], 7);
@@ -94,7 +96,7 @@ static void sync_readbacks(void) {
     psx_spu_regs[0x1ba / 2] = main_volume[1].level;
 }
 
-static void sample_frame(int16_t output[2]) {
+static SPU_HOT void sample_frame(int16_t output[2]) {
     uint16_t control = psx_spu_regs[0x1aa / 2];
     PsxSpuVoiceMix mix;
     psx_spu_mix_voices(voices, psx_spu_ram, (int16_t)noise.level,
@@ -121,7 +123,7 @@ static void sample_frame(int16_t output[2]) {
         int32_t dry = (control & 0x4000) ? mix.dry[channel] : 0;
         int32_t mixed = dry + ((wet[channel] * (int16_t)psx_spu_regs[0xc2 + channel]) >> 15);
         output[channel] = clamp16((clamp16(mixed) * main_volume[channel].level) >> 15);
-        psx_spu_volume_tick(&main_volume[channel]);
+        if (main_volume[channel].active) psx_spu_volume_tick(&main_volume[channel]);
     }
 #ifdef __linux__
     const int32_t stages[8] = {
@@ -148,8 +150,9 @@ static void sample_frame(int16_t output[2]) {
     }
 }
 
-void psx_spu_advance(unsigned ticks) {
+SPU_HOT void psx_spu_advance(unsigned ticks) {
     if (!rendering || !psx_spu_ram) return;
+    unsigned profile_spu = port_profile_begin();
     /* Break down before adding, so even UINT_MAX ticks cannot overflow. */
     unsigned frames = ticks / 96;
     sample_fraction += ticks % 96;
@@ -159,8 +162,11 @@ void psx_spu_advance(unsigned ticks) {
     while (frames) {
         unsigned count = frames > 256 ? 256 : frames;
         for (unsigned i = 0; i < count; ++i) sample_frame(output + i * 2);
+        unsigned profile_sink = port_profile_begin();
         plat_audio_samples(output, count);
+        port_profile_detail_end(PORT_PROFILE_AUDIO_SINK, profile_sink);
         frames -= count;
     }
     sync_readbacks();
+    port_profile_detail_end(PORT_PROFILE_SPU, profile_spu);
 }

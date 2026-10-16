@@ -1,6 +1,7 @@
 /* PSX reverb arithmetic and 39-tap resampling. See audio-validation.md for
  * reference scope, channel scheduling, and unresolved hardware verification. */
 #include "psx_spu_reverb.h"
+#include "spu_hot.h"
 #include <string.h>
 
 enum {
@@ -15,11 +16,11 @@ static const int16_t fir[20] = {
     10246, -2960, 1332, -616, 266, -103, 35, -10, 2, -1
 };
 
-static int16_t clip(int32_t value) {
+static SPU_HOT int16_t clip(int32_t value) {
     return value > 32767 ? 32767 : value < -32768 ? -32768 : value;
 }
 
-static unsigned address(const PsxSpuReverb *reverb, uint16_t reg, int delta) {
+static SPU_HOT unsigned address(const PsxSpuReverb *reverb, uint16_t reg, int delta) {
     uint32_t sum = reverb->cursor + (((uint32_t)reg * 4 + delta) & 0x3ffff);
     /* The 18-bit hardware address adder adds ESA on carry; this isn't generic
      * modulo by the work-area size. Preserve that behavior for unusual offsets. */
@@ -27,34 +28,34 @@ static unsigned address(const PsxSpuReverb *reverb, uint16_t reg, int delta) {
     return (sum & 0x3ffff) * 2;
 }
 
-static int16_t load(const PsxSpuReverb *reverb, const uint8_t *ram, uint16_t reg, int delta) {
+static SPU_HOT int16_t load(const PsxSpuReverb *reverb, const uint8_t *ram, uint16_t reg, int delta) {
     unsigned p = address(reverb, reg, delta);
     return (int16_t)((uint16_t)ram[p] | (uint16_t)ram[p + 1] << 8);
 }
 
-static void store(const PsxSpuReverb *reverb, uint8_t *ram, uint16_t reg, int16_t value) {
+static SPU_HOT void store(const PsxSpuReverb *reverb, uint8_t *ram, uint16_t reg, int16_t value) {
     unsigned p = address(reverb, reg, 0);
     ram[p] = (uint16_t)value;
     ram[p + 1] = (uint16_t)value >> 8;
 }
 
-static int32_t complement_product(int16_t old, int16_t alpha) {
+static SPU_HOT int32_t complement_product(int16_t old, int16_t alpha) {
     /* The -32768 IIR coefficient has a hardware special case. Avoid signed
      * overflow for old=-32768, whose normal complement product is 2^31. */
     if (alpha == -32768) return old == -32768 ? 0 : old * -65536;
     return old * (32768 - alpha);
 }
 
-static int32_t negate_coefficient(int16_t value) {
+static SPU_HOT int32_t negate_coefficient(int16_t value) {
     return value == -32768 ? 32767 : -value;
 }
 
-void psx_spu_reverb_reset(PsxSpuReverb *reverb) { memset(reverb, 0, sizeof *reverb); }
-void psx_spu_reverb_base(PsxSpuReverb *reverb, uint16_t value) {
+SPU_HOT void psx_spu_reverb_reset(PsxSpuReverb *reverb) { memset(reverb, 0, sizeof *reverb); }
+SPU_HOT void psx_spu_reverb_base(PsxSpuReverb *reverb, uint16_t value) {
     reverb->base = reverb->cursor = (uint32_t)value * 4;
 }
 
-static void channel_step(PsxSpuReverb *reverb, uint8_t *ram, unsigned ch,
+static SPU_HOT void channel_step(PsxSpuReverb *reverb, uint8_t *ram, unsigned ch,
                           int16_t input, int write_enabled) {
     const uint16_t *reg = reverb->registers;
     if (write_enabled) {
@@ -95,7 +96,7 @@ static void channel_step(PsxSpuReverb *reverb, uint8_t *ram, unsigned ch,
     reverb->up[ch][pos] = reverb->up[ch][pos + 32] = wet;
 }
 
-void psx_spu_reverb_tick(PsxSpuReverb *reverb, uint8_t *ram, int16_t left, int16_t right,
+SPU_HOT void psx_spu_reverb_tick(PsxSpuReverb *reverb, uint8_t *ram, int16_t left, int16_t right,
                          int write_enabled, int16_t output[2]) {
     unsigned pos = reverb->phase;
     reverb->down[0][pos] = reverb->down[0][pos + 64] = left;

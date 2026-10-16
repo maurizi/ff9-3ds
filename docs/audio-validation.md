@@ -529,6 +529,69 @@ python3 tools/compare_ds_audio.py build/validation/NEW_checkpoint.ml8 build/ds/f
 tools/docker.sh make -j16 ds pc
 ```
 
+## ARM9 DSP placement and throughput
+
+`SPUARM=1 SPUITCM=1` is now the default. Seven shared DSP modules compile as
+ARM instructions in ITCM; `spu_hot.h` becomes empty on the host. The normal DS
+link uses 16,488 ITCM bytes including raster/scaler and SDK code/data. Guards
+avoid calls for already-fetched sample blocks, inactive volume sweeps and held
+sustain/off envelopes. Zero-envelope voices skip read-only interpolation while
+still advancing decoder, pitch, loop/end and envelope state. No voices, sample
+rate, reverb steps or fixed-point precision are reduced.
+
+`PROFILE=1` now reports `spu_total_including_sink` and `audio_sink` separately.
+The former includes the latter and may include queue waits; do not sum them.
+The inspector accepts both the previous five-detail and new seven-detail layouts.
+The PCM comparison tool checks relocated sound code in the state's CP15 ITCM
+image as well as code in main RAM.
+
+The following title results use identical frame-600 captures in melonDS DSi
+mode with CPU clock enabled, source-PCM hashing/capture and profiling. Each
+timing window contains 128 virtual frames ending at frame 478 in mode 0.
+These are emulated hardware timer measurements, not host wall-clock FPS.
+
+| Build | SPU including sink, ms/frame | Sink, ms/frame |
+|---|---:|---:|
+| Thumb/main RAM | 21.4332 | 0.3468 |
+| ARM/main RAM | 19.1515 | 0.3676 |
+| ARM/ITCM with guards | 15.0793 | 0.3745 |
+
+All three match the same 441,000 stereo host frames exactly, with the title
+SHA256 above. The final build's 43 sized ITCM function symbols also match the
+ELF byte for byte at checkpoint; mutable SDK IRQ/thread objects are excluded.
+Total title frame time remains 100.2909 ms, including 60.3510 ms of GPU command
+work and 4.7387 ms of scaling. It still inserts 1,735,168 silent frames before
+the checkpoint: audio starvation is not resolved. Artifacts are
+`audio_budget_thumb`, `audio_budget_arm` and `audio_budget_guard` with matching
+`.nds`, `.elf`, `.ml8`, `_profile.json` and `_pcm.json`; the guarded build also
+has `_integrity.json`, under ignored `build/validation`.
+
+The disc-free `spu-throughput-ds` benchmark separately renders 100 ms of PCM
+with four or 24 voices, reverb writes off/on, and a hash-only sink with no queue
+waits. At 24 voices, the unguarded Thumb baseline requires 58.613/60.608 ms per
+735-sample interval; ARM/ITCM with guards requires 39.233/40.579 ms. The interval
+represents 16.667 ms of sound, so even the faster build is not real-time under
+this synthetic load. This measures complete-SPU cost, not a single optimized
+kernel or game-wide audio load. Hashes remain `39a85811`/`e3bef436` for four
+voices and `5fea8fe6`/`c3caf725` for 24. The benchmark labels its reverb-write
+control bit as `wet`; both runs still execute the SPU's reverb processing.
+
+Host ASan/UBSan sound suites pass after the guards. Both final ARM/ITCM ROMs
+also report all checks passing: `spu_guard_components.png` covers decoder,
+source, envelopes, Gaussian interpolation and mixing; `spu_guard_integration.png`
+covers noise, core integration and reverb. These remain component and bounded
+title comparisons, not complete original-game audio validation.
+
+```sh
+make test-spu build/tests/spu_throughput_host
+build/tests/spu_throughput_host
+tools/docker.sh make -j16 spu-ds spu-core-ds spu-throughput-ds
+# Comparative diagnostic build; archive each exact ROM and ELF before rebuilding:
+tools/docker.sh make -j16 spu-throughput-ds SPUARM=0 SPUITCM=0
+# Restore the normal configuration:
+tools/docker.sh make -j16 ds pc
+```
+
 ## Remaining sound work
 
 Resolve original-game timing/capture differences beyond the matched stage

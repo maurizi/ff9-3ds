@@ -48,6 +48,13 @@ details=[int(line.split()[0],16) for line in symbols.splitlines()
          if len(line.split())==3 and line.split()[2]=='port_profile_detail_stats']
 if len(details)==1:
     names=('gx_texture_materials','gx_texture_upload','gx_palette_upload','battle_mesh_packets','ordering_table')
+    sizes=subprocess.check_output(['nm','-S',str(a.elf)],text=True)
+    size=next(int(row.split()[1],16) for row in sizes.splitlines()
+              if len(row.split())==4 and row.split()[3]=='port_profile_detail_stats')
+    if size==64:
+        names+=('spu_total_including_sink','audio_sink')
+    elif size!=48:
+        p.error('unsupported compatibility timing block size')
     count=len(names)
     detail=struct.unpack_from('<'+str(2*count+2)+'I',data,36+details[0]-0x02000000)
     if detail[0]==frame and detail[-1]==0x44545031:

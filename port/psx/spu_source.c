@@ -1,14 +1,15 @@
 #include "psx_spu_source.h"
+#include "spu_hot.h"
 #include "psx_spu_gauss.h"
 #include <string.h>
 
-void psx_spu_source_key_on(PsxSpuSource *source, uint16_t start_address) {
+SPU_HOT void psx_spu_source_key_on(PsxSpuSource *source, uint16_t start_address) {
     memset(source, 0, sizeof *source);
     source->address = start_address & 0xfffeu;
     source->first_block = 1;
 }
 
-void psx_spu_source_set_loop(PsxSpuSource *source, uint16_t *loop_address,
+SPU_HOT void psx_spu_source_set_loop(PsxSpuSource *source, uint16_t *loop_address,
                              uint16_t value, int voice_on) {
     *loop_address = value;
     /* An explicit software loop overrides future ADPCM loop-start flags after
@@ -16,7 +17,7 @@ void psx_spu_source_set_loop(PsxSpuSource *source, uint16_t *loop_address,
     if (!voice_on || !source->first_block) source->ignore_loop_start = 1;
 }
 
-void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
+SPU_HOT void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
                           uint16_t *loop_address) {
     if (source->fetched) return;
     for (unsigned i = 0; i < 3; ++i)
@@ -31,7 +32,7 @@ void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
         *loop_address = source->address;
 }
 
-int16_t psx_spu_source_interpolate(const PsxSpuSource *source) {
+SPU_HOT int16_t psx_spu_source_interpolate(const PsxSpuSource *source) {
     unsigned phase = (source->counter >> 4) & 255;
     const int16_t *samples = source->samples + (source->counter >> 12);
     /* Accumulate before rounding, as in both reference emulators. The largest
@@ -44,7 +45,7 @@ int16_t psx_spu_source_interpolate(const PsxSpuSource *source) {
     return (int16_t)(total >> 15);
 }
 
-unsigned psx_spu_source_advance(PsxSpuSource *source, uint16_t pitch,
+SPU_HOT unsigned psx_spu_source_advance(PsxSpuSource *source, uint16_t pitch,
                                 uint16_t loop_address, int noise_enabled) {
     if (pitch > 0x3fff) pitch = 0x3fff;
     source->counter += pitch;

@@ -1,7 +1,8 @@
 /* PSX SPU ADPCM arithmetic. See docs/audio-validation.md for reference scope. */
 #include "psx_spu_adpcm.h"
+#include "spu_hot.h"
 
-uint8_t psx_spu_decode_block(const uint8_t block[PSX_SPU_BLOCK_BYTES],
+SPU_HOT uint8_t psx_spu_decode_block(const uint8_t block[PSX_SPU_BLOCK_BYTES],
                            PsxSpuAdpcmHistory *history,
                            int16_t output[PSX_SPU_BLOCK_SAMPLES]) {
     static const int8_t coefficients[5][2] = {

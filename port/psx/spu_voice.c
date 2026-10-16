@@ -1,13 +1,14 @@
 #include "psx_spu_voice.h"
+#include "spu_hot.h"
 #include <string.h>
 
-static int16_t clamp_sample(int32_t value) {
+static SPU_HOT int16_t clamp_sample(int32_t value) {
     if (value > 32767) return 32767;
     if (value < -32768) return -32768;
     return value;
 }
 
-void psx_spu_voice_write(PsxSpuVoice *voice, unsigned index, uint16_t value) {
+SPU_HOT void psx_spu_voice_write(PsxSpuVoice *voice, unsigned index, uint16_t value) {
     if (index >= 8) return;
     voice->registers[index] = value;
     if (index < 2) psx_spu_volume_write(&voice->volume[index], value);
@@ -19,22 +20,22 @@ void psx_spu_voice_write(PsxSpuVoice *voice, unsigned index, uint16_t value) {
                                 voice->adsr.phase != PSX_SPU_ADSR_OFF);
 }
 
-uint16_t psx_spu_voice_read(const PsxSpuVoice *voice, unsigned index) {
+SPU_HOT uint16_t psx_spu_voice_read(const PsxSpuVoice *voice, unsigned index) {
     if (index >= 8) return 0xffff;
     if (index == 6) return (uint16_t)voice->adsr.level;
     return voice->registers[index];
 }
 
-void psx_spu_voice_key_on(PsxSpuVoice *voice) {
+SPU_HOT void psx_spu_voice_key_on(PsxSpuVoice *voice) {
     psx_spu_source_key_on(&voice->source, voice->registers[3]);
     psx_spu_adsr_key_on(&voice->adsr);
 }
 
-void psx_spu_voice_key_off(PsxSpuVoice *voice) {
+SPU_HOT void psx_spu_voice_key_off(PsxSpuVoice *voice) {
     psx_spu_adsr_key_off(&voice->adsr);
 }
 
-void psx_spu_mix_voices(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_t *ram,
+SPU_HOT void psx_spu_mix_voices(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_t *ram,
                          int16_t noise, uint32_t noise_mask, uint32_t modulation_mask,
                          uint32_t reverb_mask, int fetch_off_voices, PsxSpuVoiceMix *mix) {
     memset(mix, 0, sizeof *mix);
@@ -47,11 +48,20 @@ void psx_spu_mix_voices(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_t *ram,
             voice->last_sample = previous = 0;
             continue;
         }
-        psx_spu_source_fetch(&voice->source, ram, &voice->registers[7]);
-        int32_t sample = (noise_mask & bit) ? noise : psx_spu_source_interpolate(&voice->source);
-        sample = (sample * voice->adsr.level) >> 15;
+        if (!voice->source.fetched)
+            psx_spu_source_fetch(&voice->source, ram, &voice->registers[7]);
+        /* Interpolation is read-only. A zero envelope still advances decoder,
+         * pitch, loop/end state and ADSR below, but its product is exactly zero. */
+        int32_t sample = 0;
+        if (voice->adsr.level) {
+            sample = (noise_mask & bit) ? noise : psx_spu_source_interpolate(&voice->source);
+            sample = (sample * voice->adsr.level) >> 15;
+        }
         voice->last_sample = sample;
-        psx_spu_adsr_tick(&voice->adsr);
+        /* OFF and a held SUSTAIN return without touching envelope state. */
+        if (voice->adsr.phase != PSX_SPU_ADSR_OFF &&
+            (voice->adsr.phase != PSX_SPU_ADSR_SUSTAIN || voice->adsr.envelope.increment))
+            psx_spu_adsr_tick(&voice->adsr);
 
         uint16_t pitch = voice->registers[2];
         if (modulation_mask & bit) {
@@ -70,7 +80,7 @@ void psx_spu_mix_voices(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_t *ram,
             int32_t value = (sample * voice->volume[channel].level) >> 15;
             mix->dry[channel] += value;
             if (reverb_mask & bit) mix->reverb_send[channel] += value;
-            psx_spu_volume_tick(&voice->volume[channel]);
+            if (voice->volume[channel].active) psx_spu_volume_tick(&voice->volume[channel]);
         }
         if (i == 1 || i == 3) mix->capture[i >> 1] = clamp_sample(sample);
     }

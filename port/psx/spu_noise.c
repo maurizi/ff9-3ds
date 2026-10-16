@@ -1,6 +1,7 @@
 #include "psx_spu.h"
+#include "spu_hot.h"
 
-void psx_spu_noise_tick(PsxSpuNoise *noise, unsigned clock) {
+SPU_HOT void psx_spu_noise_tick(PsxSpuNoise *noise, unsigned clock) {
     static const uint8_t fraction[4] = {0, 84, 140, 180};
     clock &= 63;
     unsigned add = fraction[clock & 3];
