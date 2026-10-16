@@ -76,7 +76,11 @@ static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
      * or force deferred draws to rasterise. Preserve the ordinary path when
      * force-mask could make an otherwise identical copy change destination bits. */
     if (!gp0_state.set_mask && !((sx ^ dx) & 1023) && !((sy ^ dy) & 511)) return;
+    const int check_mask=gp0_state.check_mask;
+    const u16 set_mask=gp0_state.set_mask?0x8000:0;
     psx_vram_read(sx, sy, w, h);
+    if (check_mask && (((sx ^ dx) & 1023) || ((sy ^ dy) & 511)))
+        psx_vram_read(dx, dy, w, h);
     psx_vram_touch(dx, dy, w, h);
     /* row buffer: overlapping copies behave as the GPU's line-by-line copy */
     static u16 row[VRAM_W];
@@ -85,7 +89,8 @@ static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
             row[i] = *vram_at(sx + i, sy + j);
         }
         for (int i = 0; i < w; i++) {
-            *vram_at(dx + i, dy + j) = row[i];
+            u16 *dst=vram_at(dx+i,dy+j);
+            if (!check_mask || !(*dst&0x8000)) *dst=row[i]|set_mask;
         }
     }
 }
@@ -101,11 +106,16 @@ int LoadImage(RECT *r, u32 *p) {
     if (!psx_vram) {
         return 0;
     }
+    const int check_mask=gp0_state.check_mask;
+    const u16 set_mask=gp0_state.set_mask?0x8000:0;
+    if (check_mask) psx_vram_read(r->x,r->y,r->w,r->h);
     psx_vram_touch(r->x, r->y, r->w, r->h);
     const u16 *src = (const u16 *)p;
     for (int j = 0; j < r->h; j++) {
         for (int i = 0; i < r->w; i++) {
-            *vram_at(r->x + i, r->y + j) = *src++;
+            u16 *dst=vram_at(r->x+i,r->y+j);
+            if (!check_mask || !(*dst&0x8000)) *dst=*src|set_mask;
+            src++;
         }
     }
     return 0;
@@ -456,19 +466,18 @@ static void draw_packet(u32 *p) {
             }
             vram_fill(w[i + 1] & 0x3F0, (w[i + 1] >> 16) & 0x1FF, ((w[i + 2] & 0x3FF) + 15) & ~15,
                       (w[i + 2] >> 16) & 0x1FF, rgb15(c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF));
+            gp0_run(w+i,n); /* hardware backends also submit the visible fill */
         } else if (cmd >= 0x80 && cmd < 0xA0 && n == 4) { /* VRAM to VRAM copy */
+            int width=((w[i+3]-1)&0x3ff)+1;
+            int height=(((w[i+3]>>16)-1)&0x1ff)+1;
             if (psx_trace_gpu) {
                 port_log("gpu: copy %d,%d -> %d,%d %dx%d\n", (int)(w[i + 1] & 0x3FF), (int)((w[i + 1] >> 16) & 0x1FF),
-                         (int)(w[i + 2] & 0x3FF), (int)((w[i + 2] >> 16) & 0x1FF), (int)(w[i + 3] & 0x3FF),
-                         (int)((w[i + 3] >> 16) & 0x1FF));
+                         (int)(w[i + 2] & 0x3FF), (int)((w[i + 2] >> 16) & 0x1FF), width, height);
             }
             vram_copy(w[i + 1] & 0x3FF, (w[i + 1] >> 16) & 0x1FF, w[i + 2] & 0x3FF, (w[i + 2] >> 16) & 0x1FF,
-                      w[i + 3] & 0x3FF, (w[i + 3] >> 16) & 0x1FF);
-        }
+                      width, height);
+        } else gp0_run(w+i,n);
         i += n;
-    }
-    if (len) {
-        gp0_run(w, len);
     }
 }
 

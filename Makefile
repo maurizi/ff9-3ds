@@ -394,6 +394,24 @@ $(BUILD)/tests/raster_differential: tests/raster/differential.c tests/raster/ref
 .PHONY: raster-ds
 raster-ds: $(BUILD)/tests/raster_ds.nds
 RASTER_DS_FLAGS := $(DS_ARCH) -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include -Iport/include -I$(DECOMP)/include -std=gnu17 -O2 -Wno-builtin-declaration-mismatch
+.PHONY: gpu-ds
+gpu-ds: $(BUILD)/tests/gpu_ds.nds
+$(BUILD)/tests/gpu_ds_main.o: tests/gpu/ds_main.c
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/gpu_ds_env.o: tests/gpu/env_render.c port/include/gp0.h port/include/psyq_port.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Dmain=gpu_transfer_tests -c $< -o $@
+$(BUILD)/tests/gpu_ds_gpu.o: port/psx/gpu.c port/include/gp0.h port/include/psyq_port.h port/include/profile.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -ffunction-sections -fdata-sections -c $< -o $@
+$(BUILD)/tests/gpu_ds_gp0.o: port/psx/gp0.c port/include/gp0.h port/include/profile.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/gpu_ds.elf: $(BUILD)/tests/gpu_ds_main.o $(BUILD)/tests/gpu_ds_env.o $(BUILD)/tests/gpu_ds_gpu.o $(BUILD)/tests/gpu_ds_gp0.o $(BUILD)/tests/raster_ds_fast.o
+	arm-none-eabi-gcc $(DS_ARCH) -specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/gpu_ds.nds: $(BUILD)/tests/gpu_ds.elf
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "GPU transfers;ARM9;No disc data"
 $(BUILD)/tests/raster_ds_main.o: tests/raster/ds_benchmark.c tests/raster/interpolation_golden.h port/include/gp0.h
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@

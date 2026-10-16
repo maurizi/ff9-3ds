@@ -105,6 +105,7 @@ int main(void) {
     assert(count == 2 && decoded[0] == 0xE1000066 && decoded[1] == 0x64000055);
     /* Readback materialises full PSX colour/mask words before a CPU read or
      * GPU copy. Source wrapping still uses the original VRAM addressing. */
+    gp0_state=(Gp0State){0};
     static u16 bitmap[1024 * 512];
     psx_vram = bitmap;
     RECT source = {1020, 510, 8, 4};
@@ -120,6 +121,16 @@ int main(void) {
     assert(read_calls == 2 && !read_pending);
     for (int y = 0; y < 48; y++) for (int x = 0; x < 32; x++)
         assert(bitmap[(432 + y) * 1024 + 960 + x] == (0x8000 | ((528 + x + 3 * (167 + y)) & 0x7FFF)));
+    /* Mask tests require the destination's deferred bits before writing,
+     * not just the source pixels. The hook makes that destination protected. */
+    gp0_state.check_mask=1;read_pending=1;
+    MoveImage(&source,960,432);
+    assert(read_calls==4 && !read_pending);
+    assert(bitmap[432*1024+960]==(0x8000|((960+3*432)&0x7fff)));
+    read_pending=1;LoadImage(&(RECT){1020,510,8,4},stored);
+    assert(read_calls==5 && !read_pending);
+    assert(bitmap[510*1024+1020]==(0x8000|((1020+3*510)&0x7fff)));
+    gp0_state.check_mask=0;
     source = (RECT){640, 1, 96, 190};
     gp0_state.set_mask = 0;
     bitmap[1024 + 640] = 0x1234;

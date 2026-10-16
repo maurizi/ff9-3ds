@@ -593,3 +593,14 @@ requested halfwords and left odd-count padding stale. Synthetic GPUREAD
 comparison with DuckStation returns zero in that high halfword; the port now
 preserves the whole-word result and checks caller guards. No PSX code changes
 are requested, just the helper's role and word-count semantics.
+
+### F24 (2026-10-16). PsyQ image-upload helper and preserved mask state
+
+`D_80066614 + 0x20` points to `func_8001486C`, the CPU-to-VRAM counterpart of
+the image-read helper in F23. Please name its image-upload role. It resets the
+GPU command buffer with GP1(01h), then emits GP0(A0h) and the image data; that
+reset does not reset E6 mask settings. The port's `LoadImage` previously
+overwrote all pixels regardless of those settings. It now respects protected
+destinations and force-mask while consuming each source pixel. Controlled
+GPUDUMP transfers and native ARM9 checks cover these semantics. No PSX
+instruction changes are requested.
