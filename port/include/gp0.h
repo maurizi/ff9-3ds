@@ -33,7 +33,7 @@ typedef struct {
 extern Gp0State gp0_state;
 
 typedef struct {
-    void (*poly)(const Gp0Mode *m, const Gp0Vtx *v, int n); /* n = 3 or 4 (quad order 0,1,2 / 1,2,3) */
+    void (*poly)(const Gp0Mode *m, const Gp0Vtx *v, int n); /* n = 3 or 4 (quad strip 0,1,2 / 2,1,3) */
     void (*line)(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b);
     void (*rect)(const Gp0Mode *m, const Gp0Vtx *v, int w, int h);
     void (*fill)(int x, int y, int w, int h, unsigned int rgb); /* fill command: VRAM coordinates, no offset */

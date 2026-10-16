@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Compare GPU colour conversion with a PSX emulator using synthetic GP0 draws.
+"""Compare GPU colour conversion/interpolation with synthetic PSX GP0 draws.
 
 Build build/tests/raster_psx_probe first. Redux saves/restores its full state.
 DuckStation requires a dedicated software-renderer instance with GDB enabled:
 its CPU/RAM are restored, but the synthetic GPU state remains until reset.
-Constant-colour interiors isolate quantization, modulation and blending from
-polygon edge/interpolation differences. Reports stay under ignored build/.
+Constant-colour interiors isolate quantization, modulation and blending.
+Varying colours/UVs also exercise triangle and quad interpolation. Reports
+stay under ignored build/; sampled pixels do not establish full GPU parity.
 """
 import argparse
 import importlib.util
+import itertools
 import json
 from pathlib import Path
 import struct
@@ -33,13 +35,21 @@ def words(values):return struct.pack('<'+'I'*len(values),*values)
 def xy(x,y):return x|(y<<16)
 vram=bytearray(1024*512*2);uploads=[]
 def upload(x,y,w,h,value):
-    data=struct.pack('<H',value)*(w*h)
+    data=struct.pack('<H',value)*(w*h) if isinstance(value,int) else struct.pack('<'+'H'*len(value),*value)
+    assert len(data)==2*w*h
     for row in range(h):vram[((y+row)*1024+x)*2:((y+row)*1024+x+w)*2]=data[row*w*2:(row+1)*w*2]
     uploads.extend([0xa0000000,xy(x,y),xy(w,h),*struct.unpack('<'+'I'*(len(data)//4),data)])
 upload(640,256,8,32,0x1111)
 upload(704,256,16,32,0x0101)
 upload(768,256,32,32,0x9acb)
 upload(0,480,256,1,0x9acb)
+upload(832,256,64,64,[0x8000|((u+1)&31)|(((v+1)&31)<<5)|(((u^v)&31)<<10)
+                       for v in range(64) for u in range(64)])
+upload(896,256,16,64,[sum(((u*4+k+v*3)&15)<<(k*4) for k in range(4))
+                       for v in range(64) for u in range(16)])
+upload(960,256,32,64,[sum(((u*2+k+v*3)&255)<<(k*8) for k in range(2))
+                       for v in range(64) for u in range(32)])
+upload(0,481,256,1,[0x8000|((i+1)&31)|(((i*3+1)&31)<<5)|(((i*7+1)&31)<<10) for i in range(256)])
 cases=[]
 for kind in range(5):
     # flat/gouraud quads, rectangles, flat/gouraud horizontal lines
@@ -58,7 +68,7 @@ for kind in range(5):
                             if i==0:packet.append((cmd<<24)|colour)
                             elif kind==1:packet.append(colour)
                             packet.append(xy(x,y))
-                            if textured:packet.append(xy(x,y)|(((480<<6) if i==0 else (tp&0x9ff) if i==1 else 0)<<16))
+                            if textured:packet.append(x|(y<<8)|(((480<<6) if i==0 else (tp&0x9ff) if i==1 else 0)<<16))
                     elif kind==2:
                         packet.extend([((0x60|(textured<<2)|((semi>=0)<<1)|raw)<<24)|colour,0])
                         if textured:packet.append((480<<6)<<16)
@@ -76,6 +86,45 @@ for case in list(cases):
         extra.update(colour=colour,packet=[(word&0xff000000)|colour if (word&0xffffff)==0x817f09 else word for word in case['packet']])
         cases.append(extra)
 
+# Vary attributes and vertex order: constant interiors cannot detect the
+# GPU's half-step bias, gradient precision, or starting-vertex selection.
+for geometry in [[(0,0),(32,0),(0,32)],[(0,0),(33,3),(3,31)],
+                 [(-9,-7),(37,1),(2,35)],[(1,0),(32,5),(1,33)],
+                 [(8,8),(4,10),(7,3),(4,4)],[(4,8),(8,10),(5,3),(8,4)],
+                 [(0,0),(32,0),(0,32),(32,32)]]:
+    quad=len(geometry)==4
+    orders=[(0,1,2,3),(1,0,3,2),(2,3,0,1),(3,2,1,0)] if quad else itertools.permutations(range(3))
+    for order in orders:
+        for shaded in ([0,1] if quad else [1]):
+            for depth in [-1,0,1,2]:
+                for raw in ([0,1] if depth>=0 else [0]):
+                    for dither in [0,1]:
+                        tp=(14 if depth==0 else 15 if depth==1 else 13)|16|(max(depth,0)<<7)|(dither<<9)|0x400
+                        packet=[0xe1000000|tp,0xe2000000,0xe3000000,0xe407ffff,0xe5000000,0xe6000000,
+                                0x02282828,0,xy(32,32)]
+                        colours=[0x0721e9,0xfda503,0x3fd8c1,0xa7437f];uv=[(2,1),(29,7),(9,37),(43,17)]
+                        for j,i in enumerate(order):
+                            if j==0:packet.append(((0x20|(shaded<<4)|(quad<<3)|(4 if depth>=0 else 0)|raw)<<24)|colours[i])
+                            elif shaded:packet.append(colours[i])
+                            x,y=geometry[i];packet.append((x&65535)|((y&65535)<<16))
+                            if depth>=0:
+                                packet.append(uv[i][0]|(uv[i][1]<<8)|(((481<<6) if j==0 else tp if j==1 else 0)<<16))
+                        cases.append(dict(kind='gradient',geometry=geometry,order=order,depth=depth,raw=raw,dither=dither,
+                                          shaded=shaded,semi=-1,packet=packet))
+
+# A direct-colour page near the VRAM edge includes explicitly zeroed texels
+# outside the patterned upload. Cover transparent sampling on tied quad edges.
+for shaded,raw,dither in itertools.product([0,1],repeat=3):
+    tp=15|16|(2<<7)|(dither<<9)|0x400
+    packet=[0xe1000000|tp,0xe2000000,0xe3000000,0xe407ffff,0xe5000000,0xe6000000,
+            0x02282828,0,xy(32,32)]
+    for j,((x,y),u,colour) in enumerate(zip([(8,8),(4,10),(7,3),(4,4)],[2,29,9,43],
+                                           [0x0721e9,0xfda503,0x3fd8c1,0xa7437f])):
+        if j==0:packet.append(((0x2c|(shaded<<4)|raw)<<24)|colour)
+        elif shaded:packet.append(colour)
+        packet.extend([xy(x,y),u|((tp if j==1 else 0)<<16)])
+    cases.append(dict(kind='page_boundary',depth=2,raw=raw,dither=dither,shaded=shaded,semi=-1,packet=packet))
+
 # Copy commands to GP0. Snapshot a 4x4 VRAM interior through the renderer API
 # after execution; this avoids conflating GPU read-transfer quirks with drawing.
 code=[0x3c091f80,0x35291810,0xad200004, # GPU reset (VRAM retained)
@@ -86,12 +135,18 @@ if a.backend=='redux':emu.http('/state/save?name='+saved)
 else:duck=DuckStation(a.port)
 expected=[]
 try:
+    clear=[word for y in [0,256] for x in [0,512] for word in [0x02000000,xy(x,y),xy(512,256)]]
+    if a.backend=='duckstation':
+        # GPU reset retains VRAM. Initialize unused texture memory too, so
+        # zero texels cannot accidentally sample leftovers from the game.
+        if duck.draw(clear)!=bytes(32):raise RuntimeError('reference VRAM clear failed')
     for index,case in enumerate(cases):
         packet=(uploads if index==0 else [])+case['packet']
         if a.backend=='duckstation':
             expected.append(duck.draw(packet))
             if index%100==0:print(f'DuckStation GPU cases {index+1}/{len(cases)}',flush=True)
             continue
+        if index==0:packet=clear+packet
         payload=words(packet)
         emu.bridge('write',0x801f8000,payload.hex())
         emu.bridge('write',start,words(code).hex())

@@ -142,8 +142,8 @@ both framebuffers and textures, not just the currently displayed image. All
 differences in these samples also differ in RGB15, rather than only mask bits.
 The repeat against the saved VSync-240 reference reproduces 1163 differences;
 a second full DuckStation replay also reproduces byte-identical reference VRAM.
-These are unresolved raster fidelity errors; interpolation and texture
-sampling need isolation. The 326 constant-colour interior cases still pass
+These identified the interpolation errors corrected below. The 326
+constant-colour interior cases still pass
 after extracting the shared DuckStation transport into `duckstation_gpu.py`.
 
 Separately, `ds_candle_current_review.mp4` records 60 seconds of the native
@@ -161,3 +161,67 @@ The scenario enters field 70, then original scripts transition to field
 An initial check expecting active field 70 was incorrect. An unrelated
 DuckStation slot showing Vivi/Puck in Alexandria was discarded as a candle
 reference. Native performance and whole-game fidelity remain unverified.
+
+## Polygon interpolation correction
+
+The software rasterizer now seeds RGB/UV with a half-unit bias, quantizes
+attribute slopes to twelve fractional bits with truncation toward zero, and
+evaluates the starting pixel from the leftmost input vertex using those same
+slopes. Previously it floored interpolants and computed the starting value
+independently of its stepped gradients. Quads now use strip order 0,1,2 / 2,1,3;
+reversing the second triangle changes its attribute seed when X coordinates
+tie, despite covering the same geometric area. These behaviors agree with
+controlled draws through the [DuckStation software GPU](https://github.com/stenzek/duckstation/blob/master/src/core/gpu_sw_rasterizer.inl).
+This is an independent edge-function implementation, not a replacement with
+the reference emulator's scanline rasterizer.
+
+The arithmetic retains the existing 16.16 stepping representation, with four
+low slope bits zero. It uses signed 32-bit division: byte attributes and the
+GPU's accepted extent limits bound the scaled determinant below 2^31.
+Maximum-size triangles with determinant +/-1 exercise setup and wrapped
+stepping under UBSan. The generic/optimized differential still checks 4096
+mixed primitives and shadow-region rendering; ten independent synthetic PSX
+goldens now run on both host paths and all three ARM9 benchmark backends.
+
+`test_raster_psx.py` now compares 1006 cases. Added cases use patterned 4/8/15
+bit textures, varying colours, negative/clipped coordinates, all triangle
+vertex permutations, flat/gouraud quads, tied X coordinates, raw/modulated
+textures and dithering. The reference starts with fully cleared VRAM, including
+unuploaded texture regions. Its packet staging buffer was enlarged, with an
+overlap guard, to fit the additional synthetic uploads.
+
+`raster_interpolants_full_clear.json` matches **1006/1006**, versus **358/1006**
+for the archived pre-change renderer (`interpolation_final_baseline_counts.json`).
+Provisional gradient reports packed V at bit 16 instead of bit 8; corrected
+cases use byte-sized U/V fields. Eight exploratory mismatches sampled unused
+reference VRAM containing game leftovers; explicitly clearing it removes
+that setup difference. Eight deliberate page-boundary cases retain this
+coverage with deterministic memory. The final full-clear report is the
+authoritative synthetic comparison.
+
+Captured-command checks compare all 524,288 VRAM pixels, including mask bits:
+
+| Recorded VSync | Before differing pixels | After |
+|---|---:|---:|
+| 180, room reveal | 1146 | 0 |
+| 240, candle sequence | 1163 | 0 |
+| 330, fade toward naming | 7 | 0 |
+
+Reports are `candle_replay_interpolants_room`, `candle_replay_12bit_strip`, and
+`candle_replay_interpolants_revealed`. The final 32-bit arithmetic repeats the
+VSync-180 zero-difference result in `candle_replay_interpolants_final32_room`.
+At VSync 330 the viewport is nearly black during a fade, so it is not a useful
+standalone room-reveal screenshot. VSync 180 was visually checked during the
+light reveal. Extending the replay through name entry reaches a GP0 readback
+after VSync 330 and is explicitly rejected by the current tool; no complete
+1199-VSync replay match is claimed. Readback replay, other scenes, varying
+line interpolation, audio and whole-game correctness still require work.
+
+The native `interpolation_timing` ROM includes both old and new ARM/ITCM
+backends in the same run. `interpolation_timing_32bit.png` confirms that the
+PSX goldens and new paths match. All ten goldens and seven full-image comparisons pass.
+Its guest-timer comparison ranges from approximately 0.1% faster to 6.1% slower
+for the new backend across seven cases; it does not establish game FPS.
+Different texture samples also change the work per pixel. This remaining
+cost is recorded in `interpolation_arm9_validation.json`; rendering fidelity
+improves, but performance and full-game fidelity are not finished.

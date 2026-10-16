@@ -15,7 +15,7 @@ class DuckStation:
         self.command('?')
         self.registers=self.command('g')
         self.saved=[(address,self.read(address,size)) for address,size in
-                    [(0x801f8000,0x2000),(0x801fee00,128),(0x801f0000,32)]]
+                    [(0x801f8000,0x6e00),(0x801fee00,128),(0x801f0000,32)]]
     def reply(self):
         def byte():
             value=self.socket.recv(1)
@@ -43,6 +43,7 @@ class DuckStation:
     def draw(self,packet):
         packet=packet+[0xc0000000,xy(4,4),xy(4,4)]
         payload=words(packet)
+        if len(payload)>0x6e00:raise ValueError('synthetic GPU packet overlaps probe code')
         # Wait for GPUSTAT's ready-to-read bit before consuming GPUREAD.
         code=[0x3c091f80,0x35291810,0xad200004,0x8c880000,0x24840004,0xad280000,0x1485fffc,0,
               0x8d280004,0x3c0a0800,0x010a4024,0x1100fffc,0,

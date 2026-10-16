@@ -10,6 +10,7 @@ u16 *psx_vram=pixels;
 Gp0State gp0_state;
 const Gp0Backend *gp0_backend;
 extern const Gp0Backend psx_softgpu, psx_softgpu_reference, psx_softgpu_arm_itcm;
+#include "interpolation_golden.h"
 static unsigned seed=0x38412;
 static unsigned random_value(void) {
     seed^=seed<<13; seed^=seed>>17; seed^=seed<<5; return seed;
@@ -19,6 +20,8 @@ int main(void) {
     printf("ARM9 software raster timing\n");
     for(unsigned i=0;i<1024*512;++i) initial[i]=random_value();
     const Gp0Backend *backends[]={&psx_softgpu_reference,&psx_softgpu,&psx_softgpu_arm_itcm};
+    for(int b=0;b<3;b++) interpolation_checks(backends[b],pixels);
+    printf("PSX interpolation goldens match.\n");
     const char *names[]={"flat quad", "Gouraud quad", "subtract quad", "indexed rectangle", "solid Gouraud subtract", "solid rectangle", "solid flat quad"};
     printf("Generic / fast Thumb / ARM ITCM\n");
     for(int test=0;test<7;++test) {

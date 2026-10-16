@@ -199,9 +199,13 @@ static inline int clip_span(int edge,int step,int width,int *left,int *right) {
 #define RASTER_STEP_EDGES() do {w0+=A0;w1+=A1;w2+=A2;} while(0)
 #endif
 
-/* ---- triangle: edge functions and interpolants stepped in 16.16 fixed point --------------------------- */
+/* ---- triangle: edge functions and 12-fractional-bit GPU interpolants -------------------------------- */
 
 static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
+    /* The GPU seeds attributes at the leftmost input vertex. Preserve input
+     * order for tied X before changing winding for edge coverage below. */
+    const Gp0Vtx *anchor = b->x <= a->x ? b : a;
+    if (c->x < anchor->x || (anchor == b && c->x == anchor->x)) anchor = c;
     int area = (b->x - a->x) * (c->y - a->y) - (b->y - a->y) * (c->x - a->x);
     if (area == 0) {
         return;
@@ -242,11 +246,15 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     int bias0 = (A0 > 0 || (A0 == 0 && B0 > 0)) ? 0 : -1;
     int bias1 = (A1 > 0 || (A1 == 0 && B1 > 0)) ? 0 : -1;
     int bias2 = (A2 > 0 || (A2 == 0 && B2 > 0)) ? 0 : -1;
-    /* attribute = (w0 * a + w1 * b + w2 * c) / area: precompute 16.16 per-step deltas */
-    long long inv = ((long long)1 << 32) / area; /* 0.32 */
+    /* Quantize slopes to twelve fractional bits, truncating toward zero.
+     * Keep the existing 16.16 stepping representation (four low bits zero).
+     * A half-unit seed rounds RGB/UV at pixels instead of flooring them.
+     * Decoded attributes are bytes. After the extent rejection above, each
+     * determinant is bounded by 255*1023, so scaling by 4096 fits signed 32
+     * bits. Avoid a software 64-bit divide for every attribute slope. */
 #define GRAD(fa, fb, fc) \
-    (int)((((long long)(fa) * A0 + (long long)(fb) * A1 + (long long)(fc) * A2) * inv) >> 16), \
-    (int)((((long long)(fa) * B0 + (long long)(fb) * B1 + (long long)(fc) * B2) * inv) >> 16)
+    (int)((unsigned)((((fa) * A0 + (fb) * A1 + (fc) * A2) * 4096) / area) * 16u), \
+    (int)((unsigned)((((fa) * B0 + (fb) * B1 + (fc) * B2) * 4096) / area) * 16u)
     /* Flat primitives use the first vertex colour directly. Do not compute
      * or step RGB interpolants that cannot affect their pixels. */
 #ifdef PORT_SOFTGPU_REFERENCE
@@ -273,19 +281,23 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
         int t[2] = {GRAD(a->v, b->v, c->v)}; dvdx = t[0]; dvdy = t[1];
     }
 #undef GRAD
-    /* attribute values at (minx, miny), 16.16 */
-#define AT(fa, fb, fc) \
-    (int)((((long long)(fa) * w0row + (long long)(fb) * w1row + (long long)(fc) * w2row) * inv) >> 16)
+    /* Evaluate from the same vertex using the quantized slopes. Computing
+     * an independent barycentric value here loses the GPU's accumulated
+     * rounding error when clipping or stepping from that vertex. */
+#define AT(value, dx, dy) \
+    (int)(((unsigned)(value) << 16) + 0x8000u + \
+          (unsigned)(dx) * (unsigned)(minx - anchor->x) + \
+          (unsigned)(dy) * (unsigned)(miny - anchor->y))
     int rrow = 0, grow = 0, brow = 0;
     if (interpolate_rgb) {
-        rrow = AT(a->r, b->r, c->r);
-        grow = AT(a->g, b->g, c->g);
-        brow = AT(a->b, b->b, c->b);
+        rrow = AT(anchor->r, drdx, drdy);
+        grow = AT(anchor->g, dgdx, dgdy);
+        brow = AT(anchor->b, dbdx, dbdy);
     }
     int urow = 0, vrow = 0;
     if (interpolate_uv) {
-        urow = AT(a->u, b->u, c->u);
-        vrow = AT(a->v, b->v, c->v);
+        urow = AT(anchor->u, dudx, dudy);
+        vrow = AT(anchor->v, dvdx, dvdy);
     }
 #undef AT
     if (target.clip_active) {
@@ -372,7 +384,9 @@ static void sg_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     unsigned int profile_start=port_profile_begin();
     triangle(m, &v[0], &v[1], &v[2]);
     if (n == 4) {
-        triangle(m, &v[1], &v[2], &v[3]);
+        /* Strip order matters for the attribute seed when X coordinates tie,
+         * even though reversing these first two vertices covers the same area. */
+        triangle(m, &v[2], &v[1], &v[3]);
     }
     port_profile_draw_end(0,profile_start);
 }

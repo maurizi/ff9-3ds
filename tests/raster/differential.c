@@ -12,6 +12,7 @@ uint16_t *psx_vram;
 Gp0State gp0_state;
 const Gp0Backend *gp0_backend;
 extern const Gp0Backend psx_softgpu, psx_softgpu_reference;
+#include "interpolation_golden.h"
 static uint32_t seed = 0x17932761;
 static unsigned random_value(void) {
     seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
@@ -23,6 +24,21 @@ static void draw(const Gp0Backend *backend, const Gp0Mode *m, const Gp0Vtx *v, i
     else backend->line(m, v, v+1);
 }
 static void targeted_checks(void) {
+    interpolation_checks(&psx_softgpu,actual);
+    interpolation_checks(&psx_softgpu_reference,expected);
+    /* Legal maximum extents with determinant +/-1 stress slope setup and
+     * wrapped stepping outside extremely thin triangles under UBSan. */
+    for(int reverse=0;reverse<2;reverse++) {
+        memset(actual,0,sizeof actual);memset(expected,0,sizeof expected);
+        Gp0Vtx v[3]={{0,0,0,255,0,255,0},{1023,511,255,0,255,0,255},
+                     {1021,510,0,255,0,255,0}};
+        if(reverse) {Gp0Vtx tmp=v[1];v[1]=v[2];v[2]=tmp;}
+        Gp0Mode m={.gouraud=1,.textured=1,.depth=2,.raw=1,.tx=0,.ty=0};
+        gp0_state=(Gp0State){.area_x1=1023,.area_y1=511};
+        psx_vram=actual;psx_softgpu.poly(&m,v,3);
+        psx_vram=expected;psx_softgpu_reference.poly(&m,v,3);
+        assert(memcmp(actual,expected,sizeof actual)==0);
+    }
     /* Synthetic 4x4 interiors verified through DuckStation's GPU. These
      * independent goldens catch colour errors shared by both native paths. */
     static const uint16_t shaded[16]={
@@ -214,7 +230,7 @@ int main(int argc, char **argv) {
                           random_value()%256,random_value()%256,random_value()%256,
                           random_value()%256,random_value()%256};
         /* Flat quads deliberately have different vertex colours: triangle 2
-         * must use vertex 1, rather than a cached colour from vertex 0. */
+         * must use its own strip vertex, not a cached colour from vertex 0. */
         gp0_state=(Gp0State){.area_x0=0,.area_y0=0,.area_x1=1023,.area_y1=511,
             .texpage=(trial&1)?0x200:0,
             .twin_mask_x=(random_value()%32)*8,.twin_mask_y=(random_value()%32)*8,
