@@ -663,3 +663,20 @@ the animation halfword and the local restored angle/distance object through
 their other callers. Please name/document these original behaviors without
 adding PSX guards or changing matching codegen. Original disassembly and
 pre-fix backtraces are under `build/validation/field_coverage_all`.
+
+### F28 (2026-10-16). Movie ring framing and streamed sound boundaries
+
+The port now has a bounded STR/MBG frame assembler, tested on all 43,379 playable
+frames in the user's four US discs; see `movie-validation.md`. Please document
+the original `func_8019BA70` as the video-sector ring update and
+`func_8019BCE8` as the audio/metadata-sector ring update. The reader
+`func_8019C2F4` returns compressed data in reverse physical sector order:
+ten sectors per frame, audio indices 0/1, video indices 2..9, with 0x8F4 video
+payload bytes after each 0x20-byte header. The first compressed bytes are in
+physical sector 9. The original `Ovl64StreamSect` carries two 0x24-byte camera
+records at +0x14, selected by `D_8019DE10.unk10`; keep both until that selector's
+full semantics are named. Some ISO movie extents continue with frame-zero
+padding after the frame count at audio-sector +0x60. Disc-4 MBG116's final
+frame retains camera data but has AB-filled bytes +0x80..+0x7FF instead of AKAO
+audio. That tail is not an audio-length field. These are format observations;
+movie decode/playback and synchronization remain unimplemented in the port.

@@ -631,7 +631,15 @@ $(BUILD)/tests/raster_ds_arm_itcm.o: port/psx/softgpu.c
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -DPORT_RASTER_ITCM -Dpsx_softgpu=psx_softgpu_arm_itcm -Dpsx_softgpu_enable=psx_softgpu_arm_itcm_enable -Dpsx_softgpu_shadow_poly=psx_softgpu_arm_itcm_shadow_poly -Dpsx_softgpu_shadow_poly_region=psx_softgpu_arm_itcm_shadow_poly_region -Dpsx_softgpu_shadow_rect=psx_softgpu_arm_itcm_shadow_rect -c $< -o $@
 
-.PHONY: test-display scale-ds
+.PHONY: test-display scale-ds test-movie-stream
+test-movie-stream: $(BUILD)/tests/movie_stream_test
+	@$<
+$(BUILD)/tests/movie_stream_test: tests/display/movie_stream_test.c port/psx/movie_stream.c port/include/movie_stream.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -fsanitize=address,undefined -Iport/include tests/display/movie_stream_test.c port/psx/movie_stream.c -o $@
+$(BUILD)/tests/movie_stream_probe: tests/display/movie_stream_probe.c port/psx/movie_stream.c port/include/movie_stream.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O2 -Wall -Wextra -Iport/include tests/display/movie_stream_probe.c port/psx/movie_stream.c -o $@
 $(BUILD)/tests/gpu_env_render: port/include/psx_display.h
 $(BUILD)/tests/display_rgb24_probe: tests/display/rgb24_probe.c port/ds/display_scale.c port/ds/display_scale.h port/include/psx_display.h
 	@mkdir -p $(dir $@)

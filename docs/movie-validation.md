@@ -64,11 +64,69 @@ Those attempts were not treated as passing references or used to change the
 port's channel order. DuckStation supplied the successful reference above.
 All reference emulator processes were closed after testing.
 
+## Implemented: bounded STR/MBG frame assembly
+
+`port/psx/movie_stream.c` now assembles FF9's ten-sector frames: two 2048-byte
+audio/metadata sectors, then eight 2324-byte video sectors with 32-byte headers
+and reverse-ordered 2292-byte payloads. This follows the original overlay's
+`func_8019BA70`, `func_8019BCE8`, `func_8019C434` and `func_8019C2F4`, and agrees
+with the [FF9 STR format documentation](https://psx-spx.consoledev.net/dev/ps1/cdr/cdromfileformats/streaming/).
+The assembler checks sector order, frame identity, dimensions, payload lengths
+and duplicated BS headers. Errors latch until reset, and reset permits seeking
+directly to a complete frame. It retains both camera records, control flags,
+video headers and the complete padded video tail containing MBG extras.
+
+The separate audio view validates AKAO lengths and block alignment and preserves
+the original SPU pitch value. It identifies no-audio sectors and the AB-filled
+terminal payload in disc-4 MBG116, rather than interpreting that marker as a
+2.8-billion-byte sound block. ADPCM samples are not decoded or played yet.
+
+`tools/movie_catalog.py` walks ISO9660 movie extents and runs the production C
+assembler against every sector. Results from the user's four NTSC-U discs:
+
+| disc | movie files | playable frames | frames with camera metadata | unused tail sectors |
+|---|---:|---:|---:|---:|
+| 1 | 19 | 14,141 | 745 | 10,320 |
+| 2 | 14 | 8,066 | 864 | 18,850 |
+| 3 | 14 | 8,404 | 493 | 16,240 |
+| 4 | 10 | 12,768 | 1,861 | 0 |
+| total | 57 | 43,379 | 3,963 | 45,410 |
+
+All playable frames assembled successfully, with 320×224 dimensions, BS version
+2, and continuous frame numbers from 1 through the declared end. Of those,
+42,033 frames contain AKAO audio, one has terminal sound padding, and the rest
+are silent. The probe validates unused ISO tail sectors separately as frame-zero
+padding; it does not feed them to the assembler as playable data.
+
+The maximum compressed BS length observed is 18,336 bytes. The largest declared
+expanded MDEC run-level size is 15,104 words (60,416 bytes, before its command
+word). One assembler object takes 22,708 bytes on the host: it stores compressed
+video, both full audio/metadata sectors, all eight video headers and bookkeeping.
+It allocates nothing internally and has no global frame buffer. Future playback
+must include decoder scratch space, sound queues and peak loading overlap in its
+DS budget; this object is not the entire movie working set.
+
+Reproduce after building the probe:
+
+```sh
+tools/docker.sh make test-movie-stream build/tests/movie_stream_probe
+python3 tools/movie_catalog.py '/path/to/FF9 CD1.img' --disc 1 \
+    --out build/validation/movie_stream_disc1.json
+# Repeat with the other three raw disc images and --disc 2/3/4.
+```
+
+This run's final catalogs are `build/validation/movie_stream_audio_disc1.json`
+through `movie_stream_audio_disc4.json`. Sanitizer tests exercise reverse chunk
+placement, retained camera bytes, consecutive reuse, seeking, truncated input,
+inconsistent headers, invalid audio lengths, terminal padding and latched errors.
+These checks establish stream framing and bounds, not decoded pixel or audio
+fidelity; actual PSX movie captures remain necessary for decoder validation.
+
 ## Still incomplete
 
 `port/game/movie.c` still substitutes placeholder frame timing. RGB24 scanout
 alone does not implement movie playback. Remaining work includes sector/frame
-assembly, original-compatible MDEC decoding, movie audio, synchronized frame
+integration of the frame assembler, original-compatible MDEC decoding, movie audio, synchronized frame
 timing, skipping/end conditions, MBG camera metadata and graphics composition.
 Both decoding working sets and stream buffers must fit the intended DS memory
 budget. No actual movie sequence, animation video, audio synchronization or
