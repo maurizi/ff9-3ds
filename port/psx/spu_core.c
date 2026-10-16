@@ -3,6 +3,7 @@
 #include "psx_spu.h"
 #include "psx_spu_voice.h"
 #include "psx_spu_reverb.h"
+#include "psx_spu_trace.h"
 #include "platform.h"
 #include <string.h>
 
@@ -27,6 +28,7 @@ static uint32_t flags(unsigned offset) {
 void psx_spu_set_rendering(int enabled) { rendering = !!enabled; }
 
 void psx_spu_reset(void) {
+    psx_spu_trace(PSX_SPU_TRACE_RESET, 0, 0, NULL);
     memset(voices, 0, sizeof voices);
     memset(main_volume, 0, sizeof main_volume);
     memset(psx_spu_regs, 0, 0x400);
@@ -54,6 +56,7 @@ void psx_spu_voice_register(unsigned voice, unsigned offset, uint16_t value) {
 void psx_spu_write(unsigned offset, uint16_t value) {
     if ((offset & 1) || offset >= 0x400) return;
     if (offset == 0x19c || offset == 0x19e || offset == 0x1ae) return;
+    psx_spu_trace(PSX_SPU_TRACE_WRITE, offset, value, NULL);
     uint16_t old = psx_spu_regs[offset / 2];
     psx_spu_regs[offset / 2] = value;
     if (offset < 0x180) {
@@ -120,6 +123,15 @@ static void sample_frame(int16_t output[2]) {
         output[channel] = clamp16((clamp16(mixed) * main_volume[channel].level) >> 15);
         psx_spu_volume_tick(&main_volume[channel]);
     }
+#ifdef __linux__
+    const int32_t stages[8] = {
+        (control & 0x4000) ? mix.dry[0] : 0, (control & 0x4000) ? mix.dry[1] : 0,
+        (control & 0x4000) ? clamp16(mix.reverb_send[0]) : 0,
+        (control & 0x4000) ? clamp16(mix.reverb_send[1]) : 0,
+        wet[0], wet[1], output[0], output[1]
+    };
+    psx_spu_trace(PSX_SPU_TRACE_SAMPLE, 0, 0, stages);
+#endif
     capture_offset = (capture_offset + 2) & 0x3ff;
     psx_spu_regs[0x1ae / 2] = (psx_spu_regs[0x1ae / 2] & ~0x800) | (capture_offset & 0x200 ? 0x800 : 0);
     /* Key events take effect after one output sample. Off then on means a

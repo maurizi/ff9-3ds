@@ -26,6 +26,8 @@ def main():
     parser.add_argument('--exe', type=Path, default=Path('build/pc/ff9ds.elf'))
     parser.add_argument('--data', type=Path, help='runtime data root, including optional BIOS RAM image')
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--audio', type=Path, help='capture host audio to a new WAV under build/')
+    parser.add_argument('--spu-trace', type=Path, help='capture sample-indexed SPU events to a new file under build/')
     args = parser.parse_args()
     if not 1 <= args.command <= 0x30 or not 0 <= args.ability < 192:
         parser.error('command must be 1..48 and ability 0..191')
@@ -43,6 +45,12 @@ def main():
         return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
     scenario = quote(args.scenario)
     data = '--data ' + quote(args.data) if args.data else ''
+    captures = ''
+    for option, path in [('audio', args.audio), ('spu-trace', args.spu_trace)]:
+        if path:
+            if not path.resolve().is_relative_to(root / 'build') or path.exists():
+                parser.error(f'--{option} must be a new file under build/')
+            captures += f' --{option} ' + quote(path)
     actor = f' && ((arg0->unk4->unk68 >> 1) & 15)=={args.actor}' if args.actor is not None else ''
     if args.require_trance:
         actor += ' && (arg0->unk4->status & 0x4000)'
@@ -77,7 +85,7 @@ printf "PROBE_EFFECT cmd=%u ability=%u effect=%u\\n",arg0->cmdNo,arg0->subNo,arg
 end
 continue
 end
-run {data} --scenario {scenario} --frames {args.frames} --status 1000 {presses}
+run {data} --scenario {scenario} --frames {args.frames} --status 1000 {presses}{captures}
 if $_isvoid($_exitcode)
 backtrace 20
 quit 3

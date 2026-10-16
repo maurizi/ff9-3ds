@@ -7,6 +7,8 @@ It does not emulate the CPU bus, key-event latch timing, reverb, or audio output
 """
 import argparse
 import hashlib
+import json
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -33,7 +35,11 @@ def main():
     parser.add_argument("beetle", type=Path)
     parser.add_argument("--helpers", required=True, type=Path,
                         help="directory containing pinned duck_types/bitfield/bitutils.h")
+    parser.add_argument("--journal", type=Path, help="compare real host journal dry/send stages instead of synthetic fixtures")
+    parser.add_argument("--require-match", action="store_true", help="journal replay exits nonzero on any dry/send mismatch")
     args = parser.parse_args()
+    if args.require_match and not args.journal:
+        parser.error("--require-match requires --journal")
     duck = checked(args.duck, DUCK_SHA256)
     beetle = checked(args.beetle, BEETLE_SHA256)
     helpers = {name: checked(args.helpers / f"duck_{name}.h", sha) for name, sha in HELPERS.items()}
@@ -70,7 +76,8 @@ enum : u32 {NUM_VOICES=24, NUM_VOICE_REGISTERS=8, NUM_SAMPLES_FROM_LAST_ADPCM_BL
 '''
     harness += section("union ADSRRegister", "struct ReverbRegisters")
     harness += r'''
-static struct { std::array<Voice,24> voices; u32 endx_register, key_on_register; } s_state;
+static struct { std::array<Voice,24> voices; u32 endx_register, key_on_register;
+    u32 noise_count, noise_level; struct {u8 noise_clock;} SPUCNT; } s_state;
 static u8 ram[512*1024]; static s16 noise;
 static void GeneratePendingSamples() {}
 static s16 GetVoiceNoiseLevel() { return noise; }
@@ -78,6 +85,7 @@ static void ReadADPCMBlock(u16 address, ADPCMBlock* block) {
     std::memcpy(block,ram+address*8,sizeof(*block));
 }
 static void WriteVoiceRegister(u32,u16);
+static void UpdateNoise();
 static ADSRPhase GetNextADSRPhase(ADSRPhase);
 static std::tuple<s32,s32> SampleVoice(Voice&,u32,bool,bool,bool,s32);
 }
@@ -141,6 +149,12 @@ int main() {
     puts("};");
 }
 '''
+    if args.journal:
+        harness = harness[:harness.index("void voice_case_write(")]
+        start = duck.index("void SPU::UpdateNoise()")
+        end = duck.index("\n}", start) + 2
+        harness += duck[start:end]
+        harness += '\n#include "spu_voice_journal.h"\n'
     root = Path(__file__).resolve().parents[1]
     directory = root / "build" / "validation"
     directory.mkdir(parents=True, exist_ok=True)
@@ -150,9 +164,21 @@ int main() {
         cpp.write_text(harness)
         for name, body in helpers.items():
             (Path(tmp) / f"{name}.h").write_text(body)
-        subprocess.run(["g++", "-std=c++23", "-O2", "-I", str(root / "tests/spu"),
+        subprocess.run(["g++", "-std=c++23", "-O2", "-I", str(root / "tests/spu"), "-I", str(root / "tools"),
                         str(cpp), "-o", str(exe)], check=True)
-        subprocess.run([str(exe)], check=True)
+        if args.journal:
+            result = subprocess.run([str(exe), str(args.journal)], capture_output=True, text=True)
+            if result.returncode:
+                print(result.stderr, file=sys.stderr, end='')
+                sys.exit(result.returncode)
+            report = json.loads(result.stdout)
+            report['stage_order'] = ['dry_left', 'dry_right', 'send_left', 'send_right']
+            report['reference'] = 'DuckStation voice methods with Beetle scalar interpolation; replay driver supplies scheduling'
+            print(json.dumps(report, indent=2))
+            if args.require_match and any(stage['mismatched_values'] for stage in report['stages']):
+                sys.exit(1)
+        else:
+            subprocess.run([str(exe)], check=True)
 
 
 if __name__ == "__main__":

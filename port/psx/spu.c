@@ -10,6 +10,7 @@
 #include "psyq_port.h"
 #include "psx_spu.h"
 #include "psx_spu_presets.h"
+#include "psx_spu_trace.h"
 
 #define SPU_RAM 0x80000
 
@@ -25,6 +26,7 @@ void SpuInit(void) {
     psx_spu_reset();
     if (psx_spu_ram) {
         __builtin_memset(psx_spu_ram, 0, SPU_RAM);
+        psx_spu_trace(PSX_SPU_TRACE_RAM, 0, SPU_RAM, psx_spu_ram);
     }
     reverb_type = 0;
     __builtin_memset(&reverb_attr, 0, sizeof reverb_attr);
@@ -71,6 +73,7 @@ u32 func_8005709C(u8 *addr, u32 size) {
     }
     if (psx_spu_ram) {
         __builtin_memcpy(psx_spu_ram + transfer_addr, addr, size);
+        psx_spu_trace(PSX_SPU_TRACE_RAM, transfer_addr, size, psx_spu_ram + transfer_addr);
     }
     if (transfer_cb) {
         transfer_cb();
@@ -187,7 +190,10 @@ long SpuClearReverbWorkArea(long mode) {
     bytes = mode ? psx_spu_presets[mode].bytes : 128;
     /* Synchronous transfer policy, like SpuWrite. Preserve the caller's DMA
      * address/callback; this internal clear must not invoke its callback. */
-    if (psx_spu_ram) __builtin_memset(psx_spu_ram + SPU_RAM - bytes, 0, bytes);
+    if (psx_spu_ram) {
+        __builtin_memset(psx_spu_ram + SPU_RAM - bytes, 0, bytes);
+        psx_spu_trace(PSX_SPU_TRACE_RAM, SPU_RAM - bytes, bytes, psx_spu_ram + SPU_RAM - bytes);
+    }
     return 0;
 }
 

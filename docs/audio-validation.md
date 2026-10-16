@@ -362,9 +362,95 @@ A better next comparison is synchronized capture of individual dry/send/wet stag
 register events against a second reference, rather than tuning the DSP to one
 spectral score. The shorter port clip is `spu_title_port_reverb.wav`.
 
+## Sample-indexed game journals
+
+Host `--spu-trace NEW.bin` records SPU resets, explicit register writes (including
+repeated values), RAM transfers/clears, and eight signed stage values per sample:
+stereo dry mix, clipped reverb send, raw wet output and final PCM. It enables the
+sample clock with or without `--audio`. The file uses explicit little-endian
+records and a completion footer. Truncated records, missing footers, invalid RAM
+ranges and unknown events are rejected by the inspection/replay tools. Existing
+files are never overwritten. Journals contain user-derived audio/instrument data
+and belong under ignored `build/`; none are committed.
+
+The observers are compiled out of ARM9 sample/register/transfer paths. Inspection
+of the production ARM9 core object confirms no trace calls/symbol references.
+The writer test (`tools/docker.sh make test-spu-journal`) drives the actual core,
+PsyQ transfers and journal writer with synthetic ADPCM. It checks stage PCM
+against the sink's hash, sample indices of repeated writes, in-flight RAM changes,
+no-overwrite behavior and malformed/truncated journal rejection. Deliberately changing one recorded
+dry value and one PCM value also makes the respective strict reference checks
+fail with status 1. This is separate
+from the DSP arithmetic tests.
+
+Two reference modes isolate different parts of the game-driven audio pipeline:
+
+- `spu_voice_reference.py --journal`: the existing pinned DuckStation voice
+  methods, independently compiled, process each recorded register/RAM event.
+  The replay driver supplies global masks, mute, key scheduling, capture writes
+  and summation. Gaussian interpolation uses the pinned Beetle scalar expression,
+  already checked against both coefficient tables. This verifies the voice stage
+  on real game inputs, not a separately emulated CPU bus or full SPU.
+- `spu_replay_reference.py --reverb-only`: the pinned Beetle core receives the
+  same register/RAM events and the journal's dry/send values at its reverb input.
+  Those values are supplied inputs, not verified outputs. Only wet output and
+  final PCM are independently compared in this mode. The original reverb and
+  gain computations are retained. CD input is silent; IRQ notifications are
+  discarded. `--require-match` makes any compared mismatch fail the command.
+
+The default Beetle replay instead generates voices itself. Its title dry output
+first differs at sample 229,778 (port 0, reference -1), before the first wet-output
+difference. Its voice model includes a four-sample decode delay and a different
+initial interpolation-buffer arrangement from the pinned DuckStation methods.
+It also differs in envelope and gain-update details. These are real reference
+model differences; neither a coarse spectral score nor changing the port to match
+one emulator establishes the physical PSX behavior. Absolute source/key timing,
+ADSR edge cases and synchronized original-game recordings remain open work.
+
+Validation on 2026-10-16:
+
+- A 1,000-frame title run records 735,000 stereo samples, 1,763 register writes
+  and nine RAM events. Dry/send output matches the DuckStation methods exactly;
+  isolated reverb/final output matches Beetle exactly. PCM with tracing enabled
+  and disabled has the same SHA256:
+  `dac4fc9239a2671f02f08cfe4e307562b4e4a16ce3d5f3c134d651014b50a08e`.
+- The disc-3 Ifrit first-use probe queues command 16 / ability 51 for actor 2,
+  starts effect 445, and exits normally at 6,000 host frames. Its 4,410,000 stereo
+  samples also give zero differences in both reference modes. This tests an
+  executed summon, not just battle entry. It does not verify its menu selection,
+  PSX presentation, every SFX, or original CPU timing.
+- Evidence stays under `build/validation`: `spu_title_journal.bin`,
+  `spu_title_duck_voice_replay.json`, `spu_title_reverb_isolated.json`,
+  `spu_title_replay_report.json`, `spu_ifrit_spell_journal.bin`,
+  `spu_ifrit_duck_voice_replay.json`, `spu_ifrit_reverb_isolated.json`, and
+  `spu_ifrit_spell_probe/`. Both normal game targets and all existing sound
+  component/SDK suites still pass. No emulator was needed or left running.
+
+The replay also checks pinned `spu.h` SHA256
+`feee6c16a8b885f2d85aa30181de9a17c3189767d06594c70c72c084d38862d7`.
+Reproduce with the pinned sources/helpers described above (new output paths):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/libretro/beetle-psx-libretro/9568c66b7386fa928b433f29e3daf7b8ee0f0031/mednafen/psx/spu.h -o build/validation/beetle_spu_pinned.h
+tools/docker.sh build/pc/ff9ds --frames 1000 --status 500 --spu-trace build/validation/NEW_title.bin --audio build/validation/NEW_title.wav
+python3 tools/inspect_spu_trace.py build/validation/NEW_title.bin --writes
+python3 tools/spu_voice_reference.py build/validation/duck_spu_pinned.cpp build/validation/beetle_spu_pinned.c --helpers build/validation --journal build/validation/NEW_title.bin --require-match
+python3 tools/spu_replay_reference.py build/validation/beetle_spu_pinned.c build/validation/beetle_spu_pinned.h build/validation/NEW_title.bin --reverb-only --require-match
+tools/docker.sh python3 tools/scenario_command_probe.py tests/scenarios/disc3_ifrit_first.cfg --command 16 --ability 51 --frames 6000 --out build/validation/NEW_ifrit_probe --audio build/validation/NEW_ifrit.wav --spu-trace build/validation/NEW_ifrit.bin
+```
+
+`--stages NEW.bin` on the inspector and `--reference-stages NEW.bin` on the Beetle
+replay export eight LE32 values per frame for analysis. The exported reference
+PCM is observed before Beetle's frontend-specific 75% headroom attenuation;
+that attenuation is retained in the private reference code but does not belong
+in the port's SPU output. Replay reports include compared stage names and first
+mismatch indices; a successful process alone is not a fidelity result unless
+`--require-match` was supplied or every reported count was inspected.
+
 ## Remaining sound work
 
-Resolve the title-recording discrepancy, complete IRQ/DMA/capture timing and
+Resolve original-game timing/capture differences beyond the matched stage
+replays, complete IRQ/DMA/capture timing and
 streamed movie/CD inputs, connect DS PCM output, and compare music,
 SFX and scene/bank changes against synchronized original PSX recordings. Improve
 bus/key timing and verify unresolved silicon edge cases. Exercise late-game

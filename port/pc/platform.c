@@ -26,6 +26,7 @@ static long frames;
 static long status_every = 60;
 static long dump_every; /* --dump N: write the displayed area every N frames to build/frames/ */
 static long vram_at = -1; /* --vram FRAME: also write all of VRAM at that frame */
+int plat_spu_trace_open(const char *path);
 static FILE *audio_file;
 static unsigned long long audio_frames;
 
@@ -167,6 +168,8 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--data") && i + 1 < argc) {
             data_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--spu-trace") && i + 1 < argc) {
+            if (!plat_spu_trace_open(argv[++i])) return 1;
         } else if (!strcmp(argv[i], "--audio") && i + 1 < argc && !audio_file) {
             audio_file = fopen(argv[++i], "wbx");
             if (!audio_file) { perror("audio capture"); return 1; }
@@ -204,7 +207,7 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--frames") && i + 1 < argc) {
             frame_limit = atol(argv[++i]);
         } else {
-            fprintf(stderr, "usage: %s [--data DIR] [--scenario PATH] [--frames N] [--status N] [--watch ADDR:SIZE] [--press BUTTON@FRAME[+N]] [--render] [--dump N] [--audio NEW.wav]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--data DIR] [--scenario PATH] [--frames N] [--status N] [--watch ADDR:SIZE] [--press BUTTON@FRAME[+N]] [--render] [--dump N] [--audio NEW.wav] [--spu-trace NEW.bin]\n", argv[0]);
             return 1;
         }
     }

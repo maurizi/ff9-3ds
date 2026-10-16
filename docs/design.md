@@ -252,7 +252,8 @@ renderer reproduces the opcode interpreter's layout (R15).
 - **Current implementation**: host `--audio NEW.wav` renders game audio with reverb at 44.1 kHz through the AKAO
   register boundary and interleaved virtual timer clock. All 24 voices, Gaussian interpolation, ADSR/volume
   sweeps, pitch modulation, shared noise, reverb, main-volume mixing and basic capture RAM are implemented/tested;
-  see `audio-validation.md`. IRQ/DMA/capture timing fidelity, CD/movie inputs, physical-console
+  see `audio-validation.md`. Host `--spu-trace` captures game inputs for replay against
+  pinned voice/reverb references. IRQ/DMA/capture timing fidelity, CD/movie inputs, physical-console
   comparison and DS audio output remain unfinished. DS/default host mixing stays disabled until a sink
   is selected; this is an integration stage, not completed audio fidelity.
 - FMV audio must preserve its original stream timing; the planned FastVideoDS integration is not implemented.
