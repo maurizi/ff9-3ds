@@ -189,7 +189,14 @@ test-spu-transfer: $(BUILD)/tests/spu_transfer_test
 $(BUILD)/tests/spu_transfer_test: tests/spu/transfer_test.c port/psx/spu.c port/include/psyq_port.h port/include/psx_spu.h
 	@mkdir -p $(dir $@)
 	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $< port/psx/spu.c -Wl,--gc-sections -o $@
-test-spu: $(BUILD)/tests/spu_adpcm_test $(BUILD)/tests/spu_source_test $(BUILD)/tests/spu_envelope_test $(BUILD)/tests/spu_interpolation_test $(BUILD)/tests/spu_voice_test $(BUILD)/tests/spu_noise_test $(BUILD)/tests/spu_core_test $(BUILD)/tests/spu_clock_test
+# SDK structures use the game's 32-bit ABI, like the transfer suite.
+.PHONY: test-spu-sdk-reverb
+test-spu-sdk-reverb: $(BUILD)/tests/spu_sdk_reverb_test
+	@$<
+$(BUILD)/tests/spu_sdk_reverb_test: tests/spu/sdk_reverb_test.c tests/spu/sdk_reverb_reference.h port/psx/spu.c port/include/psx_spu_presets.h
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $< port/psx/spu.c -Wl,--gc-sections -o $@
+test-spu: $(BUILD)/tests/spu_adpcm_test $(BUILD)/tests/spu_source_test $(BUILD)/tests/spu_envelope_test $(BUILD)/tests/spu_interpolation_test $(BUILD)/tests/spu_voice_test $(BUILD)/tests/spu_noise_test $(BUILD)/tests/spu_core_test $(BUILD)/tests/spu_clock_test $(BUILD)/tests/spu_reverb_test
 	@$<
 	@$(BUILD)/tests/spu_source_test
 	@$(BUILD)/tests/spu_envelope_test
@@ -198,12 +205,16 @@ test-spu: $(BUILD)/tests/spu_adpcm_test $(BUILD)/tests/spu_source_test $(BUILD)/
 	@$(BUILD)/tests/spu_noise_test
 	@$(BUILD)/tests/spu_core_test
 	@$(BUILD)/tests/spu_clock_test
-$(BUILD)/tests/spu_clock_test: tests/spu/clock_test.c port/psx/irq.c port/psx/spu_core.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c $(PORT_HDRS)
+	@$(BUILD)/tests/spu_reverb_test
+$(BUILD)/tests/spu_reverb_test: tests/spu/reverb_test.c tests/spu/reverb_cases.h tests/spu/reverb_presets.h tests/spu/reverb_reference.h port/psx/spu_reverb.c port/include/psx_spu_reverb.h
 	@mkdir -p $(dir $@)
-	$(CC) -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $< port/psx/irq.c port/psx/spu_core.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c -Wl,--gc-sections -o $@
-$(BUILD)/tests/spu_core_test: tests/spu/core_test.c port/psx/spu_core.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c port/include/psx_spu.h port/include/psx_spu_voice.h port/include/psx_spu_source.h port/include/psx_spu_gauss.h port/include/psx_spu_adpcm.h port/include/psx_spu_envelope.h port/include/platform.h
+	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_reverb.c -o $@
+$(BUILD)/tests/spu_clock_test: tests/spu/clock_test.c port/psx/irq.c port/psx/spu_core.c port/psx/spu_reverb.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c $(PORT_HDRS)
 	@mkdir -p $(dir $@)
-	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_core.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c -o $@
+	$(CC) -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $< port/psx/irq.c port/psx/spu_core.c port/psx/spu_reverb.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c -Wl,--gc-sections -o $@
+$(BUILD)/tests/spu_core_test: tests/spu/core_test.c port/psx/spu_core.c port/psx/spu_reverb.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c port/include/psx_spu_reverb.h port/include/psx_spu.h port/include/psx_spu_voice.h port/include/psx_spu_source.h port/include/psx_spu_gauss.h port/include/psx_spu_adpcm.h port/include/psx_spu_envelope.h port/include/platform.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_core.c port/psx/spu_reverb.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c -o $@
 $(BUILD)/tests/spu_noise_test: tests/spu/noise_test.c tests/spu/noise_reference.h port/psx/spu_noise.c port/include/psx_spu.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_noise.c -o $@
@@ -451,10 +462,16 @@ $(BUILD)/tests/spu_ds_noise_test.o: tests/spu/noise_test.c tests/spu/noise_refer
 $(BUILD)/tests/spu_ds_noise.o: port/psx/spu_noise.c port/include/psx_spu.h
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
-$(BUILD)/tests/spu_ds_integration.o: port/psx/spu_core.c port/include/psx_spu.h port/include/psx_spu_voice.h port/include/psx_spu_source.h port/include/psx_spu_adpcm.h port/include/psx_spu_envelope.h port/include/platform.h
+$(BUILD)/tests/spu_ds_integration.o: port/psx/spu_core.c port/include/psx_spu_reverb.h port/include/psx_spu.h port/include/psx_spu_voice.h port/include/psx_spu_source.h port/include/psx_spu_adpcm.h port/include/psx_spu_envelope.h port/include/platform.h
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
-$(BUILD)/tests/spu_core_ds.elf: $(BUILD)/tests/spu_core_ds_main.o $(BUILD)/tests/spu_core_ds_test.o $(BUILD)/tests/spu_ds_noise_test.o $(BUILD)/tests/spu_ds_noise.o $(BUILD)/tests/spu_ds_integration.o $(BUILD)/tests/spu_ds_core.o $(BUILD)/tests/spu_ds_source.o $(BUILD)/tests/spu_ds_envelope.o $(BUILD)/tests/spu_ds_voice.o
+$(BUILD)/tests/spu_ds_reverb_test.o: tests/spu/reverb_test.c tests/spu/reverb_cases.h tests/spu/reverb_reference.h tests/spu/reverb_presets.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Dmain=spu_reverb_tests -c $< -o $@
+$(BUILD)/tests/spu_ds_reverb.o: port/psx/spu_reverb.c port/include/psx_spu_reverb.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/spu_core_ds.elf: $(BUILD)/tests/spu_ds_reverb_test.o $(BUILD)/tests/spu_core_ds_main.o $(BUILD)/tests/spu_core_ds_test.o $(BUILD)/tests/spu_ds_noise_test.o $(BUILD)/tests/spu_ds_noise.o $(BUILD)/tests/spu_ds_reverb.o $(BUILD)/tests/spu_ds_integration.o $(BUILD)/tests/spu_ds_core.o $(BUILD)/tests/spu_ds_source.o $(BUILD)/tests/spu_ds_envelope.o $(BUILD)/tests/spu_ds_voice.o
 	arm-none-eabi-gcc $(DS_ARCH) -specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
 $(BUILD)/tests/spu_core_ds.nds: $(BUILD)/tests/spu_core_ds.elf
 	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "SPU integration;ARM9;No disc data"

@@ -1,0 +1,12 @@
+/* Synthetic reverb hashes from pinned Beetle PSX, not new hardware captures.
+ * Regenerate with tools/spu_reverb_reference.py; see audio-validation.md. */
+static const uint32_t reverb_reference_hashes[32] = {
+0x4e059dc5u, 0xdb0ff6aeu, 0x472e11c3u, 0x41a4434eu,
+0x75314fc5u, 0xcf17c589u, 0x4108d0a9u, 0x64446019u,
+0x5a801dc5u, 0x15fce60eu, 0x1e83dc76u, 0xde34f0a5u,
+0xb5abdb19u, 0xa020c27du, 0x73bb212fu, 0x90afd244u,
+0xa00eed3au, 0xb8c17ed8u, 0x5b9f6884u, 0xbe1d1565u,
+0x903255eau, 0x80b738b9u, 0xaf92257bu, 0xd4e12c45u,
+0x9e7be8f0u, 0x5e86b558u, 0x3d171832u, 0xedb11f8eu,
+0x76611624u, 0xa768c969u, 0xefff219au, 0x9972a42du,
+};

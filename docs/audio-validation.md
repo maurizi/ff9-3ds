@@ -1,8 +1,8 @@
 # Audio fidelity validation
 
-Host `--audio NEW.wav` now renders dry game audio through AKAO and the shared
+Host `--audio NEW.wav` now renders game audio with SPU reverb through AKAO and the shared
 sample-clocked sound core. Default host runs and DS gameplay remain silent;
-DS stream output, reverb, movie/CD inputs and full IRQ/DMA fidelity are unfinished.
+DS stream output, movie/CD inputs and full IRQ/DMA fidelity are unfinished.
 The component/reference tests and initial game captures below do not establish
 complete music/SFX fidelity.
 
@@ -277,10 +277,95 @@ Validation on 2026-10-16:
 - Reference and DS emulators were closed; melonDS's previous configuration was
   restored. No game-derived audio or test ROM is committed.
 
+## Reverb DSP and library configuration
+
+The shared core now routes each voice's EON send through the SPU reverb RAM
+network and 39-tap down/up-sampling histories. It alternates right/left channel
+steps at 44.1 kHz, advances the RAM cursor after the right step, retains FIR
+history on ESA writes, clips the send before processing, and applies signed
+EVOL before dry+wet saturation and main gain. Master enable suppresses reverb
+RAM writes while reads and tail output continue. Voice mute also mutes the send;
+it does not discard a retained wet tail. Capture writes precede reverb RAM reads.
+Final main-gain saturation handles the -32768 times -32768 corner.
+
+`tools/spu_reverb_reference.py` extracts the unmodified reverb functions from
+[pinned Beetle PSX](https://github.com/libretro/beetle-psx-libretro/blob/9568c66b7386fa928b433f29e3daf7b8ee0f0031/mednafen/psx/spu.c),
+SHA256 `f081394befd298e1d3e70a3982009ac9555853c4dfa92162fb7bbed7d3370a99`,
+into a private local harness. No reference implementation or game assets are
+committed. The 32 synthetic scenarios cover 1,048,576 stereo ticks, RAM and
+output hashes, ten public presets, random and extreme coefficients, aliased
+addresses, base changes, wraparound, disabled writes and retained tails.
+The port implementation was written separately from the reference source.
+
+The schedule follows Beetle's alternating-channel implementation; the earlier
+pinned DuckStation version processes both channels together on alternate ticks.
+The [MiSTer SPU](https://github.com/MiSTer-devel/PSX_MiSTer/blob/bc1df2492494ef1fc533ba6dba4e7c4742ee9689/rtl/spu.vhd)
+also alternates channels and implements the same address adder: on an 18-bit
+carry it adds ESA before masking. This can differ from generic modulo by the
+work-area size for unusual offsets. MiSTer's resampler is not used as an exact
+FIR oracle. These comparisons do not newly prove silicon behavior or absolute
+initial channel phase.
+
+The PsyQ replacements now set the ten documented presets and ESA, reset EVOL
+on mode changes, implement selective depth and echo delay/feedback updates,
+and honor the clear-work-area flag. Numeric settings come from the
+[public PSX-SPX examples](https://psx-spx.consoledev.net/soundprocessingunitspu/#spu-reverb-examples).
+A disposable MIPS shim called the original SDK functions inside Redux and copied
+only SPU register readbacks to scratch RAM. `tools/spu_sdk_reverb_reference.py`
+reproduces 58 sequential cases; the committed fixture contains synthetic inputs
+and hashes. All ten modes, invalid modes, write-enable preservation, depth masks,
+partial echo updates and out-of-range 32-bit arithmetic match the original
+library's register results. SDK mode 0 uses all-zero coefficients; the public
+example uses harmless unit offsets instead. The original assembly additionally
+shows that clearing mode 0 covers 128 bytes, although ESA reserves only 16.
+
+The internal clear follows the port's synchronous transfer policy and preserves
+the caller's transfer address/callback. It does not implement original DMA/event
+timing or allocation-conflict checks; the existing SPU allocator is still a stub.
+
+Reproduce component and SDK checks:
+
+```sh
+python3 tools/spu_reverb_reference.py build/validation/beetle_spu_pinned.c > build/validation/reverb_reference.h
+cmp tests/spu/reverb_reference.h build/validation/reverb_reference.h
+make test-spu
+tools/docker.sh make test-spu-sdk-reverb test-spu-transfer
+tools/docker.sh make -j16 ds pc spu-core-ds
+# In a warmed, paused Redux with title_screen available (overwrites guest state):
+python3 tools/spu_sdk_reverb_reference.py > build/validation/sdk_reverb_reference.h
+cmp tests/spu/sdk_reverb_reference.h build/validation/sdk_reverb_reference.h
+```
+
+Validation on 2026-10-16: nine host ASan/UBSan suites and the separate 32-bit SDK
+and transfer suites pass. The ARM9 integration ROM runs the same reverb fixtures,
+noise suite and mixer state checks (`spu_reverb_arm9.nds`, matching `.elf` and
+inspected `.png` under `build/validation`). This remains emulated ARM9 arithmetic,
+not audible DS playback. Both game targets build. Reference/DS emulators were closed and the prior
+melonDS configuration restored. The opening-to-Baku route
+completes 35,000 host frames with nonzero reverb PCM; Ark/Garland/Kuja entry/idle
+scenarios each complete 6,000 frames. Those runs do not establish complete battle
+or scene-transition sound fidelity.
+
+A fixed-window comparison with the earlier Redux title recording gives spectral
+cosine 0.94572 for dry output and 0.91417 with reverb
+(`spu_reverb_title_comparison.json`). Both use the same 100 windows, 2048-sample
+Hann STFT with hop 512, log1p magnitude and mean-centered frequency vectors.
+This differs from the previous comparison's preprocessing; its earlier score is
+not directly comparable. The wet score is lower and requires investigation;
+there is no fidelity improvement claim from this coarse, unsynchronized metric.
+Redux's saved configuration exposes no separate reverb-disable setting. A fresh
+original-state probe and a host debugger check agree on all 32 title coefficients,
+ESA=f204, EVOL=2800/2800 and control=c081
+(`reverb_psx_title_registers.json`, `reverb_host_registers.log`). This rules out
+a preset/depth mismatch, not a DSP, voice-timing or capture-alignment difference.
+A better next comparison is synchronized capture of individual dry/send/wet stages and
+register events against a second reference, rather than tuning the DSP to one
+spectral score. The shorter port clip is `spu_title_port_reverb.wav`.
+
 ## Remaining sound work
 
-Implement original reverb and its library configuration, complete IRQ/DMA/capture
-timing and streamed movie/CD inputs, connect DS PCM output, and compare music,
+Resolve the title-recording discrepancy, complete IRQ/DMA/capture timing and
+streamed movie/CD inputs, connect DS PCM output, and compare music,
 SFX and scene/bank changes against synchronized original PSX recordings. Improve
 bus/key timing and verify unresolved silicon edge cases. Exercise late-game
 actions and multi-voice effects directly through the scenario harness; original

@@ -58,6 +58,12 @@ int main(void) {
     assert(psx_spu_regs[6] == 0x7fff && psx_spu_regs[7] == 0x200);
     assert(psx_spu_read(0x200) == 0x7ffe && psx_spu_read(0x202) == 0x8000);
 
+    /* Saturate the signed -32768 * -32768 main-gain corner. */
+    psx_spu_write(0x182, 0x4000);
+    psx_spu_advance(96);
+    assert(last[1] == 32767);
+    psx_spu_write(0x182, 0x2000);
+
     /* Repeated KON is a retrigger, including simultaneous KOF. The current
      * output frame is generated before the event takes effect. */
     psx_spu_write(0x188, 1);
@@ -83,6 +89,27 @@ int main(void) {
     psx_spu_voice_register(24, 0, 0xffff);
     psx_spu_write(0x401, 0xffff);
     assert(psx_spu_read(0x401) == 0xffff);
+    /* Master reverb enable gates RAM writes, not reads or the wet tail.
+     * A constant work area with zero APF coefficients returns that constant;
+     * FIR coefficients sum to 16382, so filtered/held outputs differ by one.
+     * after FIR startup EVOL is applied before the signed main gains. */
+    psx_spu_reset();
+    for (unsigned i = 0x7ff80; i < sizeof ram; i += 2) {
+        ram[i] = 1000 & 255; ram[i + 1] = 1000 >> 8;
+    }
+    psx_spu_write(0x1a2, 0xfff0);
+    psx_spu_write(0x184, 0x4000);
+    psx_spu_write(0x186, 0x8000);
+    psx_spu_write(0x180, 0x2000);
+    psx_spu_write(0x182, 0x4000);
+    psx_spu_write(0x1aa, 0x8000); /* voice mute, reverb writes disabled */
+    psx_spu_advance(96 * 200);
+    assert(last[0] == 249 && last[1] == 1000);
+    for (unsigned i = 0x7ff80; i < sizeof ram; i += 2)
+        assert(ram[i] == (1000 & 255) && ram[i + 1] == (1000 >> 8));
+    psx_spu_write(0x184, 0);
+    psx_spu_advance(96);
+    assert(last[0] == 0 && last[1] == 999);
     puts("SPU integration: sample clock, keys, clipping, registers PASS");
     return 0;
 }

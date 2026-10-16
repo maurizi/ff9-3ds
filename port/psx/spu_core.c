@@ -1,7 +1,8 @@
-/* Register/timing integration for the shared SPU voice stage. Reverb, streamed
+/* Register/timing integration for the shared SPU voice stage. Streamed
  * CD input and IRQ delivery remain unfinished; see audio-validation.md. */
 #include "psx_spu.h"
 #include "psx_spu_voice.h"
+#include "psx_spu_reverb.h"
 #include "platform.h"
 #include <string.h>
 
@@ -10,6 +11,7 @@ extern unsigned char *psx_spu_ram;
 static PsxSpuVoice voices[PSX_SPU_VOICES];
 static PsxSpuVolume main_volume[2];
 static PsxSpuNoise noise;
+static PsxSpuReverb reverb;
 static uint32_t key_on, key_off, ended;
 static unsigned sample_fraction, capture_offset;
 static int rendering;
@@ -30,6 +32,7 @@ void psx_spu_reset(void) {
     memset(psx_spu_regs, 0, 0x400);
     key_on = key_off = ended = sample_fraction = capture_offset = 0;
     noise = (PsxSpuNoise){0, 1};
+    psx_spu_reverb_reset(&reverb);
     psx_spu_write(0x1aa, 0xc000); /* libspu initializes enabled/unmuted */
 }
 
@@ -61,6 +64,10 @@ void psx_spu_write(unsigned offset, uint16_t value) {
         uint32_t *pending = offset < 0x18c ? &key_on : &key_off;
         unsigned shift = (offset & 2) * 8;
         *pending = ((*pending & ~(0xffffu << shift)) | ((uint32_t)value << shift)) & 0xffffff;
+    } else if (offset == 0x1a2) {
+        psx_spu_reverb_base(&reverb, value);
+    } else if (offset >= 0x1c0 && offset < 0x200) {
+        reverb.registers[(offset - 0x1c0) / 2] = value;
     } else if (offset == 0x1aa) {
         if ((old & 0x8000) && !(value & 0x8000))
             for (unsigned i = 0; i < PSX_SPU_VOICES; ++i) psx_spu_adsr_force_off(&voices[i].adsr);
@@ -91,10 +98,9 @@ static void sample_frame(int16_t output[2]) {
                        flags(0x194), flags(0x190), flags(0x198), !!(control & 0x40), &mix);
     ended |= mix.ended;
     psx_spu_noise_tick(&noise, (control >> 8) & 63);
+    /* Capture writes precede the reverb RAM accesses, including when software
+     * programs an unusual ESA/offset that overlaps a capture buffer. */
     for (unsigned channel = 0; channel < 2; ++channel) {
-        int32_t dry = (control & 0x4000) ? mix.dry[channel] : 0;
-        output[channel] = (clamp16(dry) * main_volume[channel].level) >> 15;
-        psx_spu_volume_tick(&main_volume[channel]);
         /* PCM capture buffers: CD input is currently absent; voice capture is
          * post-ADSR and independent of global output mute. All addresses fit. */
         unsigned address = (2 + channel) * 0x400 + capture_offset;
@@ -103,6 +109,16 @@ static void sample_frame(int16_t output[2]) {
         psx_spu_ram[address + 1] = value >> 8;
         psx_spu_ram[channel * 0x400 + capture_offset] = 0;
         psx_spu_ram[channel * 0x400 + capture_offset + 1] = 0;
+    }
+    int16_t wet[2];
+    psx_spu_reverb_tick(&reverb, psx_spu_ram,
+        (control & 0x4000) ? clamp16(mix.reverb_send[0]) : 0,
+        (control & 0x4000) ? clamp16(mix.reverb_send[1]) : 0, !!(control & 0x80), wet);
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        int32_t dry = (control & 0x4000) ? mix.dry[channel] : 0;
+        int32_t mixed = dry + ((wet[channel] * (int16_t)psx_spu_regs[0xc2 + channel]) >> 15);
+        output[channel] = clamp16((clamp16(mixed) * main_volume[channel].level) >> 15);
+        psx_spu_volume_tick(&main_volume[channel]);
     }
     capture_offset = (capture_offset + 2) & 0x3ff;
     psx_spu_regs[0x1ae / 2] = (psx_spu_regs[0x1ae / 2] & ~0x800) | (capture_offset & 0x200 ? 0x800 : 0);

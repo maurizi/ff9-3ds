@@ -4,11 +4,12 @@
  * - Voice/global writes reach spu_core.c through the PsyQ API or AKAO boundary overrides.
  *   psx_spu_regs[] remains a shadow for direct hardware readbacks.
  * - Transfers complete immediately; the transfer callback runs before SpuWrite returns.
- * Host --audio enables sample-clocked dry PCM rendering. DS stream output and
- * reverb/IRQ/DMA fidelity remain unfinished; see docs/audio-validation.md.
+ * Host --audio enables sample-clocked stereo PCM rendering. DS stream output and
+ * IRQ/DMA fidelity remain unfinished; see docs/audio-validation.md.
  */
 #include "psyq_port.h"
 #include "psx_spu.h"
+#include "psx_spu_presets.h"
 
 #define SPU_RAM 0x80000
 
@@ -17,7 +18,6 @@ u8 *psx_spu_ram; /* allocated by psx_mem_init (NULL on a 4 MB DS: transfers are 
 static u32 transfer_addr;
 static void (*transfer_cb)(void);
 static void (*irq_cb)(void);
-static int reverb_on;
 static long reverb_type;
 static SpuReverbAttr reverb_attr;
 
@@ -26,6 +26,9 @@ void SpuInit(void) {
     if (psx_spu_ram) {
         __builtin_memset(psx_spu_ram, 0, SPU_RAM);
     }
+    reverb_type = 0;
+    __builtin_memset(&reverb_attr, 0, sizeof reverb_attr);
+    psx_spu_write(0x1a2, 0xfffe);
     transfer_addr = 0;
     transfer_cb = NULL;
 }
@@ -94,22 +97,81 @@ s32 func_8005703C(s32 addr, s32 size) {
 }
 
 void SpuSetReverb(int on_off) {
-    reverb_on = on_off;
     psx_spu_write(0x1aa, (psx_spu_read(0x1aa) & ~0x80) | (on_off ? 0x80 : 0));
 }
 
+/* Mode changes mute EVOL and replace all DSP registers; depth-only and echo
+ * parameter updates must preserve the other registers and the RAM cursor. */
+static void reverb_registers(const u16 regs[32], u32 selected) {
+    unsigned i;
+    for (i = 0; i < 32; ++i)
+        if (selected & (1u << i)) psx_spu_write(0x1c0 + i * 2, regs[i]);
+}
+
 long SpuSetReverbModeType(long mode) {
-    reverb_type = mode;
-    return 0;
+    SpuReverbAttr attr;
+    __builtin_memset(&attr, 0, sizeof attr);
+    attr.mask = 1;
+    attr.mode = mode;
+    return SpuSetReverbModeParam(&attr);
 }
 
 long SpuSetReverbModeParam(SpuReverbAttr *attr) {
-    reverb_attr = *attr;
+    u32 mask = attr->mask ? attr->mask : 0x1f;
+    int change = !!(mask & 1);
+    long mode = change ? attr->mode & ~0x100L : reverb_type;
+    u16 regs[32];
+    u32 selected = change ? 0xffffffffu : 0;
+    unsigned control = psx_spu_read(0x1aa);
+    if ((unsigned long)mode >= 10) return -1;
+    __builtin_memcpy(regs, psx_spu_presets[mode].registers, sizeof regs);
+    if (change) {
+        reverb_type = mode;
+        reverb_attr.delay = mode == 7 || mode == 8 ? 127 : 0;
+        reverb_attr.feedback = mode == 7 ? 127 : 0;
+    }
+    if ((mode == 7 || mode == 8) && (mask & 8)) {
+        /* MIPS shifts wrap at 32 bits before signed division by 127. */
+        s32 full = (s32)((u32)attr->delay << 13) / 127;
+        s32 half = (s32)((u32)attr->delay << 12) / 127;
+        regs[10] = full - regs[0];
+        regs[11] = half - regs[1];
+        regs[12] = regs[13] + half;
+        regs[16] = regs[17] + half;
+        regs[26] = regs[28] + half;
+        regs[27] = regs[29] + half;
+        selected |= 0x0c011c00u;
+        reverb_attr.delay = attr->delay;
+    }
+    if ((mode == 7 || mode == 8) && (mask & 16)) {
+        regs[7] = (s32)((u32)attr->feedback * 33024u) / 127;
+        selected |= 0x80;
+        reverb_attr.feedback = attr->feedback;
+    }
+    if (change) {
+        psx_spu_write(0x1aa, control & ~0x80);
+        SpuSetReverbModeDepth(0, 0);
+    } else {
+        SpuSetReverbDepth(attr);
+    }
+    reverb_registers(regs, selected);
+    if (change) {
+        if (attr->mode & 0x100) SpuClearReverbWorkArea(mode);
+        psx_spu_write(0x1a2, (SPU_RAM - psx_spu_presets[mode].bytes) / 8);
+        psx_spu_write(0x1aa, control);
+    }
     return 0;
 }
 
 void SpuSetReverbDepth(SpuReverbAttr *attr) {
-    reverb_attr.depth = attr->depth;
+    if (!attr->mask || (attr->mask & 2)) {
+        reverb_attr.depth.left = attr->depth.left;
+        psx_spu_write(0x184, attr->depth.left);
+    }
+    if (!attr->mask || (attr->mask & 4)) {
+        reverb_attr.depth.right = attr->depth.right;
+        psx_spu_write(0x186, attr->depth.right);
+    }
 }
 
 void SpuSetReverbModeDepth(short l, short r) {
@@ -120,6 +182,12 @@ void SpuSetReverbModeDepth(short l, short r) {
 }
 
 long SpuClearReverbWorkArea(long mode) {
+    unsigned bytes;
+    if ((unsigned long)mode >= 10) return -1;
+    bytes = mode ? psx_spu_presets[mode].bytes : 128;
+    /* Synchronous transfer policy, like SpuWrite. Preserve the caller's DMA
+     * address/callback; this internal clear must not invoke its callback. */
+    if (psx_spu_ram) __builtin_memset(psx_spu_ram + SPU_RAM - bytes, 0, bytes);
     return 0;
 }
 
