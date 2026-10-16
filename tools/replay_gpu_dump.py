@@ -6,7 +6,8 @@ instance with GDB enabled. This destroys its running game's RAM/GPU state.
 The dump and all reports must stay under ignored build/: they contain game data.
 Frame 0 is the preamble; frame N is immediately after N recorded VSyncs.
 Non-interlaced VRAM transfers, including partial read batches, are supported.
-GPU information-query reads and reads past a transfer end are rejected.
+GPU drawing-register queries use their latched values without a VRAM-ready wait.
+The reference is a v2 GPU with 1 MiB VRAM; interlacing is rejected.
 GP0 packets may divide commands, including image uploads, at arbitrary words.
 Specification: https://github.com/ps1dev/standards/blob/main/GPUDUMP.md
 """
@@ -51,6 +52,7 @@ def normalize(data,frame):
     if data[:16]!=MAGIC:raise ValueError('unsupported GPUDUMP magic')
     records=[];writes=[];pending=[];position=16;begun=False;vsyncs=0
     display_origin=0;display_mode=0;cancelled=0;remaining_reads=0;read_words=0;read_commands=0
+    query_latched=False;query_words=0
     while position<len(data):
         if position+4>len(data):raise ValueError('truncated packet header')
         h,=struct.unpack_from('<I',data,position);position+=4
@@ -67,7 +69,7 @@ def normalize(data,frame):
                 command=pending[offset:offset+size]
                 if 0xc0<=command[0]>>24<0xe0:
                     width=((command[2]-1)&1023)+1;height=(((command[2]>>16)-1)&511)+1
-                    remaining_reads=(width*height+1)//2;read_commands+=1
+                    remaining_reads=(width*height+1)//2;read_commands+=1;query_latched=False
                 records.append((0,command));offset+=size
             pending=pending[offset:]
         elif kind==1:
@@ -75,7 +77,10 @@ def normalize(data,frame):
                 cmd=word>>24
                 if cmd in (0,1):
                     cancelled+=len(pending);pending=[];remaining_reads=0
-                if 0x10<=cmd<0x20:raise ValueError('GPU information queries not supported')
+                if cmd==0:query_latched=False
+                if 0x10<=cmd<0x20:
+                    if remaining_reads:raise ValueError('GPU query during active VRAM read not supported')
+                    query_latched=True
                 if cmd==0:display_origin=display_mode=0
                 if cmd==5:display_origin=word&0x7ffff
                 if cmd==8:
@@ -88,19 +93,24 @@ def normalize(data,frame):
         elif kind in (3,4):
             # Both packets consume GPUREAD words; a normal dump player can
             # discard type 3's result. Compare those words here as well.
-            if n!=1 or not 0<=payload[0]<=remaining_reads:
+            if n!=1 or not 0<=payload[0]<=(262144 if query_latched else remaining_reads):
                 raise ValueError('read count exceeds active VRAM transfer')
-            remaining_reads-=payload[0];read_words+=payload[0]
-            records.append((kind,payload));writes.append((2,payload[0]))
+            if query_latched:query_words+=payload[0]
+            else:remaining_reads-=payload[0]
+            read_words+=payload[0]
+            records.append((kind,payload));writes.append((3 if query_latched else 2,payload[0]))
         elif kind==5:
             if begun or n or pending:raise ValueError('invalid trace begin')
             begun=True
+        elif kind==6:
+            if n!=1 or payload[0]!=2:raise ValueError('requires a v2 GPU with 1 MiB VRAM')
         # Metadata and unknown extension types are skipped by packet size.
         if begun and vsyncs==frame:
             if pending:raise ValueError('selected VSync splits a GP0 command; choose a later frame')
             if remaining_reads:raise ValueError('selected VSync has an unfinished VRAM read; choose a later frame')
             return records,writes,dict(frame=frame,display_origin=[display_origin&1023,display_origin>>10],
-                display_mode=display_mode,cancelled_words=cancelled,read_words=read_words,read_commands=read_commands)
+                display_mode=display_mode,cancelled_words=cancelled,read_words=read_words,
+                read_commands=read_commands,query_words=query_words)
     raise ValueError('requested frame is beyond captured trace')
 
 def main():

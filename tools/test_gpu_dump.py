@@ -46,6 +46,13 @@ class DumpTests(unittest.TestCase):
         self.assertEqual(writes,[(2,0)])
         self.assertEqual(meta['read_words'],0)
 
+    def test_query_latch_reads_are_not_vram_transfers(self):
+        data=(MAGIC+packet(5)+packet(1,[0x10000003])+packet(3,[2])+packet(2))
+        _,writes,meta=normalize(data,1)
+        self.assertEqual(writes,[(1,0x10000003),(3,2)])
+        self.assertEqual(meta['query_words'],2)
+        self.assertEqual(meta['read_commands'],0)
+
     def test_reject_incomplete_and_unsupported_streams(self):
         for data in [b'bad magic',MAGIC+b'\0',MAGIC+words([10]),
                      MAGIC+packet(5)+packet(0,[0x28000000])+packet(2),
@@ -53,7 +60,7 @@ class DumpTests(unittest.TestCase):
                      MAGIC+packet(5)+packet(3,[1,2]),
                      MAGIC+packet(5)+packet(3,[0x28000000]),
                      MAGIC+packet(5)+packet(0,[0xc0000000,0,0x10002])+packet(4,[2]),
-                     MAGIC+packet(5)+packet(1,[0x10000007]),
+                     MAGIC+packet(6,[3]),
                      MAGIC+packet(1,[0x08000020])+packet(5),
                      MAGIC+packet(5)+packet(0,[0xc0000000,0,0x10001])]:
             with self.subTest(data=data),self.assertRaises(ValueError):normalize(data,1)

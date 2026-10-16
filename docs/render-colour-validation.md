@@ -106,7 +106,7 @@ The parser follows the [GPUDUMP format](https://github.com/ps1dev/standards/blob
 It joins GP0 commands across packet boundaries, including uploads; GP1 reset
 cancels incomplete commands. Read/discard packets consume GPUREAD words.
 Unknown metadata packets are skipped by length. Truncated streams, incomplete
-selected frames, interlacing and GPU information queries are rejected. This probe does not model
+selected frames, interlacing and unsupported GPU revisions are rejected. This probe does not model
 GPU timing, scanout, interlaced drawing, or texture-cache behavior on hardware.
 It also does not exercise the game's port-specific packet generation.
 
@@ -233,7 +233,7 @@ read-and-discard, not ignored GPU input; the earlier parser interpreted it
 incorrectly. Both types are compared with the port's `StoreImage` output,
 including words that a normal dump player would discard. Split read batches and
 GP1 reset cancellation are supported. GP1 writes bypass the GP0 FIFO wait so
-reset can cancel an incomplete transfer. Information-query reads, reads past
+reset can cancel an incomplete transfer. Reads past
 the end of a VRAM transfer, interlacing, and a selected checkpoint with an
 unfinished read remain explicit errors. Zero-length read batches are no-ops.
 These semantics follow the [GPUDUMP specification](https://github.com/ps1dev/standards/blob/main/GPUDUMP.md).
@@ -271,3 +271,91 @@ and adjacent caller words remain untouched. Parser tests cover partial reads,
 reset cancellation, zero counts and malformed/unsupported operations. Both
 DS and PC targets build. This closes the recorded naming readback and the odd
 padding defect; it does not establish complete image-transfer, GPU or game parity.
+
+## Battle capture, register queries and transfer masks (2026-10-16)
+
+`tools/capture_psx_gpu.py` records GPUDUMP and an emulated-time video from an
+already paused Redux instance. Optional state restore warms a cold BIOS first.
+Before/after screenshots and status metadata retain the capture's provenance;
+all output must remain in ignored `build/`. For example, with disc 3 mounted:
+
+```sh
+python3 tools/capture_psx_gpu.py --state ds_ifrit_full_model_ready --seconds 18 \
+  --out build/validation/ifrit_gpu_reference
+```
+
+The saved summon state produces an 18-second recording and 1079 recorded
+VSyncs. Its contact sheet was reviewed: initial flash, Ifrit's model, raised
+arm, fire effect and return to battle are present. This is motion/context
+evidence; the Redux software renderer has the colour limitations described
+above. Numerical drawing comparisons use DuckStation software rendering.
+
+Battle calls GPU drawing-register queries every VBlank. Replay now models
+the GPUREAD latch, using production `GetDrawEnv2` to snapshot GP0 state. Queries
+2/3/4/5 return texture window, clip corners and offsets; changing GP0 registers
+alone does not update a latched response. Immediate query reads are batched
+with register writes and do not wait for the VRAM-read ready bit. The
+11-word `gpu_query_drawing_latches_verified` fixture matches, including repeat
+reads, signed offsets, aliases and retained values.
+
+The reference has additional query limitations: DuckStation's GPU frontend
+masks indices with 7 and leaves indices 7/8 effectively unchanged, rather than
+the documented v2 version/zero results. `gpu_query_latches_first` retains four
+exploratory mismatches for these cases; it is not passing calibration of those
+indices. See the [GPU query specification](https://psx-spx.consoledev.net/graphicsprocessingunitgpu/#gp110h-read-gpu-internal-register)
+and [reference frontend](https://github.com/stenzek/duckstation/blob/master/src/core/gpu.cpp).
+The captured battle queries only indices 2–5. Other GPU revisions and 2 MiB
+VRAM metadata are explicitly rejected.
+
+| Ifrit recorded VSync | Final VRAM differences | Returned words compared |
+|---|---:|---:|
+| 240, model entrance | 0 | 960 drawing-register words |
+| 840, fire effect | 0 | 3360 drawing-register + 15360 image words |
+
+Both checkpoints compare the full 524288-pixel VRAM, including mask bits.
+Reports are `ifrit_replay_model` and `ifrit_replay_fire`. The latter includes
+120 image reads and still matches after the transfer changes below
+(`ifrit_replay_fire_masks_fixed`). These are checkpoints reached through the
+recorded stream, not comparisons of every intermediate frame or native game
+packet generation.
+
+### Transfer and packet fixes
+
+`LoadImage` and VRAM copies previously ignored E6 force-mask/protect-mask bits.
+They now preserve protected destinations, force bit 15 when requested, and
+consume every incoming upload pixel even when its destination is protected.
+Masked writes materialize deferred destination pixels before testing their
+bits. Identity copies still skip work when force-mask is disabled; with
+force-mask enabled they update unprotected pixels. The low-level copy command
+also decodes zero width/height as 1024/512, while an empty high-level RECT
+keeps its existing no-op behavior (`gpu_copy_zero_dimensions_verified`).
+
+The packet walker also ran all fills/copies before decoding a packet's drawing
+commands. It now preserves command order, including mask changes preceding a
+copy, and a primitive followed by a copy and clear. Hardware fill callbacks
+still execute. Tests verify the copied primitive survives and the original
+source is cleared, rather than drawing after the clear.
+
+Transfer references must be interpreted per path. The four-pixel mask fixture
+has 20 differences before the fix. Afterward, four remain against DuckStation
+software because its scalar upload tail advances the source pointer only for
+unprotected destinations. Its vector upload path and the port consume every
+source pixel; the 32-pixel fixture matches all flags (`gpu_transfer_masks_wide_fixed`).
+DuckStation Vulkan agrees with the port's four-pixel uploads, but differs on
+two protected copy destinations when force-mask and protect-mask are both set
+(`gpu_transfer_masks_vulkan_fixed`). The software copy agrees with the port.
+The port follows mask protection rather than reproducing either reference bug.
+`test-gpu` retains explicit upload/copy goldens and checks destination
+materialization, source consumption and identity copies. Reference scalar
+behavior is visible in [WriteVRAMImpl](https://github.com/stenzek/duckstation/blob/master/src/core/gpu_sw_rasterizer.inl).
+
+`make gpu-ds` runs the production transfer tests on ARM9 without game data.
+The archived `gpu_transfers_final_arm9` ROM/ELF checks masks, odd padding,
+wrapping, maximum-size zero dimensions and packet order.
+`gpu_transfers_final_arm9_window.png` reports PASS; an earlier all-black root
+capture was caused by the private X server's screen saver, not a failed test.
+The host candle route also reaches frame 2800/name entry
+normally (`candle_gpu_masks_host.log`), with its light reveal and naming
+screens visually reviewed. DS/PC builds and GPU/GX regression suites pass.
+Overlapping-copy buffering, further effects, native animation fidelity,
+audio and whole-game coverage remain open.

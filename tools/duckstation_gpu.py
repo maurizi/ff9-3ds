@@ -74,12 +74,12 @@ class DuckStation:
             self.command('G'+registers)
         finally:self.socket.close()
 
-    def execute(self,code,start_address,end_address):
+    def execute(self,code,start_address,end_address,output_address=0):
         """Run probe code with a0/a1 delimiting a buffer. Overwrites test RAM."""
         self.destructive=True
         self.write(0x801fee00,words(code+[0]))
         registers=[self.registers[i:i+8] for i in range(0,len(self.registers),8)]
-        for index,value in [(4,start_address),(5,end_address),(32,0),(37,0x801fee00)]:
+        for index,value in [(4,start_address),(5,end_address),(6,output_address),(32,0),(37,0x801fee00)]:
             registers[index]=struct.pack('<I',value).hex()
         if self.command('G'+''.join(registers))!='OK':raise RuntimeError('GDB register write failed')
         end=0x801fee00+len(code)*4
@@ -91,7 +91,7 @@ class DuckStation:
         finally:self.command(f'z0,{end:x},4')
 
     def replay_writes(self,writes):
-        """Replay (port, value); port 2 consumes value GPUREAD words.
+        """Replay operations: ports 0/1 write, 2 reads VRAM, 3 reads a latch.
 
         Destructive dedicated-instance operation. Return all read bytes,
         including words a normal dump player would discard.
@@ -99,23 +99,34 @@ class DuckStation:
         reads=[];start=0
         for i,(port,value) in enumerate(writes):
             if port==2:
-                self.write_registers(writes[start:i]);start=i+1
+                reads.append(self.write_registers(writes[start:i]));start=i+1
                 reads.append(self.read_gpu_words(value))
-        self.write_registers(writes[start:])
+        reads.append(self.write_registers(writes[start:]))
         return b''.join(reads)
 
     def write_registers(self,writes):
+        # Pack immediate query reads into the same CPU run as their writes.
+        # Battle performs four queries per VBlank; one GDB round trip per
+        # query would dominate reference replay time.
+        writes=[(port,value) for port,value in writes for _ in range(value if port==3 else 1)]
+        reads=[]
         for start in range(0,len(writes),32768):
-            payload=b''.join(struct.pack('<II',0x1f801810+port*4,value)
-                             for port,value in writes[start:start+32768])
+            chunk=writes[start:start+32768];count=sum(port==3 for port,_ in chunk)
+            payload=b''.join(struct.pack('<II',0 if port==3 else 0x1f801810+port*4,value)
+                             for port,value in chunk)
             self.write(0x80010000,payload)
             # GP0 obeys FIFO backpressure. GP1 must bypass that wait so reset
             # can cancel a partial command or an incomplete read transfer.
             self.execute([0x3c0a1f80,0x354a1814,0x3c0c1000,
-                          0x8c880000,0x8c890004,0x310b0004,0x15600006,0,
+                          0x8c880000,0x8c890004,0x1100000c,0,
+                          0x310b0004,0x15600006,0,
                           0x8d4b0000,0,0x016c5824,0x1160fffc,0,
-                          0xad090000,0x24840008,0x1485fff3,0],
-                         0x80010000,0x80010000+len(payload))
+                          0xad090000,0x10000004,0,
+                          0x8d4bfffc,0x24c60004,0xaccbfffc,
+                          0x24840008,0x1485ffec,0],
+                         0x80010000,0x80010000+len(payload),0x80090000)
+            if count:reads.append(self.read(0x80090000,count*4))
+        return b''.join(reads)
 
     def read_gpu_words(self,count):
         if count==0:return b''
