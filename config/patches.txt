@@ -8,6 +8,8 @@
 src/main/main.c | func_8001D268(); | func_8001D268(); port_scenario_bootstrap(); | 1
 src/main/main.c | func_80012900(1); | port_scenario_validate_return(); func_80012900(1); | 1
 src/main/main.c | rand_init(GetRCnt(2)); | rand_init(port_scenario_seed(GetRCnt(2))); | 1
+# Test-only field loader observations; ordinary play returns immediately from the hooks.
+src/ovl_0a/ovl_0a.c | fld_load(arg0); | port_scenario_field_entering(arg0); fld_load(arg0); port_scenario_field_ready(arg0); | 1
 # Blocking loader polls must service the virtual drive between sector events.
 src/main/main.c | return g_cdLoad.unk0; | psx_cd_pump(); return g_cdLoad.unk0; | 1
 src/main/main.c | while (func_80021FB4() > 0) { | while (func_80021FB4() > 0) { psx_cd_pump(); | 2

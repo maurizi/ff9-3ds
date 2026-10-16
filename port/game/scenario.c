@@ -121,6 +121,23 @@ static void prepare_return_field(GameData *d) {
     }
     scenario.return_field_ready=1;
 }
+/* Scenario diagnostics only. Validate the current archive's directory before
+ * a synthetic story state can send the loader to an absent resource. */
+void port_scenario_field_entering(int field) {
+    if(!scenario.enabled || !scenario.consumed) return;
+    typedef struct {u16 field,area;u32 sector;} FieldEntry;
+    _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
+    FileDirEntry *dirs=(FileDirEntry *)g_gameState->unk14;
+    const FieldEntry *entries=(const FieldEntry *)(D_80067944+0x14c700+(dirs[4].unk8<<11));
+    port_log("scenario field entering: %d\n",field);
+    for(int i=0;i<dirs[4].unk4;i++) if(entries[i].field==field) return;
+    port_fatal("scenario: unavailable field %d in current archive (initial fixture disc %d, field %d); supply appropriate story/event state",
+               field,scenario.disc,scenario.field);
+}
+void port_scenario_field_ready(int field) {
+    if(scenario.enabled && scenario.consumed)
+        port_log("scenario field ready: %d\n",field);
+}
 /* Battle-only fixtures may omit a field unavailable on their disc, but an
  * actual return requires valid saved ranges instead of an unbounded CD read. */
 void port_scenario_validate_return(void) {

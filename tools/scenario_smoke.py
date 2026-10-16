@@ -4,9 +4,12 @@
 Run inside the build container. Nonzero game exits (including missing routines)
 and timeouts are failures, never hidden by a debugger's successful exit status.
 This checks execution only; native DS video/PSX comparisons remain necessary.
+--require-field-loaded additionally checks that the requested field's loader
+returned. A frame limit by itself can be reached during loading or polling.
 """
 import argparse
 import json
+import re
 import signal
 from pathlib import Path
 import subprocess
@@ -22,6 +25,8 @@ def main():
     p.add_argument('--timeout', type=float, default=60)
     p.add_argument('--out', type=Path, default=Path('build/validation/scenarios'))
     p.add_argument('--press', action='append', default=[])
+    p.add_argument('--require-field-loaded', action='store_true',
+                   help='also require the requested field to finish fld_load (field fixtures only)')
     args = p.parse_args()
     if args.frames <= 0 or args.timeout <= 0:
         p.error('frames and timeout must be positive')
@@ -44,13 +49,27 @@ def main():
             except subprocess.TimeoutExpired:
                 code, reason = None, 'timeout'
         text = log.read_text(errors='replace')
-        passed = code == 0 and f'frame limit {args.frames} reached' in text
+        frame_limit_reached = code == 0 and f'frame limit {args.frames} reached' in text
+        requested = re.search(r'^scenario configured: disc \d+, field (\d+)$', text, re.M)
+        requested_field = int(requested[1]) if requested else None
+        attempts = [int(n) for n in re.findall(r'^scenario field entering: (\d+)$', text, re.M)]
+        loaded = [int(n) for n in re.findall(r'^scenario field ready: (\d+)$', text, re.M)]
+        requested_loaded = requested_field in loaded if requested_field is not None else None
+        passed = frame_limit_reached and (not args.require_field_loaded or requested_loaded is True)
+        if frame_limit_reached and not passed:
+            reason = 'requested field did not finish loading'
         row = {'scenario': str(scenario), 'data': str(args.data) if args.data else None, 'pass': passed, 'returncode': code,
                'reason': reason, 'seconds': round(time.monotonic()-started, 3), 'log': str(log),
-               'fatal': next((line for line in text.splitlines() if 'FATAL:' in line), None)}
+               'fatal': next((line for line in text.splitlines() if 'FATAL:' in line), None),
+               'frame_limit_reached': frame_limit_reached, 'requested_field': requested_field,
+               'field_attempts': attempts, 'loaded_fields': loaded,
+               'requested_field_loaded': requested_loaded}
         results.append(row)
+        # Retain completed cases if the sweep is interrupted later.
+        pending = args.out / 'report.json.tmp'
+        pending.write_text(json.dumps(results, indent=2) + '\n')
+        pending.replace(args.out / 'report.json')
         print(f"{'PASS' if passed else 'FAIL'} {scenario}: {row['fatal'] or reason}", flush=True)
-    (args.out / 'report.json').write_text(json.dumps(results, indent=2) + '\n')
     return 0 if all(row['pass'] for row in results) else 1
 
 

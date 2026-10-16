@@ -121,6 +121,54 @@ Both emulators were closed before switching ROMs. These native checks prove
 execution beyond the prior faults, not original PSX presentation or canonical
 story progression. The normal DS/PC build passes after both patches.
 
+### Field-loader completion and unavailable destinations
+
+Scenario runs now log `scenario field entering: ID` before `fld_load` and
+`scenario field ready: ID` after it returns. The entering hook checks the
+current archive's field directory, so an unavailable synthetic destination
+stops with its field ID and initial fixture context before the decoder reads
+an absent resource. Both hooks return immediately when no scenario is active.
+This diagnosis does not supply missing story variables or make the bad routes
+pass.
+
+`scenario_smoke.py --require-field-loaded` additionally requires the configured
+field to appear in the completed-loader records. Each report separates
+`frame_limit_reached`, `requested_field_loaded`, `field_attempts` and
+`loaded_fields`; loaded fields preserve transition order. Generic battle probes
+retain their previous frame-limit criterion unless the new option is selected.
+Reports are atomically refreshed after each completed case, retaining progress
+if a later case times out or the sweep is interrupted.
+
+```sh
+tools/docker.sh python3 tools/scenario_smoke.py tests/scenarios/candle.cfg \
+  --data build/validation/kernel_data --frames 2000 --require-field-loaded \
+  --out build/validation/NEW_field_loader_check
+```
+
+The full `field_coverage_loaded` sweep finished all 1,131 disc/field entries
+with the new requirement: all requested field loaders returned, and 1,129
+entries also reached 2,000 frames without a fatal. The two unavailable-target
+routes still fail, now with explicit diagnostics and exit 2 instead of signals.
+Its per-disc and combined reports stay under `build/validation`.
+
+Negative coverage matters: a 10-frame candle run exits zero and reaches its
+frame limit, but fails the new requirement because no field finished loading
+(`field_loader_too_short/report.json`). The four opening/NULL-regression
+fixtures pass the 2,000-frame check (`field_loader_positive`), and Ark retains
+its generic 4,000-frame pass (`field_loader_battle_compat`). The disc-2 invalid
+redirect also reaches the intended diagnostic on DS, with zero exception or
+first-fault markers and no protected ITCM changes. Its exact ROM/ELF, state,
+inspection JSON and screenshot use prefix `field_loader_missing_destination`.
+The emulator was closed and its original SD configuration restored. Both
+normal game builds pass.
+
+An ordinary opening run without `--scenario` reaches field mode through 5,000
+frames and emits no scenario-field diagnostics (`field_loader_regular_field.log`).
+
+These observations establish loader return and bounded execution, not first
+visible draw, canonical story state, every script branch, movement/exits, or
+PSX graphical/audio equivalence. Those requirements remain separate.
+
 For an animation at a known game frame, arm the recording before that frame
 rather than estimating wall-clock delays. This works after direct scenario entry
 or a scripted opening run on Linux with melonDS's fast-memory backend:
