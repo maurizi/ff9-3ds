@@ -108,6 +108,9 @@ src/ovl_0a/ovl_0a.c | func_8001C7FC(8, arg0, 0x120000) | PSX_NZ(func_8001C7FC(8,
 # Map all accesses while retaining NULL for the guarded animation routines.
 src/ovl_0a/ovl_0a.c | if (m->unk50->unk0 >= 2 && func_800AB0B0(m) == 0) { | if (PSX_NZ(m->unk50)->unk0 >= 2 && func_800AB0B0(m) == 0) { | 1
 src/ovl_0a/ovl_0a.c | m->unk50->unk4[2]. | PSX_NZ(m->unk50)->unk4[2]. | 3
+# Event texture-animation opcodes C0/C1/C2 also address this nullable table.
+# Original 8003E7A0..7E0 and 8003E8A4..8E4 write +4/+C/+12 without a table guard.
+src/main/main.c | m->unk50->unk0[b]. | PSX_NZ(m->unk50)->unk0[b]. | 7
 
 # TEMPORARY until the decomp fixes it (reported 2026-10-11): defined void in ovl_0a but declared s32 in ff9.h and
 # used by script opcode 0x8F (retry while non-zero); $v0 carries func_800B31B8's result on MIPS. Without it the

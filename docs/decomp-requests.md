@@ -634,3 +634,17 @@ difference is sample 267918; instrument RAM is identical. The port removes these
 three casts with a counted patch, retaining the real prototype. Please name the
 fine-pitch parameter/field and document why matching PSX callers use casts; do
 not change original codegen merely to accommodate the ARM ABI.
+
+### F26 (2026-10-16). Event texture-animation opcodes use nullable tables
+
+`evt_execInstr` opcodes C0/C1/C2 check the model pointer but unconditionally
+address its `unk50` texture-animation array. Field 450 on all four discs,
+disc-3 field 2300 and disc-3/4 field 2450 reach C0 with that array NULL under
+synthetic New Game story flags. Loading BIOS low RAM does not remove the native
+fault. Original instructions at 8003E7A0..7E0 and 8003E8A4..8E4 load the table
+pointer without checking it, then index by 20 bytes and write +4/+C/+12; C2
+has the corresponding flag clear at 8003E9A8 onward. The port maps all seven
+accesses to its PSX low-RAM shadow, preserving the writes instead of skipping
+the opcode or changing the decomp. Please name this table and document the
+original nullable-table behavior while retaining PSX codegen. Disassembly and
+pre-fix host backtraces are under `build/validation/field_coverage_initial`.

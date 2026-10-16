@@ -39,6 +39,52 @@ Use one emulator at a time. Capture screenshots and short videos on DS and
 the matching PSX encounter; emulator saves remain useful for inspecting a
 precise failure in the same build.
 
+### Field inventory and event texture-animation regression
+
+`scenario_catalog.py --fields` reads directory 4's field/area IDs and sector
+extents using the same layout as `ovl_14::func_800A741C`. It checks directory
+bounds, duplicate IDs and resource extents. For example:
+
+```sh
+python3 tools/scenario_catalog.py disks/us/disc1/FF9.IMG --disc 1 --fields --json
+tools/docker.sh build/pc/ff9ds --scenario tests/scenarios/disc1_field450_texanim.cfg \
+  --data build/validation/kernel_data --frames 2000 --status 500
+```
+
+The four archives contain 222/322/372/215 entries (1,131 disc/field pairs),
+covering 19/33/40/20 distinct area IDs. These inventories are resources, not
+canonical story-state fixtures. A synthetic field launch can redirect to
+another field or fail because its story/spawn context is inappropriate; reaching
+a frame limit does not prove every field initialized, all exits, or visual
+fidelity. Use event/character blobs for canonical state and review original
+PSX behavior when distinguishing a port defect from an invalid fixture.
+
+The initial one-field-per-area sweep (`field_coverage_initial`) exercised 112
+synthetic entries for 2,000 host frames. It had 104 frame-limit successes and
+eight crashes. Seven share event opcode C0's unguarded NULL texture-animation
+table: field 450 on all discs, field 2300 on disc 3, and field 2450 on discs
+3/4. Loading the BIOS low-RAM image does not remove those faults. Original MIPS
+accesses the table without a NULL check, and the port now maps all seven
+C0/C1/C2 accesses through `PSX_NZ`, preserving low-RAM updates instead of
+skipping them (F26). All seven host reproducers now reach 2,000 frames
+(`field_texture_opcodes_regression/report.json`). The separate disc-2 field-70
+probe redirects to field 50, absent on that disc; it needs valid story context
+and is not claimed fixed by the texture patch.
+
+Native `field450_texanim` reaches frame 2,000 with zero first-fault markers and
+no protected ITCM changes. A 12-second recording covers frames 1511–1757;
+`field450_texanim_contact.png` was reviewed and shows continuing field activity.
+The exact ROM/ELF, checkpoint, inspection JSON and video stay in
+`build/validation`. This establishes native execution beyond the former fault,
+not PSX visual parity. The emulator was closed and its prior config restored;
+normal DS/PC builds pass.
+
+The expanded `field_coverage_all` sweep selects every on-disc field using
+synthetic New Game event flags and the captured BIOS image. Its manifest,
+per-case logs and final report stay in `build/validation`. Further failures
+include disc-1 field 259 (NULL animation-length lookup at 800216F8) and disc-2
+field 1663 (NULL object in script distance opcode 0x61); these remain open.
+
 For an animation at a known game frame, arm the recording before that frame
 rather than estimating wall-clock delays. This works after direct scenario entry
 or a scripted opening run on Linux with melonDS's fast-memory backend:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""List encounter IDs and enemy names directly from a US disc's FF9.IMG.
+"""List encounters or field IDs directly from a US disc's FF9.IMG.
 
 Does not require an emulator or an existing playthrough. Names identify the
 enemy types in a bundle; story flags can still choose different formations.
@@ -70,23 +70,62 @@ def catalog(path, disc):
     return results
 
 
+def field_catalog(path, disc):
+    """Directory 4: u16 field, u16 area, u32 sector, plus a sentinel.
+
+    Matches ovl_14 func_800A741C; these are available resources, not a claim
+    that New Game story variables form a valid entry state for every field.
+    """
+    with open(path, 'rb') as image:
+        header = image.read(SECTOR)
+        if header[:4] != b'FF9 ' or u32(header, 8) <= 4:
+            raise ValueError('not an FF9 archive with field directory')
+        kind, count, table_sector, _ = struct.unpack_from('<4I', header, 16 + 4 * 16)
+        if kind != 2:
+            raise ValueError('unsupported field directory format')
+        image.seek(0, 2)
+        image_bytes = image.tell()
+        if (not count or count > 32768 or
+                table_sector * SECTOR + (count + 1) * 8 > image_bytes):
+            raise ValueError('field directory outside archive')
+        image.seek(table_sector * SECTOR)
+        entries = image.read((count + 1) * 8)
+        if len(entries) != (count + 1) * 8:
+            raise ValueError('truncated field directory')
+        results, seen = [], set()
+        for i in range(count):
+            field, area, sector = struct.unpack_from('<HHI', entries, i * 8)
+            end = u32(entries, (i + 1) * 8 + 4)
+            if field > 32767 or field in seen or end <= sector or end * SECTOR > image_bytes:
+                raise ValueError(f'invalid field extent or duplicate ID {field}')
+            seen.add(field)
+            results.append({'disc': disc, 'id': field, 'area': area,
+                            'sector': sector, 'sectors': end - sector})
+        return results
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('image', type=Path)
     parser.add_argument('--disc', type=int, choices=range(1, 5), required=True)
     parser.add_argument('--find', default='', help='enemy name substring')
+    parser.add_argument('--fields', action='store_true', help='list field/area IDs instead of encounters')
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args()
     try:
-        rows = catalog(args.image, args.disc)
+        rows = (field_catalog if args.fields else catalog)(args.image, args.disc)
     except (OSError, ValueError, struct.error) as exc:
         parser.exit(1, f'{exc}\n')
-    rows = [row for row in rows if args.find.casefold() in ' '.join(row['enemies']).casefold()]
+    rows = [row for row in rows if args.find.casefold() in
+            (str(row['id']) if args.fields else ' '.join(row['enemies']).casefold())]
     if args.json:
         print(json.dumps(rows, indent=2))
     else:
         for row in rows:
-            print(f"disc {row['disc']}  battle {row['id']:3}  {', '.join(row['enemies'])}")
+            if args.fields:
+                print(f"disc {row['disc']}  field {row['id']:4}  area {row['area']:3}  sectors {row['sectors']}")
+            else:
+                print(f"disc {row['disc']}  battle {row['id']:3}  {', '.join(row['enemies'])}")
 
 
 if __name__ == '__main__':
