@@ -68,19 +68,23 @@ def main():
     p.add_argument('--disc',type=int,choices=range(1,5),required=True)
     p.add_argument('--probe',type=Path,default=ROOT/'build/tests/movie_stream_probe')
     p.add_argument('--out',type=Path,required=True)
+    p.add_argument('--vlc-table',type=Path,help="also expand every frame using the user's 216-byte FF9 AC table")
     a=p.parse_args()
     out=a.out.resolve()
     if not out.is_relative_to(ROOT/'build') or out.exists():
         p.error('output must be a new path under build/')
     rows=[]
     for entry in movie_extents(a.image):
-        result=subprocess.run([str(a.probe.resolve()),str(a.image.resolve()),
-                               str(entry['lba']),str(entry['sectors'])],capture_output=True,text=True)
+        command=[str(a.probe.resolve()),str(a.image.resolve()),str(entry['lba']),str(entry['sectors'])]
+        if a.vlc_table:command+=['--vlc-table',str(a.vlc_table.resolve())]
+        result=subprocess.run(command,capture_output=True,text=True)
         if result.returncode:
             raise RuntimeError(f"{entry['name']}: {result.stderr.strip()} (exit {result.returncode})")
         stats=json.loads(result.stdout)
         if stats['frames']*10+stats['padding_sectors']!=entry['sectors']:
             raise RuntimeError(f"{entry['name']}: incomplete movie scan")
+        if a.vlc_table and stats['vlc_frames']!=stats['frames']:
+            raise RuntimeError(f"{entry['name']}: incomplete VLC scan")
         rows.append(dict(disc=a.disc,**entry,**stats))
         print(f"disc {a.disc} {entry['name']}: {stats['frames']} frames",flush=True)
     if not rows:

@@ -680,3 +680,18 @@ padding after the frame count at audio-sector +0x60. Disc-4 MBG116's final
 frame retains camera data but has AB-filled bytes +0x80..+0x7FF instead of AKAO
 audio. That tail is not an audio-length field. These are format observations;
 movie decode/playback and synchronization remain unimplemented in the port.
+
+### F29 (2026-10-16). FF9 movie VLC v2 expansion matches original coefficient streams
+
+`port/psx/movie_vlc.c` supplies a bounded C interface for the BS v2 coefficient
+expansion path of `func_8019AEC0` / `func_8019B00C`. All 43,379 movie frames in
+the four US discs expanded successfully; beginning/middle/end samples from all
+57 movies (171 cases) match the original MIPS routine's complete MDEC command,
+coefficients and FE00 padding byte-for-byte. See `movie-validation.md` for
+reproduction and limits. Please document `func_8019AE44` as initialization of
+the signed AC lookup from `D_8019DCFC` (108 run/level pairs), and `func_8019AE98`
+as the expansion-work limit setter. The original uses GTE LZCS/LZCR for prefix
+selection, not IDCT. The port's new C entry has explicit input/output bounds and
+only implements version 2, which is the version observed in every scanned FF9
+frame. It does not yet replace the register-ABI v3/chunk-resume entry points or
+implement MDEC pixel reconstruction.

@@ -122,11 +122,70 @@ inconsistent headers, invalid audio lengths, terminal padding and latched errors
 These checks establish stream framing and bounds, not decoded pixel or audio
 fidelity; actual PSX movie captures remain necessary for decoder validation.
 
+## Implemented: BS v2 coefficient expansion
+
+`port/psx/movie_vlc.c` expands the compressed stream into the MDEC command and
+run-level halfwords. Prefix groups, sign handling, escapes, DC quantization
+bits and FE00 padding follow the original `func_8019AEC0` / `func_8019B00C`.
+The caller supplies the user's 108 run/level pairs from `D_8019DCFC`; the
+decoder neither embeds a new game-data table nor allocates a lookup buffer.
+Input reads and output writes are bounded, and malformed or unsupported
+streams return errors. Its output buffer can require up to 65,540 bytes under
+the original 0x4000-word limit; this is additional to the compressed-frame
+storage above. It performs no inverse quantization, IDCT or RGB conversion.
+
+Verification on 2026-10-16:
+
+* Native expansion succeeded for all **43,379 playable frames**, each producing
+  the expected 1,680 blocks. Full-scan catalogs are under ignored
+  `build/validation/movie_vlc_all_disc1.json` through `movie_vlc_all_disc4.json`.
+* **171 frames** (beginning, middle and end of every movie) were expanded by
+  FF9's original MIPS routine in PCSX-Redux, then compared byte-for-byte with
+  native output, including command words and padding. All matched; the four
+  bytes after each original output retained their canary value. Reports and
+  paired compressed/reference/native streams are in
+  `build/validation/movie_vlc_psx_disc1_ready` and `movie_vlc_psx_disc234`.
+* A separate ARM9 test ROM linked with **`ds_arm9.specs`** ran in melonDS 1.1
+  **original DS mode (67 MHz)**. Every synthetic prefix/sign, escape and bounds
+  test passed, as did four PSX coefficient fixtures selected from the latter
+  report (including its largest output and most compressed bits consumed).
+  `movie_vlc_ds_done=1` and `movie_vlc_ds_failures=0` were read from the matching
+  savestate. Evidence: `build/validation/movie_vlc_ds.png`, `.ml8`, and
+  `movie_vlc_ds_result.json`; fixture identities are in
+  `build/tests/movie_vlc_fixture.json`. This verifies the decoder component in
+  DS mode, not a working original-DS build of the full game.
+
+The original-routine comparison injects the user's unmodified ovl_64 bytes and
+a small caller into a dedicated paused emulator, then restores its full state.
+On a freshly paused emulator, BIOS initialization must first enable normal RAM
+access; `--warmup-frames 120` performs that initialization inside the saved-state
+boundary. The initial cold-RAM attempt was rejected when the original routine
+failed to return; it was not counted as a passing comparison. The emulator and
+X server were closed and configuration restored after verification.
+
+Reproduce coefficient checks:
+
+```sh
+tools/docker.sh make test-movie-vlc build/tests/movie_vlc_probe
+# Start the reference emulator paused; default --emu points to ../ff9-decomp.
+python3 tools/test_movie_vlc_psx.py --out build/validation/movie_vlc_reference \
+    --warmup-frames 120
+tools/docker.sh make movie-vlc-ds VLC_REFERENCE=build/validation/movie_vlc_reference
+```
+
+Boot `build/tests/movie_vlc.nds` in DS mode. Generated fixture assembly uses
+`.incbin` from ignored captures and the user's overlay; the ROM contains game
+data and must not be distributed. This is a component test with fixed buffers,
+not a playback benchmark. The whole-catalog scan additionally accepts
+`movie_catalog.py --vlc-table PATH`, where PATH is the 216-byte slice of the
+user's ovl_64 binary at file offset 0x55FC (address 0x8019DCFC).
+
 ## Still incomplete
 
 `port/game/movie.c` still substitutes placeholder frame timing. RGB24 scanout
 alone does not implement movie playback. Remaining work includes sector/frame
-integration of the frame assembler, original-compatible MDEC decoding, movie audio, synchronized frame
+integration of frame assembly and coefficient expansion, original-compatible
+MDEC inverse quantization/IDCT/RGB conversion, movie audio, synchronized frame
 timing, skipping/end conditions, MBG camera metadata and graphics composition.
 Both decoding working sets and stream buffers must fit the intended DS memory
 budget. No actual movie sequence, animation video, audio synchronization or

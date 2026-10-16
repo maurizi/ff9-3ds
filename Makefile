@@ -631,15 +631,44 @@ $(BUILD)/tests/raster_ds_arm_itcm.o: port/psx/softgpu.c
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -DPORT_RASTER_ITCM -Dpsx_softgpu=psx_softgpu_arm_itcm -Dpsx_softgpu_enable=psx_softgpu_arm_itcm_enable -Dpsx_softgpu_shadow_poly=psx_softgpu_arm_itcm_shadow_poly -Dpsx_softgpu_shadow_poly_region=psx_softgpu_arm_itcm_shadow_poly_region -Dpsx_softgpu_shadow_rect=psx_softgpu_arm_itcm_shadow_rect -c $< -o $@
 
-.PHONY: test-display scale-ds test-movie-stream
+.PHONY: test-display scale-ds test-movie-stream test-movie-vlc
+VLC_REFERENCE ?= $(BUILD)/validation/movie_vlc_psx_disc234
+.PHONY: movie-vlc-ds FORCE_MOVIE_VLC_FIXTURE
+movie-vlc-ds: $(BUILD)/tests/movie_vlc.nds
+VLC_DS_FLAGS := $(DS_ARCH) -specs=$(BLOCKSDS)/sys/crts/ds_arm9.specs -I$(BLOCKSDS)/libs/libnds/include -Iport/include -std=gnu17 -O2
+$(BUILD)/tests/movie_vlc_fixture.s: tools/gen_movie_vlc_fixture.py $(VLC_REFERENCE)/report.json decomp/disks/us/ovl/64.bin FORCE_MOVIE_VLC_FIXTURE
+	$(PYTHON) tools/gen_movie_vlc_fixture.py $(VLC_REFERENCE) $@
+$(BUILD)/tests/movie_vlc_fixture.o: $(BUILD)/tests/movie_vlc_fixture.s
+	arm-none-eabi-gcc $(VLC_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/movie_vlc_ds.o: tests/display/movie_vlc_ds.c port/include/movie_vlc.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(VLC_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/movie_vlc_ds_test.o: tests/display/movie_vlc_test.c port/include/movie_vlc.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(VLC_DS_FLAGS) -Dmain=movie_vlc_tests -c $< -o $@
+$(BUILD)/tests/movie_vlc_ds_core.o: port/psx/movie_vlc.c port/include/movie_vlc.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(VLC_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/movie_vlc.elf: $(BUILD)/tests/movie_vlc_ds.o $(BUILD)/tests/movie_vlc_ds_test.o $(BUILD)/tests/movie_vlc_ds_core.o $(BUILD)/tests/movie_vlc_fixture.o
+	arm-none-eabi-gcc $(VLC_DS_FLAGS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/movie_vlc.nds: $(BUILD)/tests/movie_vlc.elf
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "Movie VLC;ARM9;User PSX coefficient fixtures"
+test-movie-vlc: $(BUILD)/tests/movie_vlc_test
+	@$<
+$(BUILD)/tests/movie_vlc_test: tests/display/movie_vlc_test.c port/psx/movie_vlc.c port/include/movie_vlc.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -fsanitize=address,undefined -Iport/include tests/display/movie_vlc_test.c port/psx/movie_vlc.c -o $@
+$(BUILD)/tests/movie_vlc_probe: tests/display/movie_vlc_probe.c port/psx/movie_vlc.c port/include/movie_vlc.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O2 -Wall -Wextra -Iport/include tests/display/movie_vlc_probe.c port/psx/movie_vlc.c -o $@
 test-movie-stream: $(BUILD)/tests/movie_stream_test
 	@$<
 $(BUILD)/tests/movie_stream_test: tests/display/movie_stream_test.c port/psx/movie_stream.c port/include/movie_stream.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu17 -O1 -g -fsanitize=address,undefined -Iport/include tests/display/movie_stream_test.c port/psx/movie_stream.c -o $@
-$(BUILD)/tests/movie_stream_probe: tests/display/movie_stream_probe.c port/psx/movie_stream.c port/include/movie_stream.h
+$(BUILD)/tests/movie_stream_probe: tests/display/movie_stream_probe.c port/psx/movie_stream.c port/include/movie_stream.h port/psx/movie_vlc.c port/include/movie_vlc.h
 	@mkdir -p $(dir $@)
-	$(CC) -std=gnu17 -O2 -Wall -Wextra -Iport/include tests/display/movie_stream_probe.c port/psx/movie_stream.c -o $@
+	$(CC) -std=gnu17 -O2 -Wall -Wextra -Iport/include tests/display/movie_stream_probe.c port/psx/movie_stream.c port/psx/movie_vlc.c -o $@
 $(BUILD)/tests/gpu_env_render: port/include/psx_display.h
 $(BUILD)/tests/display_rgb24_probe: tests/display/rgb24_probe.c port/ds/display_scale.c port/ds/display_scale.h port/include/psx_display.h
 	@mkdir -p $(dir $@)
