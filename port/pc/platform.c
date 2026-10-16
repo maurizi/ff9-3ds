@@ -18,6 +18,7 @@
 #include "platform.h"
 #include "psx_mem.h"
 #include "psx_runtime.h"
+#include "psx_spu.h"
 
 static const char *data_dir = "disks/us";
 static long frame_limit = -1;
@@ -25,6 +26,44 @@ static long frames;
 static long status_every = 60;
 static long dump_every; /* --dump N: write the displayed area every N frames to build/frames/ */
 static long vram_at = -1; /* --vram FRAME: also write all of VRAM at that frame */
+static FILE *audio_file;
+static unsigned long long audio_frames;
+
+static void audio_u32(unsigned value) {
+    unsigned char bytes[4] = {value, value >> 8, value >> 16, value >> 24};
+    fwrite(bytes, 1, 4, audio_file);
+}
+
+static void audio_header(void) {
+    rewind(audio_file);
+    fwrite("RIFF", 1, 4, audio_file);
+    audio_u32((unsigned)(audio_frames * 4 + 36));
+    fwrite("WAVEfmt ", 1, 8, audio_file);
+    audio_u32(16);
+    audio_u32(0x00020001); /* PCM, stereo */
+    audio_u32(44100);
+    audio_u32(44100 * 4);
+    audio_u32(0x00100004); /* block align 4, bits/sample 16 */
+    fwrite("data", 1, 4, audio_file);
+    audio_u32((unsigned)(audio_frames * 4));
+}
+
+static void close_audio(void) {
+    if (!audio_file) return;
+    audio_header();
+    if (fclose(audio_file)) fprintf(stderr, "audio capture close failed\n");
+    audio_file = NULL;
+}
+
+void plat_audio_samples(const short *samples, unsigned count) {
+    if (!audio_file) return;
+    if ((audio_frames + count) * 4 > 0xffffffffu - 36 ||
+        fwrite(samples, sizeof(short) * 2, count, audio_file) != count) {
+        fprintf(stderr, "audio capture write failed or WAV size exceeded\n");
+        exit(2);
+    }
+    audio_frames += count;
+}
 
 void psx_softgpu_enable(int on);
 extern unsigned short *psx_vram;
@@ -128,6 +167,12 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--data") && i + 1 < argc) {
             data_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--audio") && i + 1 < argc && !audio_file) {
+            audio_file = fopen(argv[++i], "wbx");
+            if (!audio_file) { perror("audio capture"); return 1; }
+            atexit(close_audio);
+            audio_header();
+            psx_spu_set_rendering(1);
         } else if (!strcmp(argv[i], "--scenario") && i + 1 < argc) {
             port_scenario_load(argv[++i]);
         } else if (!strcmp(argv[i], "--press") && i + 1 < argc) {
@@ -159,7 +204,7 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--frames") && i + 1 < argc) {
             frame_limit = atol(argv[++i]);
         } else {
-            fprintf(stderr, "usage: %s [--data DIR] [--scenario PATH] [--frames N] [--status N] [--watch ADDR:SIZE] [--press BUTTON@FRAME[+N]] [--render] [--dump N]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--data DIR] [--scenario PATH] [--frames N] [--status N] [--watch ADDR:SIZE] [--press BUTTON@FRAME[+N]] [--render] [--dump N] [--audio NEW.wav]\n", argv[0]);
             return 1;
         }
     }

@@ -10,6 +10,9 @@ void plat_wait_frame(void);
 /* Called once the PS1 memory (VRAM/SPU shadows) is allocated: platform video setup. */
 void plat_video_init(void);
 
+/* Interleaved signed PCM16 stereo at the PSX's 44.1 kHz sample clock. */
+void plat_audio_samples(const short *samples, unsigned frames);
+
 /* Debug output (DS: bottom-screen console; PC: stderr). */
 void plat_vlog(const char *fmt, va_list ap);
 

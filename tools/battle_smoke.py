@@ -9,6 +9,7 @@ parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('exe',nargs='?',default='build/pc/ff9ds')
 parser.add_argument('--frames',type=int,default=60000)
 parser.add_argument('--dump',type=int,default=0,help='write software-renderer frames under build/frames')
+parser.add_argument('--audio',help='capture experimental host SPU output to a new WAV file')
 parser.add_argument('--gdb',help='run the chosen executable with a GDB command file')
 parser.add_argument('--briefing', action='store_true',
                     help='select Princess Garnet in the briefing quiz and continue past the meeting')
@@ -20,6 +21,7 @@ options=parser.parse_args()
 exe=options.exe
 args=[exe,'--frames',str(options.frames),'--status','2000']
 if options.dump: args += ['--dump',str(options.dump)]
+if options.audio: args += ['--audio',options.audio]
 presses=['CROSS@2500','UP@2900+3','CROSS@3000+3']
 presses += [f'CROSS@{i}+12' for i in range(6000,13000,1000)]
 presses += ['RIGHT@14000+4','UP@14100+80','CROSS@15000+12','CROSS@16000+12','START@20000+12','CROSS@20100+12']

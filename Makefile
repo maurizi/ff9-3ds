@@ -183,12 +183,30 @@ $(BUILD)/tests/gx_texture_shared_shadow_test: tests/gx/texture_test.c tests/gx/n
 	$(CC) -DPORT_GX_SHADOW -DPORT_GX_SHARE_INDEXED -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Itests/gx -Iport/include -I$(DECOMP)/include $< port/psx/softgpu.c -o $@
 
 .PHONY: test-spu
-test-spu: $(BUILD)/tests/spu_adpcm_test $(BUILD)/tests/spu_source_test $(BUILD)/tests/spu_envelope_test $(BUILD)/tests/spu_interpolation_test $(BUILD)/tests/spu_voice_test
+.PHONY: test-spu-transfer
+test-spu-transfer: $(BUILD)/tests/spu_transfer_test
+	@$<
+$(BUILD)/tests/spu_transfer_test: tests/spu/transfer_test.c port/psx/spu.c port/include/psyq_port.h port/include/psx_spu.h
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $< port/psx/spu.c -Wl,--gc-sections -o $@
+test-spu: $(BUILD)/tests/spu_adpcm_test $(BUILD)/tests/spu_source_test $(BUILD)/tests/spu_envelope_test $(BUILD)/tests/spu_interpolation_test $(BUILD)/tests/spu_voice_test $(BUILD)/tests/spu_noise_test $(BUILD)/tests/spu_core_test $(BUILD)/tests/spu_clock_test
 	@$<
 	@$(BUILD)/tests/spu_source_test
 	@$(BUILD)/tests/spu_envelope_test
 	@$(BUILD)/tests/spu_interpolation_test
 	@$(BUILD)/tests/spu_voice_test
+	@$(BUILD)/tests/spu_noise_test
+	@$(BUILD)/tests/spu_core_test
+	@$(BUILD)/tests/spu_clock_test
+$(BUILD)/tests/spu_clock_test: tests/spu/clock_test.c port/psx/irq.c port/psx/spu_core.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c $(PORT_HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $< port/psx/irq.c port/psx/spu_core.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c -Wl,--gc-sections -o $@
+$(BUILD)/tests/spu_core_test: tests/spu/core_test.c port/psx/spu_core.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c port/include/psx_spu.h port/include/psx_spu_voice.h port/include/psx_spu_source.h port/include/psx_spu_gauss.h port/include/psx_spu_adpcm.h port/include/psx_spu_envelope.h port/include/platform.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_core.c port/psx/spu_noise.c port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c -o $@
+$(BUILD)/tests/spu_noise_test: tests/spu/noise_test.c tests/spu/noise_reference.h port/psx/spu_noise.c port/include/psx_spu.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_noise.c -o $@
 $(BUILD)/tests/spu_voice_test: tests/spu/voice_test.c tests/spu/voice_cases.h tests/spu/voice_reference.h port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c port/include/psx_spu_voice.h port/include/psx_spu_source.h port/include/psx_spu_gauss.h port/include/psx_spu_adpcm.h port/include/psx_spu_envelope.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_voice.c port/psx/spu_source.c port/psx/spu_adpcm.c port/psx/spu_envelope.c -o $@
@@ -419,6 +437,27 @@ raster-ds: $(BUILD)/tests/raster_ds.nds
 RASTER_DS_FLAGS := $(DS_ARCH) -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include -Iport/include -I$(DECOMP)/include -std=gnu17 -O2 -Wno-builtin-declaration-mismatch
 .PHONY: spu-ds
 spu-ds: $(BUILD)/tests/spu_ds.nds
+.PHONY: spu-core-ds
+spu-core-ds: $(BUILD)/tests/spu_core_ds.nds
+$(BUILD)/tests/spu_core_ds_main.o: tests/spu/core_ds_main.c
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/spu_core_ds_test.o: tests/spu/core_test.c port/include/psx_spu.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Dmain=spu_core_tests -c $< -o $@
+$(BUILD)/tests/spu_ds_noise_test.o: tests/spu/noise_test.c tests/spu/noise_reference.h port/include/psx_spu.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Dmain=spu_noise_tests -c $< -o $@
+$(BUILD)/tests/spu_ds_noise.o: port/psx/spu_noise.c port/include/psx_spu.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/spu_ds_integration.o: port/psx/spu_core.c port/include/psx_spu.h port/include/psx_spu_voice.h port/include/psx_spu_source.h port/include/psx_spu_adpcm.h port/include/psx_spu_envelope.h port/include/platform.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/spu_core_ds.elf: $(BUILD)/tests/spu_core_ds_main.o $(BUILD)/tests/spu_core_ds_test.o $(BUILD)/tests/spu_ds_noise_test.o $(BUILD)/tests/spu_ds_noise.o $(BUILD)/tests/spu_ds_integration.o $(BUILD)/tests/spu_ds_core.o $(BUILD)/tests/spu_ds_source.o $(BUILD)/tests/spu_ds_envelope.o $(BUILD)/tests/spu_ds_voice.o
+	arm-none-eabi-gcc $(DS_ARCH) -specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/spu_core_ds.nds: $(BUILD)/tests/spu_core_ds.elf
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "SPU integration;ARM9;No disc data"
 $(BUILD)/tests/spu_ds_main.o: tests/spu/ds_main.c
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@

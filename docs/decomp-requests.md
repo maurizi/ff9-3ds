@@ -144,7 +144,12 @@ intercepting only `func_800576BC` would miss writes. Explicit repeated writes mu
 remain visible to the sound core: loop override and envelope counter resets
 cannot reliably be inferred by comparing register snapshots. Key-off starts ADSR
 release and must not discard ADPCM source/predictor state. The source/envelope
-components under `port/psx/spu_*` are not yet integrated with these boundaries.
+components under `port/psx/spu_*` are now integrated with these boundaries for
+optional host dry-audio capture. The port overrides these writers plus the bulk
+setup/initialization and CD-volume writers. It also declares original boundaries
+`noipa` in its prelude: GCC had inlined the old KON stores into AKAO before
+link-time weakening, bypassing the replacements and leaving all voices silent.
+The original decomp's C and PSX build remain untouched by that workaround.
 
 ### R12. Pad layer
 - The raw → logical bit mapping (`0x20000` = confirm), and where button configuration is applied.

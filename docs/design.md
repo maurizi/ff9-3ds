@@ -249,10 +249,12 @@ renderer reproduces the opcode interpreter's layout (R15).
   remain implementation work; assigning voices to the 16 native channels must not discard PSX voices or change
   the mixing arithmetic. First establish deterministic host reference comparisons, then verify DS output and
   real-time timing. Keep AKAO register writes and key events ordered relative to generated samples.
-- **Current implementation**: transfers/register shadows are present, but gameplay is still silent. Block
-  decoding, source fetch/loop/pitch state, Gaussian interpolation, ADSR/volume sweeps and a 24-voice mixing
-  stage have tests; see `audio-validation.md`. Game/global-register integration, shared noise generation,
-  reverb, IRQ/capture behavior, final main-volume mixing and platform output remain unimplemented.
+- **Current implementation**: host `--audio NEW.wav` renders dry game audio at 44.1 kHz through the AKAO
+  register boundary and interleaved virtual timer clock. All 24 voices, Gaussian interpolation, ADSR/volume
+  sweeps, pitch modulation, shared noise, main-volume mixing and basic capture RAM are implemented/tested;
+  see `audio-validation.md`. Reverb, IRQ/DMA/capture timing fidelity, CD/movie inputs, physical-console
+  comparison and DS audio output remain unfinished. DS/default host mixing stays disabled until a sink
+  is selected; this is an integration stage, not completed audio fidelity.
 - FMV audio must preserve its original stream timing; the planned FastVideoDS integration is not implemented.
 
 ## 8. Memory map (DSi mode)

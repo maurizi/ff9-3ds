@@ -14,6 +14,13 @@ unsigned char psx_ram[PSX_RAM_SIZE] __attribute__((aligned(32)));
 
 static long frames;
 
+/* ARM7 stream output is pending. Rendering remains disabled on DS until a sink
+ * is connected, avoiding software-mixing work that cannot yet be heard. */
+void plat_audio_samples(const short *samples, unsigned count) {
+    (void)samples;
+    (void)count;
+}
+
 /* Keep each status row inside 31 columns: writing the final column wraps and scrolls the console. */
 static void status_row(int row, const char *fmt, ...) {
     char text[32];

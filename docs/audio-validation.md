@@ -1,10 +1,10 @@
 # Audio fidelity validation
 
-Gameplay is still silent. `port/psx/spu.c` currently implements a transfer/register
-shadow, not an audible SPU. `spu_adpcm.c`, `spu_source.c`, `spu_envelope.c`, and
-`spu_voice.c` are tested components for the shared sound core; they are not yet connected to
-AKAO or platform audio output. Passing these tests does not establish music,
-SFX, or complete SPU fidelity.
+Host `--audio NEW.wav` now renders dry game audio through AKAO and the shared
+sample-clocked sound core. Default host runs and DS gameplay remain silent;
+DS stream output, reverb, movie/CD inputs and full IRQ/DMA fidelity are unfinished.
+The component/reference tests and initial game captures below do not establish
+complete music/SFX fidelity.
 
 ## Block decoder
 
@@ -193,11 +193,95 @@ ROM/ELF and inspected console capture are `build/validation/spu_voice_mix_arm9.n
 `.elf`, and `.png`. Both game targets build. The test emulator was closed and its
 previous configuration restored. No game data was needed for these checks.
 
+## Register boundary, clock, and first game PCM
+
+`spu_core.c` connects the voice stage to explicit register writes, pending KON/KOF
+events, ENDX/ENVX/LSAX/current-volume readbacks, shared noise, main-volume clipping
+and PCM capture buffers. Key events take effect after one sample, with key-off
+before key-on when both are pending. Halfword writes replace the corresponding
+pending half, including zero writes. The current dry path has no reverb return,
+CD/movie input, DMA/FIFO timing, or RAM IRQ delivery.
+
+`port/game/spu_regs.c` supplies the AKAO hardware-writer overrides, including bulk
+voice setup and initialization. It preserves the game's arithmetic and register
+order, while repeated writes reach the core even if the value hasn't changed.
+The original decomp checkout is untouched. The first game capture was silent:
+GCC had inlined original key-on stores into AKAO before link-time weakening.
+The port prelude now marks these original boundaries `noipa` to preserve calls
+to their replacements, including protection against cloning. The first failing
+capture, debugger traces, and the corrected capture remain in ignored validation
+artifacts. This is why a passing isolated mixer test wasn't sufficient evidence.
+
+`irq.c` advances the SPU between counter-2 events at 4,233,600 ticks/sec, one
+44.1 kHz sample per 96 ticks. A normal 240 Hz AKAO interval emits 183/184 samples,
+not four copies of a final register snapshot at VBlank. The SPU clock continues
+when the timer stops, including a stop inside its callback. The existing virtual
+video clock remains 60 Hz: this timing test does not establish physical PSX/DS
+wall-clock equivalence or complete bus-level key/IRQ timing.
+
+The noise oracle extracts pinned DuckStation `UpdateNoise` unchanged; all 64
+clock settings are compared for 20,000 ticks each. The production implementation
+uses the equivalent XOR feedback on bits 10,11,12,15 rather than a waveform lookup.
+New integration tests check fractional sample carry, pending/repeated key events,
+24-voice clipping before main volume, opposite stereo gains, current-volume and
+loop/envelope readbacks, mute/enable behavior, and capture half selection.
+The timer test runs the actual virtual IRQ code and checks event positions
+183,367,551,735, exactly 44,100 samples and 240 events over 60 virtual frames,
+and continued output with a stopped or zero-target timer.
+
+```sh
+python3 tools/spu_noise_reference.py build/validation/duck_spu_pinned.cpp > build/validation/noise_reference.h
+cmp tests/spu/noise_reference.h build/validation/noise_reference.h
+make test-spu
+tools/docker.sh make -j16 ds pc spu-core-ds
+tools/docker.sh build/pc/ff9ds --frames 7000 --status 1000 --press CROSS@2500 --press UP@2900+3 --press CROSS@3000+3 --audio build/validation/NEW_opening.wav
+python3 tools/battle_smoke.py --frames 35000 --audio build/validation/NEW_baku.wav
+```
+
+WAV paths must be new files; the host refuses to overwrite an existing capture.
+WAV headers are finalized on normal exit/fatal exit, at 44.1 kHz stereo PCM16.
+The `--audio` option explicitly enables rendering; no software mixing cost is
+added to DS gameplay while the DS output sink remains unimplemented.
+
+The PsyQ transfer layer also now applies `SpuRead`'s original unsigned 0x7eff0
+size clamp before address arithmetic (confirmed in the original 8005703C assembly).
+Previously, a negative count could wrap `transfer_addr + n` and reach `memcpy`
+with an enormous size. `tools/docker.sh make test-spu-transfer` checks this on
+the 32-bit ABI under ASan/UBSan, including -1/-16 counts, near-end extents, and
+callbacks. The port's existing end-of-RAM clipping remains a compatibility
+policy; this test does not establish original DMA wrap/FIFO semantics.
+
+Validation on 2026-10-16:
+
+- All eight host ASan/UBSan suites pass (`spu_clock_host_tests.log`); the ARM9
+  noise/integration ROM also passes (`spu_integration_arm9.nds`, matching `.elf`
+  and inspected `.png`). These are arithmetic/state tests, not DS sound output.
+- Corrected 7,000-frame opening captures contain 5,145,000 stereo samples each,
+  range -23,079..20,243, with first nonzero PCM at 5.210408 seconds. The `noinline`
+  and final `noipa` builds produce identical PCM SHA256
+  `3cd04d76ee93f54b42d18bf6ae122ae6cfb2e2e5976f419ba939b774175605a2`.
+- The scripted 35,000-frame opening reaches Baku battle (mode 2/overlay 0B), then
+  returns to field (mode 1/overlay 0A) with rendering enabled and disabled. Both
+  exit normally; `spu_baku_integrated.wav` contains 25,725,000 stereo samples.
+  This validates that execution route, not graphical or audio equivalence.
+- Direct Ark/Garland/Kuja scenarios each complete 6,000 host frames with audio
+  rendering and nonzero captures (`spu_disc3_*.log/.wav`). This is entry/idle
+  coverage, not victory, summon, or complete battle coverage.
+- Original PSX `title_screen` state was loaded after cold-boot warmup, visually
+  checked (`spu_psx_title.png`), and recorded through Redux's audio sink while
+  advancing 480 VBlanks. The captured `spu_psx_title_reference.wav` has 442,368
+  stereo samples. Comparing a 100-window log-magnitude spectral segment with
+  the port's title interval gives mean cosine 0.93098
+  (`spu_title_spectral_comparison.json`). This is coarse signal correspondence,
+  not a fidelity percentage, synchronized PCM match, or proof of correct reverb.
+- Reference and DS emulators were closed; melonDS's previous configuration was
+  restored. No game-derived audio or test ROM is committed.
+
 ## Remaining sound work
 
-Connect the mixing stage with ordered key events, direct AKAO register writes,
-and the global SPU registers; implement the shared noise generator, reverb and
-capture/IRQ semantics; connect PCM output on host and DS. Validate music, SFX,
-movie audio, and changes of scene/bank against original PSX recordings. Test
-late-game and multi-voice effects directly through the scenario harness. No
-audible gameplay comparison or DS sound-output performance result is claimed yet.
+Implement original reverb and its library configuration, complete IRQ/DMA/capture
+timing and streamed movie/CD inputs, connect DS PCM output, and compare music,
+SFX and scene/bank changes against synchronized original PSX recordings. Improve
+bus/key timing and verify unresolved silicon edge cases. Exercise late-game
+actions and multi-voice effects directly through the scenario harness; original
+timing, sound-output performance and complete audio fidelity remain unproven.

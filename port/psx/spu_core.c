@@ -1,0 +1,138 @@
+/* Register/timing integration for the shared SPU voice stage. Reverb, streamed
+ * CD input and IRQ delivery remain unfinished; see audio-validation.md. */
+#include "psx_spu.h"
+#include "psx_spu_voice.h"
+#include "platform.h"
+#include <string.h>
+
+extern unsigned short psx_spu_regs[0x200];
+extern unsigned char *psx_spu_ram;
+static PsxSpuVoice voices[PSX_SPU_VOICES];
+static PsxSpuVolume main_volume[2];
+static PsxSpuNoise noise;
+static uint32_t key_on, key_off, ended;
+static unsigned sample_fraction, capture_offset;
+static int rendering;
+
+static int16_t clamp16(int32_t value) {
+    return value > 32767 ? 32767 : value < -32768 ? -32768 : value;
+}
+
+static uint32_t flags(unsigned offset) {
+    return psx_spu_regs[offset / 2] | ((uint32_t)psx_spu_regs[offset / 2 + 1] << 16);
+}
+
+void psx_spu_set_rendering(int enabled) { rendering = !!enabled; }
+
+void psx_spu_reset(void) {
+    memset(voices, 0, sizeof voices);
+    memset(main_volume, 0, sizeof main_volume);
+    memset(psx_spu_regs, 0, 0x400);
+    key_on = key_off = ended = sample_fraction = capture_offset = 0;
+    noise = (PsxSpuNoise){0, 1};
+    psx_spu_write(0x1aa, 0xc000); /* libspu initializes enabled/unmuted */
+}
+
+uint16_t psx_spu_read(unsigned offset) {
+    if ((offset & 1) || offset >= 0x400) return 0xffff;
+    if (offset < 0x180) return psx_spu_voice_read(&voices[offset / 16], (offset & 15) / 2);
+    if (offset == 0x19c) return ended;
+    if (offset == 0x19e) return ended >> 16;
+    if (offset == 0x1b8 || offset == 0x1ba) return main_volume[(offset - 0x1b8) / 2].level;
+    if (offset >= 0x200 && offset < 0x260)
+        return voices[(offset - 0x200) / 4].volume[(offset & 2) / 2].level;
+    return psx_spu_regs[offset / 2];
+}
+
+void psx_spu_voice_register(unsigned voice, unsigned offset, uint16_t value) {
+    if (voice < PSX_SPU_VOICES && offset < 16) psx_spu_write(voice * 16 + offset, value);
+}
+
+void psx_spu_write(unsigned offset, uint16_t value) {
+    if ((offset & 1) || offset >= 0x400) return;
+    if (offset == 0x19c || offset == 0x19e || offset == 0x1ae) return;
+    uint16_t old = psx_spu_regs[offset / 2];
+    psx_spu_regs[offset / 2] = value;
+    if (offset < 0x180) {
+        psx_spu_voice_write(&voices[offset / 16], (offset & 15) / 2, value);
+    } else if (offset == 0x180 || offset == 0x182) {
+        psx_spu_volume_write(&main_volume[(offset - 0x180) / 2], value);
+    } else if (offset >= 0x188 && offset <= 0x18e) {
+        uint32_t *pending = offset < 0x18c ? &key_on : &key_off;
+        unsigned shift = (offset & 2) * 8;
+        *pending = ((*pending & ~(0xffffu << shift)) | ((uint32_t)value << shift)) & 0xffffff;
+    } else if (offset == 0x1aa) {
+        if ((old & 0x8000) && !(value & 0x8000))
+            for (unsigned i = 0; i < PSX_SPU_VOICES; ++i) psx_spu_adsr_force_off(&voices[i].adsr);
+        /* Mode readback only. DMA/IRQ status flags still require implementation. */
+        psx_spu_regs[0x1ae / 2] = (psx_spu_regs[0x1ae / 2] & ~0x3f) | (value & 0x3f);
+    } else if (offset == 0x1b8 || offset == 0x1ba) {
+        main_volume[(offset - 0x1b8) / 2].level = (int16_t)value;
+    }
+}
+
+static void sync_readbacks(void) {
+    for (unsigned i = 0; i < PSX_SPU_VOICES; ++i) {
+        psx_spu_regs[i * 8 + 6] = psx_spu_voice_read(&voices[i], 6);
+        psx_spu_regs[i * 8 + 7] = psx_spu_voice_read(&voices[i], 7);
+        psx_spu_regs[0x100 + i * 2] = voices[i].volume[0].level;
+        psx_spu_regs[0x101 + i * 2] = voices[i].volume[1].level;
+    }
+    psx_spu_regs[0x19c / 2] = ended;
+    psx_spu_regs[0x19e / 2] = ended >> 16;
+    psx_spu_regs[0x1b8 / 2] = main_volume[0].level;
+    psx_spu_regs[0x1ba / 2] = main_volume[1].level;
+}
+
+static void sample_frame(int16_t output[2]) {
+    uint16_t control = psx_spu_regs[0x1aa / 2];
+    PsxSpuVoiceMix mix;
+    psx_spu_mix_voices(voices, psx_spu_ram, (int16_t)noise.level,
+                       flags(0x194), flags(0x190), flags(0x198), !!(control & 0x40), &mix);
+    ended |= mix.ended;
+    psx_spu_noise_tick(&noise, (control >> 8) & 63);
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        int32_t dry = (control & 0x4000) ? mix.dry[channel] : 0;
+        output[channel] = (clamp16(dry) * main_volume[channel].level) >> 15;
+        psx_spu_volume_tick(&main_volume[channel]);
+        /* PCM capture buffers: CD input is currently absent; voice capture is
+         * post-ADSR and independent of global output mute. All addresses fit. */
+        unsigned address = (2 + channel) * 0x400 + capture_offset;
+        uint16_t value = mix.capture[channel];
+        psx_spu_ram[address] = value;
+        psx_spu_ram[address + 1] = value >> 8;
+        psx_spu_ram[channel * 0x400 + capture_offset] = 0;
+        psx_spu_ram[channel * 0x400 + capture_offset + 1] = 0;
+    }
+    capture_offset = (capture_offset + 2) & 0x3ff;
+    psx_spu_regs[0x1ae / 2] = (psx_spu_regs[0x1ae / 2] & ~0x800) | (capture_offset & 0x200 ? 0x800 : 0);
+    /* Key events take effect after one output sample. Off then on means a
+     * simultaneous key-on retriggers the voice. Repeated writes remain events. */
+    if (key_on || key_off) {
+        for (unsigned i = 0; i < PSX_SPU_VOICES; ++i) {
+            if (key_off & (1u << i)) psx_spu_voice_key_off(&voices[i]);
+            if (key_on & (1u << i)) {
+                psx_spu_voice_key_on(&voices[i]);
+                ended &= ~(1u << i);
+            }
+        }
+        key_on = key_off = 0;
+    }
+}
+
+void psx_spu_advance(unsigned ticks) {
+    if (!rendering || !psx_spu_ram) return;
+    /* Break down before adding, so even UINT_MAX ticks cannot overflow. */
+    unsigned frames = ticks / 96;
+    sample_fraction += ticks % 96;
+    frames += sample_fraction / 96;
+    sample_fraction %= 96;
+    int16_t output[256 * 2];
+    while (frames) {
+        unsigned count = frames > 256 ? 256 : frames;
+        for (unsigned i = 0; i < count; ++i) sample_frame(output + i * 2);
+        plat_audio_samples(output, count);
+        frames -= count;
+    }
+    sync_readbacks();
+}

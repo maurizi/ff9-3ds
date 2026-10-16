@@ -24,7 +24,10 @@ listed at the milestone that first needs them. The decomp agent should work slig
   and polygon counters are on the bottom-screen debug overlay. The profile goes to `docs/perf.md`.
 
 ## M3: Sound (R11)
-- Emulated SPU on ARM9 → ARM7 driver: voice mapping, software ADSR, PCM16 sample cache.
+- Shared 24-voice software SPU → ARM7 PCM stream output, preserving ADSR/interpolation/loop/reverb behavior.
+- Partial progress: host dry WAV capture is connected to AKAO; reference-tested voice components, noise,
+  main mixing and virtual timer integration are present. DS output, reverb, streaming/IRQ fidelity and
+  audible PSX comparisons remain open; see `audio-validation.md`.
 - **Exit**: the title music and the field/battle music play and sound right compared with an emulator, side by
   side; menu SFX play; nothing hangs on key-off.
 

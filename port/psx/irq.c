@@ -10,6 +10,7 @@
 #include "gp0.h"
 #include "platform.h"
 #include "psyq_port.h"
+#include "psx_spu.h"
 
 #define RCNT_HZ 4233600 /* root counter 2 at sysclk/8: 33.8688 MHz / 8 */
 
@@ -167,23 +168,22 @@ void VSyncCallback(void (*f)(void)) {
 
 /* Advance the root counters by one frame and raise their target events (AKAO's tick on counter 2). */
 static void rcnt_frame(void) {
-    for (int i = 0; i < 3; i++) {
-        RCnt *c = &rcnt[i];
+    /* Counters 0/1 still have no dot/hblank implementation. SPU time advances
+     * independently of counter 2, including when AKAO stops its timer. */
+    RCnt *c = &rcnt[2];
+    unsigned ticks = (RCNT_HZ + c->frac) / 60;
+    c->frac = (RCNT_HZ + c->frac) % 60;
+    while (ticks) {
         if (!c->running || !c->target) {
-            continue;
+            psx_spu_advance(ticks);
+            break;
         }
-        unsigned int ticks = (RCNT_HZ + c->frac) / 60;
-        c->frac = (RCNT_HZ + c->frac) % 60;
-        if (i != 2) {
-            continue; /* counters 0/1 count dot/hblank clocks: only their value is read */
-        }
-        while (ticks) {
-            unsigned int step = c->target - c->count;
-            if (step > ticks) {
-                c->count += ticks;
-                break;
-            }
-            ticks -= step;
+        unsigned step = c->target - c->count;
+        if (step > ticks) step = ticks;
+        psx_spu_advance(step);
+        ticks -= step;
+        c->count += step;
+        if (c->count == c->target) {
             c->count = 0;
             DeliverEvent(0xF2000002, 0x0002); /* RCntCNT2, EvSpINT */
         }
