@@ -388,3 +388,55 @@ by the existing transfer/mask/packet checks. Both game targets build.
 
 No overlap algorithm change was needed for these cases. The source comment
 now states the tested scope instead of claiming general overlap fidelity.
+
+## Blended sprite path and title timing (2026-10-16)
+
+The title's 246x51 indexed additive glow still used generic per-pixel plotting.
+The sprite path now handles semi-transparency and destination mask checks for
+cached indexed or raw/neutral direct-colour textures. Raw indexed palettes can
+also be cached. Opaque sprites retain a separate branch without per-pixel blend
+checks. Original texels determine transparency/STP before modulation; all four
+blend modes and mask writes retain the existing arithmetic. Texture reads stay
+live when source and destination overlap. Palette overlap and shadow targets
+retain the generic fallback.
+
+Host ASan/UBSan compares 720 targeted sprite combinations (depth, raw/modulated,
+neutral/extreme colour, source/CLUT feedback, five blend settings and both mask
+bits), alongside the existing 4096 mixed primitives, shadow cases and PSX
+interpolation goldens. The expanded `raster-ds` probe compares generic,
+optimized Thumb and ARM/ITCM paths, including raw indexed, additive indexed,
+raw subtractive and masked direct-colour rectangles. All full-VRAM comparisons
+pass (`sprite_effects_raster.nds`, matching `.elf` and `.png`).
+
+Replaying captured PSX candle commands through VSync 1199 and Ifrit through
+VSync 840 gives zero differing VRAM pixels and readback words. These reuse the
+previously captured DuckStation software reference, checked against the same
+normalized command SHA256; no new PSX execution is claimed. Reports are
+`sprite_effects_candle_complete/comparison.json` and
+`sprite_effects_ifrit_fire/comparison.json` under ignored `build/validation`.
+
+In melonDS DSi mode with CPU clock enabled, the 128-frame title timing window
+ending at game frame 478 changes from 60.2353 to 36.1675 ms of rectangles per
+virtual frame, and total frame time from 100.2909 to 71.9535 ms. These are
+emulated hardware timer measurements with profiling enabled. A preliminary
+raw-palette-only change measured 59.9875 ms and did not materially help the
+title. Artifact prefixes are `audio_budget_guard`, `raw_palette_title` and
+`sprite_effects_title`, with matching ROM/ELF/states and `_profile.json` reports.
+
+At game frame 600, the optimized title's entire 1 MiB VRAM shadow is identical
+to the baseline (SHA256
+`7bbd588489e30a56a226991361b9c74bf59c3f1cc813e9ae39b21d6b23942048`).
+All 441,000 stereo source frames remain byte-identical to the host title capture.
+Inserted silence falls from 1,735,168 to 1,389,896 frames but is still severe;
+this does not establish real-time audio. Comparison reports end in
+`_vram_comparison.json` and `_pcm.json`.
+
+`sprite_effects_candle_action.mp4` records the current DS build from game
+frame 1513 to 2344: approach, prompt, lighting action and room reveal. Its
+contact sheet was reviewed against `psx_candle_current_reveal.mp4`; the final
+frame-3200 screenshot reaches name entry with the same room/light progression
+and no observed new rectangular patches. This is a scoped visual review, not
+pixel or motion-timing parity. The final checkpoint has zero first-fault and
+exception markers, no protected ITCM changes, and all 43 sized ITCM functions
+match the ELF byte for byte. The emulator was closed and its configuration
+restored. The normal DS/PC build passes; its ITCM occupies 17,984 bytes.

@@ -281,7 +281,7 @@ renderer reproduces the opcode interpreter's layout (R15).
   is selected. DS source PCM matches a captured title interval on the host, but gameplay still
   produces audible gaps because rendering/mixing cannot keep pace. See `audio-validation.md`.
 - **ARM9 DSP placement**: `SPUARM=1 SPUITCM=1` compiles the seven shared sound-core
-  modules as ARM instructions in ITCM. The normal link currently uses 16,488 of
+  modules as ARM instructions in ITCM. The normal link currently uses 17,984 of
   32,768 ITCM bytes including raster/scaler and SDK code/data. Diagnostic switches
   permit Thumb/main-RAM comparisons without changing sound arithmetic.
 - FMV audio must preserve its original stream timing; the planned FastVideoDS integration is not implemented.

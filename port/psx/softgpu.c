@@ -54,7 +54,7 @@ static void prepare_palette(const Gp0Mode *m, const Gp0Vtx *v,
                             int x0, int y0, int x1, int y1) {
     palette_ready = 0;
 #ifndef PORT_SOFTGPU_REFERENCE
-    if (!m->textured || m->raw || m->gouraud || m->depth > 1) return;
+    if (!m->textured || m->gouraud || m->depth > 1) return;
     int count = m->depth == 0 ? 16 : 256;
     if ((x1-x0)*(y1-y0) < count*4) return;
     /* Palette reads must remain live when drawing can modify the CLUT.
@@ -77,6 +77,7 @@ static void prepare_palette(const Gp0Mode *m, const Gp0Vtx *v,
         int tr = (t & 31)*r >> 7, tg = ((t >> 5)&31)*g >> 7, tb = ((t >> 10)&31)*b >> 7;
         u16 c = (tr > 31 ? 31 : tr) | ((tg > 31 ? 31 : tg) << 5)
               | ((tb > 31 ? 31 : tb) << 10) | (t & 0x8000);
+        if (m->raw) c = t;
         /* Keep the original texel for transparency and STP, even when colour
          * modulation turns an opaque texel into black. */
         shaded_palette[i] = t | ((u32)c << 16);
@@ -442,6 +443,53 @@ static SG_HOT void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
     port_profile_draw_end(2,profile_start);
 }
 
+#ifndef PORT_SOFTGPU_REFERENCE
+/* effects is constant at each call site, retaining the opaque pixel loop
+ * without mask/blend branches. The slow variants preserve original STP even
+ * when modulation turns a nonzero source colour into black. */
+static inline __attribute__((always_inline)) void sprite_pixel(
+        const Gp0Mode *m, u16 *dst, u16 original, u16 colour, u16 mask, int effects) {
+    if (!original) return;
+    if (effects) {
+        if (gp0_state.check_mask && (*dst & 0x8000)) return;
+        if (m->semi && (original & 0x8000))
+            colour = blend(*dst, colour, m->abr) | (colour & 0x8000);
+    }
+    *dst = colour | mask;
+}
+
+static inline __attribute__((always_inline)) void sprite_rows(
+        const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int effects) {
+    unsigned keep_x=~gp0_state.twin_mask_x,keep_y=~gp0_state.twin_mask_y;
+    unsigned window_x=gp0_state.twin_off_x&gp0_state.twin_mask_x;
+    unsigned window_y=gp0_state.twin_off_y&gp0_state.twin_mask_y;
+    u16 mask=gp0_state.set_mask ? 0x8000 : 0;
+    for(int y=y0;y<y1;y++) {
+        unsigned tv=((((unsigned)v0+(unsigned)y)&keep_y)|window_y)&255;
+        const u16 *row=psx_vram+(((m->ty+tv)&511)*1024);
+        u16 *dst=psx_vram+y*1024+x0;
+        unsigned cursor=(unsigned)u0+(unsigned)x0;
+        if(m->depth==0) for(int x=x0;x<x1;x++,cursor++,dst++) {
+            unsigned u=((cursor&keep_x)|window_x)&255;
+            u16 packed=row[(m->tx+(u>>2))&1023];
+            u32 sample=shaded_palette[(packed>>((u&3)*4))&15];
+            sprite_pixel(m, dst, (u16)sample, sample >> 16, mask, effects);
+        }
+        else if(m->depth==1) for(int x=x0;x<x1;x++,cursor++,dst++) {
+            unsigned u=((cursor&keep_x)|window_x)&255;
+            u16 packed=row[(m->tx+(u>>1))&1023];
+            u32 sample=shaded_palette[(packed>>((u&1)*8))&255];
+            sprite_pixel(m, dst, (u16)sample, sample >> 16, mask, effects);
+        }
+        else for(int x=x0;x<x1;x++,cursor++,dst++) {
+            unsigned u=((cursor&keep_x)|window_x)&255;
+            u16 sample=row[(m->tx+u)&1023];
+            sprite_pixel(m, dst, sample, sample, mask, effects);
+        }
+    }
+}
+#endif
+
 static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (!psx_vram) {
         return;
@@ -471,40 +519,17 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
 #endif
     prepare_palette(m, v, x0, y0, x1, y1);
 #ifndef PORT_SOFTGPU_REFERENCE
-    if(m->textured && !m->semi && !gp0_state.check_mask && !target.pixels &&
+    if(m->textured && !target.pixels &&
        x0>=0 && y0>=0 && x1<=VRAM_W && y1<=VRAM_H &&
        (palette_ready || (m->depth>=2 && (m->raw ||
           (v->r==128 && v->g==128 && v->b==128))))) {
-        /* Opaque cached-indexed or unmodulated direct-colour sprites need no
-         * per-pixel colour clamp, destination lookup, or mode dispatch. Keep
-         * every texture read live: source and destination may overlap. */
-        unsigned keep_x=~gp0_state.twin_mask_x,keep_y=~gp0_state.twin_mask_y;
-        unsigned window_x=gp0_state.twin_off_x&gp0_state.twin_mask_x;
-        unsigned window_y=gp0_state.twin_off_y&gp0_state.twin_mask_y;
-        u16 mask=gp0_state.set_mask ? 0x8000 : 0;
-        for(int y=y0;y<y1;y++) {
-            unsigned tv=((((unsigned)v0+(unsigned)y)&keep_y)|window_y)&255;
-            const u16 *row=psx_vram+(((m->ty+tv)&511)*1024);
-            u16 *dst=psx_vram+y*1024+x0;
-            unsigned cursor=(unsigned)u0+(unsigned)x0;
-            if(m->depth==0) for(int x=x0;x<x1;x++,cursor++,dst++) {
-                unsigned u=((cursor&keep_x)|window_x)&255;
-                u16 packed=row[(m->tx+(u>>2))&1023];
-                u32 sample=shaded_palette[(packed>>((u&3)*4))&15];
-                if((u16)sample) *dst=(u16)(sample>>16)|mask;
-            }
-            else if(m->depth==1) for(int x=x0;x<x1;x++,cursor++,dst++) {
-                unsigned u=((cursor&keep_x)|window_x)&255;
-                u16 packed=row[(m->tx+(u>>1))&1023];
-                u32 sample=shaded_palette[(packed>>((u&1)*8))&255];
-                if((u16)sample) *dst=(u16)(sample>>16)|mask;
-            }
-            else for(int x=x0;x<x1;x++,cursor++,dst++) {
-                unsigned u=((cursor&keep_x)|window_x)&255;
-                u16 sample=row[(m->tx+u)&1023];
-                if(sample) *dst=sample|mask;
-            }
-        }
+        /* Cached-indexed or unmodulated direct-colour sprites avoid per-pixel
+         * colour setup. Keep texture reads live for overlapping source/dest.
+         * prepare_palette rejects CLUT feedback; shadows use generic plot. */
+        if (m->semi || gp0_state.check_mask)
+            sprite_rows(m, u0, v0, x0, y0, x1, y1, 1);
+        else
+            sprite_rows(m, u0, v0, x0, y0, x1, y1, 0);
         port_profile_draw_end(1,profile_start);
         return;
     }

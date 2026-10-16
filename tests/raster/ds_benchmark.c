@@ -22,20 +22,24 @@ int main(void) {
     const Gp0Backend *backends[]={&psx_softgpu_reference,&psx_softgpu,&psx_softgpu_arm_itcm};
     for(int b=0;b<3;b++) interpolation_checks(backends[b],pixels);
     printf("PSX interpolation goldens match.\n");
-    const char *names[]={"flat quad", "Gouraud quad", "subtract quad", "indexed rectangle", "solid Gouraud subtract", "solid rectangle", "solid flat quad"};
+    const char *names[]={"flat quad", "Gouraud quad", "subtract quad", "indexed rectangle", "solid Gouraud subtract", "solid rectangle", "solid flat quad",
+        "raw indexed rectangle", "indexed additive rectangle", "raw indexed subtract rect", "direct masked semi rect"};
     printf("Generic / fast Thumb / ARM ITCM\n");
-    for(int test=0;test<7;++test) {
-        Gp0Mode m={.textured=test<4,.depth=test==3 ? 0 : 1,.tx=640,.ty=256,
-                   .clut_x=512,.clut_y=450,.gouraud=test==1 || test==4,.semi=test==2 || test==4,.abr=2};
+    for(int test=0;test<11;++test) {
+        Gp0Mode m={.textured=test<4 || test>=7,.depth=test==10 ? 2 : test==3 || test==9 ? 0 : 1,.tx=640,.ty=256,
+                   .clut_x=512,.clut_y=450,.gouraud=test==1 || test==4,
+                   .semi=test==2 || test==4 || test>=8,.abr=test==8 ? 1 : test==10 ? 3 : 2,
+                   .raw=test==7 || test==9 || test==10};
         Gp0Vtx v[4]={{0,0,97,191,255,0,0},{96,0,153,67,21,96,0},
                      {0,96,255,97,191,0,96},{96,96,21,255,97,96,96}};
-        gp0_state=(Gp0State){.area_x1=1023,.area_y1=511};
+        gp0_state=(Gp0State){.area_x1=1023,.area_y1=511,
+            .check_mask=test==10,.set_mask=test==10};
         printf("\n%s\n",names[test]);
         for(int b=0;b<3;++b) {
             memcpy(pixels,initial,sizeof pixels);
             cpuStartTiming(0);
             for(int i=0;i<64;++i) {
-                if(test==3 || test==5) backends[b]->rect(&m,v,96,96);
+                if(test==3 || test==5 || test>=7) backends[b]->rect(&m,v,96,96);
                 else backends[b]->poly(&m,v,4);
             }
             unsigned ticks=cpuEndTiming();

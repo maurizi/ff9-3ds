@@ -533,7 +533,8 @@ tools/docker.sh make -j16 ds pc
 
 `SPUARM=1 SPUITCM=1` is now the default. Seven shared DSP modules compile as
 ARM instructions in ITCM; `spu_hot.h` becomes empty on the host. The normal DS
-link uses 16,488 ITCM bytes including raster/scaler and SDK code/data. Guards
+link now uses 17,984 ITCM bytes including the expanded sprite loops, raster/scaler
+and SDK code/data. Guards
 avoid calls for already-fetched sample blocks, inactive volume sweeps and held
 sustain/off envelopes. Zero-envelope voices skip read-only interpolation while
 still advancing decoder, pitch, loop/end and envelope state. No voices, sample
