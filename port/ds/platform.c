@@ -1,6 +1,7 @@
 /* DS platform: entry point, console, frame pacing. */
 #include <fat.h>
 #include <nds.h>
+#include "audio.h"
 #include <stdio.h>
 
 #include "display.h"
@@ -13,13 +14,6 @@
 unsigned char psx_ram[PSX_RAM_SIZE] __attribute__((aligned(32)));
 
 static long frames;
-
-/* ARM7 stream output is pending. Rendering remains disabled on DS until a sink
- * is connected, avoiding software-mixing work that cannot yet be heard. */
-void plat_audio_samples(const short *samples, unsigned count) {
-    (void)samples;
-    (void)count;
-}
 
 /* Keep each status row inside 31 columns: writing the final column wraps and scrolls the console. */
 static void status_row(int row, const char *fmt, ...) {
@@ -56,6 +50,9 @@ void plat_wait_frame(void) {
         extern void psx_vram_read(int, int, int, int);
         psx_vram_read(0, 0, 1024, 512);
 #endif
+        /* Diagnostic checkpoints freeze game time. Stop hardware playback too,
+         * so waiting to save a state cannot inflate starvation counters. */
+        port_audio_stop();
         status_row(19,"capture frame %ld",frames);
         for(;;) swiWaitForVBlank();
     }
@@ -67,6 +64,10 @@ void plat_wait_frame(void) {
         status_row(19, "texfail %d budget %d", psx_gx_stats_texture_fail, psx_gx_stats_budget_fail);
         status_row(20, "gx %d polys drop %d", psx_gx_stats_polys, psx_gx_stats_dropped);
         status_row(21, "blend %d exact %d approx", psx_gx_stats_composited, psx_gx_stats_blend_fallback);
+#endif
+#ifdef PORT_AUDIO
+        status_row(17, "pcm %lu/%lu u%lu", (unsigned long)port_audio_stats[2],
+                   (unsigned long)port_audio_stats[3], (unsigned long)port_audio_stats[4]);
 #endif
         unsigned char *gs = g_gameState;
         /* fixed line at the bottom of the console */
@@ -106,6 +107,7 @@ void plat_vlog(const char *fmt, va_list ap) {
 }
 
 void plat_halt(void) {
+    port_audio_stop();
     for (;;) {
         swiWaitForVBlank();
     }
@@ -159,5 +161,8 @@ int main(void) {
     } while (!(keysDown() & KEY_START));
 #endif
     port_profile_init();
+#ifdef PORT_AUDIO
+    printf("SPU PCM: %s\n", port_audio_init() ? "44100 Hz stereo" : "initialization failed");
+#endif
     psx_run_game();
 }

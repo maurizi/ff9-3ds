@@ -12,8 +12,8 @@ uint16_t psx_spu_read(unsigned offset);
 void psx_spu_write(unsigned offset, uint16_t value);
 void psx_spu_voice_register(unsigned voice, unsigned offset, uint16_t value);
 
-/* Enable only when a PCM sink is available. The DS output driver is pending;
- * host --audio enables the path before SpuInit. Reset preserves this setting. */
+/* Enable only when a PCM sink is available: host --audio/--spu-trace or
+ * the DS stream setup. SpuInit/reset preserves this setting. */
 void psx_spu_set_rendering(int enabled);
 /* Root counter clock is master/8: one output sample per 96 ticks. */
 void psx_spu_advance(unsigned ticks);

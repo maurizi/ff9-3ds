@@ -165,3 +165,8 @@ src/main/main.c | func_801EF284(); | battleEnd_main(); | 1
 src/ovl_0b/ovl_0b_2.c | DrawOTag(ot); | port_draw_ot_buffer(ot, p, sizeof(*p)); | 1
 # Game Over owns both display buffers and their packet lists on the native stack.
 src/ovl_65/ovl_65.c | DrawOTagEnv(cur->unk70, &cur->draw); | PutDrawEnv(&cur->draw); port_draw_ot_buffer(cur->unk70, b, sizeof b); | 1
+
+# AKAO pitch: an unprototyped s32 function cast bypasses AAPCS u8 argument
+# extension. Signed fine=-1 reaches the ARM callee as ffffffff instead of ff.
+# Use the real u16-return/u8-argument prototype at all three call sites.
+src/main/main.c | ((s32 (*)())func_8005DFE0) | func_8005DFE0 | 3

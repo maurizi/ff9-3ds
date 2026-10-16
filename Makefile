@@ -124,6 +124,7 @@ endef
 # DS: BlocksDS, DSi-mode memory map, Thumb.
 # Preserve complete PSX textures and effects while GX resource/blend issues remain.
 SOFTDISPLAY ?= 1
+AUDIO ?= 1
 # ARM9 timing probe verifies these pixel loops in instruction TCM; keep O2.
 PORT_ARCH_ds_psx/softgpu := -marm -DPORT_RASTER_ITCM
 PORT_ARCH_ds_ds/display_scale := -marm -DPORT_SCALE_ITCM
@@ -133,21 +134,24 @@ $(BUILD)/ds/port/ds/video_gl.o: third_party/libnds/videoGL.c
 $(BUILD)/ds/port/ds/render_gx.o $(BUILD)/tests/gx_backend.o: port/ds/gx_shadow_lazy.h port/include/profile.h
 SPECS    := $(BLOCKSDS)/sys/crts/dsi_arm9.specs
 DS_ARCH  := -mcpu=arm946e-s -mthumb -mthumb-interwork
-PORT_EXTRA_ds := -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include $(if $(AUTORUN),-DPORT_AUTORUN) \
+PORT_EXTRA_ds := $(if $(filter 1,$(AUDIO)),-DPORT_AUDIO) $(if $(filter 1,$(AUDIOHASH)),-DPORT_AUDIO_HASH) $(if $(AUDIOCAPTURE),-DPORT_AUDIO_CAPTURE=$(AUDIOCAPTURE)) -I$(BLOCKSDS)/libs/maxmod/include -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include $(if $(AUTORUN),-DPORT_AUTORUN) \
                  $(if $(CAPTURE_FRAME),-DPORT_CAPTURE_FRAME=$(CAPTURE_FRAME)) \
                  $(if $(filter 1,$(CAPTURE_READBACK)),-DPORT_CAPTURE_READBACK) \
                  $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') $(if $(filter 1,$(SOFTDISPLAY)),-DPORT_SOFT_DISPLAY) $(if $(filter 0,$(GXMERGE)),-DPORT_GX_NO_MERGE) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) $(if $(filter 1,$(GXEXPERIMENTAL)),-DPORT_GX_EXPERIMENTAL) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXLAZY)),-DPORT_GX_LAZY) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1,$(ITCMGUARD)),-DPORT_ITCM_GUARD) $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE)
 $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH),ds,arm,\
-	-specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib -Wl$(,)--gc-sections,-lnds9 -lc))
+	-specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib -L$(BLOCKSDS)/libs/maxmod/lib -Wl$(,)--gc-sections,-lmm9 -lnds9 -lc))
 
 # Changing a DS runtime option must rebuild its users even when sources are unchanged.
 .PHONY: FORCE_DS_CONFIG
 $(BUILD)/ds/runtime-config: FORCE_DS_CONFIG
 	@mkdir -p $(dir $@)
-	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' '$(GXLAZY)' '$(CAPTURE_READBACK)' > $@.tmp
+	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(AUDIO)' '$(AUDIOHASH)' '$(AUDIOCAPTURE)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' '$(GXLAZY)' '$(CAPTURE_READBACK)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(ds_PORTOBJS): $(BUILD)/ds/runtime-config
+$(BUILD)/ds/port/ds/audio.o: port/ds/audio.h port/ds/pcm_ring.h
+$(BUILD)/ds/port/ds/pcm_ring.o: port/ds/pcm_ring.h
+$(BUILD)/ds/port/ds/platform.o: port/ds/audio.h
 
 .PHONY: test-gx test-libnds-allocator
 test-libnds-allocator:
@@ -307,7 +311,7 @@ $(BUILD)/tests/gx_backend.o: port/ds/render_gx.c tests/gx/nds.h $(BUILD)/ds/runt
 	@mkdir -p $(dir $@)
 	$(CC) $(PC_ARCH) $(PORT_CFLAGS) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXLAZY)),-DPORT_GX_LAZY) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) -Itests/gx -c $< -o $@
 
-ARM7ELF  := $(BLOCKSDS)/sys/arm7/main_core/arm7_minimal.elf
+ARM7ELF  := $(BLOCKSDS)/sys/arm7/main_core/arm7_maxmod.elf
 NDSTOOL  := $(BLOCKSDS)/tools/ndstool/ndstool
 
 ds: $(BUILD)/ff9ds.nds
@@ -320,7 +324,7 @@ $(BUILD)/ff9ds_r4.nds: $(BUILD)/ff9ds.nds
 	@cp $< $@
 	@$(BLOCKSDS)/tools/dlditool/dlditool $(BLOCKSDS)/sys/dldi_r4/r4tf.dldi $@ > /dev/null
 
-$(BUILD)/ff9ds.nds: $(BUILD)/ds/ff9ds.elf
+$(BUILD)/ff9ds.nds: $(BUILD)/ds/ff9ds.elf $(ARM7ELF)
 	@echo "NDS  $@"
 	@$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "FF9 DS;port build;not for distribution"
 
@@ -455,6 +459,47 @@ raster-ds: $(BUILD)/tests/raster_ds.nds
 RASTER_DS_FLAGS := $(DS_ARCH) -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include -Iport/include -I$(DECOMP)/include -std=gnu17 -O2 -Wno-builtin-declaration-mismatch
 .PHONY: spu-ds
 spu-ds: $(BUILD)/tests/spu_ds.nds
+.PHONY: test-akao-pitch spu-pitch-ds
+$(BUILD)/tests/akao_pitch_callee.c $(BUILD)/tests/akao_pitch_caller.c &: $(BUILD)/portified/src/main/main.c tools/akao_pitch_abi_fixture.py
+	$(PYTHON) tools/akao_pitch_abi_fixture.py $< $(BUILD)/tests
+test-akao-pitch: $(BUILD)/tests/akao_pitch_host
+	@$<
+$(BUILD)/tests/akao_pitch_host: $(BUILD)/tests/akao_pitch_callee.c $(BUILD)/tests/akao_pitch_caller.c
+	$(CC) -m32 -std=gnu17 -O2 -fsigned-char -fno-strict-aliasing -fwrapv -Wno-builtin-declaration-mismatch -Wno-incompatible-pointer-types -I$(DECOMP)/include $^ -o $@
+spu-pitch-ds: $(BUILD)/tests/spu_pitch_ds.nds
+$(BUILD)/tests/akao_pitch_ds_callee.o: $(BUILD)/tests/akao_pitch_callee.c
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -fsigned-char -fno-strict-aliasing -fwrapv -c $< -o $@
+$(BUILD)/tests/akao_pitch_ds_caller.o: $(BUILD)/tests/akao_pitch_caller.c
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Wno-incompatible-pointer-types -c $< -o $@
+$(BUILD)/tests/spu_pitch_ds_main.o: tests/spu/pitch_ds_main.c
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/spu_pitch_ds.elf: $(BUILD)/tests/spu_pitch_ds_main.o $(BUILD)/tests/akao_pitch_ds_callee.o $(BUILD)/tests/akao_pitch_ds_caller.o
+	arm-none-eabi-gcc $(DS_ARCH) -specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/spu_pitch_ds.nds: $(BUILD)/tests/spu_pitch_ds.elf $(ARM7ELF)
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "AKAO pitch ABI;ARM9;Synthetic data"
+.PHONY: test-pcm-ring spu-stream-ds
+test-pcm-ring: $(BUILD)/tests/pcm_ring_test
+	@$<
+$(BUILD)/tests/pcm_ring_test: tests/spu/pcm_ring_test.c port/ds/pcm_ring.c port/ds/pcm_ring.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/ds $< port/ds/pcm_ring.c -o $@
+spu-stream-ds: $(BUILD)/tests/spu_stream_ds.nds
+$(BUILD)/tests/pcm_ring_ds_test.o: tests/spu/pcm_ring_test.c port/ds/pcm_ring.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Iport/ds -Dmain=pcm_ring_tests -c $< -o $@
+$(BUILD)/tests/spu_stream_ds_main.o: tests/spu/stream_ds_main.c port/ds/audio.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Iport/ds -c $< -o $@
+$(BUILD)/tests/spu_stream_ds_audio.o: port/ds/audio.c port/ds/audio.h port/ds/pcm_ring.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -DPORT_AUDIO -I$(BLOCKSDS)/libs/maxmod/include -c $< -o $@
+$(BUILD)/tests/spu_stream_ds_ring.o: port/ds/pcm_ring.c port/ds/pcm_ring.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/spu_stream_ds.elf: $(BUILD)/tests/spu_stream_ds_main.o $(BUILD)/tests/pcm_ring_ds_test.o $(BUILD)/tests/spu_stream_ds_audio.o $(BUILD)/tests/spu_stream_ds_ring.o
+	arm-none-eabi-gcc $(DS_ARCH) -specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib -L$(BLOCKSDS)/libs/maxmod/lib $^ -Wl,--gc-sections -Wl,--start-group -lmm9 -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/spu_stream_ds.nds: $(BUILD)/tests/spu_stream_ds.elf $(ARM7ELF)
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "SPU PCM stream;ARM9/ARM7;No disc data"
 .PHONY: spu-core-ds
 spu-core-ds: $(BUILD)/tests/spu_core_ds.nds
 $(BUILD)/tests/spu_core_ds_main.o: tests/spu/core_ds_main.c

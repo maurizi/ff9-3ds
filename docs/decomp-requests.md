@@ -621,3 +621,16 @@ overwrote all pixels regardless of those settings. It now respects protected
 destinations and force-mask while consuming each source pixel. Controlled
 GPUDUMP transfers and native ARM9 checks cover these semantics. No PSX
 instruction changes are requested.
+
+### F25 (2026-10-16). AKAO fine-pitch argument across native ABIs
+
+`func_8005DFE0` takes `u8 fine` and returns `u16`; its three callers cast it to
+`s32 (*)()` and pass signed `AkaoChannel.unk108`. On ARM AAPCS the callee relies
+on the caller to extend narrow arguments, so fine=-1 incorrectly arrives as
+ffffffff rather than ff. The original MIPS code explicitly masks a2 with ff at
+8005E0B4. The title's channel 4 then stores detune f516 rather
+than fffffff5 and programs voice 1 pitch 3ff4 rather than 0ad3. The first PCM
+difference is sample 267918; instrument RAM is identical. The port removes these
+three casts with a counted patch, retaining the real prototype. Please name the
+fine-pitch parameter/field and document why matching PSX callers use casts; do
+not change original codegen merely to accommodate the ARM ABI.

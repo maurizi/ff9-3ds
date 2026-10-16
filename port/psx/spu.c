@@ -4,8 +4,8 @@
  * - Voice/global writes reach spu_core.c through the PsyQ API or AKAO boundary overrides.
  *   psx_spu_regs[] remains a shadow for direct hardware readbacks.
  * - Transfers complete immediately; the transfer callback runs before SpuWrite returns.
- * Host --audio enables sample-clocked stereo PCM rendering. DS stream output and
- * IRQ/DMA fidelity remain unfinished; see docs/audio-validation.md.
+ * Host --audio and the DS stream use sample-clocked stereo PCM. DS playback
+ * still underruns when the game cannot keep pace; IRQ/DMA fidelity is unfinished; see docs/audio-validation.md.
  */
 #include "psyq_port.h"
 #include "psx_spu.h"

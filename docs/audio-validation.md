@@ -1,8 +1,9 @@
 # Audio fidelity validation
 
-Host `--audio NEW.wav` now renders game audio with SPU reverb through AKAO and the shared
-sample-clocked sound core. Default host runs and DS gameplay remain silent;
-DS stream output, movie/CD inputs and full IRQ/DMA fidelity are unfinished.
+Host `--audio NEW.wav` and default DS builds render game audio with SPU reverb
+through AKAO and the shared sample-clocked sound core. Default host runs remain
+silent. DS PCM streaming is connected, but slow gameplay causes audible starvation;
+movie/CD inputs and full IRQ/DMA fidelity are unfinished.
 The component/reference tests and initial game captures below do not establish
 complete music/SFX fidelity.
 
@@ -241,7 +242,8 @@ python3 tools/battle_smoke.py --frames 35000 --audio build/validation/NEW_baku.w
 WAV paths must be new files; the host refuses to overwrite an existing capture.
 WAV headers are finalized on normal exit/fatal exit, at 44.1 kHz stereo PCM16.
 The `--audio` option explicitly enables rendering; no software mixing cost is
-added to DS gameplay while the DS output sink remains unimplemented.
+added to DS gameplay at that integration stage. DS playback is now connected
+as described below, with its real-time budget still unresolved.
 
 The PsyQ transfer layer also now applies `SpuRead`'s original unsigned 0x7eff0
 size clamp before address arithmetic (confirmed in the original 8005703C assembly).
@@ -447,11 +449,91 @@ in the port's SPU output. Replay reports include compared stage names and first
 mismatch indices; a successful process alone is not a fidelity result unless
 `--require-match` was supplied or every reported count was inspected.
 
+## DS PCM output and native pitch-call fix
+
+DS builds now enable the shared 44.1 kHz mixer and stream its interleaved PCM16
+through Maxmod. The SDK `arm7_maxmod.elf` replaces `arm7_minimal.elf`; ARM7 drives
+channels 4/5 while ARM9 retains AKAO, voice processing and reverb. No original
+voices are stolen and no samples are converted to native DS ADPCM. Maxmod's
+[streaming API](https://blocksds.skylyrac.net/maxmod/group__nds__arm9__streaming.html)
+accepts the PCM; its timer 0 refill IRQ is separate from profiling timers 2/3.
+The installed implementation accepts 44100 Hz despite an older header range
+comment ending at 32768.
+
+An 8,192-frame single-producer/IRQ-consumer queue feeds a 2,048-frame Maxmod
+stream after 4,096 frames of prefill. A full queue blocks the foreground producer
+until the IRQ frees space. An empty queue emits counted zero samples and retains
+future PCM in order; it does not replay stale queue contents or discard later
+samples. Cursor arithmetic handles 32-bit rollover (about 27 hours at 44.1 kHz).
+Maxmod performs the final deinterleave/cache flush for ARM7. Queue/output storage
+is approximately 48 KiB. `AUDIO=0` disables DS mixing/output for diagnostic
+comparisons; it is not the fidelity target.
+
+`make test-pcm-ring` runs ASan/UBSan coverage for order, stereo extrema, full queues,
+partial requests, starvation/recovery and rollover. `spu-stream-ds` runs the same
+queue test on ARM9, then sends distinct synthetic stereo tones through the actual
+ARM7 output path, pauses the producer and forces a burst large enough to block.
+In the inspected melonDS DSi run, all 191,100 submitted frames were consumed,
+19,115 silent frames were counted during the deliberate pause, 13 producer waits
+occurred and there were zero format errors. Artifacts are `ds_pcm_stream.nds`,
+matching `.elf`, `.ml8`, `.png` and `_stats.json` under `build/validation`.
+A Pulse monitor capture (`ds_pcm_tones_verified.wav`) contains both tone channels;
+its dominant peaks are approximately 442.2/294.8 Hz with the test emulator limited
+to 60 FPS (`ds_pcm_tones_analysis.json`). These validate output routing/stereo;
+absolute wall-clock pitch at native refresh and physical DS output remain unproven.
+
+The first full-game ARM9/host PCM comparison exposed a separate ABI bug, rather
+than an output-buffer error. Three callers cast `func_8005DFE0` to `s32 (*)()` and
+pass signed `AkaoChannel.unk108` to its `u8 fine` parameter. AAPCS expects the
+[caller to extend narrow arguments](https://github.com/ARM-software/abi-aa/blob/main/aapcs32/aapcs32.rst#parameter-passing).
+The ARM callee therefore used ffffffff for fine=-1 rather than ff. The original
+MIPS callee explicitly executes `andi a2,a2,0xff` at 8005E0B4; its disassembly is
+retained in `akao_pitch_mips_disassembly.log`. The counted port patch removes all
+three incompatible casts and uses the real prototype, leaving the decomp untouched
+(F25 in `decomp-requests.md`).
+
+In the title, the bug changed channel 4 detune from fffffff5 to f516 and voice 1
+pitch from 0ad3 to 3ff4. Instrument RAM was identical. Before the fix, 346,018
+channel values differed in 441,000 stereo frames, first at sample 267,918, with
+maximum absolute difference 4,197 (`ds_audio_before_comparison.json`).
+`test-akao-pitch` and `spu-pitch-ds` extract the production function and its three
+actual call expressions into separate translation units with synthetic tables.
+Eleven signed fine values, including -32768/-129/-128/-1 and byte-wrap cases,
+pass on both host and emulated ARM9 (`akao_pitch_abi.nds`, `.elf`, `.png`).
+
+After the patch, all 441,000 stereo source frames through title game frame 600
+match the host byte for byte: PCM SHA256
+`b58ef5780406b8ba8b232e08f2ca4828c42dad6e58194a662e23763c9c1aade0`.
+This compares the ARM9 mixer output before hardware playback, not the analog
+speaker signal. `AUDIOHASH=1` publishes a diagnostic hash/nonzero count;
+`AUDIOCAPTURE=N` keeps the first N stereo frames in an optional diagnostic buffer.
+These options are off in normal builds. `compare_ds_audio.py` checks loaded code
+against the matching ELF, compares every captured value, and can export a WAV.
+
+Real-time playback remains poor. The title checkpoint generated 441,000 source
+frames but inserted 1,817,928 silent frames before stopping playback. Checkpoint
+builds now stop hardware audio when game time freezes, so delayed state capture
+cannot inflate that count. Evidence is `ds_audio_checkpoint.nds`, `.elf`, `.ml8`,
+`.png` and `_comparison.json`. Queue buffering is not a solution to the current
+rendering/mixing throughput deficit. Native clock cadence, IRQ deadline behavior,
+audio/video latency, long-running playback, and later scenes still need work.
+The test emulator was closed and its prior configuration restored.
+
+```sh
+make test-pcm-ring
+tools/docker.sh make test-akao-pitch spu-pitch-ds spu-stream-ds
+tools/docker.sh make -j16 ds pc AUTORUN=1 AUDIOHASH=1 AUDIOCAPTURE=441000 CAPTURE_FRAME=600
+# Run this exact ROM in melonDS and save its checkpoint with the matching ELF.
+python3 tools/compare_ds_audio.py build/validation/NEW_checkpoint.ml8 build/ds/ff9ds.elf build/validation/NEW_host.wav --wav build/validation/NEW_ds_source.wav
+# Restore the normal build configuration before committing:
+tools/docker.sh make -j16 ds pc
+```
+
 ## Remaining sound work
 
 Resolve original-game timing/capture differences beyond the matched stage
 replays, complete IRQ/DMA/capture timing and
-streamed movie/CD inputs, connect DS PCM output, and compare music,
+streamed movie/CD inputs, eliminate DS playback starvation, and compare music,
 SFX and scene/bank changes against synchronized original PSX recordings. Improve
 bus/key timing and verify unresolved silicon edge cases. Exercise late-game
 actions and multi-voice effects directly through the scenario harness; original

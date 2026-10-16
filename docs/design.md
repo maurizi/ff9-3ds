@@ -122,7 +122,7 @@ heap, so `g_btlUi` (0x80104F88) and the literal `0x80104000` are the same memory
   breaks with `0x02xxxxxx` pointers: R4.
 
 ### 3.6 Link (implemented in M0)
-`make` → `build/ff9ds.nds` (DSi-mode specs, `arm7_minimal` for now). The link has two passes: the first lists
+`make` → `build/ff9ds.nds` (DSi-mode specs, the SDK Maxmod ARM7 core). The link has two passes: the first lists
 what is still undefined, and `tools/gen_stubs.py` turns each into a stub that stops with its name
 (`build/gen/stubs.txt` is the to-do list). On 2026-10-11 that was 280 stubs: 125 PsyQ functions (`port/psx`),
 136 library/BIOS/hand-written asm routines (including the 63-function text module), and 19 game functions
@@ -245,8 +245,8 @@ renderer reproduces the opcode interpreter's layout (R15).
 - **Shared software SPU target**: all 24 voices at the PSX's 44.1 kHz sample clock, including Gaussian
   interpolation, ADSR, volume sweeps, pitch modulation, noise, and the original reverb processing. Voice stealing,
   1 kHz envelope approximations, and reduced-rate reverb do not satisfy the fidelity objective.
-- **DS output target**: stream the mixed stereo PCM through DS sound hardware. ARM9/ARM7 division and buffering
-  remain implementation work; assigning voices to the 16 native channels must not discard PSX voices or change
+- **DS output target**: stream the mixed stereo PCM through DS sound hardware. The ARM9 now queues
+  full-rate stereo PCM for Maxmod, whose ARM7 core drives two hardware channels; assigning voices to the 16 native channels must not discard PSX voices or change
   the mixing arithmetic. First establish deterministic host reference comparisons, then verify DS output and
   real-time timing. Keep AKAO register writes and key events ordered relative to generated samples.
 - **Current implementation**: host `--audio NEW.wav` renders game audio with reverb at 44.1 kHz through the AKAO
@@ -254,8 +254,10 @@ renderer reproduces the opcode interpreter's layout (R15).
   sweeps, pitch modulation, shared noise, reverb, main-volume mixing and basic capture RAM are implemented/tested;
   see `audio-validation.md`. Host `--spu-trace` captures game inputs for replay against
   pinned voice/reverb references. IRQ/DMA/capture timing fidelity, CD/movie inputs, physical-console
-  comparison and DS audio output remain unfinished. DS/default host mixing stays disabled until a sink
-  is selected; this is an integration stage, not completed audio fidelity.
+  comparison and real-time DS playback without starvation remain unfinished. DS audio is enabled by
+  default (`AUDIO=0` is a diagnostic baseline); default host mixing stays disabled until a sink
+  is selected. DS source PCM matches a captured title interval on the host, but gameplay still
+  produces audible gaps because rendering/mixing cannot keep pace. See `audio-validation.md`.
 - FMV audio must preserve its original stream timing; the planned FastVideoDS integration is not implemented.
 
 ## 8. Memory map (DSi mode)
