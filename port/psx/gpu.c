@@ -12,6 +12,7 @@
  */
 #include "psyq_port.h"
 #include "profile.h"
+#include "psx_display.h"
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -282,6 +283,11 @@ DISPENV *PutDispEnv(DISPENV *env) {
 /* the display area the game last set (PutDispEnv): what the TV shows */
 const DISPENV *psx_gpu_dispenv(void) {
     return &disp_env;
+}
+
+void psx_gpu_display_info(PsxDisplayInfo *info) {
+    *info = (PsxDisplayInfo){disp_env.disp.x, disp_env.disp.y,
+                           disp_env.disp.w, disp_env.disp.h, !!disp_env.isrgb24};
 }
 
 /* The framebuffer selected by PutDrawEnv, independent of subsequent GP0 clipping commands. */

@@ -9,11 +9,8 @@
 #include "display_scale.h"
 #include "psx_mem.h"
 #include "profile.h"
+#include "psx_display.h"
 
-typedef struct {
-    short x, y, w, h;
-} DispRect;
-const DispRect *psx_gpu_dispenv(void);
 extern unsigned short *psx_vram;
 void psx_softgpu_enable(int on);
 
@@ -78,7 +75,9 @@ void display_present(void) {
         swiWaitForVBlank();
         return;
     }
-    const DispRect *d = psx_gpu_dispenv();
+    PsxDisplayInfo info;
+    psx_gpu_display_info(&info);
+    const PsxDisplayInfo *d = &info;
     int w = d->w ? d->w : 320, h = d->h ? d->h : 224;
     if (w > 320) {
         w = 320;
@@ -93,8 +92,11 @@ void display_present(void) {
         previous_w[back_buffer]=w; previous_h[back_buffer]=h;
     }
     psx_display_font_presented=text_count;
-    ds_scale_display_text_pair(dst, psx_vram, d->x, d->y, w, h,
-                              text_rects, text_count, previous_rects, previous_count);
+    if (d->rgb24)
+        ds_scale_display_rgb24(dst, psx_vram, d->x, d->y, w, h);
+    else
+        ds_scale_display_text_pair(dst, psx_vram, d->x, d->y, w, h,
+                                  text_rects, text_count, previous_rects, previous_count);
     port_profile_end(PORT_PROFILE_SCALE,profile_scale);
     /* The scaler has a nearest pass followed by font coverage. Never let
      * scanout see the intermediate bitmap, even if rendering outlasts blank. */

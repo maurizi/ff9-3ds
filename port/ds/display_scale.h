@@ -2,6 +2,10 @@
 #define DS_DISPLAY_SCALE_H
 #include <stdint.h>
 
+/* Packed RGB24 movie scanout, nearest sampled like the scene display path. */
+void ds_scale_display_rgb24(uint16_t *dst, const uint16_t *vram,
+                           int x, int y, int width, int height);
+
 /* Shrink the PSX display by 4/5 with area coverage, into a 256-wide bitmap.
  * The source is wrapped 1024x512 VRAM; output is capped at 256x192. */
 void ds_scale_display(uint16_t *dst, const uint16_t *vram,

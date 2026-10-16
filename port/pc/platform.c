@@ -69,13 +69,10 @@ void plat_audio_samples(const short *samples, unsigned count) {
 void psx_softgpu_enable(int on);
 extern unsigned short *psx_vram;
 
-typedef struct {
-    short x, y, w, h;
-} DispRect;
-const DispRect *psx_gpu_dispenv(void); /* DISPENV starts with its display RECT */
+#include "psx_display.h"
 
 /* A VRAM area as a binary PPM (15-bit BGR expanded to 24-bit RGB): the displayed one, or all of it. */
-static void dump_area(const char *name, int x0, int y0, int w, int h) {
+static void dump_area(const char *name, int x0, int y0, int w, int h, int rgb24) {
     char path[256];
     snprintf(path, sizeof path, "build/frames/%s_%06ld.ppm", name, frames);
     FILE *f = fopen(path, "wb");
@@ -88,6 +85,10 @@ static void dump_area(const char *name, int x0, int y0, int w, int h) {
             unsigned short c = psx_vram[((y0 + y) & 511) * 1024 + ((x0 + x) & 1023)];
             unsigned char rgb[3] = {(unsigned char)((c & 31) << 3), (unsigned char)(((c >> 5) & 31) << 3),
                                     (unsigned char)(((c >> 10) & 31) << 3)};
+            if (rgb24) {
+                unsigned packed = psx_display_rgb24(psx_vram, x0, y0 + y, x);
+                rgb[0] = packed; rgb[1] = packed >> 8; rgb[2] = packed >> 16;
+            }
             fwrite(rgb, 1, 3, f);
         }
     }
@@ -95,8 +96,9 @@ static void dump_area(const char *name, int x0, int y0, int w, int h) {
 }
 
 static void dump_frame(void) {
-    const DispRect *d = psx_gpu_dispenv();
-    dump_area("frame", d->x, d->y, d->w ? d->w : 320, d->h ? d->h : 240);
+    PsxDisplayInfo d;
+    psx_gpu_display_info(&d);
+    dump_area("frame", d.x, d.y, d.w ? d.w : 320, d.h ? d.h : 240, d.rgb24);
 }
 
 __attribute__((constructor(101))) static void map_psx_ram(void) {
@@ -126,7 +128,7 @@ void plat_wait_frame(void) {
         dump_frame();
     }
     if (frames == vram_at) {
-        dump_area("vram", 0, 0, 1024, 512);
+        dump_area("vram", 0, 0, 1024, 512, 0);
     }
     if (status_every && frames % status_every == 0) {
         unsigned char *gs = g_gameState;

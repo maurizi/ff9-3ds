@@ -5,7 +5,36 @@
 #include "display_scale.h"
 
 static uint16_t vram[1024*512], output[256*192+1], full[256*192+1];
+static void check_rgb24(void) {
+    /* A movie pixel occupies three bytes, not one halfword. Nonzero low bits
+     * exercise RGB8->RGB5 truncation; odd display origins ignore X bit 0. */
+    uint8_t *bytes = (uint8_t *)vram;
+    for (unsigned i=0;i<sizeof vram;i++) bytes[i]=(i*73+(i/2048)*19+5)&255;
+    const int origins[]={0,1,480,1023,-1};
+    const int sizes[][2]={{320,224},{320,240},{319,217},{3,3},{512,256},{0,224},{320,0}};
+    for (unsigned o=0;o<sizeof origins/sizeof origins[0];o++)
+    for (unsigned s=0;s<sizeof sizes/sizeof sizes[0];s++) {
+        int w=sizes[s][0]>320 ? 320 : sizes[s][0];
+        int h=sizes[s][1]>240 ? 240 : sizes[s][1];
+        memset(output,0x5a,sizeof output);
+        ds_scale_display_rgb24(output,vram,origins[o],509,sizes[s][0],sizes[s][1]);
+        for (int y=0;y<192;y++) for (int x=0;x<256;x++) {
+            uint16_t expected=0x5a5a;
+            if (x<w*4/5 && y<h*4/5) {
+                unsigned row=((509+y*5/4)%512)*2048;
+                unsigned offset=((origins[o]&1022)*2+(x*5/4)*3)%2048;
+                expected=0x8000;
+                for (unsigned c=0;c<3;c++)
+                    expected|=(bytes[row+(offset+c)%2048]>>3)<<(c*5);
+            }
+            assert(output[y*256+x]==expected);
+        }
+        assert(output[256*192]==0x5a5a);
+    }
+}
 int main(void) {
+    check_rgb24();
+    memset(vram,0,sizeof vram);
     /* A one-pixel white stroke discarded by nearest-neighbour survives with
      * its actual coverage; adjacent green must not carry into red or blue. */
     for (int y=0; y<512; ++y) {

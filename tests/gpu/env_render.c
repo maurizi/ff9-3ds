@@ -6,6 +6,7 @@
 #include "psyq_port.h"
 #include "gp0.h"
 #include "psx_raster.h"
+#include "psx_display.h"
 
 unsigned char psx_ram[PSX_RAM_SIZE];
 extern u16 *psx_vram;
@@ -67,6 +68,18 @@ static void check_transfer_masks(void) {
     for(int y=0;y<512;y++) assert(bitmap[y*1024+351]==0x2000+y);
 }
 int main(void) {
+    DISPENV display;
+    PsxDisplayInfo info;
+    SetDefDispEnv(&display,480,240,320,224);
+    PutDispEnv(&display);
+    psx_gpu_display_info(&info);
+    assert(info.x==480 && info.y==240 && info.w==320 && info.h==224 && info.rgb24==0);
+    display.isrgb24=1;
+    PutDispEnv(&display);
+    psx_gpu_display_info(&info);
+    assert(info.x==480 && info.w==320 && info.rgb24==1);
+    display.isrgb24=0;
+    PutDispEnv(&display);
     psx_vram=bitmap;gp0_backend=&psx_softgpu;
     check_overlap_reference();
     check_transfer_masks();

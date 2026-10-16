@@ -632,13 +632,17 @@ $(BUILD)/tests/raster_ds_arm_itcm.o: port/psx/softgpu.c
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -DPORT_RASTER_ITCM -Dpsx_softgpu=psx_softgpu_arm_itcm -Dpsx_softgpu_enable=psx_softgpu_arm_itcm_enable -Dpsx_softgpu_shadow_poly=psx_softgpu_arm_itcm_shadow_poly -Dpsx_softgpu_shadow_poly_region=psx_softgpu_arm_itcm_shadow_poly_region -Dpsx_softgpu_shadow_rect=psx_softgpu_arm_itcm_shadow_rect -c $< -o $@
 
 .PHONY: test-display scale-ds
+$(BUILD)/tests/gpu_env_render: port/include/psx_display.h
+$(BUILD)/tests/display_rgb24_probe: tests/display/rgb24_probe.c port/ds/display_scale.c port/ds/display_scale.h port/include/psx_display.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O2 -Iport/ds -Iport/include tests/display/rgb24_probe.c port/ds/display_scale.c -o $@
 test-display: $(BUILD)/tests/display_scale_test $(BUILD)/tests/display_glyph_test
 	@$(BUILD)/tests/display_scale_test
 	@$(BUILD)/tests/display_glyph_test
 $(BUILD)/tests/display_glyph_test: tests/display/glyph_test.c port/psx/gp0.c port/include/gp0.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu17 -O1 -g -fsanitize=address,undefined -Iport/include tests/display/glyph_test.c port/psx/gp0.c -o $@
-$(BUILD)/tests/display_scale_test: tests/display/scale_test.c port/ds/display_scale.c port/ds/display_scale.h
+$(BUILD)/tests/display_scale_test: tests/display/scale_test.c port/ds/display_scale.c port/ds/display_scale.h port/include/psx_display.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu17 -O1 -g -fsanitize=address,undefined -Iport/ds tests/display/scale_test.c port/ds/display_scale.c -o $@
 
@@ -646,7 +650,7 @@ scale-ds: $(BUILD)/tests/display_scale.nds
 $(BUILD)/tests/display_scale_main.o: tests/display/ds_benchmark.c port/ds/display_scale.h
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Iport/ds -c $< -o $@
-$(BUILD)/tests/display_scale.o: port/ds/display_scale.c port/ds/display_scale.h
+$(BUILD)/tests/display_scale.o: port/ds/display_scale.c port/ds/display_scale.h port/include/psx_display.h
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -DPORT_SCALE_ITCM -c $< -o $@
 $(BUILD)/tests/display_scale.elf: $(BUILD)/tests/display_scale_main.o $(BUILD)/tests/display_scale.o

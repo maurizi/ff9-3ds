@@ -32,7 +32,10 @@ listed at the milestone that first needs them. The decomp agent should work slig
   side; menu SFX play; nothing hangs on key-off.
 
 ## M4: Whole game, PS1 presentation (R10, R12, R13, R14)
-- FMV and MBG via FastVideoDS; disc changes; saves; every mode reachable.
+- FMV and MBG with original-compatible video, audio and camera timing; disc changes; saves; every mode reachable.
+  Packed RGB24 scanout is implemented and compared with synthetic PSX captures;
+  real playback remains incomplete (see `movie-validation.md`). Any transcoding
+  pipeline must establish fidelity and fit the DS working-set budget.
 - **Exit**: a scripted route (save states from the decomp's emulator collection, re-created as `.mcr` saves)
   enters every mode and every menu overlay. Tetra Master and Blackjack are playable. Save, quit and reload work.
 

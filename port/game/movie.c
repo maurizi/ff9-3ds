@@ -1,7 +1,7 @@
 /* The MBG / FMV player (decomp ovl_64: MBG_init, play, per-frame decode, stop), replaced for the DS.
  *
- * The PS1 player streams STR sectors and decodes them with the MDEC (libpress). The port plays transcoded movies
- * instead (FastVideoDS, M4). Until then a movie is HEADLESS_FRAMES long. As on the PS1, where the player's
+ * The PS1 player streams STR sectors and decodes them with the MDEC (libpress). Real playback is not implemented
+ * yet: a placeholder movie is HEADLESS_FRAMES long. See docs/movie-validation.md. As on the PS1, where the player's
  * interrupt callbacks advance it, the frame number (D_80071E34) moves on its own, at 15 fps from the frame
  * interrupt (psx_movie_tick); the game's per-frame call reports whether a new frame is ready. The game waits for
  * frame > 0 before it watches for the end.

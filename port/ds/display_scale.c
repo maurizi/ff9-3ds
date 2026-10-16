@@ -1,5 +1,20 @@
 #include "display_scale.h"
+#include "../include/psx_display.h"
 #include <string.h>
+
+void ds_scale_display_rgb24(uint16_t *dst, const uint16_t *vram,
+                           int x, int y, int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    if (width > 320) width = 320;
+    if (height > 240) height = 240;
+    for (int oy = 0; oy < height * 4 / 5; oy++) {
+        for (int ox = 0; ox < width * 4 / 5; ox++) {
+            uint32_t rgb = psx_display_rgb24(vram, x, y + oy * 5 / 4, ox * 5 / 4);
+            dst[oy * 256 + ox] = 0x8000 | ((rgb >> 3) & 31)
+                | ((rgb >> 6) & 0x3e0) | ((rgb >> 9) & 0x7c00);
+        }
+    }
+}
 
 /* Ten bits per channel leave room for the 25-fold coverage sum without
  * carries between RGB channels. Ignore PSX STP and set DS opacity at output. */
