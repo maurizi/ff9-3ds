@@ -1,8 +1,8 @@
 # Audio fidelity validation
 
 Gameplay is still silent. `port/psx/spu.c` currently implements a transfer/register
-shadow, not an audible SPU. `spu_adpcm.c`, `spu_source.c`, and `spu_envelope.c`
-are tested components for the shared sound core; they are not yet connected to
+shadow, not an audible SPU. `spu_adpcm.c`, `spu_source.c`, `spu_envelope.c`, and
+`spu_voice.c` are tested components for the shared sound core; they are not yet connected to
 AKAO or platform audio output. Passing these tests does not establish music,
 SFX, or complete SPU fidelity.
 
@@ -121,12 +121,83 @@ make test-spu
 tools/docker.sh make -j16 ds pc spu-ds
 ```
 
+## Gaussian interpolation, volumes, and combined voices
+
+`psx_spu_source_interpolate` uses the documented 512 hardware coefficients.
+They were compared numerically with both pinned reference tables. The LE16
+coefficient bytes have SHA256
+`3e221a5b25de34ca9ad1ea945ad90fbe8171c5e3f7c52af15b232f9c36fbd40d`.
+Counter bits 4..11 select the phase; the four most recent samples include the
+three carried from the preceding block. Products are summed before the final
+15-bit arithmetic shift, following both reference emulators. The documentation's
+pseudocode instead shifts each product first; that can differ by a few PCM units.
+Hardware confirmation of this rounding distinction remains outstanding.
+
+The interpolation oracle extracts the original scalar expression and table from
+[Beetle PSX commit 9568c66b7386fa928b433f29e3daf7b8ee0f0031](https://github.com/libretro/beetle-psx-libretro/blob/9568c66b7386fa928b433f29e3daf7b8ee0f0031/mednafen/psx/spu.c).
+Source SHA256:
+`f081394befd298e1d3e70a3982009ac9555853c4dfa92162fb7bbed7d3370a99`.
+Its fixed hashes cover 32 input vectors for each of 256 phases; the production
+test repeats these at all 28 positions and all 16 low fractional values.
+
+`PsxSpuVolume` implements direct signed 15-bit volume and sweep register writes,
+retaining the level when changing to sweep mode, resetting counters on explicit
+writes, and stopping a saturated sweep. Tests enumerate all 32,768 direct-volume
+values and exercise negative, exponential, held, and restarted sweeps on top of
+the existing envelope oracle.
+
+`psx_spu_mix_voices` combines all 24 voices with Gaussian interpolation, ADSR,
+pitch modulation from the preceding voice's post-ADSR sample, independent stereo
+volumes/sweeps, raw dry/reverb-send sums, ENDX actions, and the voice 1/3 capture
+samples. It accepts an externally supplied shared noise sample. This is a mixing
+stage: the global noise clock, reverb, CD/external inputs, main volume/clipping,
+register bus, key-event latches, capture RAM/IRQs, and output remain separate work.
+No voice is discarded to fit the DS's 16 hardware channels.
+
+The combined oracle extracts the pinned DuckStation voice structs, register
+writer, key methods, ADSR/sweep/decoder methods, and `SampleVoice` without changing
+those method bodies. It substitutes Beetle's independently checked scalar
+interpolation for DuckStation's SIMD method and supplies RAM/noise data directly.
+Pinned DuckStation helper headers also remain local. `GeneratePendingSamples`
+is a no-op because events occur at explicit sample boundaries; this oracle does
+not validate the future CPU bus or key-latch scheduling.
+
+Eight synthetic scenarios each exercise 24 voices for 2,048 samples, comparing
+dry/reverb sums, capture samples, ENDX, and each voice's envelope level/phase,
+source address/pitch counter, loop address, stereo volume levels, and post-ADSR
+sample. They cover zero/extreme/modulated pitches, noise substitution, off-voice
+fetching, envelope/volume writes, manual loop changes, retriggers, and releases.
+These comparisons exposed an already-off voice edge: a subsequent end/mute action
+must retain a manually written ENVX value, as the reference does. The envelope
+component now preserves that value; a dedicated assertion checks it as well.
+
+Regenerate the additional numerical fixtures (host compiler needs C++23 for the
+combined reference's pinned helper headers):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/libretro/beetle-psx-libretro/9568c66b7386fa928b433f29e3daf7b8ee0f0031/mednafen/psx/spu.c -o build/validation/beetle_spu_pinned.c
+curl -fsSL https://raw.githubusercontent.com/stenzek/duckstation/fe809807026e49472dd8bd99ff4771d6918a5707/src/common/types.h -o build/validation/duck_types.h
+curl -fsSL https://raw.githubusercontent.com/stenzek/duckstation/fe809807026e49472dd8bd99ff4771d6918a5707/src/common/bitfield.h -o build/validation/duck_bitfield.h
+curl -fsSL https://raw.githubusercontent.com/stenzek/duckstation/fe809807026e49472dd8bd99ff4771d6918a5707/src/common/bitutils.h -o build/validation/duck_bitutils.h
+python3 tools/spu_interpolation_reference.py build/validation/beetle_spu_pinned.c > build/validation/interpolation_reference.h
+python3 tools/spu_voice_reference.py build/validation/duck_spu_pinned.cpp build/validation/beetle_spu_pinned.c --helpers build/validation > build/validation/voice_reference.h
+cmp tests/spu/interpolation_reference.h build/validation/interpolation_reference.h
+cmp tests/spu/voice_reference.h build/validation/voice_reference.h
+make test-spu
+tools/docker.sh make -j16 ds pc spu-ds
+```
+
+Validation on 2026-10-16: all five suites pass host ASan/UBSan and emulated ARM9
+execution, including all eight combined 24-voice reference scenarios. The exact
+ROM/ELF and inspected console capture are `build/validation/spu_voice_mix_arm9.nds`,
+`.elf`, and `.png`. Both game targets build. The test emulator was closed and its
+previous configuration restored. No game data was needed for these checks.
+
 ## Remaining sound work
 
-Connect the source/envelope components with ordered key events and direct AKAO
-register writes; add Gaussian interpolation and volume-sweep register handling;
-mix all 24 voices with noise/pitch modulation; implement reverb and capture/IRQ
-semantics; connect PCM output on host and DS. Validate music, SFX, movie audio,
-and changes of scene/bank against original PSX recordings. Test late-game and
-multi-voice effects directly through the scenario harness. No audible comparison
-or DS sound-output performance result is claimed yet.
+Connect the mixing stage with ordered key events, direct AKAO register writes,
+and the global SPU registers; implement the shared noise generator, reverb and
+capture/IRQ semantics; connect PCM output on host and DS. Validate music, SFX,
+movie audio, and changes of scene/bank against original PSX recordings. Test
+late-game and multi-voice effects directly through the scenario harness. No
+audible gameplay comparison or DS sound-output performance result is claimed yet.

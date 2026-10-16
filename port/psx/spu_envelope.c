@@ -50,6 +50,24 @@ int psx_spu_envelope_tick(PsxSpuEnvelope *env, int16_t *level) {
     return value > 0;
 }
 
+void psx_spu_volume_write(PsxSpuVolume *volume, uint16_t value) {
+    if (!(value & 0x8000)) {
+        int level = value & 0x7fff;
+        if (level & 0x4000) level -= 0x8000;
+        volume->level = level * 2;
+        volume->active = 0;
+        return;
+    }
+    psx_spu_envelope_configure(&volume->envelope, value & 0x7f, 0x7f,
+                               value & 0x2000, value & 0x4000, value & 0x1000);
+    volume->active = volume->envelope.increment != 0;
+}
+
+void psx_spu_volume_tick(PsxSpuVolume *volume) {
+    if (volume->active)
+        volume->active = psx_spu_envelope_tick(&volume->envelope, &volume->level);
+}
+
 static void adsr_phase(PsxSpuAdsr *adsr, PsxSpuAdsrPhase phase) {
     unsigned rate = 0, mask = 0x7f;
     int decrease = 0, exponential = 0;
@@ -103,6 +121,7 @@ void psx_spu_adsr_key_off(PsxSpuAdsr *adsr) {
 }
 
 void psx_spu_adsr_force_off(PsxSpuAdsr *adsr) {
+    if (adsr->phase == PSX_SPU_ADSR_OFF) return;
     adsr->level = 0;
     adsr_phase(adsr, PSX_SPU_ADSR_OFF);
 }

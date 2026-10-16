@@ -15,6 +15,17 @@ void psx_spu_envelope_configure(PsxSpuEnvelope *env, uint8_t rate, uint8_t hold_
  * not tick or saturate, even if the current level is already at an endpoint. */
 int psx_spu_envelope_tick(PsxSpuEnvelope *env, int16_t *level);
 
+typedef struct {
+    PsxSpuEnvelope envelope;
+    int16_t level;
+    uint8_t active;
+} PsxSpuVolume;
+
+/* VOLL/VOLR/MVOLL/MVOLR: direct signed 15-bit volume or a sweep starting from
+ * the existing level. Explicit writes reset the sweep's rate counter. */
+void psx_spu_volume_write(PsxSpuVolume *volume, uint16_t value);
+void psx_spu_volume_tick(PsxSpuVolume *volume);
+
 typedef enum {
     PSX_SPU_ADSR_OFF, PSX_SPU_ADSR_ATTACK, PSX_SPU_ADSR_DECAY,
     PSX_SPU_ADSR_SUSTAIN, PSX_SPU_ADSR_RELEASE
@@ -31,6 +42,7 @@ typedef struct {
 void psx_spu_adsr_set_registers(PsxSpuAdsr *adsr, uint16_t adsr1, uint16_t adsr2);
 void psx_spu_adsr_key_on(PsxSpuAdsr *adsr);
 void psx_spu_adsr_key_off(PsxSpuAdsr *adsr);
+/* Stops an active envelope. Already-off voices retain manually written ENVX. */
 void psx_spu_adsr_force_off(PsxSpuAdsr *adsr);
 void psx_spu_adsr_tick(PsxSpuAdsr *adsr);
 #endif

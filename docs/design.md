@@ -250,9 +250,9 @@ renderer reproduces the opcode interpreter's layout (R15).
   the mixing arithmetic. First establish deterministic host reference comparisons, then verify DS output and
   real-time timing. Keep AKAO register writes and key events ordered relative to generated samples.
 - **Current implementation**: transfers/register shadows are present, but gameplay is still silent. Block
-  decoding, source fetch/loop/pitch state, and ADSR/envelope components have tests; see `audio-validation.md`.
-  Their game integration, interpolation, volume-sweep register handling, mixer, reverb, IRQ/capture behavior,
-  and platform output remain unimplemented.
+  decoding, source fetch/loop/pitch state, Gaussian interpolation, ADSR/volume sweeps and a 24-voice mixing
+  stage have tests; see `audio-validation.md`. Game/global-register integration, shared noise generation,
+  reverb, IRQ/capture behavior, final main-volume mixing and platform output remain unimplemented.
 - FMV audio must preserve its original stream timing; the planned FastVideoDS integration is not implemented.
 
 ## 8. Memory map (DSi mode)

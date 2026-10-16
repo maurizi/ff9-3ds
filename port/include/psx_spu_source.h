@@ -34,6 +34,10 @@ void psx_spu_source_set_loop(PsxSpuSource *source, uint16_t *loop_address,
 void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
                           uint16_t *loop_address);
 
+/* Four-tap Gaussian sample at the current 4.12 source position. Requires fetch
+ * first. Counter bits 0..3 are ignored; bits 4..11 select the coefficient phase. */
+int16_t psx_spu_source_interpolate(const PsxSpuSource *source);
+
 /* Advance AFTER sampling the current position. pitch is already modulated;
  * hardware limits it to 0x3fff. Returns ENDX and envelope-mute actions for the
  * enclosing core. End+mute is ignored for noise voices, but ENDX/looping aren't.

@@ -85,6 +85,12 @@ int main(void) {
     psx_spu_adsr_tick(&adsr);
     assert(adsr.phase == PSX_SPU_ADSR_OFF && adsr.level == 0);
 
+    /* Already-off ENVX writes survive an end/mute action during IRQ fetching. */
+    adsr.level = 1234;
+    psx_spu_adsr_force_off(&adsr);
+    psx_spu_adsr_tick(&adsr);
+    assert(adsr.level == 1234 && adsr.phase == PSX_SPU_ADSR_OFF);
+
     /* Both exponential sustain modes and full-scale sustain-level decoding. */
     psx_spu_adsr_set_registers(&adsr, 15, 0xc000);
     psx_spu_adsr_key_on(&adsr);
@@ -100,6 +106,48 @@ int main(void) {
     psx_spu_adsr_tick(&adsr);
     assert(adsr.level == 32767 && adsr.phase == PSX_SPU_ADSR_SUSTAIN);
 
-    puts("SPU envelopes: all rates/modes, ADSR phases and key-off PASS");
+    /* Direct volumes decode all signed 15-bit values; sweep writes retain the
+     * current level. A saturated sweep stops, and equal writes restart it. */
+    PsxSpuVolume volume = {0};
+    for (unsigned raw = 0; raw < 0x8000; ++raw) {
+        psx_spu_volume_write(&volume, raw);
+        int expected_level = raw < 0x4000 ? (int)raw * 2 : (int)raw * 2 - 65536;
+        assert(volume.level == expected_level && !volume.active);
+        psx_spu_volume_tick(&volume);
+        assert(volume.level == expected_level);
+    }
+    psx_spu_volume_write(&volume, 0);
+    psx_spu_volume_write(&volume, 0x8000);
+    assert(volume.level == 0 && volume.active);
+    for (unsigned i = 0; i < 3; ++i) psx_spu_volume_tick(&volume);
+    assert(volume.level == 32767 && !volume.active);
+    psx_spu_volume_tick(&volume);
+    assert(volume.level == 32767 && !volume.active);
+    psx_spu_volume_write(&volume, 0x8000);
+    assert(volume.level == 32767 && volume.active);
+    psx_spu_volume_tick(&volume);
+    assert(!volume.active);
+    psx_spu_volume_write(&volume, 0x4000); /* direct -32768 */
+    psx_spu_volume_write(&volume, 0x807f); /* paused sweep retains negative level */
+    assert(volume.level == -32768 && !volume.active);
+    psx_spu_volume_tick(&volume);
+    assert(volume.level == -32768);
+    psx_spu_volume_write(&volume, 0);
+    psx_spu_volume_write(&volume, 0x9000); /* negative phase linear increase */
+    psx_spu_volume_tick(&volume);
+    assert(volume.level == -16384);
+    psx_spu_volume_tick(&volume);
+    assert(volume.level == -32768 && !volume.active);
+    psx_spu_volume_write(&volume, 0x2000); /* 16384 */
+    psx_spu_volume_write(&volume, 0xe000); /* exponential decrease */
+    psx_spu_volume_tick(&volume);
+    assert(volume.level == 8192);
+    psx_spu_volume_write(&volume, 0x8030);
+    psx_spu_volume_tick(&volume);
+    assert(volume.envelope.counter == 0x4000);
+    psx_spu_volume_write(&volume, 0x8030);
+    assert(volume.envelope.counter == 0 && volume.level == 8192);
+
+    puts("SPU envelopes: all rates/modes, ADSR, volume registers PASS");
     return 0;
 }

@@ -1,4 +1,5 @@
 #include "psx_spu_source.h"
+#include "psx_spu_gauss.h"
 #include <string.h>
 
 void psx_spu_source_key_on(PsxSpuSource *source, uint16_t start_address) {
@@ -28,6 +29,19 @@ void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
     source->fetched = 1;
     if ((source->flags & 4) && !source->ignore_loop_start)
         *loop_address = source->address;
+}
+
+int16_t psx_spu_source_interpolate(const PsxSpuSource *source) {
+    unsigned phase = (source->counter >> 4) & 255;
+    const int16_t *samples = source->samples + (source->counter >> 12);
+    /* Accumulate before rounding, as in both reference emulators. The largest
+     * absolute coefficient sum is below 32768, so int32 cannot overflow even
+     * with four full-scale input samples. See audio-validation.md. */
+    int32_t total = samples[0] * psx_spu_gauss[255 - phase];
+    total += samples[1] * psx_spu_gauss[511 - phase];
+    total += samples[2] * psx_spu_gauss[256 + phase];
+    total += samples[3] * psx_spu_gauss[phase];
+    return (int16_t)(total >> 15);
 }
 
 unsigned psx_spu_source_advance(PsxSpuSource *source, uint16_t pitch,
