@@ -378,6 +378,9 @@ $(BUILD)/tests/low_ram_test: tests/battle/low_ram_test.c port/include/psx_mem.h
 
 test-raster: $(BUILD)/tests/raster_differential
 	@$<
+$(BUILD)/tests/raster_psx_probe: tests/raster/psx_probe.c port/psx/softgpu.c port/psx/gp0.c port/include/gp0.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/raster/psx_probe.c port/psx/softgpu.c port/psx/gp0.c -o $@
 $(BUILD)/tests/raster_differential: tests/raster/differential.c tests/raster/reference.c port/psx/softgpu.c port/include/gp0.h port/include/psx_raster.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/raster/differential.c tests/raster/reference.c port/psx/softgpu.c -o $@

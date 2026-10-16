@@ -2,7 +2,7 @@
  *
  * It is the reference renderer: on the PC build it shows what the PS1 would display (frame dumps), and the DS 3D
  * renderer is checked against it. It models the drawing area, texture pages (4/8/15 bit, CLUTs), texture window,
- * the four semi-transparency modes, raw vs modulated textures, gouraud shading and mask bits. Dithering and exact
+ * the four semi-transparency modes, raw vs modulated textures, gouraud shading, dithering and mask bits. Exact
  * sub-pixel edge rules are not modelled. Edge functions and interpolants step per pixel (no division in the loop).
  */
 #include "gp0.h"
@@ -111,7 +111,17 @@ static inline u32 texel(const Gp0Mode *m, int u, int v) {
 #ifndef PORT_SOFTGPU_REFERENCE
 __attribute__((always_inline))
 #endif
-static inline void plot(const Gp0Mode *m, int x, int y, int r, int g, int b, int u, int v) {
+static inline u16 dither_colour(int r,int g,int b,int x,int y) {
+    static const signed char offsets[16]={-4,0,-3,1,2,-2,3,-1,-3,1,-4,0,3,-1,2,-2};
+    int bias=offsets[((y&3)<<2)|(x&3)];
+    r+=bias;g+=bias;b+=bias;
+    r=r<0?0:r>255?255:r;
+    g=g<0?0:g>255?255:g;
+    b=b<0?0:b>255?255:b;
+    return (u16)((r>>3)|((g>>3)<<5)|((b>>3)<<10));
+}
+
+static inline void plot(const Gp0Mode *m, int x, int y, int r, int g, int b, int u, int v, int dither) {
     /* Fixed-point interpolation can round an edge channel one step below
      * zero. Keep colours in their architectural eight-bit range before packing. */
     r = r < 0 ? 0 : r > 255 ? 255 : r;
@@ -141,12 +151,16 @@ static inline void plot(const Gp0Mode *m, int x, int y, int r, int g, int b, int
             c = t;
         } else if (palette_ready) {
             c = sample >> 16;
+        } else if (dither) {
+            /* Retain the modulation's low three bits until dithering. Doing
+             * the old five-bit multiply first loses the threshold changes. */
+            c=dither_colour((t&31)*r>>4,((t>>5)&31)*g>>4,((t>>10)&31)*b>>4,x,y)|(t&0x8000);
         } else {
             int tr = (t & 31) * r >> 7, tg = ((t >> 5) & 31) * g >> 7, tb = ((t >> 10) & 31) * b >> 7;
             c = (u16)((tr > 31 ? 31 : tr) | (tg > 31 ? 31 : tg) << 5 | (tb > 31 ? 31 : tb) << 10 | (t & 0x8000));
         }
     } else {
-        c = (u16)((r >> 3) | (g >> 3) << 5 | (b >> 3) << 10);
+        c = dither ? dither_colour(r,g,b,x,y) : (u16)((r >> 3) | (g >> 3) << 5 | (b >> 3) << 10);
     }
     if (semi) {
         c = (u16)(blend(*d, c, m->abr) | (c & 0x8000));
@@ -216,7 +230,9 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     if (minx >= maxx || miny >= maxy) {
         return;
     }
-    prepare_palette(m, a, minx, miny, maxx, maxy);
+    int dither=(gp0_state.texpage&0x200) && (m->textured?!m->raw:m->gouraud);
+    if(dither) palette_ready=0;
+    else prepare_palette(m, a, minx, miny, maxx, maxy);
     /* edge function e_i(x, y) = A_i x + B_i y + C_i, for the edge opposite vertex i */
     int A0 = b->y - c->y, B0 = c->x - b->x, A1 = c->y - a->y, B1 = a->x - c->x, A2 = a->y - b->y, B2 = b->x - a->x;
     int w0row = A0 * (minx - b->x) + B0 * (miny - b->y);
@@ -313,7 +329,7 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
         if (!m->gouraud) {
             for (int x = left; x < right; x++) {
                 if (RASTER_COVERED)
-                    plot(m, x, y, a->r, a->g, a->b, u >> 16, v >> 16);
+                    plot(m, x, y, a->r, a->g, a->b, u >> 16, v >> 16, dither);
                 RASTER_STEP_EDGES();
                 u = step_attribute(u, dudx); v = step_attribute(v, dvdx);
             }
@@ -322,7 +338,7 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
              * Avoid both UV setup and the two per-pixel attribute steps. */
             for (int x = left; x < right; x++) {
                 if (RASTER_COVERED)
-                    plot(m, x, y, r >> 16, g >> 16, bl >> 16, 0, 0);
+                    plot(m, x, y, r >> 16, g >> 16, bl >> 16, 0, 0, dither);
                 RASTER_STEP_EDGES();
                 r = step_attribute(r, drdx); g = step_attribute(g, dgdx);
                 bl = step_attribute(bl, dbdx);
@@ -332,9 +348,9 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
         for (int x = left; x < right; x++) {
             if (RASTER_COVERED) {
                 if (m->gouraud) {
-                    plot(m, x, y, r >> 16, g >> 16, bl >> 16, u >> 16, v >> 16);
+                    plot(m, x, y, r >> 16, g >> 16, bl >> 16, u >> 16, v >> 16, dither);
                 } else {
-                    plot(m, x, y, a->r, a->g, a->b, u >> 16, v >> 16);
+                    plot(m, x, y, a->r, a->g, a->b, u >> 16, v >> 16, dither);
                 }
             }
             RASTER_STEP_EDGES();
@@ -407,7 +423,7 @@ static SG_HOT void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
             g += (b->g - a->g) * i / n;
             bl += (b->b - a->b) * i / n;
         }
-        plot(m, x, y, r, g, bl, 0, 0);
+        plot(m, x, y, r, g, bl, 0, 0, gp0_state.texpage&0x200);
     }
     port_profile_draw_end(2,profile_start);
 }
@@ -481,7 +497,7 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
 #endif
     for (int y = y0; y < y1; y++) {
         for (int x = x0; x < x1; x++) {
-            plot(m, x, y, v->r, v->g, v->b, u0 + x, v0 + y);
+            plot(m, x, y, v->r, v->g, v->b, u0 + x, v0 + y, 0);
         }
     }
     port_profile_draw_end(1,profile_start);

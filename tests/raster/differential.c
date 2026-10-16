@@ -23,6 +23,40 @@ static void draw(const Gp0Backend *backend, const Gp0Mode *m, const Gp0Vtx *v, i
     else backend->line(m, v, v+1);
 }
 static void targeted_checks(void) {
+    /* Synthetic 4x4 interiors verified through DuckStation's GPU. These
+     * independent goldens catch colour errors shared by both native paths. */
+    static const uint16_t shaded[16]={
+        0x3de0,0x41e1,0x3de0,0x4201,0x4201,0x3de0,0x4201,0x41e1,
+        0x3de0,0x4201,0x3de0,0x41e1,0x4201,0x41e1,0x4201,0x3de0};
+    static const uint16_t modulated[16]={
+        0x96a0,0x9aa0,0x96a0,0x9aa0,0x9ac1,0x96a0,0x9ac1,0x96a0,
+        0x96a0,0x9aa0,0x96a0,0x9aa0,0x9ac1,0x96a0,0x9ac1,0x96a0};
+    for(int py=0;py<4;py++) for(int px=0;px<4;px++) {
+        memset(actual,0,sizeof actual);psx_vram=actual;
+        gp0_state=(Gp0State){.area_x1=1023,.area_y1=511,.texpage=0x200};
+        Gp0Mode m={.gouraud=1};
+        Gp0Vtx v[4]={{px,py,9,127,129,0,0},{32+px,py,9,127,129,32,0},
+                     {px,32+py,9,127,129,0,32},{32+px,32+py,9,127,129,32,32}};
+        psx_softgpu.poly(&m,v,4);
+        for(int y=0;y<4;y++) for(int x=0;x<4;x++)
+            assert(actual[(4+y+py)*1024+4+x+px]==shaded[((y+py)&3)*4+((x+px)&3)]);
+        m.gouraud=0;
+        for(int y=4;y<8;y++) {
+            Gp0Vtx a={0,y,9,127,129,0,0},b={31,y,9,127,129,0,0};
+            psx_softgpu.line(&m,&a,&b);
+        }
+        for(int y=0;y<4;y++) for(int x=0;x<4;x++) assert(actual[(4+y)*1024+4+x]==shaded[y*4+x]);
+        m=(Gp0Mode){.textured=1,.depth=0,.tx=640,.ty=256,.clut_y=480};
+        for(int y=256;y<288;y++) for(int x=640;x<648;x++) actual[y*1024+x]=0x1111;
+        actual[480*1024+1]=0x9acb;
+        psx_softgpu.poly(&m,v,4);
+        for(int y=0;y<4;y++) for(int x=0;x<4;x++)
+            assert(actual[(4+y+py)*1024+4+x+px]==modulated[((y+py)&3)*4+((x+px)&3)]);
+        m.raw=1;psx_softgpu.poly(&m,v,4);
+        for(int y=4+py;y<8+py;y++) for(int x=4+px;x<8+px;x++) assert(actual[y*1024+x]==0x9acb);
+        m.raw=0;psx_softgpu.rect(&m,v,32,32);
+        for(int y=4+py;y<8+py;y++) for(int x=4+px;x<8+px;x++) assert(actual[y*1024+x]==0x9aa0);
+    }
     /* A screen-aligned quad must cover the same top/left-inclusive,
      * bottom/right-exclusive pixels as a rectangle, including row zero. */
     for(int blend_mode=0;blend_mode<5;++blend_mode) {
@@ -105,6 +139,7 @@ static void shadow_checks(void) {
         memcpy(pixels[1],pixels[0],sizeof pixels[0]);
         memcpy(known[1],known[0],sizeof known[0]);
         gp0_state=(Gp0State){.area_x0=3,.area_y0=5,.area_x1=61,.area_y1=59,
+                            .texpage=(trial&1)?0x200:0,
                             .set_mask=(trial>>6)&1,.check_mask=(trial>>7)&1};
         psx_softgpu_reference_shadow_poly(&m,v,3+(trial&1),pixels[1],known[1],0,0,64,64);
         for (int region=0;region<16;region++) {
@@ -181,6 +216,7 @@ int main(int argc, char **argv) {
         /* Flat quads deliberately have different vertex colours: triangle 2
          * must use vertex 1, rather than a cached colour from vertex 0. */
         gp0_state=(Gp0State){.area_x0=0,.area_y0=0,.area_x1=1023,.area_y1=511,
+            .texpage=(trial&1)?0x200:0,
             .twin_mask_x=(random_value()%32)*8,.twin_mask_y=(random_value()%32)*8,
             .twin_off_x=(random_value()%32)*8,.twin_off_y=(random_value()%32)*8,
             .check_mask=random_value()%2,.set_mask=random_value()%2};

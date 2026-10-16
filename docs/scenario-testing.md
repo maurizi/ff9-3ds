@@ -484,6 +484,15 @@ DS clip. Enemy action/RNG timing differs, so this checks transformation and
 model progression, not synchronized effect pixels or combat values.
 Both emulators were closed and normal melonDS configuration restored.
 
+## Renderer colour validation
+
+[Controlled PSX colour checks](render-colour-validation.md) now compare the
+production rasterizer with DuckStation's software GPU. All 326 synthetic colour
+cases match after dithering support (253 matched before). Native trance video
+and a fault-free endpoint checkpoint exercise the updated code on DS. This
+resolves a specific colour-pipeline gap; rectangular character artifacts,
+exact edges, full animation pixels and audio remain separate work.
+
 ## Cached HUD text and subsequent effect interfaces
 
 The earlier screenshot-based diagnosis of stale/overlapping DS name text was

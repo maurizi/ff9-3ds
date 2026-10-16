@@ -24,12 +24,16 @@ def main():
     parser.add_argument('--seconds', type=float, default=30)
     parser.add_argument('--timeout', type=float, default=600)
     parser.add_argument('--state-out', type=Path)
+    parser.add_argument('--state-after', type=Path, help='save a checkpoint immediately after the recording')
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     if args.pid <= 0 or args.frame <= 0 or args.timeout <= 0 or not 0 < args.seconds <= 60:
         parser.error('PID, frame and timeout must be positive; recording must be at most 60 seconds')
-    for output in (args.out, args.state_out):
+    outputs=[p.resolve() for p in (args.out,args.state_out,args.state_after) if p]
+    if len(outputs)!=len(set(outputs)):
+        parser.error('video and checkpoint paths must be distinct')
+    for output in (args.out, args.state_out, args.state_after):
         if output and (not output.resolve().is_relative_to(root / 'build') or output.exists()):
             parser.error('outputs must be new paths under build/')
     if args.out.suffix != '.mp4':
@@ -106,11 +110,15 @@ def main():
             previous = current
         print(f'Triggered at game frame {previous}', flush=True)
     common = [sys.executable]
-    if args.state_out:
+    def save_state(path):
         subprocess.run(common + [str(root / 'tools/save_ds_state.py'), '--window', args.window,
-                       '--rom', str(args.rom), '--elf', str(args.elf), '--out', str(args.state_out)], check=True)
+                       '--rom', str(args.rom), '--elf', str(args.elf), '--out', str(path)], check=True)
+    if args.state_out:
+        save_state(args.state_out)
     subprocess.run(common + [str(root / 'tools/capture.py'), '--window', args.window,
                    '--seconds', str(args.seconds), '--out', str(args.out)], check=True)
+    if args.state_after:
+        save_state(args.state_after)
 
 
 if __name__ == '__main__':
