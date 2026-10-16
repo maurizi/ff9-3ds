@@ -182,6 +182,13 @@ $(BUILD)/tests/gx_texture_shared_shadow_test: tests/gx/texture_test.c tests/gx/n
 	@mkdir -p $(dir $@)
 	$(CC) -DPORT_GX_SHADOW -DPORT_GX_SHARE_INDEXED -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Itests/gx -Iport/include -I$(DECOMP)/include $< port/psx/softgpu.c -o $@
 
+.PHONY: test-spu
+test-spu: $(BUILD)/tests/spu_adpcm_test
+	@$<
+$(BUILD)/tests/spu_adpcm_test: tests/spu/adpcm_test.c tests/spu/adpcm_cases.h tests/spu/adpcm_reference.h port/psx/spu_adpcm.c port/include/psx_spu_adpcm.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_adpcm.c -o $@
+
 # Match the production pointer width when exercising 24-bit OT links.
 .PHONY: test-gpu
 test-gpu: $(BUILD)/tests/gpu_ordering_test $(BUILD)/tests/gpu_env_probe $(BUILD)/tests/gpu_env_render $(BUILD)/tests/gpu_replay
@@ -394,6 +401,21 @@ $(BUILD)/tests/raster_differential: tests/raster/differential.c tests/raster/ref
 .PHONY: raster-ds
 raster-ds: $(BUILD)/tests/raster_ds.nds
 RASTER_DS_FLAGS := $(DS_ARCH) -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include -Iport/include -I$(DECOMP)/include -std=gnu17 -O2 -Wno-builtin-declaration-mismatch
+.PHONY: spu-ds
+spu-ds: $(BUILD)/tests/spu_ds.nds
+$(BUILD)/tests/spu_ds_main.o: tests/spu/ds_main.c
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/spu_ds_test.o: tests/spu/adpcm_test.c tests/spu/adpcm_cases.h tests/spu/adpcm_reference.h port/include/psx_spu_adpcm.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Dmain=spu_adpcm_tests -c $< -o $@
+$(BUILD)/tests/spu_ds_core.o: port/psx/spu_adpcm.c port/include/psx_spu_adpcm.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/spu_ds.elf: $(BUILD)/tests/spu_ds_main.o $(BUILD)/tests/spu_ds_test.o $(BUILD)/tests/spu_ds_core.o
+	arm-none-eabi-gcc $(DS_ARCH) -specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/spu_ds.nds: $(BUILD)/tests/spu_ds.elf
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "SPU decoder;ARM9;No disc data"
 .PHONY: gpu-ds
 gpu-ds: $(BUILD)/tests/gpu_ds.nds
 $(BUILD)/tests/gpu_ds_main.o: tests/gpu/ds_main.c

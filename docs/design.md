@@ -239,19 +239,20 @@ renderer reproduces the opcode interpreter's layout (R15).
 
 - **AKAO stays on the ARM9**, unchanged C, driven by a 240 Hz timer IRQ as on PS1 (root counter 2). It writes
   the emulated SPU registers.
-- **SPU transfers** (`SpuWrite`/DMA) land in a 512 KB SPU RAM shadow. The shadow is scanned for ADPCM block flags
-  to find sample boundaries and loop points, and each sample decodes to **PCM16** into a sample cache (DSi RAM
-  allows ~2 MB worst case). Loops stay sample-exact.
-- **ARM7 driver** (`arm7/`) receives voice events (key on/off, pitch, volume, ADSR parameters) over a lock-free
-  ring in main RAM:
-  - It maps 24 PS1 voices to 16 DS channels. When they run out, it steals the quietest released voice, or mixes
-    the overflow in software on 2 channels.
-  - Envelopes are software ADSR at 1 kHz using the psx-spx envelope rules.
-  - Pitch converts PS1 4.12 relative to 44.1 kHz into a DS timer value. PS1 noise maps to DS noise channels
-    14–15.
-- **Reverb** (phase 6): capture unit 0 records the reverb-send mix, the ARM7 runs a reduced psx-spx reverb at
-  16 kHz, and channel 1 plays it back. Until then it's dry.
-- FMV audio is handled by the FastVideoDS player.
+- **SPU transfers** (`SpuWrite`/DMA) land in a 512 KB SPU RAM shadow. Decode blocks as voices fetch them;
+  predictor history persists across blocks and loops, and RAM writes must remain observable. Sample caching
+  must preserve those semantics rather than infer independent samples from block flags.
+- **Shared software SPU target**: all 24 voices at the PSX's 44.1 kHz sample clock, including Gaussian
+  interpolation, ADSR, volume sweeps, pitch modulation, noise, and the original reverb processing. Voice stealing,
+  1 kHz envelope approximations, and reduced-rate reverb do not satisfy the fidelity objective.
+- **DS output target**: stream the mixed stereo PCM through DS sound hardware. ARM9/ARM7 division and buffering
+  remain implementation work; assigning voices to the 16 native channels must not discard PSX voices or change
+  the mixing arithmetic. First establish deterministic host reference comparisons, then verify DS output and
+  real-time timing. Keep AKAO register writes and key events ordered relative to generated samples.
+- **Current implementation**: transfers/register shadows are present, but gameplay is still silent. The block
+  decoder has independent emulator goldens; see `audio-validation.md`. Voice sequencing, interpolation,
+  envelopes, mixer, reverb, IRQ/capture behavior, and platform output remain unimplemented.
+- FMV audio must preserve its original stream timing; the planned FastVideoDS integration is not implemented.
 
 ## 8. Memory map (DSi mode)
 
