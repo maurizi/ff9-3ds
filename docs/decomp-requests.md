@@ -131,8 +131,20 @@ The numbers go in the port's `docs/perf.md`.
 ### R11. Sound boundary
 - The full `akao_command` command set: which commands game code issues (music play/stop/fade, SFX, volume).
 - How sample banks reach SPU RAM (`SpuWrite`/transfer callers, file type, and when).
-- Does any game code **read** SPU registers or voice status (key status, envelope)? The port only needs to
-  emulate what is read.
+- Does any game code **read** SPU registers or voice status (key status, envelope)? Read behavior matters
+  for driver decisions as well as the full synthesis needed for audio fidelity.
+
+Port-side sound-boundary findings (2026-10-16; no decomp edits): `func_800575B4`
+writes KON0/KON1, `func_800575D0` writes KOF0/KOF1, `func_800575EC` writes reverb
+send bits, `func_80057608` writes noise enable bits, and `func_80057624` writes
+pitch-modulation bits. `func_800576BC` writes one voice's LSAX. These are candidates
+for descriptive upstream names after matching verification. `func_800577EC` also
+writes LSAX directly through its voice-register pointer during bulk setup, so
+intercepting only `func_800576BC` would miss writes. Explicit repeated writes must
+remain visible to the sound core: loop override and envelope counter resets
+cannot reliably be inferred by comparing register snapshots. Key-off starts ADSR
+release and must not discard ADPCM source/predictor state. The source/envelope
+components under `port/psx/spu_*` are not yet integrated with these boundaries.
 
 ### R12. Pad layer
 - The raw → logical bit mapping (`0x20000` = confirm), and where button configuration is applied.

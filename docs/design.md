@@ -249,9 +249,10 @@ renderer reproduces the opcode interpreter's layout (R15).
   remain implementation work; assigning voices to the 16 native channels must not discard PSX voices or change
   the mixing arithmetic. First establish deterministic host reference comparisons, then verify DS output and
   real-time timing. Keep AKAO register writes and key events ordered relative to generated samples.
-- **Current implementation**: transfers/register shadows are present, but gameplay is still silent. The block
-  decoder has independent emulator goldens; see `audio-validation.md`. Voice sequencing, interpolation,
-  envelopes, mixer, reverb, IRQ/capture behavior, and platform output remain unimplemented.
+- **Current implementation**: transfers/register shadows are present, but gameplay is still silent. Block
+  decoding, source fetch/loop/pitch state, and ADSR/envelope components have tests; see `audio-validation.md`.
+  Their game integration, interpolation, volume-sweep register handling, mixer, reverb, IRQ/capture behavior,
+  and platform output remain unimplemented.
 - FMV audio must preserve its original stream timing; the planned FastVideoDS integration is not implemented.
 
 ## 8. Memory map (DSi mode)

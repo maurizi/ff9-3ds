@@ -183,8 +183,16 @@ $(BUILD)/tests/gx_texture_shared_shadow_test: tests/gx/texture_test.c tests/gx/n
 	$(CC) -DPORT_GX_SHADOW -DPORT_GX_SHARE_INDEXED -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Itests/gx -Iport/include -I$(DECOMP)/include $< port/psx/softgpu.c -o $@
 
 .PHONY: test-spu
-test-spu: $(BUILD)/tests/spu_adpcm_test
+test-spu: $(BUILD)/tests/spu_adpcm_test $(BUILD)/tests/spu_source_test $(BUILD)/tests/spu_envelope_test
 	@$<
+	@$(BUILD)/tests/spu_source_test
+	@$(BUILD)/tests/spu_envelope_test
+$(BUILD)/tests/spu_envelope_test: tests/spu/envelope_test.c tests/spu/envelope_cases.h tests/spu/envelope_reference.h port/psx/spu_envelope.c port/include/psx_spu_envelope.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_envelope.c -o $@
+$(BUILD)/tests/spu_source_test: tests/spu/source_test.c port/psx/spu_source.c port/psx/spu_adpcm.c port/include/psx_spu_source.h port/include/psx_spu_adpcm.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_source.c port/psx/spu_adpcm.c -o $@
 $(BUILD)/tests/spu_adpcm_test: tests/spu/adpcm_test.c tests/spu/adpcm_cases.h tests/spu/adpcm_reference.h port/psx/spu_adpcm.c port/include/psx_spu_adpcm.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iport/include $< port/psx/spu_adpcm.c -o $@
@@ -412,10 +420,22 @@ $(BUILD)/tests/spu_ds_test.o: tests/spu/adpcm_test.c tests/spu/adpcm_cases.h tes
 $(BUILD)/tests/spu_ds_core.o: port/psx/spu_adpcm.c port/include/psx_spu_adpcm.h
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
-$(BUILD)/tests/spu_ds.elf: $(BUILD)/tests/spu_ds_main.o $(BUILD)/tests/spu_ds_test.o $(BUILD)/tests/spu_ds_core.o
+$(BUILD)/tests/spu_ds_source_test.o: tests/spu/source_test.c port/include/psx_spu_source.h port/include/psx_spu_adpcm.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Dmain=spu_source_tests -c $< -o $@
+$(BUILD)/tests/spu_ds_source.o: port/psx/spu_source.c port/include/psx_spu_source.h port/include/psx_spu_adpcm.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/spu_ds_envelope_test.o: tests/spu/envelope_test.c tests/spu/envelope_cases.h tests/spu/envelope_reference.h port/include/psx_spu_envelope.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Dmain=spu_envelope_tests -c $< -o $@
+$(BUILD)/tests/spu_ds_envelope.o: port/psx/spu_envelope.c port/include/psx_spu_envelope.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
+$(BUILD)/tests/spu_ds.elf: $(BUILD)/tests/spu_ds_main.o $(BUILD)/tests/spu_ds_test.o $(BUILD)/tests/spu_ds_core.o $(BUILD)/tests/spu_ds_source_test.o $(BUILD)/tests/spu_ds_source.o $(BUILD)/tests/spu_ds_envelope_test.o $(BUILD)/tests/spu_ds_envelope.o
 	arm-none-eabi-gcc $(DS_ARCH) -specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
 $(BUILD)/tests/spu_ds.nds: $(BUILD)/tests/spu_ds.elf
-	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "SPU decoder;ARM9;No disc data"
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "SPU components;ARM9;No disc data"
 .PHONY: gpu-ds
 gpu-ds: $(BUILD)/tests/gpu_ds.nds
 $(BUILD)/tests/gpu_ds_main.o: tests/gpu/ds_main.c
