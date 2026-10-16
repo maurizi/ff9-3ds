@@ -632,25 +632,54 @@ $(BUILD)/tests/raster_ds_arm_itcm.o: port/psx/softgpu.c
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -DPORT_RASTER_ITCM -Dpsx_softgpu=psx_softgpu_arm_itcm -Dpsx_softgpu_enable=psx_softgpu_arm_itcm_enable -Dpsx_softgpu_shadow_poly=psx_softgpu_arm_itcm_shadow_poly -Dpsx_softgpu_shadow_poly_region=psx_softgpu_arm_itcm_shadow_poly_region -Dpsx_softgpu_shadow_rect=psx_softgpu_arm_itcm_shadow_rect -c $< -o $@
 
 .PHONY: test-display scale-ds test-movie-stream test-movie-vlc
+.PHONY: test-mdec
+MDEC_REFERENCE ?= $(BUILD)/validation/mdec_psx_movies
+.PHONY: mdec-ds FORCE_MDEC_FIXTURE
+mdec-ds: $(BUILD)/tests/mdec.nds
+$(BUILD)/tests/mdec_fixture.s: tools/gen_mdec_fixture.py $(MDEC_REFERENCE)/report.json decomp/disks/us/ovl/64.bin FORCE_MDEC_FIXTURE
+	$(PYTHON) tools/gen_mdec_fixture.py $(MDEC_REFERENCE) $@
+$(BUILD)/tests/mdec_fixture.o: $(BUILD)/tests/mdec_fixture.s
+	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -c $< -o $@
+$(BUILD)/tests/mdec_ds.o: tests/display/mdec_ds.c port/include/mdec_decode.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -c $< -o $@
+$(BUILD)/tests/mdec_ds_test.o: tests/display/mdec_test.c port/include/mdec_decode.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -Dmain=mdec_tests -c $< -o $@
+$(BUILD)/tests/mdec_ds_core.o: port/psx/mdec_decode.c port/include/mdec_decode.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -c $< -o $@
+$(BUILD)/tests/mdec.elf: $(BUILD)/tests/mdec_ds.o $(BUILD)/tests/mdec_ds_test.o $(BUILD)/tests/mdec_ds_core.o $(BUILD)/tests/mdec_fixture.o
+	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/mdec.nds: $(BUILD)/tests/mdec.elf
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "MDEC pixels;ARM9;User PSX pixel fixtures"
+test-mdec: $(BUILD)/tests/mdec_test
+	@$<
+$(BUILD)/tests/mdec_test: tests/display/mdec_test.c port/psx/mdec_decode.c port/include/mdec_decode.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O1 -g -fsanitize=address,undefined -Iport/include tests/display/mdec_test.c port/psx/mdec_decode.c -o $@
+$(BUILD)/tests/mdec_probe: tests/display/mdec_probe.c port/psx/mdec_decode.c port/include/mdec_decode.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O2 -Wall -Wextra -Iport/include tests/display/mdec_probe.c port/psx/mdec_decode.c -o $@
 VLC_REFERENCE ?= $(BUILD)/validation/movie_vlc_psx_disc234
 .PHONY: movie-vlc-ds FORCE_MOVIE_VLC_FIXTURE
 movie-vlc-ds: $(BUILD)/tests/movie_vlc.nds
-VLC_DS_FLAGS := $(DS_ARCH) -specs=$(BLOCKSDS)/sys/crts/ds_arm9.specs -I$(BLOCKSDS)/libs/libnds/include -Iport/include -std=gnu17 -O2
+DS_COMPONENT_FLAGS := $(DS_ARCH) -specs=$(BLOCKSDS)/sys/crts/ds_arm9.specs -I$(BLOCKSDS)/libs/libnds/include -Iport/include -std=gnu17 -O2
 $(BUILD)/tests/movie_vlc_fixture.s: tools/gen_movie_vlc_fixture.py $(VLC_REFERENCE)/report.json decomp/disks/us/ovl/64.bin FORCE_MOVIE_VLC_FIXTURE
 	$(PYTHON) tools/gen_movie_vlc_fixture.py $(VLC_REFERENCE) $@
 $(BUILD)/tests/movie_vlc_fixture.o: $(BUILD)/tests/movie_vlc_fixture.s
-	arm-none-eabi-gcc $(VLC_DS_FLAGS) -c $< -o $@
+	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -c $< -o $@
 $(BUILD)/tests/movie_vlc_ds.o: tests/display/movie_vlc_ds.c port/include/movie_vlc.h
 	@mkdir -p $(dir $@)
-	arm-none-eabi-gcc $(VLC_DS_FLAGS) -c $< -o $@
+	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -c $< -o $@
 $(BUILD)/tests/movie_vlc_ds_test.o: tests/display/movie_vlc_test.c port/include/movie_vlc.h
 	@mkdir -p $(dir $@)
-	arm-none-eabi-gcc $(VLC_DS_FLAGS) -Dmain=movie_vlc_tests -c $< -o $@
+	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -Dmain=movie_vlc_tests -c $< -o $@
 $(BUILD)/tests/movie_vlc_ds_core.o: port/psx/movie_vlc.c port/include/movie_vlc.h
 	@mkdir -p $(dir $@)
-	arm-none-eabi-gcc $(VLC_DS_FLAGS) -c $< -o $@
+	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -c $< -o $@
 $(BUILD)/tests/movie_vlc.elf: $(BUILD)/tests/movie_vlc_ds.o $(BUILD)/tests/movie_vlc_ds_test.o $(BUILD)/tests/movie_vlc_ds_core.o $(BUILD)/tests/movie_vlc_fixture.o
-	arm-none-eabi-gcc $(VLC_DS_FLAGS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
 $(BUILD)/tests/movie_vlc.nds: $(BUILD)/tests/movie_vlc.elf
 	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "Movie VLC;ARM9;User PSX coefficient fixtures"
 test-movie-vlc: $(BUILD)/tests/movie_vlc_test

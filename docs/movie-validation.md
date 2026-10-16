@@ -180,12 +180,93 @@ not a playback benchmark. The whole-catalog scan additionally accepts
 `movie_catalog.py --vlc-table PATH`, where PATH is the 216-byte slice of the
 user's ovl_64 binary at file offset 0x55FC (address 0x8019DCFC).
 
+## Implemented: integer MDEC macroblock pixels
+
+`port/psx/mdec_decode.c` now reconstructs one six-block Cr/Cb/Y macroblock at a
+time, producing either packed RGB24 or RGB555 bytes. It accepts the caller's
+uploaded quantization and scale tables, preserves signed/STP command flags,
+handles leading FE00 padding and implicit block completion at coefficient 63,
+and checks input/output bounds. It allocates no heap memory and needs no global
+decoder buffer. The two matrix passes use integer sums and explicit floor/round
+operations; there is no floating-point conversion or offline recompression.
+
+The fixed-point precision and colour arithmetic are adapted from Mednafen's
+GPL-2.0-or-later PSX MDEC research, with attribution, source revision and licence
+in `third_party/mednafen/`. Scalar matrix passes retain the raw signed uploaded
+scale values. This is a reconstruction API, not an emulated MDEC MMIO/DMA state
+machine. It supports the two coloured output depths; monochrome output is not
+implemented by this API.
+
+Verification on 2026-10-16 used DuckStation `0.1-12080-g9cb25f7e9`, interpreter
+mode and the user's original FF9 tables. The reference executes real MDEC
+commands and collects the output through DMA1 into a guarded RAM buffer:
+
+* **804 synthetic macroblocks** match byte-for-byte. These cover every AC rank
+  in all six blocks with different signs, q scales and saturation levels,
+  neutral/DC quadrant controls, both colour depths and signed/STP combinations.
+* **2,688 real movie macroblocks** also match. The suite samples beginning,
+  middle and end macroblocks from each of the 171 coefficient reference frames
+  across all 57 movie files, and expands the sampling to every macroblock of
+  three selected frames in both output depths.
+* The three reconstructed **320×224 RGB24 frames** match pixel-for-pixel:
+  disc-2 FMV031 frame 1 (detailed ocean view), disc-2 MBG110 frame 195 (black end
+  frame), and disc-3 MBG112 frame 60 (detailed pool/room). The paired PNGs are
+  assembled from macroblock DMA captures using the original player's column
+  order; they are not screenshots of composed field gameplay or a playing movie.
+* The separate test ROM, linked with `ds_arm9.specs`, passed the unit suite and
+  **five captured PSX pixel fixtures in original DS mode at 67 MHz** in melonDS
+  1.1. The matching saved state has `mdec_ds_done=1`, `mdec_ds_failures=0`.
+  This checks ARM9 execution, not original DS hardware or full-game DS support.
+
+The impulse comparison caught an integer IDCT pass-order error: vertical must
+precede horizontal, because rounding makes the otherwise commuting transforms
+different. The signed RGB555 comparison caught rounding at the byte-127
+boundary. Both have independent PSX golden assertions in the host/ARM9 unit
+tests. A synthetic q=63/DC=-512 case was removed as invalid test input because
+its encoded value is FE00, reserved as padding; the valid saturation case uses
+q=62. Failed diagnostic attempts remain under ignored `build/validation/` and
+were not counted as passing evidence.
+
+All 3,492 final comparisons and paired raw output files are in
+`build/validation/mdec_psx_movies/report.json` and its directory. Full frames
+are `frame_081_{psx,port}.png`, `frame_095_{psx,port}.png`, and
+`frame_121_{psx,port}.png`; their identities are in `full_frames.json`.
+ARM9 evidence is `build/validation/mdec_ds.png`, `.ml8`, and
+`mdec_ds_result.json`; fixture identities are in `build/tests/mdec_fixture.json`.
+Both emulators were closed and configurations restored after testing.
+
+Reproduce:
+
+```sh
+tools/docker.sh make test-mdec build/tests/mdec_probe
+python3 tools/test_mdec_psx.py --make-boot-exe --out build/validation/mdec_boot
+# Boot mdec_boot/park.exe in a dedicated DuckStation, interpreter mode,
+# software GPU, GDB enabled on port 19000. Its CPU/RAM/MDEC/DMA state is replaced.
+python3 tools/test_mdec_psx.py --out build/validation/mdec_reference \
+    --movie-references build/validation/movie_vlc_psx_disc1_ready \
+                       build/validation/movie_vlc_psx_disc234
+tools/docker.sh make mdec-ds MDEC_REFERENCE=build/validation/mdec_reference
+# Boot build/tests/mdec.nds in DS mode.
+```
+
+The pixel fixture ROM contains the user's game data and must not be distributed.
+At `-O2 -mthumb` for ARM946E-S, GCC's stack-usage report gives 1,064 bytes for
+`psx_mdec_macroblock`; the caller additionally owns a 256-byte environment and
+a 512/768-byte output buffer. This avoids another full-frame allocation. These
+are component memory measurements, not a demonstrated total movie budget or a
+real-time performance result.
+
+The comparison establishes agreement with this emulator on these inputs. It
+does not prove exact original-hardware rounding for arbitrary custom tables,
+all MDEC modes, or every movie pixel. The complete game, final compositing,
+animation and audio fidelity requirements remain open.
+
 ## Still incomplete
 
 `port/game/movie.c` still substitutes placeholder frame timing. RGB24 scanout
 alone does not implement movie playback. Remaining work includes sector/frame
-integration of frame assembly and coefficient expansion, original-compatible
-MDEC inverse quantization/IDCT/RGB conversion, movie audio, synchronized frame
+integration of frame assembly, coefficient expansion and pixel reconstruction
+into the game player, movie audio, synchronized frame
 timing, skipping/end conditions, MBG camera metadata and graphics composition.
 Both decoding working sets and stream buffers must fit the intended DS memory
 budget. No actual movie sequence, animation video, audio synchronization or

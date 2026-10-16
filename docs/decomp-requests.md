@@ -695,3 +695,17 @@ selection, not IDCT. The port's new C entry has explicit input/output bounds and
 only implements version 2, which is the version observed in every scanned FF9
 frame. It does not yet replace the register-ABI v3/chunk-resume entry points or
 implement MDEC pixel reconstruction.
+
+### F30 (2026-10-16). Movie MDEC environment tables and output reconstruction
+
+The native decoder now accepts the quantization bytes uploaded from
+`D_8019DEC8` (64 luma + 64 chroma) and signed scale halfwords from `D_8019DF4C`
+(64 entries). These follow command words at `D_8019DEC4` (40000001h) and
+`D_8019DF48` (60000000h), uploaded by the original reset path
+`func_8019D020` through `func_8019D110`. Please name/document these environment
+tables as MDEC inputs rather than video pixels or VLC lookup data. The two
+default quant arrays are identical in the user's US overlay. The port's
+integer macroblock reconstruction now agrees with DuckStation MDEC DMA output
+on 3,492 synthetic/real cases; see `movie-validation.md` for the exact coverage,
+ARM9 evidence and original-hardware accuracy limits. This does not replace the
+original player's DMA callback, frame pacing, MBG masks or streaming sound yet.
