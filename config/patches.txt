@@ -111,6 +111,13 @@ src/ovl_0a/ovl_0a.c | m->unk50->unk4[2]. | PSX_NZ(m->unk50)->unk4[2]. | 3
 # Event texture-animation opcodes C0/C1/C2 also address this nullable table.
 # Original 8003E7A0..7E0 and 8003E8A4..8E4 write +4/+C/+12 without a table guard.
 src/main/main.c | m->unk50->unk0[b]. | PSX_NZ(m->unk50)->unk0[b]. | 7
+# Missing animation metadata still supplies its halfword at physical address 2
+# on PSX (800216F8); do not dereference the native NULL returned by the lookup.
+src/main/main.c | ((u16 *)func_8001C7FC( | ((u16 *)PSX_NZ(func_8001C7FC( | 1
+src/main/main.c | 0x30000, 0))[1] | 0x30000, 0)))[1] | 1
+# Angle/distance opcodes restore the PSX KSEG0 base even for an absent object.
+# 80052640..54 reads its position at physical +14/+1C without a NULL guard.
+src_equiv/main/script_text.c | q = (Unk8004AB64 *)SCRIPT_PTR_RESTORE(func_80051D4C()); | q = PSX_NZ((Unk8004AB64 *)SCRIPT_PTR_RESTORE(func_80051D4C())); | 1
 
 # TEMPORARY until the decomp fixes it (reported 2026-10-11): defined void in ovl_0a but declared s32 in ff9.h and
 # used by script opcode 0x8F (retry while non-zero); $v0 carries func_800B31B8's result on MIPS. Without it the

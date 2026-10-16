@@ -82,8 +82,44 @@ normal DS/PC builds pass.
 The expanded `field_coverage_all` sweep selects every on-disc field using
 synthetic New Game event flags and the captured BIOS image. Its manifest,
 per-case logs and final report stay in `build/validation`. Further failures
-include disc-1 field 259 (NULL animation-length lookup at 800216F8) and disc-2
-field 1663 (NULL object in script distance opcode 0x61); these remain open.
+included disc-1 field 259 (NULL animation-length lookup at 800216F8) and disc-2
+field 1663 (NULL object in script distance opcode 0x61); see the fixes below.
+
+### Full field-entry sweep and two additional low-RAM reads
+
+The first full sweep finished all 1,131 disc/field entries, with 1,127 reaching
+the 2,000-frame host limit. Besides the two NULL reads above, disc-2 field 70
+redirects to unavailable field 50 and disc-4 field 2502 redirects to unavailable
+field 2500. Both fail while trying to decode an absent resource. Those two
+fixtures need canonical story context; do not suppress the decoder or count
+these routes as validated. Baseline report/backtraces and original disassembly
+are in `field_coverage_all` under `build/validation`.
+
+The animation-length helper now reads a missing resource's halfword from PSX
+low RAM, matching the unconditional `lhu v0,2(v0)` at 800216F8. Angle/distance
+opcodes 60/61 map their locally restored zero object to low RAM, matching the
+original KSEG0 restore and +14/+1C coordinate loads at 80052640..54. Ordinary
+lookup return values stay nullable for other callers; the fixes do not replace
+missing data with fabricated animation frames or zero distances (F27).
+
+Repeating the entire host sweep after these changes gives 1,129 frame-limit
+successes and the same two unavailable-destination failures. All cases use the
+captured BIOS low-RAM image and synthetic New Game event variables. Reports
+are `field_coverage_low_ram_fixed/disc1` through `disc4`, with a combined
+`report.json`. This is bounded execution coverage, not a complete playthrough,
+field/exit assertion, or graphics/audio comparison.
+
+The committed reproducers are `disc1_field259_anim_length.cfg` and
+`disc2_field1663_distance.cfg`. Native field 259 reaches frame 2,000, transitions
+into a battle, and has zero first-fault markers and no protected ITCM changes
+(`field259_anim_length_checkpoint` state/inspection JSON and matching ROM/ELF).
+Native field 1663 also reaches frame 2,000 with zero exception/first-fault
+markers and no protected ITCM changes (`field1663_distance_final` state and
+inspection JSON, matching `field1663_distance` ROM/ELF). Its separate SD image
+contains disc 2; the original emulator SD configuration was restored afterward.
+Both emulators were closed before switching ROMs. These native checks prove
+execution beyond the prior faults, not original PSX presentation or canonical
+story progression. The normal DS/PC build passes after both patches.
 
 For an animation at a known game frame, arm the recording before that frame
 rather than estimating wall-clock delays. This works after direct scenario entry

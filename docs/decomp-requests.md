@@ -648,3 +648,18 @@ accesses to its PSX low-RAM shadow, preserving the writes instead of skipping
 the opcode or changing the decomp. Please name this table and document the
 original nullable-table behavior while retaining PSX codegen. Disassembly and
 pre-fix host backtraces are under `build/validation/field_coverage_initial`.
+
+### F27 (2026-10-16). Animation length and script object distance read low RAM
+
+The full field-entry sweep exposes two further native NULL reads. Disc-1 field
+259 calls `func_800216D8` while its animation lookup returns NULL; the original
+800216F8 executes `lhu v0,2(v0)` without checking the lookup result. Disc-2
+field 1663 evaluates script distance opcode 61 with a zero object value.
+Original 80052640..54 ORs in the KSEG0 base and loads +14/+1C, so the zero
+value still denotes physical low RAM. The equivalent C restores the pointer
+through a port hook and currently leaves zero as native NULL. The port maps
+the animation halfword and the local restored angle/distance object through
+`PSX_NZ`; it retains ordinary nullable resource/object lookup results for
+their other callers. Please name/document these original behaviors without
+adding PSX guards or changing matching codegen. Original disassembly and
+pre-fix backtraces are under `build/validation/field_coverage_all`.
