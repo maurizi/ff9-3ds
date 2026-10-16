@@ -14,7 +14,7 @@ from pathlib import Path
 import struct
 import subprocess
 import time
-import socket
+from duckstation_gpu import DuckStation
 
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
@@ -76,62 +76,6 @@ for case in list(cases):
         extra.update(colour=colour,packet=[(word&0xff000000)|colour if (word&0xffffff)==0x817f09 else word for word in case['packet']])
         cases.append(extra)
 
-class DuckStation:
-    def __init__(self,port):
-        self.socket=socket.create_connection(('127.0.0.1',port),timeout=10)
-        self.socket.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
-        self.command('?')
-        self.registers=self.command('g')
-        self.saved=[(address,self.read(address,size)) for address,size in
-                    [(0x801f8000,0x2000),(0x801fee00,128),(0x801f0000,32)]]
-    def reply(self):
-        def byte():
-            value=self.socket.recv(1)
-            if not value:raise RuntimeError('DuckStation GDB disconnected')
-            return value
-        while byte()!=b'$':pass
-        data=bytearray()
-        while True:
-            c=byte()
-            if c==b'#':break
-            data.extend(c)
-        checksum=byte()+byte()
-        if int(checksum,16)!=(sum(data)&255):raise RuntimeError('bad GDB checksum')
-        self.socket.sendall(b'+')
-        return data.decode()
-    def command(self,text):
-        data=text.encode();self.socket.sendall(b'$'+data+b'#'+f'{sum(data)&255:02x}'.encode())
-        return self.reply()
-    def read(self,address,size):
-        return b''.join(bytes.fromhex(self.command(f'm{address+i:x},{min(512,size-i):x}')) for i in range(0,size,512))
-    def write(self,address,data):
-        for i in range(0,len(data),512):
-            part=data[i:i+512]
-            if self.command(f'M{address+i:x},{len(part):x}:'+part.hex())!='OK':raise RuntimeError('GDB write failed')
-    def draw(self,packet):
-        packet=packet+[0xc0000000,xy(4,4),xy(4,4)]
-        payload=words(packet)
-        # Wait for GPUSTAT's ready-to-read bit before consuming GPUREAD.
-        code=[0x3c091f80,0x35291810,0xad200004,0x8c880000,0x24840004,0xad280000,0x1485fffc,0,
-              0x8d280004,0x3c0a0800,0x010a4024,0x1100fffc,0,
-              0x8d280000,0x24c60004,0xacc8fffc,0x14c7fffc,0,0]
-        self.write(0x801f8000,payload);self.write(0x801fee00,words(code))
-        registers=[self.registers[i:i+8] for i in range(0,len(self.registers),8)]
-        for index,value in [(4,0x801f8000),(5,0x801f8000+len(payload)),(6,0x801f0000),
-                            (7,0x801f0020),(32,0),(37,0x801fee00)]:
-            registers[index]=struct.pack('<I',value).hex()
-        if self.command('G'+''.join(registers))!='OK':raise RuntimeError('GDB register write failed')
-        if self.command('Z0,801fee48,4')!='OK':raise RuntimeError('GDB breakpoint failed')
-        try:
-            if not self.command('c').startswith(('S05','T05')):raise RuntimeError('GPU probe did not reach breakpoint')
-            if self.command('g')[37*8:38*8]!='48ee1f80':raise RuntimeError('GPU probe stopped at wrong PC')
-            return self.read(0x801f0000,32)
-        finally:self.command('z0,801fee48,4')
-    def close(self):
-        try:
-            for address,data in self.saved:self.write(address,data)
-            self.command('G'+self.registers)
-        finally:self.socket.close()
 # Copy commands to GP0. Snapshot a 4x4 VRAM interior through the renderer API
 # after execution; this avoids conflating GPU read-transfer quirks with drawing.
 code=[0x3c091f80,0x35291810,0xad200004, # GPU reset (VRAM retained)

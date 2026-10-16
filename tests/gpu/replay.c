@@ -1,0 +1,54 @@
+/* Replay normalized GPUDUMP commands through production GPU entry points.
+ * Input records: type, word count, words (LE32); type 0 = complete GP0 command,
+ * 1 = GP1 words, 2 = snapshot. Python validates command boundaries first.
+ * This is a non-interlaced raster probe, not a GPU timing emulator. */
+#include <stdio.h>
+#include <stdlib.h>
+#undef NULL
+#include "psyq_port.h"
+#include "gp0.h"
+#include "psx_raster.h"
+
+unsigned char psx_ram[PSX_RAM_SIZE];
+extern u16 *psx_vram;
+static u16 bitmap[1024*512];
+void port_log(const char *format, ...) { (void)format; }
+void port_fatal(const char *format, ...) { (void)format; abort(); }
+
+int main(void) {
+    u32 header[2];
+    psx_vram=bitmap;gp0_backend=&psx_softgpu;
+    for (;;) {
+        size_t bytes=fread(header,1,8,stdin);
+        if (!bytes) break;
+        if (bytes!=8) return 2;
+        unsigned type=header[0],n=header[1];
+        if (n>262147) return 2;
+        u32 *p=calloc(n+1,sizeof *p);
+        if (!p || fread(p+1,4,n,stdin)!=n) return 2;
+        if (type==0 && n) {
+            unsigned cmd=p[1]>>24;
+            if (cmd>=0xa0 && cmd<0xc0) {
+                if (n<3) return 2;
+                RECT r={(s16)(p[2]&1023),(s16)((p[2]>>16)&511),
+                    (s16)(((p[3]-1)&1023)+1),(s16)((((p[3]>>16)-1)&511)+1)};
+                if (n!=3+((unsigned)r.w*r.h+1)/2) return 2;
+                LoadImage(&r,p+4);
+            } else if (n<=255) {
+                p[0]=n<<24;DrawPrim(p);
+            } else return 2;
+        } else if (type==1) {
+            for (unsigned i=1;i<=n;i++) {
+                unsigned cmd=p[i]>>24;
+                if (cmd==0) gp0_state=(Gp0State){0};
+                /* Display/control commands don't affect non-interlaced VRAM.
+                 * GP1(01) stream cancellation is handled by the parser. */
+                if (cmd==8 && (p[i]&0x20)) return 2;
+            }
+        } else if (type==2 && n==0) {
+            if (fwrite(bitmap,1,sizeof bitmap,stdout)!=sizeof bitmap) return 2;
+        } else return 2;
+        free(p);
+    }
+    return !feof(stdin) || ferror(stdin) || ferror(stdout);
+}
