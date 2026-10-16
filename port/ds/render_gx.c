@@ -12,6 +12,10 @@
  *   subtractive geometry and mixed STP textures outside that sprite path are approximated.
  * - Offscreen DRAWENVs rasterise into PSX VRAM on the CPU; later GX textures see those generated pixels.
  */
+/* Its strong VRAM hooks otherwise retain this entire backend, including its
+ * primitive and texture buffers, even when display_init selects software.
+ * Software rendering uses the no-op weak hooks in psx/gpu.c instead. */
+#ifndef PORT_SOFT_DISPLAY
 #include <nds.h>
 #include <string.h>
 #include <stdlib.h>
@@ -1798,3 +1802,4 @@ void render_gx_init(void) {
     glLoadIdentity();
     gp0_backend = &gx_backend;
 }
+#endif /* !PORT_SOFT_DISPLAY */

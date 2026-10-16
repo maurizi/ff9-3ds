@@ -39,18 +39,19 @@ update rate must not slow game time or reduce audio production.
 
 ### Hardware budget
 
-**Default target: DSi mode** (DSi, 3DS/2DS via TWiLight Menu++ or nds-bootstrap, flashcarts that support DSi
-mode): 134 MHz ARM9, 16 MB RAM, SD access from the ARM7. Original DS mode (67 MHz, 4 MB) is a stretch goal: see
-§8 and `decisions.md` D1.
+**Working baseline: DSi mode**, with a 134 MHz ARM9 and 16 MiB main RAM.
+**Preferred hardware target: original DS mode**, with a 67 MHz ARM9 and 4 MiB main RAM.
+The current game build does not fit the original DS budget. New architecture work
+must account for that budget now; see §8, `ds-mode.md` and `decisions.md` D1.
 
 | resource | PS1 | DSi mode | notes |
 |---|---|---|---|
 | CPU | R3000A 33.9 MHz + GTE | ARM946E-S 134 MHz (+ ARM7 33 MHz), 8 KB D-cache, 16 KB I-cache | the GTE becomes software; the DS geometry engine can take over hot paths later |
-| RAM | 2 MB | 16 MB | the whole game, all overlays, a 1 MB VRAM shadow and a PCM sample cache all fit |
+| RAM | 2 MB | 16 MB | current build keeps all native overlays resident, plus PSX RAM, VRAM and SPU shadows; see §8 |
 | scratchpad | 1 KB | DTCM 16 KB, ITCM 32 KB | scratchpad → DTCM; the GTE core and the OT walker → ITCM |
 | VRAM | 1 MB, framebuffers included | 656 KB in banks; the 3D engine writes the screen directly | 512 KB for the current GX path; planned effects reduce this budget; see §6 |
 | GPU | ~ 90k–180k polys/s, 4 blend modes | 2048 polygons / 6144 vertices per frame, alpha blending only, depth buffer, fog, 4bpp/8bpp paletted textures in the PS1's BGR555 | per-frame budget and blending are the main risks; see §5.4 |
-| sound | SPU: 24 ADPCM voices, ADSR, reverb, 512 KB | 16 channels (PCM8/PCM16/IMA-ADPCM; 14–15 noise), no ADSR or reverb, 2 capture units | software ADSR on the ARM7; see §7 |
+| sound | SPU: 24 ADPCM voices, ADSR, reverb, 512 KB | 16 channels (PCM8/PCM16/IMA-ADPCM; 14–15 noise), no ADSR or reverb, 2 capture units | current SPU mixing runs on ARM9; ARM7 streams PCM via Maxmod |
 | storage | CD, 4 discs | SD card | everything is on SD; disc swaps resolve instantly |
 | display | 320×224/240 | 2 × 256×192, bottom one touch | see `dual-screen.md` |
 
@@ -286,19 +287,26 @@ renderer reproduces the opcode interpreter's layout (R15).
   permit Thumb/main-RAM comparisons without changing sound arithmetic.
 - FMV audio must preserve its original stream timing; the planned FastVideoDS integration is not implemented.
 
-## 8. Memory map (DSi mode)
+## 8. Memory budget
 
-| region | size | |
-|---|---|---|
-| ARM9 code (main + 19 overlays + port) | ~1.4 MB | Thumb; hot code ARM in ITCM |
-| generated data (exe + overlay `.data`/`.rodata`) | ~0.5 MB | the exe's 1.3 MB zero region at 0x800A7000 is *not* linked: it is part of the arena |
-| `psx_ram` arena | 2 MB | the PS1 heap and fixed buffers at their original offsets |
-| VRAM shadow | 1 MB | the PS1 VRAM image |
-| texture conversion staging | 256 KB | |
-| SPU RAM shadow + PCM16 sample cache | 0.5 + 2 MB | |
-| FMV buffers (only during FMV) | ~1 MB | |
-| SD I/O, libnds, stack, UI | ~1 MB | |
-| **total** | **~9.5 MB of 16** | |
+Measured 2026-10-16 with default `make ds` (software display and audio enabled):
+
+| region | bytes | accounting |
+|---|---:|---|
+| ELF text / read-only data, including ITCM | 1,196,004 | all native overlays and generated relocation images remain resident |
+| ELF initialized writable data | 456 | |
+| ELF zero-initialized data | 2,233,908 | includes the 2,097,152-byte PSX arena and audio queue |
+| **ELF static total** | **3,430,368 (3.27 MiB)** | `size build/ds/ff9ds.elf`; includes regions outside main RAM, not a heap high-water measurement |
+| VRAM shadow allocated at boot | 1,048,576 | `psx_mem_init()` |
+| SPU RAM allocated at boot | 524,288 | `psx_mem_init()` |
+| **Static + these two allocations** | **5,003,232 (4.77 MiB)** | excludes other heap allocations, filesystem buffers, stacks and loading peaks |
+
+This is a footprint tally, not an exact main-RAM occupancy measurement: ITCM is
+separate RAM, the loader needs initialization bytes, and alignment/TLS/reserved
+regions require linker-aware accounting. It already demonstrates that the
+current implementation cannot fit in 4 MiB. There is no implemented 2 MiB PCM
+sample cache or real movie decoder buffer to count yet. See `ds-mode.md` for
+reproduction commands, the removed inactive GX buffers, and the required design work.
 
 **VRAM banks** (planned layout):
 
@@ -315,9 +323,11 @@ and capture effects below are not implemented yet; adding them will reduce textu
 | F/G | main OBJ and extended BG palettes |
 | H/I | sub engine (bottom screen UI, 48 KB) |
 
-**Original DS (4 MB)**: 1.4 + 0.5 + 2 + 1 + 2.5 doesn't fit. It would need DS overlays for the code, no VRAM
-shadow (conversion at `LoadImage` time), offline IMA-ADPCM samples, and a smaller arena. That's a separate effort
-after M7.
+**Original DS (4 MiB)** requires native code/data overlays and a measured graphics,
+audio and streaming working set. Removing the VRAM shadow, shrinking the PSX arena
+or converting sound formats are not assumed safe: each changes semantics that
+still need to be preserved. This is an architecture constraint now, rather than
+a separate post-M7 effort; see `ds-mode.md`.
 
 ## 9. Repository layout (planned)
 

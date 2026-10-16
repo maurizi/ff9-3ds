@@ -3,6 +3,8 @@
 A port of Final Fantasy IX (PS1, NTSC-U) to the Nintendo DS family. It runs in DSi mode on DSi/3DS, uses both
 screens and supports the touchscreen. It is built from the C source of the
 [ff9-decomp](../ff9-decomp) matching decompilation.
+Original DS mode is the preferred hardware target, but the current build still
+requires DSi resources; see the [measured DS memory budget and architecture work](docs/ds-mode.md).
 
 This repository contains no game data. Building it and running it both require your own copy of the four NTSC-U
 discs (SLUS-01251/01295/01296/01297). The build extracts what it needs from the disc images. **A built `.nds` and
