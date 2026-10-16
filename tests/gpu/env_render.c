@@ -10,6 +10,7 @@
 unsigned char psx_ram[PSX_RAM_SIZE];
 extern u16 *psx_vram;
 static u16 bitmap[1024*512];
+#include "overlap_reference.h"
 void port_log(const char *format, ...) { (void)format; }
 void port_fatal(const char *format, ...) { (void)format; abort(); }
 
@@ -67,6 +68,7 @@ static void check_transfer_masks(void) {
 }
 int main(void) {
     psx_vram=bitmap;gp0_backend=&psx_softgpu;
+    check_overlap_reference();
     check_transfer_masks();
     /* Odd pixel counts are still whole GPU words. Check both VRAM wrapping
      * and zero padding, without overwriting the caller's adjacent words. */

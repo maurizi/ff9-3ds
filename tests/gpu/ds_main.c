@@ -9,6 +9,7 @@ int main(void) {
     if(gpu_transfer_tests()!=0) {
         printf("GPU transfer checks FAILED\n");
     } else {
+        printf("147 overlap references PASS\n");
         printf("Masks, padding, wrapping,\n");
         printf("and packet order PASS\n");
     }

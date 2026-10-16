@@ -82,7 +82,8 @@ static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
     if (check_mask && (((sx ^ dx) & 1023) || ((sy ^ dy) & 511)))
         psx_vram_read(dx, dy, w, h);
     psx_vram_touch(dx, dy, w, h);
-    /* row buffer: overlapping copies behave as the GPU's line-by-line copy */
+    /* Snapshot each source row. Non-wrapping overlaps match the published
+     * ps1-tests reference; cross-boundary overlap behavior remains unverified. */
     static u16 row[VRAM_W];
     for (int j = 0; j < h; j++) {
         for (int i = 0; i < w; i++) {

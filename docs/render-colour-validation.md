@@ -359,3 +359,32 @@ normally (`candle_gpu_masks_host.log`), with its light reveal and naming
 screens visually reviewed. DS/PC builds and GPU/GX regression suites pass.
 Overlapping-copy buffering, further effects, native animation fidelity,
 audio and whole-game coverage remain open.
+
+## Published overlapping-copy reference (2026-10-16)
+
+The port reproduces all 147 cases in the published
+[ps1-tests VRAM overlap test](https://github.com/JaCzekanski/ps1-tests/tree/93568c5589e58b1fe442c854728324994bd30426/gpu/vram-to-vram-overlap).
+Its seven rows cover block sizes 2, 8, 15 and 16, with the last three rows
+offsetting the source by one pixel in X, Y or both. Each row tests shifts
+X=-3..3 and Y=-1..1. Initial patterns are uploaded with `LoadImage` and copied
+through production `MoveImage`.
+
+All 123627 pixels in 29x29 cell interiors match the published `vram.png` in
+RGB15 (`overlap_reference_baseline.json`). These interiors omit labels and
+grid lines; no rasterized font or line behavior is inferred. The PNG SHA-256
+is `28cd11886418438e76fafd970f990205ffe6fd776e755b846ab427fa86c305af`.
+The image's console model/capture provenance is not specified, so this is
+agreement with a published reference, not a new physical-console measurement.
+The image also cannot verify bit 15. Wrapping overlaps and protected-pixel
+interactions remain separate questions.
+
+`tests/gpu/overlap_reference.h` retains the synthetic input layout and 147
+independent reference hashes. Each checksum starts at 2166136261 and updates
+as `(hash ^ rgb15) * 16777619` modulo 2^32 in row order. The MIT attribution
+and license are retained alongside the test. `make test-gpu` verifies these
+goldens under ASan/UBSan; `make gpu-ds` runs the same cases on ARM9. The archived
+`gpu_overlap_arm9` ROM/ELF and screenshot report all 147 cases passing, followed
+by the existing transfer/mask/packet checks. Both game targets build.
+
+No overlap algorithm change was needed for these cases. The source comment
+now states the tested scope instead of claiming general overlap fidelity.

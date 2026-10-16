@@ -190,7 +190,7 @@ test-gpu: $(BUILD)/tests/gpu_ordering_test $(BUILD)/tests/gpu_env_probe $(BUILD)
 	@python3 tools/test_gpu_env.py
 	@python3 tools/test_gpu_dump.py
 
-$(BUILD)/tests/gpu_env_render: tests/gpu/env_render.c port/psx/gpu.c port/psx/gp0.c port/psx/softgpu.c port/include/gp0.h port/include/psyq_port.h port/include/psx_raster.h
+$(BUILD)/tests/gpu_env_render: tests/gpu/env_render.c tests/gpu/overlap_reference.h port/psx/gpu.c port/psx/gp0.c port/psx/softgpu.c port/include/gp0.h port/include/psyq_port.h port/include/psx_raster.h
 	@mkdir -p $(dir $@)
 	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $< port/psx/gpu.c port/psx/gp0.c port/psx/softgpu.c -Wl,--gc-sections -o $@
 
@@ -399,7 +399,7 @@ gpu-ds: $(BUILD)/tests/gpu_ds.nds
 $(BUILD)/tests/gpu_ds_main.o: tests/gpu/ds_main.c
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -c $< -o $@
-$(BUILD)/tests/gpu_ds_env.o: tests/gpu/env_render.c port/include/gp0.h port/include/psyq_port.h
+$(BUILD)/tests/gpu_ds_env.o: tests/gpu/env_render.c tests/gpu/overlap_reference.h port/include/gp0.h port/include/psyq_port.h
 	@mkdir -p $(dir $@)
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -Dmain=gpu_transfer_tests -c $< -o $@
 $(BUILD)/tests/gpu_ds_gpu.o: port/psx/gpu.c port/include/gp0.h port/include/psyq_port.h port/include/profile.h
