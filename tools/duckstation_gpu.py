@@ -91,17 +91,39 @@ class DuckStation:
         finally:self.command(f'z0,{end:x},4')
 
     def replay_writes(self,writes):
-        """Destructive dedicated-instance replay; writes (GP0/GP1 port, value)."""
+        """Replay (port, value); port 2 consumes value GPUREAD words.
+
+        Destructive dedicated-instance operation. Return all read bytes,
+        including words a normal dump player would discard.
+        """
+        reads=[];start=0
+        for i,(port,value) in enumerate(writes):
+            if port==2:
+                self.write_registers(writes[start:i]);start=i+1
+                reads.append(self.read_gpu_words(value))
+        self.write_registers(writes[start:])
+        return b''.join(reads)
+
+    def write_registers(self,writes):
         for start in range(0,len(writes),32768):
             payload=b''.join(struct.pack('<II',0x1f801810+port*4,value)
                              for port,value in writes[start:start+32768])
             self.write(0x80010000,payload)
-            # Honour GPU FIFO backpressure; a tight CPU loop can otherwise
-            # outrun polygon processing and lose later command words.
+            # GP0 obeys FIFO backpressure. GP1 must bypass that wait so reset
+            # can cancel a partial command or an incomplete read transfer.
             self.execute([0x3c0a1f80,0x354a1814,0x3c0c1000,
+                          0x8c880000,0x8c890004,0x310b0004,0x15600006,0,
                           0x8d4b0000,0,0x016c5824,0x1160fffc,0,
-                          0x8c880000,0x8c890004,0x24840008,0xad090000,0x1485fff6,0],
+                          0xad090000,0x24840008,0x1485fff3,0],
                          0x80010000,0x80010000+len(payload))
+
+    def read_gpu_words(self,count):
+        if count==0:return b''
+        if not 0<count<=262144:raise ValueError('invalid GPU read word count')
+        self.execute([0x3c081f80,0x35081810,0x8d090004,0x3c0a0800,
+                      0x012a4824,0x1120fffc,0,0x8d090000,0x24840004,
+                      0xac89fffc,0x1485fffc,0],0x80010000,0x80010000+count*4)
+        return self.read(0x80010000,count*4)
 
     def read_vram(self):
         """Full 1024x512 VRAM, waiting for the GPU read-transfer ready bit."""

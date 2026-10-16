@@ -125,6 +125,9 @@ int StoreImage(RECT *r, u32 *p) {
             *dst++ = *vram_at(r->x + i, r->y + j);
         }
     }
+    /* The PSX transfer is word-sized: ceil(w*h/2) GPUREAD words. An odd
+     * final pixel has a zero high halfword, not the caller's previous data. */
+    if (r->w > 0 && r->h > 0 && ((r->w * r->h) & 1)) *dst = 0;
     return 0;
 }
 

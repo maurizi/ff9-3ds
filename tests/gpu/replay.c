@@ -1,6 +1,7 @@
 /* Replay normalized GPUDUMP commands through production GPU entry points.
  * Input records: type, word count, words (LE32); type 0 = complete GP0 command,
- * 1 = GP1 words, 2 = snapshot. Python validates command boundaries first.
+ * 1 = GP1 words, 2 = snapshot, 3/4 = read/discard count. Read results precede
+ * the final VRAM snapshot on stdout. Python validates boundaries first.
  * This is a non-interlaced raster probe, not a GPU timing emulator. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,11 +13,12 @@
 unsigned char psx_ram[PSX_RAM_SIZE];
 extern u16 *psx_vram;
 static u16 bitmap[1024*512];
+static u32 read_buffer[1024*512/2];
 void port_log(const char *format, ...) { (void)format; }
 void port_fatal(const char *format, ...) { (void)format; abort(); }
 
 int main(void) {
-    u32 header[2];
+    u32 header[2];unsigned read_count=0,read_position=0;
     psx_vram=bitmap;gp0_backend=&psx_softgpu;
     for (;;) {
         size_t bytes=fread(header,1,8,stdin);
@@ -34,6 +36,15 @@ int main(void) {
                     (s16)(((p[3]-1)&1023)+1),(s16)((((p[3]>>16)-1)&511)+1)};
                 if (n!=3+((unsigned)r.w*r.h+1)/2) return 2;
                 LoadImage(&r,p+4);
+            } else if (cmd>=0xc0 && cmd<0xe0) {
+                if (n!=3) return 2;
+                RECT r={(s16)(p[2]&1023),(s16)((p[2]>>16)&511),
+                    (s16)(((p[3]-1)&1023)+1),(s16)((((p[3]>>16)-1)&511)+1)};
+                read_count=((unsigned)r.w*r.h+1)/2;read_position=0;
+                /* Sentinels expose incomplete StoreImage writes, including
+                 * the high halfword of an odd-sized transfer. */
+                for(unsigned i=0;i<read_count;i++) read_buffer[i]=0xdeadbeef;
+                StoreImage(&r,read_buffer);
             } else if (n<=255) {
                 p[0]=n<<24;DrawPrim(p);
             } else return 2;
@@ -41,12 +52,17 @@ int main(void) {
             for (unsigned i=1;i<=n;i++) {
                 unsigned cmd=p[i]>>24;
                 if (cmd==0) gp0_state=(Gp0State){0};
+                if (cmd==0 || cmd==1) read_count=read_position=0;
                 /* Display/control commands don't affect non-interlaced VRAM.
                  * GP1(01) stream cancellation is handled by the parser. */
                 if (cmd==8 && (p[i]&0x20)) return 2;
             }
         } else if (type==2 && n==0) {
             if (fwrite(bitmap,1,sizeof bitmap,stdout)!=sizeof bitmap) return 2;
+        } else if ((type==3 || type==4) && n==1) {
+            if (p[1]>read_count-read_position) return 2;
+            if (fwrite(read_buffer+read_position,4,p[1],stdout)!=p[1]) return 2;
+            read_position+=p[1];
         } else return 2;
         free(p);
     }

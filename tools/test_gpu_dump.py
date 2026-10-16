@@ -27,14 +27,33 @@ class DumpTests(unittest.TestCase):
         self.assertIsNone(command_length([0x58000000,0,1,2,3,0x50005000]))
         self.assertEqual(command_length([0x58000000,0,1,2,0x50005000]),5)
 
-    def test_discarded_words_are_not_commands(self):
-        records,writes,_=normalize(MAGIC+packet(3,[0x28000000])+packet(5),0)
-        self.assertEqual((records,writes),([],[]))
+    def test_discard_and_readback_batches_consume_vram(self):
+        data=(MAGIC+packet(5)+packet(0,[0xc0000000,0,0x10006])+
+              packet(3,[1])+packet(4,[2])+packet(2))
+        records,writes,meta=normalize(data,1)
+        self.assertEqual(records[-2:],[(3,[1]),(4,[2])])
+        self.assertEqual(writes[-2:],[(2,1),(2,2)])
+        self.assertEqual(meta['read_words'],3)
+        self.assertEqual(meta['read_commands'],1)
+
+    def test_reset_cancels_unfinished_read(self):
+        data=(MAGIC+packet(5)+packet(0,[0xc0000000,0,0x10006])+
+              packet(4,[1])+packet(1,[0x01000000])+packet(2))
+        self.assertEqual(normalize(data,1)[2]['read_words'],1)
+
+    def test_zero_length_read_is_a_noop(self):
+        _,writes,meta=normalize(MAGIC+packet(5)+packet(3,[0])+packet(2),1)
+        self.assertEqual(writes,[(2,0)])
+        self.assertEqual(meta['read_words'],0)
 
     def test_reject_incomplete_and_unsupported_streams(self):
         for data in [b'bad magic',MAGIC+b'\0',MAGIC+words([10]),
                      MAGIC+packet(5)+packet(0,[0x28000000])+packet(2),
                      MAGIC+packet(5)+packet(4,[1]),
+                     MAGIC+packet(5)+packet(3,[1,2]),
+                     MAGIC+packet(5)+packet(3,[0x28000000]),
+                     MAGIC+packet(5)+packet(0,[0xc0000000,0,0x10002])+packet(4,[2]),
+                     MAGIC+packet(5)+packet(1,[0x10000007]),
                      MAGIC+packet(1,[0x08000020])+packet(5),
                      MAGIC+packet(5)+packet(0,[0xc0000000,0,0x10001])]:
             with self.subTest(data=data),self.assertRaises(ValueError):normalize(data,1)

@@ -5,7 +5,8 @@ Requires build/tests/gpu_replay and a DEDICATED DuckStation software-renderer
 instance with GDB enabled. This destroys its running game's RAM/GPU state.
 The dump and all reports must stay under ignored build/: they contain game data.
 Frame 0 is the preamble; frame N is immediately after N recorded VSyncs.
-Only non-interlaced traces without GPU readbacks are currently supported.
+Non-interlaced VRAM transfers, including partial read batches, are supported.
+GPU information-query reads and reads past a transfer end are rejected.
 GP0 packets may divide commands, including image uploads, at arbitrary words.
 Specification: https://github.com/ps1dev/standards/blob/main/GPUDUMP.md
 """
@@ -49,7 +50,7 @@ def not_fixed_size(cmd):return int((cmd>>3)&3==0)
 def normalize(data,frame):
     if data[:16]!=MAGIC:raise ValueError('unsupported GPUDUMP magic')
     records=[];writes=[];pending=[];position=16;begun=False;vsyncs=0
-    display_origin=0;display_mode=0;cancelled=0
+    display_origin=0;display_mode=0;cancelled=0;remaining_reads=0;read_words=0;read_commands=0
     while position<len(data):
         if position+4>len(data):raise ValueError('truncated packet header')
         h,=struct.unpack_from('<I',data,position);position+=4
@@ -64,14 +65,17 @@ def normalize(data,frame):
                 size=command_length(pending[offset:])
                 if size is None or size>len(pending)-offset:break
                 command=pending[offset:offset+size]
-                if 0xc0<=command[0]>>24<0xe0:raise ValueError('GPU read commands not supported')
+                if 0xc0<=command[0]>>24<0xe0:
+                    width=((command[2]-1)&1023)+1;height=(((command[2]>>16)-1)&511)+1
+                    remaining_reads=(width*height+1)//2;read_commands+=1
                 records.append((0,command));offset+=size
             pending=pending[offset:]
         elif kind==1:
             for word in payload:
                 cmd=word>>24
                 if cmd in (0,1):
-                    cancelled+=len(pending);pending=[]
+                    cancelled+=len(pending);pending=[];remaining_reads=0
+                if 0x10<=cmd<0x20:raise ValueError('GPU information queries not supported')
                 if cmd==0:display_origin=display_mode=0
                 if cmd==5:display_origin=word&0x7ffff
                 if cmd==8:
@@ -81,16 +85,22 @@ def normalize(data,frame):
         elif kind==2:
             if not begun or n>2:raise ValueError('invalid VSync packet')
             vsyncs+=1
-        elif kind==4:raise ValueError('GPU readbacks not supported')
+        elif kind in (3,4):
+            # Both packets consume GPUREAD words; a normal dump player can
+            # discard type 3's result. Compare those words here as well.
+            if n!=1 or not 0<=payload[0]<=remaining_reads:
+                raise ValueError('read count exceeds active VRAM transfer')
+            remaining_reads-=payload[0];read_words+=payload[0]
+            records.append((kind,payload));writes.append((2,payload[0]))
         elif kind==5:
             if begun or n or pending:raise ValueError('invalid trace begin')
             begun=True
-        # Type 3 words were deliberately discarded by the GPU. Metadata and
-        # unknown extension types can also be skipped using their packet size.
+        # Metadata and unknown extension types are skipped by packet size.
         if begun and vsyncs==frame:
             if pending:raise ValueError('selected VSync splits a GP0 command; choose a later frame')
+            if remaining_reads:raise ValueError('selected VSync has an unfinished VRAM read; choose a later frame')
             return records,writes,dict(frame=frame,display_origin=[display_origin&1023,display_origin>>10],
-                display_mode=display_mode,cancelled_words=cancelled)
+                display_mode=display_mode,cancelled_words=cancelled,read_words=read_words,read_commands=read_commands)
     raise ValueError('requested frame is beyond captured trace')
 
 def main():
@@ -109,28 +119,34 @@ def main():
     stream=b''.join(words([kind,len(payload)]+payload) for kind,payload in records)+words([2,0])
     digest=hashlib.sha256(stream).hexdigest()
     metadata['command_sha256']=digest
-    native=subprocess.run([a.probe.resolve()],input=stream,capture_output=True,check=True).stdout
-    if len(native)!=1048576:raise RuntimeError('incomplete native VRAM snapshot')
+    output=subprocess.run([a.probe.resolve()],input=stream,capture_output=True,check=True).stdout
+    read_bytes=metadata['read_words']*4
+    if len(output)!=1048576+read_bytes:raise RuntimeError('incomplete native VRAM/readback output')
+    native_reads,native=output[:read_bytes],output[read_bytes:]
     if a.reference:
         saved=json.loads((a.reference/'comparison.json').read_text())
         if saved.get('command_sha256')!=digest:raise ValueError('reference captured commands differ')
         reference=(a.reference/'psx.vram').read_bytes()
+        reference_reads=(a.reference/'psx.reads').read_bytes() if read_bytes else b''
     else:
-        print(f'Replaying {len(writes)} register writes at VSync {a.frame}',flush=True)
+        print(f'Replaying {sum(port<2 for port,_ in writes)} register writes at VSync {a.frame}',flush=True)
         duck=DuckStation(a.port)
         try:
-            duck.replay_writes(writes)
+            reference_reads=duck.replay_writes(writes)
             reference=duck.read_vram()
         finally:duck.close()
     if len(reference)!=1048576:raise RuntimeError('incomplete reference VRAM snapshot')
+    if len(reference_reads)!=read_bytes:raise RuntimeError('incomplete reference readback output')
     a.out.mkdir(parents=True)
     (a.out/'native.vram').write_bytes(native);(a.out/'psx.vram').write_bytes(reference)
+    (a.out/'native.reads').write_bytes(native_reads);(a.out/'psx.reads').write_bytes(reference_reads)
     want=struct.unpack('<524288H',reference);got=struct.unpack('<524288H',native)
-    metadata.update(dump=str(a.dump),commands=len(records),register_writes=len(writes),
+    metadata.update(dump=str(a.dump),commands=len(records),register_writes=sum(port<2 for port,_ in writes),
         different_pixels=sum(x!=y for x,y in zip(want,got)),
-        different_rgb15_pixels=sum((x&32767)!=(y&32767) for x,y in zip(want,got)))
+        different_rgb15_pixels=sum((x&32767)!=(y&32767) for x,y in zip(want,got)),
+        different_read_words=sum(native_reads[i:i+4]!=reference_reads[i:i+4] for i in range(0,read_bytes,4)))
     (a.out/'comparison.json').write_text(json.dumps(metadata,indent=2)+'\n')
     print(json.dumps(metadata,indent=2))
-    return bool(metadata['different_pixels'])
+    return bool(metadata['different_pixels'] or metadata['different_read_words'])
 
 if __name__=='__main__':raise SystemExit(main())

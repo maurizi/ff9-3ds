@@ -104,9 +104,9 @@ for differences. Captures contain game data and must remain in ignored `build/`.
 
 The parser follows the [GPUDUMP format](https://github.com/ps1dev/standards/blob/main/GPUDUMP.md).
 It joins GP0 commands across packet boundaries, including uploads; GP1 reset
-cancels incomplete commands. Discarded GPU words are skipped. Unknown metadata
-packets are skipped by length. Truncated streams, incomplete selected frames,
-interlacing and GPU readback commands are rejected. This probe does not model
+cancels incomplete commands. Read/discard packets consume GPUREAD words.
+Unknown metadata packets are skipped by length. Truncated streams, incomplete
+selected frames, interlacing and GPU information queries are rejected. This probe does not model
 GPU timing, scanout, interlaced drawing, or texture-cache behavior on hardware.
 It also does not exercise the game's port-specific packet generation.
 
@@ -214,7 +214,7 @@ At VSync 330 the viewport is nearly black during a fade, so it is not a useful
 standalone room-reveal screenshot. VSync 180 was visually checked during the
 light reveal. Extending the replay through name entry reaches a GP0 readback
 after VSync 330 and is explicitly rejected by the current tool; no complete
-1199-VSync replay match is claimed. Readback replay, other scenes, varying
+1199-VSync replay match was claimed at this stage. Other scenes, varying
 line interpolation, audio and whole-game correctness still require work.
 
 The native `interpolation_timing` ROM includes both old and new ARM/ITCM
@@ -225,3 +225,49 @@ for the new backend across seven cases; it does not establish game FPS.
 Different texture samples also change the work per pixel. This remaining
 cost is recorded in `interpolation_arm9_validation.json`; rendering fidelity
 improves, but performance and full-game fidelity are not finished.
+
+## Readback replay and odd image padding
+
+The replay now consumes GPUDUMP types 3 and 4 as read counts. Type 3 means
+read-and-discard, not ignored GPU input; the earlier parser interpreted it
+incorrectly. Both types are compared with the port's `StoreImage` output,
+including words that a normal dump player would discard. Split read batches and
+GP1 reset cancellation are supported. GP1 writes bypass the GP0 FIFO wait so
+reset can cancel an incomplete transfer. Information-query reads, reads past
+the end of a VRAM transfer, interlacing, and a selected checkpoint with an
+unfinished read remain explicit errors. Zero-length read batches are no-ops.
+These semantics follow the [GPUDUMP specification](https://github.com/ps1dev/standards/blob/main/GPUDUMP.md).
+
+Output now also includes `native.reads` and `psx.reads`, with concatenated
+little-endian GPUREAD words in stream order. `different_read_words` participates
+in the exit status, so matching final VRAM cannot conceal wrong readback data.
+Reference reuse checks the same normalized command hash, including read batches.
+
+The complete candle capture replays through all 1199 recorded VSyncs and ends
+on the naming screen. `candle_replay_readbacks_complete` and the sentinel-buffer
+repeat `candle_replay_readbacks_repeat` both have zero final VRAM differences
+and zero differences in the 64 words returned by the transition's one VRAM
+read. The latter contains 686773 normalized records and 2529361 register writes.
+The naming framebuffer was viewed. This compares the final VRAM and recorded
+read results after the whole stream; it does not compare every intermediate
+VSync or establish native DS scanout/scaling fidelity.
+
+Synthetic even-sized transfers also match across both VRAM axes, with partial
+read batches using both read/discard packet types (`readback_even_first`).
+Reset during a partial read followed by a new transfer also matches reference
+VRAM and both returned words (`readback_cancel_verified`); a zero-length batch
+in that trace does not block or consume data.
+An odd three-pixel read matches the GPU words `22221111 00003333`. Initially,
+zero-initializing the native buffer hid a `StoreImage` defect: the API copied
+three halfwords but left the fourth stale. Changing the probe buffer to
+`DEADBEEF` exposes one differing word (`readback_odd_sentinel_before`). The
+production API now zeros that padding halfword, matching the reference
+(`readback_odd_sentinel_fixed`). The original PsyQ transfer helper at 80014AA8
+also computes `(w*h+1)/2` words and writes full words to the destination.
+
+`test-gpu` now checks an odd 3x3 upload/read across x=1023 and y=511. It verifies
+upload padding is discarded, read padding is zero, all nine pixels survive,
+and adjacent caller words remain untouched. Parser tests cover partial reads,
+reset cancellation, zero counts and malformed/unsupported operations. Both
+DS and PC targets build. This closes the recorded naming readback and the odd
+padding defect; it does not establish complete image-transfer, GPU or game parity.

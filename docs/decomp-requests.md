@@ -581,3 +581,15 @@ initializes BtlUnit.unk78. Enemy damage in B81C4 saturates that gauge and calls
 btl_addStatus(0x4000), which queues command 0x3b through the normal path.
 Please name these gates together. A full saved gauge alone does not force a
 transformation when the global flag or guest variant disables it.
+
+### F23 (2026-10-15). PsyQ image-read transfer helper
+
+`D_80066614 + 0x1c` points to `func_80014AA8`, used by `StoreImage` and
+`StoreImage2`. Please name it as the GPU VRAM-to-CPU image transfer helper.
+At 80014B58–80014B68 it computes `(width*height+1)/2` GPU words after clamping
+dimensions; the CPU tail writes whole words at 80014CAC and advances the
+destination by four bytes at 80014CB4. The port previously copied exactly the
+requested halfwords and left odd-count padding stale. Synthetic GPUREAD
+comparison with DuckStation returns zero in that high halfword; the port now
+preserves the whole-word result and checks caller guards. No PSX code changes
+are requested, just the helper's role and word-count semantics.
