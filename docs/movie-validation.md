@@ -261,13 +261,44 @@ does not prove exact original-hardware rounding for arbitrary custom tables,
 all MDEC modes, or every movie pixel. The complete game, final compositing,
 animation and audio fidelity requirements remain open.
 
+## Implemented: the original player drives playback (2026-10-17)
+
+The placeholder player is gone. The decomp's ovl_64 C (`MBG_init`, `mbg_play`,
+`mbg_update`, the sector ring, camera/mask bookkeeping, pause and end
+conditions) now runs unchanged. `port/game/movie.c` supplies only what is still
+hand-written asm there:
+
+* `mbg_vlcDecode` calls `ff9_movie_vlc_v2` with the original `g_mbgVlcPairs`,
+  bounded by the frame's ring slot. `mbg_vlcBuildTable` has nothing to build.
+* `mbg_applyMask`, translated from the original routine, including its
+  do-while edges and the `FE n` column fill that compares with `n`.
+* libpress `DecDCTReset/in/out/inSync/outSync/outCallback` over
+  `psx_mdec_macroblock`, with the quantization/scale tables uploaded by the
+  original reset (`D_8019DEC8`, `D_8019DF4C`). Decoding is synchronous; an out
+  request made from the out callback is run by the outer call's loop, so the
+  player's slice-by-slice `LoadImage` order is preserved without recursion.
+
+Streamed sectors now arrive at drive speed: `psx_cd_frame` delivers 75 or 150
+sectors per second (`CdlModeSpeed`) once per 60 Hz frame, while loader polls keep
+their one-sector pumps. Movies read without polling, so they need the real rate:
+ten sectors per 15 fps movie frame.
+
+Observed on the PC build (software renderer frame dumps):
+
+* The attract loop matches the PSX order: Squaresoft logo, intro FMV with the
+  map overlays, the title menu over its animated background, the character
+  motto cards, then the intro again.
+* New Game plays field 70's opening FMV (the storm, Garnet, the Prima Vista,
+  the staff credits) at 15 movie frames per four VSyncs, then loads field 50,
+  the dark room. The `candle` scenario follows the same path.
+* Movie audio through AKAO's streamed-sound commands: the intro's 44 seconds
+  have no silent 20 ms window once the music starts.
+
 ## Still incomplete
 
-`port/game/movie.c` still substitutes placeholder frame timing. RGB24 scanout
-alone does not implement movie playback. Remaining work includes sector/frame
-integration of frame assembly, coefficient expansion and pixel reconstruction
-into the game player, movie audio, synchronized frame
-timing, skipping/end conditions, MBG camera metadata and graphics composition.
-Both decoding working sets and stream buffers must fit the intended DS memory
-budget. No actual movie sequence, animation video, audio synchronization or
-end-to-end DS movie playback is claimed by these synthetic display checks.
+Not yet compared frame-by-frame with a PSX capture of the same movie (timing,
+first/last frame, audio sync). DS performance and memory are unmeasured: the
+decoder working set adds to the original player buffers, and software IDCT of
+280 macroblocks every 15 fps frame must fit the ARM9 budget. MBG movies inside
+fields (masks and camera records with field models drawn over them) have not
+been inspected visually yet.

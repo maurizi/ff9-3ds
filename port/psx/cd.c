@@ -7,7 +7,9 @@
  * sites therefore service the drive, as do frame boundaries and libcd calls.
  * Each pump completes queued commands but delivers at most one sector. Draining
  * a whole read immediately can overwrite a released summon model while its
- * final callbacks still query it (Ifrit). Commands issued inside a callback
+ * final callbacks still query it (Ifrit). The frame pump (psx_cd_frame) instead
+ * delivers what the drive reads in a 60 Hz frame (75 or 150 sectors/s): streamed
+ * movies read without polling and need the real rate. Commands issued inside a callback
  * are queued and processed after it returns, without recursive sector delivery.
  * This preserves asynchronous progress; it does not model physical seek time.
  *
@@ -358,7 +360,28 @@ int CdControlB(u8 com, u8 *param, u8 *result) {
     return control(com, param, result);
 }
 
+static void pump(int max_sectors);
+
 void psx_cd_pump(void) {
+    pump(MAX_SECTORS_PER_PUMP);
+}
+
+/* One frame of drive time: 75 sectors/s at normal speed, 150 with CdlModeSpeed (mode bit 7), as whole sectors
+ * with the remainder carried over. Credit only builds while reading, so seeks and idle time don't bank sectors. */
+void psx_cd_frame(void) {
+    static unsigned int credit; /* in 1/60 sectors */
+    if (!reading || !ready_cb) {
+        credit = 0;
+        pump(MAX_SECTORS_PER_PUMP);
+        return;
+    }
+    credit += (mode & 0x80) ? 150 : 75;
+    int n = (int)(credit / 60);
+    credit %= 60;
+    pump(n > MAX_SECTORS_PER_PUMP ? n : MAX_SECTORS_PER_PUMP);
+}
+
+static void pump(int max_sectors) {
     psx_cd_debug[4] = pumping | reading << 4 | (ready_cb != NULL) << 8 | (sync_cb != NULL) << 12;
     psx_cd_debug[5] = (unsigned)(q_tail - q_head);
     if (pumping) {
@@ -375,7 +398,7 @@ void psx_cd_pump(void) {
             complete(execute(com, param, NULL), NULL);
             continue;
         }
-        if (reading && ready_cb && delivered < MAX_SECTORS_PER_PUMP) {
+        if (reading && ready_cb && delivered < max_sectors) {
             sector_lba = read_lba;
             read_raw(read_lba++, sector);
             psx_cd_debug[2]++;

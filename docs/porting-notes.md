@@ -23,8 +23,9 @@ build instead of silently doing nothing. Remove a patch once the decomp fixes it
 ## Debugging recipe (PC build)
 ```
 tools/docker.sh make -j16 pc
-tools/docker.sh build/pc/ff9ds --frames 20000 --status 1000 --watch 800AB3C8:1 \
-    --press CROSS@2500 --press UP@2900+3 --press CROSS@3000+3      # title -> New Game -> field 70
+tools/docker.sh build/pc/ff9ds --frames 12000 --status 1000 --watch 800AB3C8:1 \
+    --press UP@3700+8 --press CROSS@3800+8   # intro FMV, title menu (cursor on CONTINUE) -> New Game ->
+                                             # field 70's opening FMV -> field 50 (dark room) at ~10500
 tools/docker.sh tools/pcdebug.sh <same args>                       # crash: fault address, line, backtrace
 ```
 Most crashes so far were found by following the bad value back with gdb watchpoints (`watch -l`) on PS1 globals,

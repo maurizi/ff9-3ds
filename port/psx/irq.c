@@ -190,12 +190,9 @@ static void rcnt_frame(void) {
     }
 }
 
-void psx_movie_tick(void); /* port/game/movie.c */
-
 void psx_frame(void) {
     polls = 0;
-    psx_cd_pump();
-    psx_movie_tick();
+    psx_cd_frame();
     psx_drawsync_pending();
     rcnt_frame();
     vblanks++;

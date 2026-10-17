@@ -16,6 +16,7 @@ void psx_drawsync_pending(void); /* gpu.c: a DrawSyncCallback is owed */
 
 /* CD (cd.c): service queued commands and at most one sector event. */
 void psx_cd_pump(void);
+void psx_cd_frame(void); /* once per 60 Hz frame: a frame of drive reading */
 
 /* Pad (pad.c): refresh the buffers PadInitDirect registered (called once per frame). */
 void psx_pad_update(void);

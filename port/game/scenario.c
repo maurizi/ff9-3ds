@@ -122,15 +122,23 @@ static void prepare_return_field(GameData *d) {
     scenario.return_field_ready=1;
 }
 /* Scenario diagnostics only. Validate the current archive's directory before
- * a synthetic story state can send the loader to an absent resource. */
+ * a synthetic story state can send the loader to an absent resource. The IDs are
+ * copied at the first field entry: the in-RAM directory shares its area with
+ * movie buffers (MBG_init), and the game reloads it before its own lookups. */
 void port_scenario_field_entering(int field) {
     if(!scenario.enabled || !scenario.consumed) return;
     typedef struct {u16 field,area;u32 sector;} FieldEntry;
     _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
-    FileDirEntry *dirs=(FileDirEntry *)g_gameState->unk14;
-    const FieldEntry *entries=(const FieldEntry *)(D_80067944+0x14c700+(dirs[4].unk8<<11));
+    static u16 ids[512];
+    static int n_ids=-1;
+    if(n_ids<0) {
+        FileDirEntry *dirs=(FileDirEntry *)g_gameState->unk14;
+        const FieldEntry *entries=(const FieldEntry *)(D_80067944+0x14c700+(dirs[4].unk8<<11));
+        if(dirs[4].unk4>(s32)(sizeof ids/sizeof ids[0])) port_fatal("scenario: %d field entries",(int)dirs[4].unk4);
+        for(n_ids=0;n_ids<dirs[4].unk4;n_ids++) ids[n_ids]=entries[n_ids].field;
+    }
     port_log("scenario field entering: %d\n",field);
-    for(int i=0;i<dirs[4].unk4;i++) if(entries[i].field==field) return;
+    for(int i=0;i<n_ids;i++) if(ids[i]==field) return;
     port_fatal("scenario: unavailable field %d in current archive (initial fixture disc %d, field %d); supply appropriate story/event state",
                field,scenario.disc,scenario.field);
 }
