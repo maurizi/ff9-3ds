@@ -626,7 +626,20 @@ the `disc3_valia_pira` battle hash identically with the block path forced off.
 | 24 | off | 39.23 | 25.16 |
 | 24 | on | 40.58 | 26.14 |
 
-Still above the 16.7 ms budget at 24 voices. About 5 ms of each interval is
+In the game the guard first rejected nearly every span: FF9 parks idle voices on a
+loop at SPU address 0, the CD input buffer. Without CD input that buffer only
+receives zeros, so a span may proceed when the bytes it will write are already
+zero. FF9 also enables the SPU IRQ bit, so its off voices keep fetching and
+advancing. They have no envelope and now take the steady path too. A 1,500-frame
+host title run then mixes every span in blocks. Title (3,000 frames of intro
+movie audio) and `disc3_valia_pira` (4,000 frames) PCM still hash identically to
+the forced per-sample path.
+
+In-game, melonDS DSi, intro FMV, `spu_total_including_sink` per 60 Hz frame:
+28.7 ms before block mixing, 23.4 ms with it, 11.5 ms with idle voices on the
+steady path.
+
+The synthetic 24-voice case is still above the 16.7 ms budget. About 5 ms of each interval is
 per-sample work independent of voice count (reverb, output). melonDS's JIT
 timing in this configuration charges main RAM and DTCM data accesses the same
 (`build/bench/cache_probe.c`); with the JIT off, main RAM costs about 1.25x.
