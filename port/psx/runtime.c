@@ -25,3 +25,7 @@ void port_fatal(const char *fmt, ...) {
 void port_stub_hit(const char *name) {
     port_fatal("not implemented: %s", name);
 }
+
+__attribute__((weak)) void port_canary(const char *where) {
+    (void)where;
+}

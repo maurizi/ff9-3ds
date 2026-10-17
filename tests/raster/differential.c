@@ -167,6 +167,24 @@ static void shadow_checks(void) {
         assert(memcmp(known[0],known[1],sizeof known[0])==0);
     }
 }
+/* A sprite clipped horizontally to nothing while rows remain (x1 < x0 after the drawing-area clip) draws
+ * nothing. The fast row path once computed its width unsigned and ran away over memory (DS crash in battle). */
+static void clipped_sprite_checks(void) {
+    for (int depth = 0; depth < 3; depth++) {
+        for (unsigned i = 0; i < 1024 * 512; i++) actual[i] = i % 7 ? 0x1234 : 0;
+        memcpy(expected, actual, sizeof actual);
+        Gp0Mode m = {.textured = 1, .depth = depth, .raw = 1, .tx = 640, .ty = 256, .clut_x = 0, .clut_y = 480};
+        Gp0Vtx v = {.x = 100, .y = 40, .u = 20, .v = 0, .r = 128, .g = 128, .b = 128};
+        gp0_state = (Gp0State){.area_x0 = 200, .area_y0 = 0, .area_x1 = 300, .area_y1 = 511};
+        psx_vram = actual; psx_softgpu.rect(&m, &v, 16, 16);
+        psx_vram = expected; psx_softgpu_reference.rect(&m, &v, 16, 16);
+        if (memcmp(actual, expected, sizeof actual)) {
+            fprintf(stderr, "clipped sprite depth %d drew pixels\n", depth);
+            exit(1);
+        }
+    }
+}
+
 static void sprite_checks(void) {
     /* Large indexed palettes, neutral direct colour, STP/transparent black,
      * window remapping, clipped UV origins and live source/CLUT feedback. */
@@ -215,6 +233,7 @@ int main(int argc, char **argv) {
     targeted_checks();
     shadow_checks();
     sprite_checks();
+    clipped_sprite_checks();
     for (unsigned i=0; i<1024*512; ++i)
         actual[i] = (i % 17 == 0) ? 0 : (i % 19 == 0) ? 0x8000 : random_value();
     memcpy(expected, actual, sizeof actual);

@@ -43,6 +43,13 @@ void port_itcm_guard_init(void) {
     unsigned bytes=16384, region=0x0100001b;
     while(bytes>immutable && bytes>4096) { bytes>>=1; region-=2; }
     sassert(immutable>=4096,"ITCM alias guard overlaps mutable IRQ data");
+#ifdef PORT_ITCM_GUARD_LOW
+    /* ITCMGUARD=2: instead make the whole 32 KiB alias at address 0 read-only. Code and IRQ data are only
+     * written through their linked 0x01000000 addresses; a near-NULL pointer (base 0 plus a struct offset up to
+     * 32 KiB) writes through this alias and can reach the IRQ table at the end of ITCM. */
+    bytes=32768;
+    region=0x0000001d; /* base 0, size 2^15, enabled */
+#endif
     port_itcm_guard_bytes=bytes;
     unsigned ime=enterCriticalSection();
     __asm__ volatile("mrc p15, 0, %0, c5, c0, 2\n"

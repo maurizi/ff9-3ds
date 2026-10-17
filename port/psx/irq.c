@@ -191,19 +191,25 @@ static void rcnt_frame(void) {
 }
 
 void psx_frame(void) {
+    port_canary("game code before psx_frame");
     polls = 0;
     psx_cd_frame();
+    port_canary("CD frame");
     psx_drawsync_pending();
+    port_canary("DrawSync callback");
     rcnt_frame();
+    port_canary("root counters (SPU/AKAO)");
     vblanks++;
     psx_pad_update();
     if (vsync_cb) {
         vsync_cb();
     }
+    port_canary("VSync callback");
     if (gp0_backend && gp0_backend->frame) {
         gp0_backend->frame();
     }
     plat_wait_frame();
+    port_canary("present/wait");
 }
 
 /* VSync(mode) (libetc): -1 the vblank count; 1 hblanks since the last vblank (no wait); 0 wait for the next

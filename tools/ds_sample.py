@@ -129,7 +129,10 @@ def main():
     p.add_argument('--interval', type=float, default=0.005)
     p.add_argument('--port', type=int, default=3333)
     p.add_argument('--display', default=':99')
+    p.add_argument('--sd-folder', type=Path)
+    p.add_argument('--sd-image', type=Path)
     p.add_argument('--top', type=int, default=40)
+    p.add_argument('--samples', type=int, default=0, help='stop after this many samples (0: at --to)')
     p.add_argument('--detail', action='append', default=[], help='also histogram PCs inside this function')
     a = p.parse_args()
     rom, elf = a.rom.resolve(), a.elf.resolve()
@@ -157,6 +160,11 @@ def main():
     text = set_option(text, 'Instance0.Gdb', 'Enabled', 'true')
     text = set_option(text, 'Instance0.Gdb.ARM9', 'Port', str(a.port))
     text = set_option(text, 'Instance0.Gdb.ARM9', 'BreakOnStartup', 'false')
+    if a.sd_folder:
+        text = set_option(text, 'DSi.SD', 'FolderPath', f'"{a.sd_folder.resolve()}"')
+        text = set_option(text, 'DSi.SD', 'FolderSync', 'true')
+        if a.sd_image:
+            text = set_option(text, 'DSi.SD', 'ImagePath', f'"{a.sd_image.resolve()}"')
     CONFIG.write_text(text)
     xvfb = None
     if subprocess.run(['xdpyinfo', '-display', a.display], capture_output=True).returncode != 0:
@@ -202,7 +210,8 @@ def main():
             if name(pc) in a.detail:
                 detail[pc] += 1
             stub.resume()
-            if sum(samples.values()) % 200 == 0 and reader() >= a.stop:
+            n = sum(samples.values())
+            if (a.samples and n >= a.samples) or (n % 200 == 0 and reader() >= a.stop):
                 break
         print(f'stopped at frame {reader()}')
     finally:

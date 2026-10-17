@@ -33,6 +33,11 @@ def main():
     p.add_argument('--timeout', type=float, default=3600)
     p.add_argument('--sd-folder', type=Path)
     p.add_argument('--sd-image', type=Path)
+    p.add_argument('--break', dest='brk', default='defaultHandler', help='function to stop at')
+    p.add_argument('--watch', type=lambda v: int(v, 16), help='hex address: report each write (PC/LR) instead')
+    p.add_argument('--hits', type=int, default=5)
+    p.add_argument('--regs', default='exceptionRegisters', help='saved r0-r15 array to print (ITCMGUARD builds: '
+                   'port_itcm_first_fault, whose r0 is at +4)')
     a = p.parse_args()
     rom, elf = a.rom.resolve(), a.elf.resolve()
     syms = {}
@@ -40,7 +45,7 @@ def main():
         parts = row.split()
         if len(parts) == 3:
             syms[parts[2]] = int(parts[0], 16)
-    for need in ('defaultHandler', 'exceptionRegisters'):
+    for need in (a.brk, a.regs):
         if need not in syms:
             sys.exit(f'{need} not in ELF')
 
@@ -85,13 +90,25 @@ def main():
             sys.exit('no GDB stub')
         stub.sock.settimeout(a.timeout)
         stub.attach()
-        bp = syms['defaultHandler'] & ~1
+        if a.watch is not None:
+            stub.send(f'Z2,{a.watch:x},4')
+            print('watchpoint:', stub.packet() or 'OK', flush=True)
+            for hit in range(a.hits):
+                stub.resume()
+                print(f'hit {hit}: {stub.packet()}', flush=True)
+                pc, lr, sp = stub.register(15), stub.register(14), stub.register(13)
+                stub.send(f'm{a.watch:x},4')
+                value = int.from_bytes(bytes.fromhex(stub.packet()), 'little')
+                print(f'  value {value:08x}  pc {pc:08x} {where(pc)}  lr {lr:08x} {where(lr)}  sp {sp:08x}', flush=True)
+            return
+        bp = syms[a.brk] & ~1
         stub.send(f'Z1,{bp:x},2')
         print('breakpoint:', stub.packet() or 'OK', flush=True)
         stub.resume()
         reply = stub.packet()  # stop reply when the handler is reached
         print('stopped:', reply, flush=True)
-        stub.send(f'm{syms["exceptionRegisters"]:x},40')
+        regs_at = syms[a.regs] + (4 if a.regs == 'port_itcm_first_fault' else 0)
+        stub.send(f'm{regs_at:x},40')
         regs_hex = stub.packet()
         regs = [int.from_bytes(bytes.fromhex(regs_hex[i:i + 8]), 'little') for i in range(0, 128, 8)]
         names = [f'r{i}' for i in range(13)] + ['sp', 'lr', 'pc']

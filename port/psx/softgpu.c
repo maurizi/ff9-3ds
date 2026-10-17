@@ -562,8 +562,11 @@ static inline __attribute__((always_inline)) int fast_indexed_row(
         const Gp0Mode *m, const u16 *row, unsigned row_y, u16 *dst, int y, int x0, int x1, unsigned cursor,
         unsigned keep_x, unsigned window_x, u16 mask, int direct) {
     if (keep_x != ~0u || window_x) return 0;
+    /* A rectangle clipped to nothing can have x1 < x0: nothing to draw, but the unsigned width would wrap the
+     * u range check below and run the row loop over ~4 GiB (seen on DS as stray pixels in DTCM). */
+    if (x1 <= x0) return 1;
     unsigned u = cursor & 255, width = (unsigned)(x1 - x0);
-    if (!width || u + width > 256) return 0;
+    if (width > 256 || u + width > 256) return 0;
     unsigned shift = m->depth ? 1 : 2; /* texels per halfword: 2 or 4 */
     unsigned tx0 = m->tx + (u >> shift), tx1 = m->tx + ((u + width - 1) >> shift);
     if (tx1 >= 1024) return 0;

@@ -45,9 +45,22 @@ extern unsigned short *psx_vram;
 extern unsigned char *psx_spu_ram;
 
 /* The VRAM and SPU RAM shadows (1.5 MB): allocated, so a 4 MB DS can still run the game logic without them. */
+#ifdef PORT_CANARY
+/* CANARY=1: a patterned 32 KiB tail after each shadow, checked by port_canary */
+unsigned short *psx_vram_tail;
+unsigned char *psx_spu_ram_tail;
+#define SHADOW_TAIL 0x8000
+#else
+#define SHADOW_TAIL 0
+#endif
 static void psx_mem_init(void) {
-    psx_vram = malloc(1024 * 512 * 2);
-    psx_spu_ram = malloc(0x80000);
+    psx_vram = malloc(1024 * 512 * 2 + SHADOW_TAIL);
+    psx_spu_ram = malloc(0x80000 + SHADOW_TAIL);
+#ifdef PORT_CANARY
+    if (psx_vram) psx_vram_tail = psx_vram + 1024 * 512, memset(psx_vram_tail, 0xA5, SHADOW_TAIL);
+    if (psx_spu_ram) psx_spu_ram_tail = psx_spu_ram + 0x80000, memset(psx_spu_ram_tail, 0xA5, SHADOW_TAIL);
+    port_log("vram %p..%p spu %p\n", (void *)psx_vram, (void *)(psx_vram + 1024 * 512), (void *)psx_spu_ram);
+#endif
     if (!psx_vram || !psx_spu_ram) {
         port_log("no room for the VRAM/SPU shadows: running without graphics and sound memory\n");
     }

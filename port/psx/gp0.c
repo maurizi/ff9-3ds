@@ -3,11 +3,14 @@
 #include "gp0.h"
 #include "profile.h"
 #include "psx_display.h"
+#include "psx_runtime.h"
 
 Gp0State gp0_state = {0, 0, 1023, 511, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 const Gp0Backend *gp0_backend;
 /* psx_display.h; weak here and in gpu.c, since unit tests link either file alone */
 __attribute__((weak)) unsigned int psx_vram_generation;
+/* psx_runtime.h; weak here too, for unit tests that link gp0.c without runtime.c */
+__attribute__((weak)) void port_canary(const char *where) { (void)where; }
 /* Snapshot counters for diagnosing the DS font presentation handoff. */
 unsigned int psx_gp0_font_probe[16];
 
@@ -228,8 +231,10 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
 
 void gp0_run(const unsigned int *w, unsigned int len) {
     unsigned int profile_start=port_profile_begin();
+    port_canary("before GP0 commands");
     for (unsigned int i = 0; i < len;) {
         i += command(w + i, len - i);
     }
+    port_canary("GP0 commands");
     port_profile_end(PORT_PROFILE_GPU,profile_start);
 }

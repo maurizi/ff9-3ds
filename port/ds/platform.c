@@ -53,6 +53,36 @@ static unsigned int stack_free(void) {
     return (unsigned int)((const char *)p - (const char *)start);
 }
 
+#ifdef PORT_CANARY
+/* CANARY=1: the BIOS IRQ handler jumps through the word at the top of DTCM; a corrupt value there crashes the
+ * next interrupt far from the culprit. Check it between phases and stop at the first phase that broke it. */
+void IntrMain(void);
+extern unsigned short *psx_vram_tail;
+extern unsigned char *psx_spu_ram_tail;
+static int tail_intact(const void *tail) {
+    const unsigned int *p = tail;
+    if (!p) return 1;
+    for (unsigned int i = 0; i < 0x8000 / 4; ++i)
+        if (p[i] != 0xA5A5A5A5u) {
+            printf("\ntail %p word %u: %08x\n", tail, i, p[i]);
+            return 0;
+        }
+    return 1;
+}
+void port_canary(const char *where) {
+    static const char *previous = "boot";
+    volatile unsigned int *vector = (volatile unsigned int *)0x02FF7FFC;
+    if (*vector != (unsigned int)IntrMain || !tail_intact(psx_vram_tail) || !tail_intact(psx_spu_ram_tail)) {
+        unsigned int bad = *vector;
+        REG_IME = 0;
+        printf("\nIRQ vector corrupt: %08x\nfirst seen after: %s\nprevious check: %s\nframe %ld\n", bad, where,
+               previous, frames);
+        for (;;) {}
+    }
+    previous = where;
+}
+#endif
+
 void plat_wait_frame(void) {
 #ifndef PORT_SOFT_DISPLAY
     swiWaitForVBlank();

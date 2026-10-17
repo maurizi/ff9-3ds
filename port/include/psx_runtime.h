@@ -42,6 +42,9 @@ int port_scenario_seed(int ordinary_seed);
 
 /* Print to the debug console. */
 void port_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/* Diagnostic memory-corruption canary between major phases; `where` names the phase just finished. A no-op
+ * unless the platform implements it (DS CANARY=1 builds check the IRQ vector at the top of DTCM). */
+void port_canary(const char *where);
 
 /* Print to the debug console and stop. */
 void port_fatal(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
