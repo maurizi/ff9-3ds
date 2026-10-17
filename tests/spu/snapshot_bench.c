@@ -18,13 +18,21 @@ unsigned short psx_spu_regs[0x200];
 static unsigned char ram[512 * 1024];
 unsigned char *psx_spu_ram = ram;
 static uint32_t hash = 2166136261u, frames;
+#ifdef BENCH_AUDIO
+/* Also play through the game's DS output (Maxmod stream, timer IRQ), to see its cost in context. */
+#include "audio.h"
+void real_plat_audio_samples(const short *pcm, unsigned count);
+#endif
 void plat_audio_samples(const short *pcm, unsigned count) {
+#ifdef BENCH_AUDIO
+    real_plat_audio_samples(pcm, count);
+#endif
     frames += count;
     for (unsigned i = 0; i < count * 2; ++i) hash = (hash ^ (uint16_t)pcm[i]) * 16777619u;
 }
 
 /* Component timing through the production profile hooks (built with PORT_PROFILE). */
-static uint32_t detail[PORT_PROFILE_DETAIL_CATEGORIES];
+static uint32_t detail[PORT_PROFILE_DETAIL_CATEGORIES], calls[PORT_PROFILE_DETAIL_CATEGORIES];
 #ifdef ARM9
 unsigned int port_profile_begin(void) { return TIMER_DATA(2) | (unsigned)TIMER_DATA(3) << 16; }
 #else
@@ -37,6 +45,7 @@ void port_profile_end(unsigned int category, unsigned int start) { (void)categor
 void port_profile_draw_end(unsigned int kind, unsigned int start) { (void)kind; (void)start; }
 void port_profile_detail_end(unsigned int category, unsigned int start) {
     detail[category] += port_profile_begin() - start;
+    calls[category]++;
 }
 
 #ifdef ARM9
@@ -62,6 +71,9 @@ int main(int argc, char **argv) {
     if (!f) { perror(argv[1]); return 1; }
     size = fread(file, 1, sizeof file, f); fclose(f); data = file;
     const double tick_ms = 0.001;
+#endif
+#ifdef BENCH_AUDIO
+    if (!port_audio_init()) printf("audio init failed\n");
 #endif
     unsigned state = psx_spu_snapshot_size();
     if (size < state + sizeof ram + 4 || !psx_spu_restore(data)) {
@@ -98,6 +110,10 @@ int main(int argc, char **argv) {
     printf("total   %.3f ms/frame\n", total * tick_ms / FRAMES);
     printf("voices  %.3f ms/frame\n", detail[PORT_PROFILE_SPU_VOICES] * tick_ms / FRAMES);
     printf("output  %.3f ms/frame\n", detail[PORT_PROFILE_SPU_OUTPUT] * tick_ms / FRAMES);
+    printf("steady  %.3f ms, %u/frame\n", detail[PORT_PROFILE_SPU_STEADY] * tick_ms / FRAMES,
+           calls[PORT_PROFILE_SPU_STEADY] / FRAMES);
+    printf("event   %.3f ms, %u/frame\n", detail[PORT_PROFILE_SPU_EVENT] * tick_ms / FRAMES,
+           calls[PORT_PROFILE_SPU_EVENT] / FRAMES);
 #ifdef ARM9
     while (1) swiWaitForVBlank();
 #endif

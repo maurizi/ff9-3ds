@@ -122,6 +122,28 @@ static SPU_HOT unsigned steady_samples(const PsxSpuVoice *voice, uint16_t pitch,
     return limit;
 }
 
+/* The Gaussian coefficients a source phase uses, in sample order: {g[255-p], g[511-p], g[256+p], g[p]}.
+ * The same values and summation order as spu_source_interpolate; one row per phase keeps them together. */
+#if defined(PORT_SPU_ITCM) && defined(__arm__)
+__attribute__((section(".sbss")))
+#endif
+static int16_t gauss4[256][4];
+static int gauss4_ready;
+static void gauss4_init(void) {
+    for (unsigned p = 0; p < 256; ++p) {
+        gauss4[p][0] = psx_spu_gauss[255 - p];
+        gauss4[p][1] = psx_spu_gauss[511 - p];
+        gauss4[p][2] = psx_spu_gauss[256 + p];
+        gauss4[p][3] = psx_spu_gauss[p];
+    }
+    gauss4_ready = 1;
+}
+
+static inline __attribute__((always_inline)) int32_t gauss_sample(const int16_t *samples, uint32_t counter) {
+    const int16_t *at = samples + (counter >> 12), *c = gauss4[(counter >> 4) & 255];
+    return at[0] * c[0] + at[1] * c[1] + at[2] * c[2] + at[3] * c[3];
+}
+
 /* The steady run's per-sample work: Gaussian interpolation at the moving source position, ENVX and the two
  * volumes applied, added into dry (and reverb send) pairs. Inlined per case, so the inner loop has no tests. */
 static inline __attribute__((always_inline)) int32_t steady_mix(
@@ -129,11 +151,7 @@ static inline __attribute__((always_inline)) int32_t steady_mix(
         int32_t *dry, int32_t *send, int32_t *keep, unsigned run) {
     int32_t sample = 0;
     for (unsigned k = 0; k < run; ++k) {
-        unsigned phase = (counter >> 4) & 255;
-        const int16_t *at = samples + (counter >> 12);
-        const int16_t *up = psx_spu_gauss + phase, *down = psx_spu_gauss + 255 - phase;
-        int32_t total = at[0] * down[0] + at[1] * down[256] + at[2] * up[256] + at[3] * up[0];
-        sample = ((int16_t)(total >> 15) * level) >> 15;
+        sample = ((int16_t)(gauss_sample(samples, counter) >> 15) * level) >> 15;
         counter += pitch;
         int32_t l = (sample * left) >> 15, r = (sample * right) >> 15;
         dry[0] += l;
@@ -180,13 +198,7 @@ static SPU_HOT __attribute__((noinline)) unsigned ticking_run(PsxSpuVoice *voice
     unsigned k = 0;
     while (k < run) {
         sample = 0;
-        if (adsr->level) {
-            unsigned phase = (counter >> 4) & 255;
-            const int16_t *at = samples + (counter >> 12);
-            const int16_t *up = psx_spu_gauss + phase, *down = psx_spu_gauss + 255 - phase;
-            int32_t total = at[0] * down[0] + at[1] * down[256] + at[2] * up[256] + at[3] * up[0];
-            sample = ((int16_t)(total >> 15) * adsr->level) >> 15;
-        }
+        if (adsr->level) sample = ((int16_t)(gauss_sample(samples, counter) >> 15) * adsr->level) >> 15;
         if (adsr->phase != PSX_SPU_ADSR_OFF &&
             (adsr->phase != PSX_SPU_ADSR_SUSTAIN || adsr->envelope.increment))
             spu_adsr_tick(adsr);
@@ -214,6 +226,7 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
                                       uint32_t reverb_mask, int fetch_off_voices, PsxSpuVoiceBlock *out) {
     int32_t previous_buffer[2][PSX_SPU_BLOCK_SPAN];
     int32_t *previous = previous_buffer[0], *current = previous_buffer[1];
+    if (!gauss4_ready) gauss4_init();
     memset(out, 0, sizeof *out);
     modulation_mask &= ~1u; /* voice 0 is never modulated, so nothing reads a buffer before voice 0's */
     for (unsigned i = 0; i < PSX_SPU_VOICES; ++i) {

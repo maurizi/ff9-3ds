@@ -546,6 +546,17 @@ $(BUILD)/tests/spu_snapshot_data.s: $(SPU_SNAPSHOT)
 $(BUILD)/tests/spu_snapshot_ds.elf: $(SPU_SNAPSHOT_SRCS) $(BUILD)/tests/spu_snapshot_data.s $(PORT_HDRS) port/psx/spu_hot.h port/psx/spu_inline.h
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -DPORT_SPU_ITCM -DPORT_PROFILE -DARM9 $(SPU_SNAPSHOT_SRCS) $(BUILD)/tests/spu_snapshot_data.s \
 	    -L$(BLOCKSDS)/libs/libnds/lib -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+# The same with the game's PCM output running (Maxmod stream, timer IRQ).
+$(BUILD)/tests/spu_snapshot_audio.o: port/ds/audio.c port/ds/audio.h port/ds/pcm_ring.h
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -DPORT_AUDIO -Dplat_audio_samples=real_plat_audio_samples \
+	    -I$(BLOCKSDS)/libs/maxmod/include -c $< -o $@
+$(BUILD)/tests/spu_snapshot_audio_ds.elf: $(SPU_SNAPSHOT_SRCS) $(BUILD)/tests/spu_snapshot_data.s $(BUILD)/tests/spu_snapshot_audio.o port/ds/pcm_ring.c $(PORT_HDRS)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -DPORT_SPU_ITCM -DPORT_PROFILE -DARM9 -DBENCH_AUDIO -Iport/ds \
+	    $(SPU_SNAPSHOT_SRCS) $(BUILD)/tests/spu_snapshot_data.s port/ds/pcm_ring.c $(BUILD)/tests/spu_snapshot_audio.o \
+	    -L$(BLOCKSDS)/libs/libnds/lib -L$(BLOCKSDS)/libs/maxmod/lib -Wl,--gc-sections -Wl,--start-group -lmm9 -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/spu_snapshot_audio_ds.nds: $(BUILD)/tests/spu_snapshot_audio_ds.elf $(ARM7ELF)
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "SPU snapshot+PCM;ARM9;User game state"
 $(BUILD)/tests/spu_snapshot_ds.nds: $(BUILD)/tests/spu_snapshot_ds.elf $(ARM7ELF)
 	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "SPU snapshot;ARM9;User game state"
 $(BUILD)/tests/spu_snapshot_host: $(SPU_SNAPSHOT_SRCS) $(PORT_HDRS) port/psx/spu_hot.h port/psx/spu_inline.h
