@@ -61,6 +61,27 @@ each source halfword once. The SPU mixes voices in exact blocks
 (`audio-validation.md`). The GTE is compiled as ARM, since Thumb has no long
 multiply.
 
+## Ark battle (disc 3), window ending at frame 1633, ms per 60 Hz frame
+
+Needs an SD image with disc 3:
+`ds_profile.py ... --sd-folder build/sdroot_disc3 --sd-image build/melon_sd_disc3.img`,
+where the folder holds `ff9ds/raw/FF9 CD3.img`, `psx_low_ram.bin` and the scenario.
+
+| | before | dithered polygon rows |
+|---|---:|---:|
+| interval | 150.6 | 99.9 |
+| GPU commands | 105.8 | 54.5 |
+| of which polygons | 91.1 | 39.8 |
+| of which rectangles | 9.5 | 9.5 |
+| GTE | 8.9 | 8.9 |
+| display scaling | 10.0 | 10.0 |
+| SPU | 9.9 | 9.9 |
+
+Battle polygons are almost all flat, textured, opaque and dithered (82.8M of
+84M host pixels in the first 1,700 frames). `tools/check_raster_frames.sh`
+checks every fast path against the reference rasterizer on field and battle
+frames.
+
 ## Intro FMV (title), ms per 60 Hz frame
 
 175 at first (movie decode uninstrumented), 47 after the MDEC, display-skip and
