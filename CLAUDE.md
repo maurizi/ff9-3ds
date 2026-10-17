@@ -15,7 +15,8 @@ FF9 (PS1 NTSC-U) port to Nintendo DS (DSi mode by default), built from the ff9-d
 - Build both targets before committing: `tools/docker.sh make -j16 ds pc` (the DS compiler is gcc 16, the host is
   gcc 13: they don't reject the same things).
 - The PC host build is the fast loop (seconds per run, gdb). Recipes are in `docs/porting-notes.md`. Its options:
-  `--frames N --status N --watch ADDR:SIZE --press BUTTON@FRAME[+N]`.
+  `--frames N --status N --watch ADDR:SIZE --press BUTTON@FRAME[+N] --render --dump N`. Without `--render` or
+  `--dump` the host does not rasterise at all, so rasterizer bugs (and costs) only show with one of them.
 - A crash in decomp code is usually one of the classes in `docs/porting-notes.md`. Fix it with the matching
   mechanism (counted patch in `config/patches.txt`, PsyQ layer, override), and tell the decomp session when the
   source can say it more clearly without changing the PS1 output.
