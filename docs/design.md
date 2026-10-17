@@ -310,6 +310,27 @@ renderer reproduces the opcode interpreter's layout (R15).
 
 ## 7. Audio
 
+### 7.0 Original-DS sound path (decided 2026-10-17)
+
+The exact software SPU (24 voices, Gaussian interpolation, reverb) costs about 16 ms per 60 Hz frame on the DSi's
+134 MHz ARM9, so about 32 ms on the DS's 67 MHz: twice a frame by itself, and the ARM7 (33 MHz) is far slower.
+The port targets the original DS, so the DS's 16 hardware channels do the mixing:
+
+- The SPU stays emulated on the ARM9 for everything the game observes: registers, key on/off, ADPCM block
+  stepping (loop and end flags, ENDX, IRQ addresses) and ADSR levels, which AKAO reads back to free voices.
+  Only interpolation and mixing go away.
+- Each voice's decoded ADPCM samples, in the order the voice plays them (loops included), go into a per-voice
+  ring buffer that a DS channel plays at the voice's pitch. A key-on starts the channel one frame later, once
+  that frame's samples are written.
+- Each frame, a voice's ADSR level, its volumes and the main volume set the channel's volume and pan, and its
+  pitch sets the frequency. Envelopes thus move in 60 Hz steps.
+- At most 16 voices sound at once: the loudest get channels. Pitch modulation is per frame. Noise voices use the
+  PSG noise channels (14, 15). Reverb is approximated later through the capture units.
+- The exact mixer stays as the host reference and the DSi diagnostic build (`HWSOUND=0`).
+
+This gives up bit-exact PS1 audio: no Gaussian interpolation (the DS resamples by nearest sample), envelope
+detail below 1/60 s, voices beyond 16, and exact reverb.
+
 - **AKAO stays on the ARM9**, unchanged C, driven by a 240 Hz timer IRQ as on PS1 (root counter 2). It writes
   the emulated SPU registers.
 - **SPU transfers** (`SpuWrite`/DMA) land in a 512 KB SPU RAM shadow. Decode blocks as voices fetch them;

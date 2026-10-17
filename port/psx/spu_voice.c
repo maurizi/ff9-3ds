@@ -301,3 +301,46 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
         current = swap;
     }
 }
+
+SPU_HOT void psx_spu_step_voice(PsxSpuVoice *voice, unsigned index, const uint8_t *ram, unsigned n, int fetch_off,
+                                uint32_t *ended, void (*block)(unsigned voice, const int16_t *samples, void *user),
+                                void *user) {
+    PsxSpuSource *src = &voice->source;
+    const uint32_t pitch = voice->registers[2] > 0x3fff ? 0x3fff : voice->registers[2];
+    const uint32_t bit = 1u << index;
+    if (voice->adsr.phase == PSX_SPU_ADSR_OFF && !fetch_off) return;
+    for (unsigned c = 0; c < 2; ++c) /* volume sweeps advance per sample whatever the source does */
+        for (unsigned k = 0; k < n && voice->volume[c].active; ++k) psx_spu_volume_tick(&voice->volume[c]);
+    for (unsigned s = 0; s < n;) {
+        if (voice->adsr.phase == PSX_SPU_ADSR_OFF && !fetch_off) return;
+        if (!src->fetched) {
+            psx_spu_source_fetch(src, ram, &voice->registers[7]);
+            block(index, src->samples + 3, user);
+        }
+        PsxSpuAdsr *adsr = &voice->adsr;
+        int steady = adsr->phase == PSX_SPU_ADSR_OFF ||
+                     (adsr->phase == PSX_SPU_ADSR_SUSTAIN && !adsr->envelope.increment);
+        unsigned run;
+        if (steady) {
+            /* jump to the sample that crosses into the next block, or the end */
+            if (!pitch) return;
+            uint32_t left = (PSX_SPU_BLOCK_SAMPLES << 12) - src->counter;
+            run = (left + pitch - 1) / pitch;
+            if (run > n - s) { src->counter += pitch * (n - s); return; }
+        } else {
+            /* one sample with the envelope step (as fast_span's per-sample path) */
+            if (adsr->envelope.increment) spu_envelope_tick(&adsr->envelope, &adsr->level);
+            if (adsr->phase != PSX_SPU_ADSR_SUSTAIN &&
+                (adsr->envelope.decrease ? adsr->level <= adsr->target : adsr->level >= adsr->target))
+                psx_spu_adsr_advance_phase(adsr);
+            run = 1;
+            if (src->counter + pitch < (PSX_SPU_BLOCK_SAMPLES << 12)) { src->counter += pitch; ++s; continue; }
+        }
+        /* the crossing sample: everything before it moved the counter, this one steps the block */
+        src->counter += pitch * (run - 1);
+        s += run;
+        unsigned action = spu_source_advance(src, pitch, voice->registers[7], 0);
+        if (action & PSX_SPU_SOURCE_END) *ended |= bit;
+        if (action & PSX_SPU_SOURCE_MUTE) psx_spu_adsr_force_off(&voice->adsr);
+    }
+}

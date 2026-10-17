@@ -25,6 +25,14 @@ static const char *data_dir = "disks/us";
 static long frame_limit = -1;
 static long spu_snapshot_at = -1;
 static long ram_dump_at = -1; /* --ram-dump FRAME:PATH: PS1 RAM image, for tools/ram_diff.py */
+/* --hw-sound: the DS's hardware-mixing SPU path (design §7.0) with a sink that only counts, to check that the game
+ * observes the same SPU as with mixing. */
+static int hw_sound;
+static unsigned long hw_blocks, hw_key_ons;
+static void hw_key_on(unsigned voice, void *user) { (void)voice; (void)user; hw_key_ons++; }
+static void hw_block(unsigned voice, const int16_t *samples, void *user) { (void)voice; (void)samples; (void)user; hw_blocks++; }
+static const PsxSpuSink hw_counting_sink = {hw_key_on, hw_block, NULL};
+static void hw_report(void) { fprintf(stderr, "hw sound: %lu key-ons, %lu blocks\n", hw_key_ons, hw_blocks); }
 static const char *ram_dump_path;
 static const char *spu_snapshot_path;
 /* After the snapshot, the next SPU_REPLAY_FRAMES frames of register writes and RAM uploads follow it in the
@@ -270,6 +278,8 @@ int main(int argc, char **argv) {
                 return 1;
             }
             spu_snapshot_path = path;
+        } else if (!strcmp(argv[i], "--hw-sound")) {
+            hw_sound = 1;
         } else if (!strcmp(argv[i], "--ram-dump") && i + 1 < argc) {
             static char path[512];
             if (sscanf(argv[++i], "%ld:%511s", &ram_dump_at, path) != 2) {
@@ -287,5 +297,6 @@ int main(int argc, char **argv) {
     /* The SPU always runs, as on the DS: the game reads it back (AKAO frees a voice when SpuGetVoiceEnvelope
      * reports its envelope finished), so a silent SPU would run different game logic. --audio only adds the WAV. */
     psx_spu_set_rendering(1);
+    if (hw_sound) { psx_spu_set_hw(&hw_counting_sink); atexit(hw_report); }
     psx_run_game();
 }

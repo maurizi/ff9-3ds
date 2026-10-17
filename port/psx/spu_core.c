@@ -244,7 +244,64 @@ static SPU_HOT void span_frames(int16_t *output, unsigned n) {
     port_profile_detail_end(PORT_PROFILE_SPU_OUTPUT, profile_output);
 }
 
+static const PsxSpuSink *hw_sink;
+void psx_spu_set_hw(const PsxSpuSink *sink) { hw_sink = sink; }
+
+void psx_spu_voice_output(unsigned i, PsxSpuVoiceOutput *out) {
+    const PsxSpuVoice *v = &voices[i];
+    out->on = v->adsr.phase != PSX_SPU_ADSR_OFF || v->adsr.level;
+    out->pitch = v->registers[2] > 0x3fff ? 0x3fff : v->registers[2];
+    int muted = !(psx_spu_regs[0x1aa / 2] & 0x4000);
+    for (int c = 0; c < 2; ++c) {
+        int32_t a = (v->adsr.level * v->volume[c].level) >> 15;
+        a = (a * main_volume[c].level) >> 15;
+        if (c) out->right = muted ? 0 : a;
+        else out->left = muted ? 0 : a;
+    }
+    out->noise = !!(flags(0x194) & (1u << i));
+}
+
+/* Hardware mixing: the voices' observable state over `frames` samples, without producing them. */
+static void hw_step(unsigned frames) {
+    uint16_t control = psx_spu_regs[0x1aa / 2];
+    for (unsigned i = 0; i < PSX_SPU_VOICES; ++i)
+        psx_spu_step_voice(&voices[i], i, psx_spu_ram, frames, !!(control & 0x40), &ended, hw_sink->block,
+                           hw_sink->user);
+    for (unsigned c = 0; c < 2; ++c)
+        for (unsigned k = 0; k < frames && main_volume[c].active; ++k) psx_spu_volume_tick(&main_volume[c]);
+    for (unsigned k = 0; k < frames; ++k) psx_spu_noise_tick(&noise, (control >> 8) & 63);
+}
+
+static void hw_advance(unsigned frames) {
+    /* key events take effect after one sample, as with mixing (sample_frame) */
+    if (key_on || key_off) {
+        hw_step(1);
+        --frames;
+        for (unsigned i = 0; i < PSX_SPU_VOICES; ++i) {
+            if (key_off & (1u << i)) psx_spu_voice_key_off(&voices[i]);
+            if (key_on & (1u << i)) {
+                psx_spu_voice_key_on(&voices[i]);
+                ended &= ~(1u << i);
+                hw_sink->key_on(i, hw_sink->user);
+            }
+        }
+        key_on = key_off = 0;
+    }
+    if (frames) hw_step(frames);
+}
+
 SPU_HOT void psx_spu_advance(unsigned ticks) {
+    if (hw_sink && psx_spu_ram) {
+        unsigned frames = ticks / 96;
+        sample_fraction += ticks % 96;
+        frames += sample_fraction / 96;
+        sample_fraction %= 96;
+        unsigned profile_spu = port_profile_begin();
+        if (frames) hw_advance(frames);
+        sync_readbacks();
+        port_profile_detail_end(PORT_PROFILE_SPU, profile_spu);
+        return;
+    }
     if (!rendering || !psx_spu_ram) return;
     unsigned profile_spu = port_profile_begin();
     /* Break down before adding, so even UINT_MAX ticks cannot overflow. */
