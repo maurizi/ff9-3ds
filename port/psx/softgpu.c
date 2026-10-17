@@ -459,7 +459,7 @@ static inline __attribute__((always_inline)) void sprite_pixel(
 }
 
 static inline __attribute__((always_inline)) void sprite_rows(
-        const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int effects) {
+        const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int effects, int direct) {
     unsigned keep_x=~gp0_state.twin_mask_x,keep_y=~gp0_state.twin_mask_y;
     unsigned window_x=gp0_state.twin_off_x&gp0_state.twin_mask_x;
     unsigned window_y=gp0_state.twin_off_y&gp0_state.twin_mask_y;
@@ -469,7 +469,25 @@ static inline __attribute__((always_inline)) void sprite_rows(
         const u16 *row=psx_vram+(((m->ty+tv)&511)*1024);
         u16 *dst=psx_vram+y*1024+x0;
         unsigned cursor=(unsigned)u0+(unsigned)x0;
-        if(m->depth==0) for(int x=x0;x<x1;x++,cursor++,dst++) {
+        if(direct) {
+            /* Unmodulated indexed texels: the colour is the CLUT entry itself, read live from VRAM as plot()
+             * does, so a sprite that overwrites its own CLUT still sees each entry as it is at that pixel. */
+            const u16 *clut=psx_vram+(m->clut_y&511)*1024;
+            unsigned clut_x=m->clut_x;
+            if(m->depth==0) for(int x=x0;x<x1;x++,cursor++,dst++) {
+                unsigned u=((cursor&keep_x)|window_x)&255;
+                u16 packed=row[(m->tx+(u>>2))&1023];
+                u16 sample=clut[(clut_x+((packed>>((u&3)*4))&15))&1023];
+                sprite_pixel(m, dst, sample, sample, mask, effects);
+            }
+            else for(int x=x0;x<x1;x++,cursor++,dst++) {
+                unsigned u=((cursor&keep_x)|window_x)&255;
+                u16 packed=row[(m->tx+(u>>1))&1023];
+                u16 sample=clut[(clut_x+((packed>>((u&1)*8))&255))&1023];
+                sprite_pixel(m, dst, sample, sample, mask, effects);
+            }
+        }
+        else if(m->depth==0) for(int x=x0;x<x1;x++,cursor++,dst++) {
             unsigned u=((cursor&keep_x)|window_x)&255;
             u16 packed=row[(m->tx+(u>>2))&1023];
             u32 sample=shaded_palette[(packed>>((u&3)*4))&15];
@@ -519,17 +537,21 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
 #endif
     prepare_palette(m, v, x0, y0, x1, y1);
 #ifndef PORT_SOFTGPU_REFERENCE
+    const int unmodulated = m->raw || (v->r==128 && v->g==128 && v->b==128);
     if(m->textured && !target.pixels &&
        x0>=0 && y0>=0 && x1<=VRAM_W && y1<=VRAM_H &&
-       (palette_ready || (m->depth>=2 && (m->raw ||
-          (v->r==128 && v->g==128 && v->b==128))))) {
-        /* Cached-indexed or unmodulated direct-colour sprites avoid per-pixel
-         * colour setup. Keep texture reads live for overlapping source/dest.
-         * prepare_palette rejects CLUT feedback; shadows use generic plot. */
-        if (m->semi || gp0_state.check_mask)
-            sprite_rows(m, u0, v0, x0, y0, x1, y1, 1);
-        else
-            sprite_rows(m, u0, v0, x0, y0, x1, y1, 0);
+       (palette_ready || unmodulated)) {
+        /* Cached-indexed or unmodulated sprites avoid per-pixel colour setup. Keep texture and CLUT reads live
+         * for overlapping source/dest. prepare_palette rejects CLUT feedback; shadows use generic plot.
+         * Neutral 128 modulation reproduces each texel exactly, as raw does. */
+        const int direct = !palette_ready && m->depth < 2;
+        if (m->semi || gp0_state.check_mask) {
+            if (direct) sprite_rows(m, u0, v0, x0, y0, x1, y1, 1, 1);
+            else sprite_rows(m, u0, v0, x0, y0, x1, y1, 1, 0);
+        } else {
+            if (direct) sprite_rows(m, u0, v0, x0, y0, x1, y1, 0, 1);
+            else sprite_rows(m, u0, v0, x0, y0, x1, y1, 0, 0);
+        }
         port_profile_draw_end(1,profile_start);
         return;
     }
