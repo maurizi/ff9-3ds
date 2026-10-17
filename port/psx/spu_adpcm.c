@@ -15,6 +15,17 @@ SPU_HOT uint8_t psx_spu_decode_block(const uint8_t block[PSX_SPU_BLOCK_BYTES],
     int c2 = filter < 5 ? coefficients[filter][1] : 0;
     /* Reserved shifts follow psx-spx/DuckStation; hardware confirmation pending. */
     if (shift > 12) shift = 9;
+    if (!c1 && !c2) {
+        /* No prediction and all-zero nibbles decode to silence whatever the shift: FF9 parks idle voices on
+         * the zeroed CD input buffer, which they keep fetching. Blocks start 16-byte aligned. */
+        typedef uint32_t __attribute__((may_alias)) word;
+        const word *w = (const word *)__builtin_assume_aligned(block, 4);
+        if (!((w[0] >> 16) | w[1] | w[2] | w[3])) {
+            for (unsigned i = 0; i < PSX_SPU_BLOCK_SAMPLES; ++i) output[i] = 0;
+            history->previous = history->older = 0;
+            return block[1];
+        }
+    }
     for (unsigned i = 0; i < PSX_SPU_BLOCK_SAMPLES; ++i) {
         int nibble = (block[2 + i / 2] >> ((i & 1) * 4)) & 15;
         if (nibble & 8) nibble -= 16;

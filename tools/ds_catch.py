@@ -36,6 +36,9 @@ def main():
     p.add_argument('--break', dest='brk', default='defaultHandler', help='function to stop at')
     p.add_argument('--watch', type=lambda v: int(v, 16), help='hex address: report each write (PC/LR) instead')
     p.add_argument('--hits', type=int, default=5)
+    p.add_argument('--args', action='store_true', help='with --break: print r0-r3 and LR at each of --hits stops '
+                   'instead of the exception registers (a call trace of that function)')
+    p.add_argument('--dump-r0', type=int, default=0, help='with --args: also print this many bytes at r0')
     p.add_argument('--regs', default='exceptionRegisters', help='saved r0-r15 array to print (ITCMGUARD builds: '
                    'port_itcm_first_fault, whose r0 is at +4)')
     a = p.parse_args()
@@ -104,6 +107,21 @@ def main():
         bp = syms[a.brk] & ~1
         stub.send(f'Z1,{bp:x},2')
         print('breakpoint:', stub.packet() or 'OK', flush=True)
+        if a.args:
+            for hit in range(a.hits):
+                stub.resume()
+                stub.packet()
+                r = [stub.register(i) for i in range(4)]
+                lr = stub.register(14)
+                print(f'hit {hit}: r0 {r[0]:08x} r1 {r[1]:08x} r2 {r[2]:08x} r3 {r[3]:08x}  lr {lr:08x} {where(lr)}',
+                      flush=True)
+                if a.dump_r0:
+                    stub.send(f'm{r[0]:x},{a.dump_r0:x}')
+                    raw = bytes.fromhex(stub.packet())
+                    for i in range(0, len(raw), 16):
+                        print(f'  {r[0] + i:08x} ' + ' '.join(f'{int.from_bytes(raw[j:j + 4], "little"):08x}'
+                                                             for j in range(i, min(i + 16, len(raw)), 4)), flush=True)
+            return
         stub.resume()
         reply = stub.packet()  # stop reply when the handler is reached
         print('stopped:', reply, flush=True)

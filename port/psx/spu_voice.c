@@ -92,6 +92,8 @@ SPU_HOT void psx_spu_mix_voices(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_
 /* The Gaussian coefficients a source phase uses, in sample order: {g[255-p], g[511-p], g[256+p], g[p]}.
  * The same values and summation order as spu_source_interpolate; one row per phase keeps them together. */
 static int16_t gauss4[256][4];
+/* The same rows as halfword pairs, for the steady loops: {g0 | g1 << 16, g2 | g3 << 16} (16-bit multiplies). */
+static uint32_t gauss4w[256][2];
 static int gauss4_ready;
 static void gauss4_init(void) {
     for (unsigned p = 0; p < 256; ++p) {
@@ -99,8 +101,21 @@ static void gauss4_init(void) {
         gauss4[p][1] = psx_spu_gauss[511 - p];
         gauss4[p][2] = psx_spu_gauss[256 + p];
         gauss4[p][3] = psx_spu_gauss[p];
+        gauss4w[p][0] = (uint16_t)gauss4[p][0] | (uint32_t)(uint16_t)gauss4[p][1] << 16;
+        gauss4w[p][1] = (uint16_t)gauss4[p][2] | (uint32_t)(uint16_t)gauss4[p][3] << 16;
     }
     gauss4_ready = 1;
+}
+
+/* gauss_sample's value, its envelope product and the two volume products, all 16 x 16 bits: the interpolated
+ * sample, the envelope level and both volume levels are halfwords (`volumes`: left | right << 16). */
+static inline __attribute__((always_inline)) int32_t steady_sample(const int16_t *samples, uint32_t counter,
+                                                                   int32_t level) {
+    const int16_t *at = samples + (counter >> 12);
+    const uint32_t *c = gauss4w[(counter >> 4) & 255];
+    int32_t g = at[0] * (int16_t)c[0] + at[1] * (int16_t)(c[0] >> 16) +
+                at[2] * (int16_t)c[1] + at[3] * (int16_t)(c[1] >> 16);
+    return ((int16_t)(g >> 15) * (int16_t)level) >> 15;
 }
 
 static inline __attribute__((always_inline)) int32_t gauss_sample(const int16_t *samples, uint32_t counter) {
@@ -140,24 +155,33 @@ static SPU_HOT __attribute__((noinline)) unsigned fast_span(PsxSpuVoice *restric
                     if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) break;
                     if (++s == n) goto done;
                 }
-            } else if (send) {
-                for (;;) {
-                    sample = ((int16_t)(gauss_sample(samples, counter) >> 15) * level) >> 15;
-                    int32_t l = (sample * left) >> 15, r = (sample * right) >> 15;
-                    dry[s][0] += l; dry[s][1] += r;
-                    send[s][0] += l; send[s][1] += r;
-                    counter += pitch;
-                    if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) break;
-                    if (++s == n) goto done;
-                }
             } else {
-                for (;;) {
-                    sample = ((int16_t)(gauss_sample(samples, counter) >> 15) * level) >> 15;
-                    dry[s][0] += (sample * left) >> 15; dry[s][1] += (sample * right) >> 15;
-                    counter += pitch;
-                    if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) break;
-                    if (++s == n) goto done;
+                /* Pointer-walked, so the loop keeps everything in registers. */
+                const uint32_t volumes = (uint16_t)left | (uint32_t)(uint16_t)right << 16;
+                int32_t (*d)[2] = dry + s, (*const end)[2] = dry + n;
+                if (send) {
+                    int32_t (*w)[2] = send + s;
+                    for (;;) {
+                        sample = steady_sample(samples, counter, level);
+                        int32_t l = (sample * (int16_t)volumes) >> 15, r = (sample * (int16_t)(volumes >> 16)) >> 15;
+                        (*d)[0] += l; (*d)[1] += r;
+                        (*w)[0] += l; (*w)[1] += r;
+                        counter += pitch;
+                        if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) break;
+                        ++w;
+                        if (++d == end) { s = n; goto done; }
+                    }
+                } else {
+                    for (;;) {
+                        sample = steady_sample(samples, counter, level);
+                        (*d)[0] += (sample * (int16_t)volumes) >> 15;
+                        (*d)[1] += (sample * (int16_t)(volumes >> 16)) >> 15;
+                        counter += pitch;
+                        if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) break;
+                        if (++d == end) { s = n; goto done; }
+                    }
                 }
+                s = (unsigned)(d - dry);
             }
         } else {
             sample = 0;

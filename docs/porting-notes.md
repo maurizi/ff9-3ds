@@ -15,6 +15,10 @@ upstream request where the decomp can make the C say what it means without chang
 | pointer through a 26-bit script value | `o = (Unk8004AB64 *)func_80052D40()` | 0x00xxxxxx is the RAM mirror | `PORT_SCRIPT_PTR()` (patch), `SCRIPT_PTR_RESTORE` in src_equiv | done for src_equiv |
 | busy-wait on the vblank counter | `while (VSync(-1) - t < n)` (`func_800B2C80`) | the counter moves in real time | a run of `VSync(-1)` polls lets a frame pass | none needed |
 | interrupt-driven progress | the movie frame counter, CD sectors, AKAO ticks | hardware interrupts | virtual interrupts at VSync and in libcd (`port/psx/irq.c`, `cd.c`) | none needed |
+| BIOS routine with libc's name but not its contract | overlapping `memcpy` sliding a file down its buffer (`func_800B2BC4`, field load) | A(2Ah) copies forward a byte at a time | `port_prelude.h` maps it to `psx_bios_memcpy` (`bios.c`), like `strcpy` | none needed |
+
+glibc's `memcpy` corrupted that overlap on the host only (the DS libc copies forward), which zeroed the field music
+sequence's channel mask: the host played no field music, so host audio runs and the DS disagreed.
 
 The decomp checks the first two classes from the asm (`tools/void_returns.py`, `tools/arg_check.py`; both report 0),
 so new decomp work doesn't reintroduce them. Patches live in `config/patches.txt` as exact text with an expected count, so one that no longer applies fails the

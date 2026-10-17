@@ -16,6 +16,7 @@
 /* BIOS calls the decomp names after their libc counterparts. Their PSX behaviour differs (memory card file
  * descriptors, KUSEG string pointers), so they link to port/psx's psx_bios_* instead of replacing the C library. */
 #define strcpy psx_bios_strcpy
+#define memcpy psx_bios_memcpy
 #define strcat psx_bios_strcat
 #define open psx_bios_open
 #define lseek psx_bios_lseek
