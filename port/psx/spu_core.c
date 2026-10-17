@@ -68,7 +68,7 @@ int psx_spu_restore(const void *in) {
     return 1;
 }
 
-SPU_HOT void psx_spu_reset(void) {
+void psx_spu_reset(void) {
     psx_spu_trace(PSX_SPU_TRACE_RESET, 0, 0, NULL);
     memset(voices, 0, sizeof voices);
     memset(main_volume, 0, sizeof main_volume);

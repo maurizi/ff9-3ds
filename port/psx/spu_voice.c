@@ -128,41 +128,74 @@ static SPU_HOT __attribute__((noinline)) unsigned fast_span(PsxSpuVoice *restric
         psx_spu_source_fetch(src, ram, &voice->registers[7]);
     }
     for (; s < n; ++s) {
-        if (adsr.phase == PSX_SPU_ADSR_OFF && !fetch_off) break;
-        sample = 0;
-        if (adsr.level) sample = ((int16_t)(gauss_sample(samples, counter) >> 15) * adsr.level) >> 15;
-        /* spu_adsr_tick, on the local copy; the phase change itself runs on the voice. */
-        if (adsr.phase != PSX_SPU_ADSR_OFF && (adsr.phase != PSX_SPU_ADSR_SUSTAIN || adsr.envelope.increment)) {
-            if (adsr.envelope.increment) spu_envelope_tick(&adsr.envelope, &adsr.level);
-            if (adsr.phase != PSX_SPU_ADSR_SUSTAIN &&
-                (adsr.envelope.decrease ? adsr.level <= adsr.target : adsr.level >= adsr.target)) {
-                voice->adsr = adsr;
-                psx_spu_adsr_advance_phase(&voice->adsr);
-                adsr = voice->adsr;
+        if (adsr.phase == PSX_SPU_ADSR_OFF && !fetch_off) goto done;
+        if (!keep && !capture &&
+            (adsr.phase == PSX_SPU_ADSR_OFF || (adsr.phase == PSX_SPU_ADSR_SUSTAIN && !adsr.envelope.increment))) {
+            /* The envelope holds: run to the block crossing or the span's end with nothing else per sample. */
+            const int32_t level = adsr.level;
+            if (!level) {
+                sample = 0; /* contributes nothing: only the position moves */
+                for (;;) {
+                    counter += pitch;
+                    if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) break;
+                    if (++s == n) goto done;
+                }
+            } else if (send) {
+                for (;;) {
+                    sample = ((int16_t)(gauss_sample(samples, counter) >> 15) * level) >> 15;
+                    int32_t l = (sample * left) >> 15, r = (sample * right) >> 15;
+                    dry[s][0] += l; dry[s][1] += r;
+                    send[s][0] += l; send[s][1] += r;
+                    counter += pitch;
+                    if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) break;
+                    if (++s == n) goto done;
+                }
+            } else {
+                for (;;) {
+                    sample = ((int16_t)(gauss_sample(samples, counter) >> 15) * level) >> 15;
+                    dry[s][0] += (sample * left) >> 15; dry[s][1] += (sample * right) >> 15;
+                    counter += pitch;
+                    if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) break;
+                    if (++s == n) goto done;
+                }
             }
-        }
-        if (keep) keep[s] = sample;
-        counter += pitch;
-        if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) {
-            /* spu_source_advance's block step; then the fetch the next sample would do first. */
-            src->counter = counter - pitch;
-            unsigned action = spu_source_advance(src, pitch, voice->registers[7], 0);
-            if (action & PSX_SPU_SOURCE_END) *ended |= bit;
-            if (action & PSX_SPU_SOURCE_MUTE) {
-                voice->adsr = adsr;
-                psx_spu_adsr_force_off(&voice->adsr);
-                adsr = voice->adsr;
+        } else {
+            sample = 0;
+            if (adsr.level) sample = ((int16_t)(gauss_sample(samples, counter) >> 15) * adsr.level) >> 15;
+            /* spu_adsr_tick, on the local copy; the phase change itself runs on the voice. */
+            if (adsr.phase != PSX_SPU_ADSR_OFF && (adsr.phase != PSX_SPU_ADSR_SUSTAIN || adsr.envelope.increment)) {
+                if (adsr.envelope.increment) spu_envelope_tick(&adsr.envelope, &adsr.level);
+                if (adsr.phase != PSX_SPU_ADSR_SUSTAIN &&
+                    (adsr.envelope.decrease ? adsr.level <= adsr.target : adsr.level >= adsr.target)) {
+                    voice->adsr = adsr;
+                    psx_spu_adsr_advance_phase(&voice->adsr);
+                    adsr = voice->adsr;
+                }
             }
-            counter = src->counter;
-            if (s + 1 < n && (adsr.phase != PSX_SPU_ADSR_OFF || fetch_off))
-                psx_spu_source_fetch(src, ram, &voice->registers[7]);
+            if (keep) keep[s] = sample;
+            int32_t l = (sample * left) >> 15, r = (sample * right) >> 15;
+            dry[s][0] += l;
+            dry[s][1] += r;
+            if (send) send[s][0] += l, send[s][1] += r;
+            if (capture) capture[s][capture_channel] = clamp_sample(sample);
+            counter += pitch;
+            if (counter < (PSX_SPU_BLOCK_SAMPLES << 12)) continue;
         }
-        int32_t l = (sample * left) >> 15, r = (sample * right) >> 15;
-        dry[s][0] += l;
-        dry[s][1] += r;
-        if (send) send[s][0] += l, send[s][1] += r;
-        if (capture) capture[s][capture_channel] = clamp_sample(sample);
+        /* spu_source_advance's block step for sample s; then the fetch the next sample would do first. Mixing
+         * doesn't depend on it, so it may follow the sample's mix. */
+        src->counter = counter - pitch;
+        unsigned action = spu_source_advance(src, pitch, voice->registers[7], 0);
+        if (action & PSX_SPU_SOURCE_END) *ended |= bit;
+        if (action & PSX_SPU_SOURCE_MUTE) {
+            voice->adsr = adsr;
+            psx_spu_adsr_force_off(&voice->adsr);
+            adsr = voice->adsr;
+        }
+        counter = src->counter;
+        if (s + 1 < n && (adsr.phase != PSX_SPU_ADSR_OFF || fetch_off))
+            psx_spu_source_fetch(src, ram, &voice->registers[7]);
     }
+done:
     src->counter = counter;
     voice->adsr = adsr;
     *last = sample;

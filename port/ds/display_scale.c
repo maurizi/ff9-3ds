@@ -141,9 +141,7 @@ void ds_scale_display_text(uint16_t *dst, const uint16_t *vram,
     ds_scale_display_text_pair(dst,vram,x,y,width,height,rects,count,0,0);
 }
 
-#ifdef PORT_SCALE_ITCM
-__attribute__((section(".itcm"), long_call))
-#endif
+/* Tests only (the game presents through the text-pair and RGB24 scalers): not in ITCM. */
 void ds_scale_display(uint16_t *dst, const uint16_t *vram,
                       int x, int y, int width, int height) {
     if (width <= 0 || height <= 0) return;

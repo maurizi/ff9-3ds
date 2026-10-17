@@ -14,6 +14,8 @@
 
 #define RCNT_HZ 4233600 /* root counter 2 at sysclk/8: 33.8688 MHz / 8 */
 
+__attribute__((weak)) void port_canary(const char *where) { (void)where; } /* also in gp0.c */
+
 static unsigned int vblanks;      /* VSync(-1) */
 static unsigned int last_vsync;   /* vblank count at the previous VSync(n >= 0) */
 static void (*vsync_cb)(void);

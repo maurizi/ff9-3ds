@@ -3,7 +3,7 @@
 #include "spu_hot.h"
 #include "spu_inline.h"
 
-SPU_HOT void psx_spu_envelope_configure(PsxSpuEnvelope *env, uint8_t rate, uint8_t hold_mask,
+void psx_spu_envelope_configure(PsxSpuEnvelope *env, uint8_t rate, uint8_t hold_mask,
                                 int decrease, int exponential, int negative) {
     rate &= 0x7f;
     unsigned shift = rate >> 2;
@@ -83,12 +83,12 @@ SPU_HOT void psx_spu_adsr_set_registers(PsxSpuAdsr *adsr, uint16_t adsr1, uint16
     adsr_phase(adsr, adsr->phase);
 }
 
-SPU_HOT void psx_spu_adsr_key_on(PsxSpuAdsr *adsr) {
+void psx_spu_adsr_key_on(PsxSpuAdsr *adsr) {
     adsr->level = 0;
     adsr_phase(adsr, PSX_SPU_ADSR_ATTACK);
 }
 
-SPU_HOT void psx_spu_adsr_key_off(PsxSpuAdsr *adsr) {
+void psx_spu_adsr_key_off(PsxSpuAdsr *adsr) {
     if (adsr->phase != PSX_SPU_ADSR_OFF && adsr->phase != PSX_SPU_ADSR_RELEASE)
         adsr_phase(adsr, PSX_SPU_ADSR_RELEASE);
 }
