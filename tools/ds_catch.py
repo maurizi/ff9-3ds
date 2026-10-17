@@ -39,6 +39,8 @@ def main():
     p.add_argument('--args', action='store_true', help='with --break: print r0-r3 and LR at each of --hits stops '
                    'instead of the exception registers (a call trace of that function)')
     p.add_argument('--dump-r0', type=int, default=0, help='with --args: also print this many bytes at r0')
+    p.add_argument('--dump', action='append', default=[], metavar='SYMBOL:BYTES',
+                   help='with --args: also print bytes at a symbol at each stop (repeatable)')
     p.add_argument('--regs', default='exceptionRegisters', help='saved r0-r15 array to print (ITCMGUARD builds: '
                    'port_itcm_first_fault, whose r0 is at +4)')
     a = p.parse_args()
@@ -115,6 +117,12 @@ def main():
                 lr = stub.register(14)
                 print(f'hit {hit}: r0 {r[0]:08x} r1 {r[1]:08x} r2 {r[2]:08x} r3 {r[3]:08x}  lr {lr:08x} {where(lr)}',
                       flush=True)
+                for spec in a.dump:
+                    sym, count = spec.rsplit(':', 1)
+                    stub.send(f'm{syms[sym]:x},{int(count, 0):x}')
+                    raw = bytes.fromhex(stub.packet())
+                    print(f'  {sym}: ' + ' '.join(f'{int.from_bytes(raw[j:j + 4], "little"):08x}'
+                                                  for j in range(0, len(raw), 4)), flush=True)
                 if a.dump_r0:
                     stub.send(f'm{r[0]:x},{a.dump_r0:x}')
                     raw = bytes.fromhex(stub.packet())

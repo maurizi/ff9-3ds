@@ -12,6 +12,10 @@ Usage: portify.py SRC.c OUT.c [--report FILE]
   buffer bases): it is wrapped too, and listed in the report for review against decomp-requests.md R4. Literals
   that are really plain numbers go in config/addr_plain.txt (`path:line literal`) and are left alone.
 - config/patches.txt: exact-text replacements for the few spots nothing else can reach.
+- A function definition's 8/16-bit scalar parameters get `PORT_NARROW_ARG(p);` at the top of the body, so the
+  callee narrows them as the PS1's does (`andi a2,a2,0xff`). ARM AAPCS leaves that to the caller, and a caller
+  compiled against a wider prototype (func_8005593C's u8, declared s32 in four overlay headers) would pass -3
+  straight through as 0xfffffffd. (The parameter's type can't change: the file's own prototypes must match.)
 """
 import argparse
 import re
@@ -42,6 +46,23 @@ PAD = re.compile(r'__asm__\("(?:\.section \.rodata|\.rdata)[^"]*"\);')
 HW = re.compile(r'(?<!PSX_HW\()\b0x1F80[0-9A-Fa-f]{4}\b')
 CAST_RAM = re.compile(r'(\(\s*[A-Za-z_][\w\s]*\*+\s*\)\s*\(?\s*)(0x80[0-9A-Fa-f]{6})\b')
 RAM = re.compile(r'\b0x80[0-9A-Fa-f]{6}\b')
+
+
+NARROW_TYPE = r"(?:unsigned\s+char|signed\s+char|unsigned\s+short(?:\s+int)?|signed\s+short(?:\s+int)?|short(?:\s+int)?|char|u8|s8|u16|s16)"
+DEFINITION = re.compile(r"^(?!static\s+inline)[A-Za-z_][\w \t\*]*?\b\w+\(([^;{}()]*?)\)\s*\{", re.M)
+NARROW_PARAM = re.compile(r"^\s*(?:register\s+|const\s+)*(" + NARROW_TYPE + r")\s+(\w+)\s*$")
+
+
+def narrow_params(text, code):
+    """Make each definition narrow its own 8/16-bit scalar parameters, as the PS1's code does."""
+    edits = []
+    for m in DEFINITION.finditer(code):
+        names = [n.group(2) for n in map(NARROW_PARAM.match, m.group(1).split(",")) if n]
+        if names:
+            edits.append((m.end(), " " + "".join(f"PORT_NARROW_ARG({n}); " for n in names)))
+    for at, new in sorted(edits, reverse=True):
+        text = text[:at] + new + text[at:]
+    return text
 
 
 def strip_comments_keep_lines(text):
@@ -93,6 +114,7 @@ def main():
     text = open(args.src, encoding="utf-8").read()
     text = PAD.sub("/* port: rodata padding removed */", text)
     text = apply_patches(args.src, text)
+    text = narrow_params(text, strip_comments_keep_lines(text))
 
     code = strip_comments_keep_lines(text)
     bad = [code.count("\n", 0, m.start()) + 1 for m in re.finditer(r"(?<![A-Za-z_])__asm__\s*\(", code)]

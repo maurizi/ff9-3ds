@@ -17,6 +17,13 @@ upstream request where the decomp can make the C say what it means without chang
 | interrupt-driven progress | the movie frame counter, CD sectors, AKAO ticks | hardware interrupts | virtual interrupts at VSync and in libcd (`port/psx/irq.c`, `cd.c`) | none needed |
 | BIOS routine with libc's name but not its contract | overlapping `memcpy` sliding a file down its buffer (`func_800B2BC4`, field load) | A(2Ah) copies forward a byte at a time | `port_prelude.h` maps it to `psx_bios_memcpy` (`bios.c`), like `strcpy` | none needed |
 
+| narrow parameter behind a wider prototype | `func_8005593C(s32, s32, u8)` declared `(s32, s32, s32)` in four overlay headers; `ovl_0a` passes -3 | the MIPS callee narrows its own argument (`andi a2,a2,0xff`) | `tools/portify.py` adds `PORT_NARROW_ARG(p)` (prelude: an empty asm on ARM) to every 8/16-bit parameter, so GCC re-extends in the callee; `tools/narrow_args.py` lists the 26 mismatched functions | none needed |
+
+ARM AAPCS has the caller narrow such arguments and the callee trust them, so on the DS that u8 held 0xfffffffd
+(AKAO's sound-effect arguments). x86 behaves like MIPS here, so only the DS diverged. `tools/ram_diff.py` found
+it by comparing the DS's PS1 RAM with the host's at the same frame (pointers normalised); the host build must
+then run with its SPU on (it always does now), since AKAO reads voice envelopes back to free voices.
+
 glibc's `memcpy` corrupted that overlap on the host only (the DS libc copies forward), which zeroed the field music
 sequence's channel mask: the host played no field music, so host audio runs and the DS disagreed.
 

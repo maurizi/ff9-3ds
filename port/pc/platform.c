@@ -24,6 +24,8 @@
 static const char *data_dir = "disks/us";
 static long frame_limit = -1;
 static long spu_snapshot_at = -1;
+static long ram_dump_at = -1; /* --ram-dump FRAME:PATH: PS1 RAM image, for tools/ram_diff.py */
+static const char *ram_dump_path;
 static const char *spu_snapshot_path;
 /* After the snapshot, the next SPU_REPLAY_FRAMES frames of register writes and RAM uploads follow it in the
  * file, by output sample: {u32 sample, type, a, b, b bytes of RAM data padded to 4}, then sample 0xffffffff. */
@@ -189,6 +191,14 @@ void plat_wait_frame(void) {
         fprintf(stderr, "SPU snapshot at frame %ld: %s\n", frames, spu_snapshot_path);
     }
     if (spu_replay && frames == spu_snapshot_at + SPU_REPLAY_FRAMES) spu_replay_close();
+    if (frames == ram_dump_at) {
+        FILE *f = fopen(ram_dump_path, "wbx");
+        if (!f || fwrite(psx_ram, 1, PSX_RAM_SIZE, f) != PSX_RAM_SIZE || fclose(f)) {
+            perror("ram dump");
+            exit(1);
+        }
+        fprintf(stderr, "PS1 RAM at frame %ld: %s\n", frames, ram_dump_path);
+    }
     if (frame_limit >= 0 && frames >= frame_limit) {
         fprintf(stderr, "frame limit %ld reached\n", frame_limit);
         exit(0);
@@ -260,12 +270,22 @@ int main(int argc, char **argv) {
                 return 1;
             }
             spu_snapshot_path = path;
+        } else if (!strcmp(argv[i], "--ram-dump") && i + 1 < argc) {
+            static char path[512];
+            if (sscanf(argv[++i], "%ld:%511s", &ram_dump_at, path) != 2) {
+                fprintf(stderr, "bad --ram-dump %s (FRAME:NEW_PATH)\n", argv[i]);
+                return 1;
+            }
+            ram_dump_path = path;
         } else if (!strcmp(argv[i], "--frames") && i + 1 < argc) {
             frame_limit = atol(argv[++i]);
         } else {
-            fprintf(stderr, "usage: %s [--data DIR] [--scenario PATH] [--frames N] [--status N] [--watch ADDR:SIZE] [--press BUTTON@FRAME[+N]] [--render] [--dump N] [--audio NEW.wav] [--spu-trace NEW.bin] [--spu-snapshot FRAME:NEW_PATH]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--data DIR] [--scenario PATH] [--frames N] [--status N] [--watch ADDR:SIZE] [--press BUTTON@FRAME[+N]] [--render] [--dump N] [--audio NEW.wav] [--spu-trace NEW.bin] [--spu-snapshot FRAME:NEW_PATH] [--ram-dump FRAME:NEW_PATH]\n", argv[0]);
             return 1;
         }
     }
+    /* The SPU always runs, as on the DS: the game reads it back (AKAO frees a voice when SpuGetVoiceEnvelope
+     * reports its envelope finished), so a silent SPU would run different game logic. --audio only adds the WAV. */
+    psx_spu_set_rendering(1);
     psx_run_game();
 }

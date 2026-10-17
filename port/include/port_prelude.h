@@ -25,6 +25,15 @@
 #define close psx_bios_close
 #define nextfile psx_bios_nextfile
 
+/* tools/portify.py puts this on each 8/16-bit scalar parameter at the top of its function: the PS1's callee narrows
+ * such arguments itself, while ARM AAPCS trusts the caller to have done it (wrong when the caller saw a wider
+ * prototype). The empty asm makes GCC forget the incoming value is already extended, so it re-extends at use. */
+#ifdef __arm__
+#define PORT_NARROW_ARG(p) __asm__("" : "+r"(p))
+#else
+#define PORT_NARROW_ARG(p) ((void)0)
+#endif
+
 #include PORT_HEADER
 #include "port_hw.h"
 #include "psx_runtime.h"
