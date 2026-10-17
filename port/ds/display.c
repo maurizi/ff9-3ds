@@ -43,6 +43,9 @@ void psx_display_glyph(int x, int y, int w, int h) {
 }
 
 void render_gx_init(void);
+static void vblank_irq(void);
+static volatile unsigned int real_vblanks;
+static unsigned int virtual_frames;
 
 void display_init(void) {
     if (!psx_vram) {
@@ -62,10 +65,38 @@ void display_init(void) {
     bgSetRotateScale(bg, 0, 256, 256);
     bgSetScroll(bg, 0, -6);
     bgUpdate();
+    irqSet(IRQ_VBLANK, vblank_irq);
+    irqEnable(IRQ_VBLANK);
+    virtual_frames = real_vblanks;
     psx_softgpu_enable(1);
 }
 
 /* Copy the displayed area into the bitmap (bit 15 set: opaque). */
+/* Virtual frames (psx_frame) are paced against real VBlanks: a frame waits only while it is ahead of real time,
+ * as the PS1's VSync(n) counts the VBlanks that passed while the game was working. A frame that falls more than
+ * MAX_LAG behind gives up the debt (the PS1 slows down too). The bitmap swap happens in the VBlank interrupt,
+ * so presenting never waits for the beam. */
+#define MAX_LAG 8
+static volatile int queued_buffer = -1, queued_scroll;
+
+static void vblank_irq(void) {
+    real_vblanks++;
+    if (queued_buffer >= 0) {
+        bgSetMapBase(bg, queued_buffer * 8);
+        bgSetScroll(bg, 0, queued_scroll);
+        bgUpdate();
+        queued_buffer = -1;
+    }
+}
+
+static void pace(void) {
+    unsigned int profile_wait = port_profile_begin();
+    ++virtual_frames;
+    if ((int)(real_vblanks - virtual_frames) > MAX_LAG) virtual_frames = real_vblanks;
+    while ((int)(real_vblanks - virtual_frames) < 0) swiWaitForVBlank();
+    port_profile_end(PORT_PROFILE_WAIT, profile_wait);
+}
+
 void display_present(void) {
 #ifndef PORT_SOFT_DISPLAY
     return;
@@ -77,18 +108,17 @@ void display_present(void) {
     PsxDisplayInfo info;
     psx_gpu_display_info(&info);
     const PsxDisplayInfo *d = &info;
-    /* Nothing written to VRAM and the same display area: the front bitmap is already this frame (movies change
-     * every fourth VSync). Keep it rather than scaling an identical copy. */
+    /* Nothing written over the shown area and the same display area: the bitmap already shows this frame. Keep
+     * it rather than scaling an identical copy (battle scenes change every fourth VSync, movies too). */
     static PsxDisplayInfo shown;
     static unsigned int shown_generation;
     static int shown_valid;
-    if (shown_valid && shown_generation == psx_vram_generation && !memcmp(&shown, d, sizeof shown)) {
-        swiWaitForVBlank();
+    if (shown_valid && shown_generation == psx_display_generation && !memcmp(&shown, d, sizeof shown)) {
         drawing = 0;
+        pace();
         return;
     }
     shown = info;
-    shown_generation = psx_vram_generation;
     shown_valid = 1;
     int w = d->w ? d->w : 320, h = d->h ? d->h : 224;
     if (w > 320) {
@@ -97,9 +127,14 @@ void display_present(void) {
     if (h > 240) {
         h = 240;
     }
+    /* Watch the VRAM this frame reads (RGB24 spans 1.5 halfwords a pixel); a wrapping area watches everything. */
+    int watch_w = d->rgb24 ? (w * 3 + 1) / 2 + 1 : w;
+    if (d->x + watch_w > 1024 || d->y + h > 512) watch_w = 0;
+    psx_display_watch[0] = d->x; psx_display_watch[1] = d->y; psx_display_watch[2] = watch_w; psx_display_watch[3] = h;
+    shown_generation = psx_display_generation;
     unsigned int profile_scale=port_profile_begin();
-    /* Scale into cached main RAM, then DMA to the VRAM back buffer while waiting for VBlank: the ARM9's own
-     * stores to VRAM cross the slow external bus and cost most of the scaling time. */
+    /* Scale into cached main RAM, then DMA to the VRAM back buffer: the ARM9's own stores to VRAM cross the
+     * slow external bus and cost most of the scaling time. */
     static u16 frame[256*192] __attribute__((aligned(32)));
     static int frame_w, frame_h;
     u16 *dst = frame;
@@ -114,17 +149,16 @@ void display_present(void) {
         ds_scale_display_text_pair(dst, psx_vram, d->x, d->y, w, h,
                                   text_rects, text_count, previous_rects, previous_count);
     DC_FlushRange(frame, sizeof frame);
-    dmaCopyWordsAsynch(2, frame, BG_BMP_RAM_MAIN(back_buffer*8), sizeof frame);
     port_profile_end(PORT_PROFILE_SCALE,profile_scale);
-    /* The back buffer is only shown after the copy completes, so scanout never sees a partial frame. */
+    /* The back buffer is scanned out until a queued swap happens: wait for it before overwriting. */
     unsigned int profile_wait=port_profile_begin();
-    swiWaitForVBlank();
-    while (dmaBusy(2)) {}
+    while (queued_buffer >= 0) swiWaitForVBlank();
     port_profile_end(PORT_PROFILE_WAIT,profile_wait);
-    bgSetMapBase(bg,back_buffer*8);
-    bgSetScroll(bg,0,-(192-h*4/5)/2);
-    bgUpdate();
+    dmaCopyWords(2, frame, BG_BMP_RAM_MAIN(back_buffer*8), sizeof frame);
+    queued_scroll = -(192-h*4/5)/2;
+    queued_buffer = back_buffer;
     back_buffer^=1;
     /* An extra VSync without drawing must retain the same filtered glyphs. */
     drawing = 0;
+    pace();
 }

@@ -51,6 +51,9 @@ function, callers, and with `--detail` the sampled instructions.
 | SPU (incl. sink) | 17.9 | 18.5 |
 | display scaling | 2.3 | 2.4 |
 
+Since frame pacing (below), the same window measures 49.9: the second VSync of each 30 fps pair no longer
+rescales an unchanged display or waits a whole VBlank behind time already lost.
+
 The first column is from a different window of the same scene (not yet
 fixed-frame), so compare it loosely. Presentation waits for VBlank, so a frame
 costs a whole number of VBlanks. About 4 today; the PSX field runs at 30 fps (2).
@@ -60,6 +63,15 @@ generic path. They now use a direct-CLUT sprite path and a row loop that reads
 each source halfword once. The SPU mixes voices in exact blocks
 (`audio-validation.md`). The GTE is compiled as ARM, since Thumb has no long
 multiply.
+
+## Frame pacing
+
+Virtual frames (`psx_frame`) wait only while ahead of real VBlanks (`display.c` `pace`), as the PS1's `VSync(n)`
+counts VBlanks that passed during the game's work; more than 8 behind drops the debt. The bitmap swap is queued
+for the VBlank interrupt. The presenter rescales only when a VRAM write may touch the shown rectangle
+(`psx_display_generation`; draws are bounded by the drawing area). Battle still rescales every VBlank: the UI
+draws 109 commands into the shown buffer each VBlank (the scene itself every fourth, `VSync(0)` + `VSync(3)`,
+15 fps), so the PS1 budget is 66.7 ms per scene, about 4x below the DS's current cost there.
 
 ## Ark battle (disc 3), window ending at frame 1633, ms per 60 Hz frame
 

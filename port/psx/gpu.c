@@ -57,12 +57,15 @@ __attribute__((weak)) void psx_vram_read(int x, int y, int w, int h) {
 }
 
 __attribute__((weak)) unsigned int psx_vram_generation; /* also in gp0.c */
+__attribute__((weak)) unsigned int psx_display_generation;
+__attribute__((weak)) int psx_display_watch[4];
 
 static void vram_fill(int x, int y, int w, int h, u16 c) {
     if (!psx_vram) {
         return;
     }
     psx_vram_generation++;
+    psx_display_written(x, y, w, h);
     psx_vram_touch(x, y, w, h);
     /* Row segments up to the VRAM edge (wrapping as vram_at does), with paired 32-bit stores. */
     const u32 pair = c | (u32)c << 16;
@@ -99,6 +102,7 @@ static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
         psx_vram_read(dx, dy, w, h);
     psx_vram_touch(dx, dy, w, h);
     psx_vram_generation++;
+    psx_display_written(dx, dy, w, h);
     /* Snapshot each source row. Non-wrapping overlaps match the published
      * ps1-tests reference; cross-boundary overlap behavior remains unverified. */
     static u16 row[VRAM_W];
@@ -129,6 +133,7 @@ int LoadImage(RECT *r, u32 *p) {
     if (check_mask) psx_vram_read(r->x,r->y,r->w,r->h);
     psx_vram_touch(r->x, r->y, r->w, r->h);
     psx_vram_generation++;
+    psx_display_written(r->x, r->y, r->w, r->h);
     const u16 *src = (const u16 *)p;
     for (int j = 0; j < r->h; j++) {
         for (int i = 0; i < r->w; i++) {
