@@ -892,11 +892,23 @@ static int last_x, last_y, last_w, last_h;
 static u8 *colour_map;          /* 32768 RGB15 -> palette index (0: not mapped yet) */
 static int colours, colours_full;
 
+/* Palette: 1-64 a fixed 4x4x4 colour cube for software glows (gradients with many shades), 65-255 exact colours
+ * as they appear (the battle UI uses under 200). */
+#define CUBE 64
+static const u8 cube_level[4] = {0, 10, 21, 31};
+
 static void reset_colours(void) {
     if (!colour_map) colour_map = malloc(32768);
     memset(colour_map, 0, 32768);
-    colours = 0;
+    for (int i = 0; i < CUBE; ++i)
+        BG_PALETTE[1 + i] = cube_level[i & 3] | cube_level[(i >> 2) & 3] << 5 | cube_level[i >> 4] << 10;
+    colours = CUBE;
     colours_full = 0;
+}
+
+static inline u8 cube_of(u16 c) {
+    int r = ((c & 31) + 5) / 11, g = (((c >> 5) & 31) + 5) / 11, b = (((c >> 10) & 31) + 5) / 11;
+    return (u8)(1 + (r | g << 2 | b << 4));
 }
 
 /* A colour's palette index: a new entry while there is room, else the nearest entry (remembered, so each colour
@@ -952,8 +964,12 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
     /* another buffer or area: every block's hash decides; a palette that filled starts over then (rebuilding
      * everything), so colours that left the screen give their entries back */
     int check_all = b != last_shown || d->x != last_x || d->y != last_y || w != last_w || h != last_h;
-    int rebuild = check_all && colours_full;
-    if (rebuild) reset_colours();
+    /* (text coverage averages fill it with edge shades, which the nearest entries stand in for well: at most
+     * one rebuild per 64 presents) */
+    static unsigned presents, last_rebuild;
+    ++presents;
+    int rebuild = check_all && colours_full && presents - last_rebuild >= 64;
+    if (rebuild) { reset_colours(); last_rebuild = presents; }
     last_shown = b; last_x = d->x; last_y = d->y; last_w = w; last_h = h;
     static u16 block[BLOCK * 256] __attribute__((aligned(4)));   /* a scaled block, stride 256 */
     u16 *bitmap = (u16 *)BG_BMP_RAM(0);
@@ -996,8 +1012,9 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
                 const u16 *frow = block + oy * 256;
                 for (int ox = 0; ox < bw; ox += 2) {
                     int a = (sx0 + ox * 5 / 4) & 1023, b2 = (sx0 + (ox + 1) * 5 / 4) & 1023;
-                    u16 i0 = shows(vrow[a], clear, mrow[a]) ? colour_of(frow[ox]) : 0;
-                    u16 i1 = ox + 1 < bw && shows(vrow[b2], clear, mrow[b2]) ? colour_of(frow[ox + 1]) : 0;
+                    u16 i0 = shows(vrow[a], clear, mrow[a]) ? mrow[a] ? cube_of(frow[ox]) : colour_of(frow[ox]) : 0;
+                    u16 i1 = ox + 1 < bw && shows(vrow[b2], clear, mrow[b2])
+                                 ? mrow[b2] ? cube_of(frow[ox + 1]) : colour_of(frow[ox + 1]) : 0;
                     out[ox / 2] = i0 | i1 << 8; /* halfword stores: VRAM ignores byte writes */
                 }
             }
