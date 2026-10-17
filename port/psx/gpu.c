@@ -64,9 +64,21 @@ static void vram_fill(int x, int y, int w, int h, u16 c) {
     }
     psx_vram_generation++;
     psx_vram_touch(x, y, w, h);
+    /* Row segments up to the VRAM edge (wrapping as vram_at does), with paired 32-bit stores. */
+    const u32 pair = c | (u32)c << 16;
     for (int j = 0; j < h; j++) {
-        for (int i = 0; i < w; i++) {
-            *vram_at(x + i, y + j) = c;
+        u16 *row = psx_vram + ((y + j) & (VRAM_H - 1)) * VRAM_W;
+        int xs = x & (VRAM_W - 1), left = w;
+        while (left > 0) {
+            int span = left < VRAM_W - xs ? left : VRAM_W - xs;
+            u16 *p = row + xs;
+            int n = span;
+            if (((uintptr_t)p & 2) && n) *p++ = c, n--;
+            u32 *q = (u32 *)p;
+            for (; n >= 2; n -= 2) *q++ = pair;
+            if (n) *(u16 *)q = c;
+            left -= span;
+            xs = 0;
         }
     }
 }
