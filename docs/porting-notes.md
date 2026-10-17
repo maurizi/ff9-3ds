@@ -17,6 +17,7 @@ upstream request where the decomp can make the C say what it means without chang
 | interrupt-driven progress | the movie frame counter, CD sectors, AKAO ticks | hardware interrupts | virtual interrupts at VSync and in libcd (`port/psx/irq.c`, `cd.c`) | none needed |
 | BIOS routine with libc's name but not its contract | overlapping `memcpy` sliding a file down its buffer (`func_800B2BC4`, field load) | A(2Ah) copies forward a byte at a time | `port_prelude.h` maps it to `psx_bios_memcpy` (`bios.c`), like `strcpy` | none needed |
 
+| argument evaluation order with shared side effects | `func_800384D0(func_80038150(), a, *g_evtCurObj->unk0++, 0)`: both arguments read the script stream | the PS1's GCC resolves the target before reading the key; x86 GCC read the key first (no target: field 259 diverged at frame 319), ARM GCC happened to match | counted patch sequencing it; `tools/arg_order.py` lists calls with competing side effects (the other hits are pure lookups) | requested (F32) |
 | narrow parameter behind a wider prototype | `func_8005593C(s32, s32, u8)` declared `(s32, s32, s32)` in four overlay headers; `ovl_0a` passes -3 | the MIPS callee narrows its own argument (`andi a2,a2,0xff`) | `tools/portify.py` adds `PORT_NARROW_ARG(p)` (prelude: an empty asm on ARM) to every 8/16-bit parameter, so GCC re-extends in the callee; `tools/narrow_args.py` lists the 26 mismatched functions | none needed |
 
 ARM AAPCS has the caller narrow such arguments and the callee trust them, so on the DS that u8 held 0xfffffffd

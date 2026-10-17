@@ -46,7 +46,7 @@ class Names:
 
 def normalise(word, base, names):
     """Every reading of a word (a word may be both a code address and a link); words match if any agree."""
-    out = {('raw', word)}
+    out = {('raw', word), ('rebased', (word + base) & 0xFFFFFFFF)}  # an address minus psx_ram
     if base <= word < base + RAM:
         out.add(('ram', word - base))
     hit = names.find(word)

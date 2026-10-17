@@ -182,3 +182,8 @@ src/ovl_65/ovl_65.c | DrawOTagEnv(cur->unk70, &cur->draw); | PutDrawEnv(&cur->dr
 # extension. Signed fine=-1 reaches the ARM callee as ffffffff instead of ff.
 # Use the real u16-return/u8-argument prototype at all three call sites.
 src/main/main.c | ((s32 (*)())akao_calcPitch) | akao_calcPitch | 3
+
+# Argument evaluation order is unspecified in C. The PS1 resolves the target object before reading the key byte
+# from the same script stream; x86 GCC read the key first (wrong object, field 259 diverged at frame 319).
+# tools/arg_order.py lists calls with competing side effects.
+src/main/main.c | func_800384D0(func_80038150(), a, *g_evtCurObj->unk0++, 0); | { Unk8004AB64 *port_target = func_80038150(); func_800384D0(port_target, a, *g_evtCurObj->unk0++, 0); } | 1

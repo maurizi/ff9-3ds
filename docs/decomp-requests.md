@@ -724,3 +724,13 @@ The same merge names the BIOS file and string calls `open`, `lseek`, `read`,
 `write`, `close`, `nextfile`, `strcpy` and `strcat`. The port maps these to
 `psx_bios_*` in its prelude so they don't replace the C library on ARM/x86;
 no decomp change is needed for that.
+
+### F32 (2026-10-17). Sequence the script reads in evt_execInstr case 0x10
+
+`evt_execInstr` case 0x10 is `func_800384D0(func_80038150(), a, *g_evtCurObj->unk0++, 0);`. Both the first and
+third arguments read the script stream, and C leaves their order unspecified. The PS1 code (`8003a048`) calls
+`func_80038150` (the target object) and then reads the key byte. x86 GCC reads the key first: the host resolved
+the wrong object in field 259 at frame 319 and never ran object 6's function 0x17. The port patches it
+(`config/patches.txt`). Assigning the target to a local first, e.g.
+`o = func_80038150(); func_800384D0(o, a, *g_evtCurObj->unk0++, 0);`, would say it in the source if it keeps the
+PS1 output identical. The port's `tools/arg_order.py` finds no other call with two arguments that read shared state.
