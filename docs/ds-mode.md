@@ -56,8 +56,13 @@ do not infer free runtime RAM from the ROM file size.
   offset and kind; code pointers carry the native address). ELF text+rodata 1,221,300 -> 850,776 bytes. PS1 RAM
   after field 259 (700 frames) and Ark (2000) is identical to the image build; 18/18 scenarios pass. Main's
   47 KB image is still linked in.
-* Totals now: about 0.85 MB code and read-only data, 2.35 MB bss (2 MB `psx_ram`), 1.5 MB VRAM/SPU shadows,
-  and (HYBRID=1) about 1.1 MB of renderer buffers: still about 5.8 MB against 4 MB.
+* Main's MIPS code range in `psx_ram` (0x800127A0-0x800665E0, ~335 KB) is never loaded by the port and stayed
+  zero through field, battle and New Game runs; `psx_spare_alloc` gives it to port buffers (the hybrid's
+  primitives, glow bit plane and colour map). The hybrid's GX list goes to the FIFO in two 16 KB halves.
+* Totals now (HYBRID=1): about 0.85 MB code and read-only data, 2.4 MB bss (2 MB `psx_ram`, of which 335 KB now
+  holds port buffers), 1.5 MB VRAM/SPU shadows: about 4.8 MB against 4 MB, before stacks and SDK heap.
+  The remaining gap needs native code overlays (field/battle/world code is mutually exclusive: about 250 KB) and
+  a smaller working set for the VRAM shadow or for `psx_ram` regions holding the resident overlay's MIPS code.
 
 ## What already streams and what must change
 

@@ -454,11 +454,26 @@ enum { CMD_COLOR = 0x20, CMD_TEXCOORD = 0x22, CMD_VTX16 = 0x23, CMD_POLYATTR = 0
 
 /* The scene's commands (packed FIFO format, one command per header), fed to the geometry FIFO by DMA while the
  * CPU goes on. Worst case per polygon: 4 state commands and 4 vertices of colour, texcoord and position. */
-#define LIST_WORDS (MAX_POLYS * 36 + 16)
-static u32 *list;
-static int list_words;
+#define CHUNK_WORDS 4096   /* two 16 KB halves: one fills while the other goes to the FIFO */
+static u32 chunks[2][CHUNK_WORDS] __attribute__((aligned(32)));
+static int chunk, chunk_words;
 
-static inline void fifo(u32 cmd, u32 param) { list[list_words++] = cmd; list[list_words++] = param; }
+static void flush_chunk(void) {
+    if (!chunk_words) return;
+    DC_FlushRange(chunks[chunk], chunk_words * 4);
+    while (dmaBusy(0)) {}
+    while (dmaBusy(1) || dmaBusy(2) || dmaBusy(3)) {} /* libnds: no concurrent DMA when one feeds the FIFO */
+    dmaSetParams(0, chunks[chunk], (void *)&GFX_FIFO, DMA_FIFO | (u32)chunk_words);
+    chunk ^= 1;
+    chunk_words = 0;
+}
+
+static inline void put(u32 word) {
+    chunks[chunk][chunk_words++] = word;
+    if (chunk_words == CHUNK_WORDS) flush_chunk();
+}
+
+static inline void fifo(u32 cmd, u32 param) { put(cmd); put(param); }
 
 static inline u32 rgb_for(const Prim *p, int i) {
     int r, g, b;
@@ -511,7 +526,6 @@ static int area_cut(Buffer *b) {
 
 static void emit_scene(Buffer *b) {
     u32 attr = INITIAL_ATTR, image = 0, palette = ~0u;
-    list_words = 0;
     fifo(CMD_POLYATTR, attr);
     fifo(CMD_TEXIMAGE, 0);
     int polys = 0, vertices = 0, z = 0;
@@ -558,9 +572,9 @@ static void emit_scene(Buffer *b) {
             if (j == 0 || (p->flags & P_GOURAUD)) fifo(CMD_COLOR, rgb_for(p, i));
             if (p->flags & P_TEXTURED)
                 fifo(CMD_TEXCOORD, (u32)(u16)((p->u[i] - tu) * 16) | (u32)(u16)((p->v[i] - tv) * 16) << 16);
-            list[list_words++] = CMD_VTX16;
-            list[list_words++] = (u32)(u16)p->x[i] | (u32)(u16)p->y[i] << 16;
-            list[list_words++] = (u32)(u16)z;
+            put(CMD_VTX16);
+            put((u32)(u16)p->x[i] | (u32)(u16)p->y[i] << 16);
+            put((u32)(u16)z);
         }
         ++polys;
         vertices += p->n;
@@ -598,7 +612,7 @@ typedef struct {
     Gp0Vtx v[4];
     Gp0State state;
 } UiPrim;
-#define UI_MAX 384
+#define UI_MAX 256   /* the battle UI draws about 110 a VBlank */
 static UiPrim ui_list[2][UI_MAX];     /* [0] the previous VBlank's, [1] this one's */
 static int ui_count[2], ui_overflow;
 static Buffer *ui_buffer;             /* the displayed buffer the list belongs to */
@@ -811,7 +825,6 @@ void gxh_init(void) {
     for (int i = 0; i < 2; ++i) buffers[i].prims = psx_spare_alloc(MAX_PRIMS * sizeof(Prim));
     marks = psx_spare_alloc(1024 * 512 / 8);
     memset(marks, 0, 1024 * 512 / 8);
-    list = malloc(LIST_WORDS * 4);
 }
 
 int gxh_active(void) { return active; }
@@ -877,9 +890,7 @@ static void submit(Buffer *b, int display_h) {
     unsigned int c = b->clear;
     glClearColor(c & 31, (c >> 5) & 31, (c >> 10) & 31, 31);
     emit_scene(b);
-    DC_FlushRange(list, list_words * 4);
-    while (dmaBusy(1) || dmaBusy(2) || dmaBusy(3)) {} /* libnds: no concurrent DMA when one feeds the FIFO */
-    dmaSetParams(0, list, (void *)&GFX_FIFO, DMA_FIFO | (u32)list_words);
+    flush_chunk();
     b->submitted = 1;
     port_profile_detail_end(PORT_PROFILE_UPLOAD, profile); /* reported as gx_texture_upload */
 }
