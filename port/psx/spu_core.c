@@ -163,6 +163,15 @@ static SPU_HOT int span_independent(unsigned n) {
     uint16_t control = psx_spu_regs[0x1aa / 2];
     uint32_t reverb_from = (control & 0x80) ? reverb.base * 2 : 0x80000; /* bytes; writes only when enabled */
     if (reverb_from < 0x1000) return 0;
+    /* The CD input buffers (0..0x7ff) only ever receive zeros here. If the bytes this span will write are
+     * already zero, those writes change nothing and voices may read that area too (idle voices often loop
+     * at address 0). The voice 1/3 capture buffers (0x800..0xfff) do change. */
+    uint32_t capture_from = 0x800;
+    const uint16_t *ram = __builtin_assume_aligned(psx_spu_ram, 2);
+    for (unsigned k = 0; k < n && capture_from; ++k) {
+        unsigned at = ((capture_offset + k * 2) & 0x3ff) / 2;
+        if (ram[at] | ram[0x200 + at]) capture_from = 0;
+    }
     unsigned blocks = (n * 0x3fffu + (PSX_SPU_BLOCK_SAMPLES << 12)) / (PSX_SPU_BLOCK_SAMPLES << 12) + 2;
     int fetch_off = !!(control & 0x40);
     for (unsigned i = 0; i < PSX_SPU_VOICES; ++i) {
@@ -171,7 +180,7 @@ static SPU_HOT int span_independent(unsigned n) {
         uint32_t starts[2] = {(uint32_t)v->source.address * 8, (uint32_t)(v->registers[7] & 0xfffe) * 8};
         for (unsigned k = 0; k < 2; ++k) {
             uint32_t from = starts[k], to = from + blocks * PSX_SPU_BLOCK_BYTES;
-            if (from < 0x1000 || to > reverb_from) return 0;
+            if ((to > capture_from && from < 0x1000) || to > reverb_from) return 0;
         }
     }
     return 1;
