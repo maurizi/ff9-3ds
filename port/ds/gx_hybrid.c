@@ -58,6 +58,9 @@ typedef struct {
 } Buffer;
 
 static Buffer buffers[2];
+/* 1024x512: MARK_ADD where a software-drawn additive glow wrote since its buffer's scene started */
+static u8 *marks;
+#define MARK_ADD 1
 
 static Buffer *buffer_at(int x, int y) {
     for (int i = 0; i < 2; ++i) {
@@ -89,6 +92,8 @@ static void start_scene(Buffer *b) {
     b->shown = 0;
     b->count = 0;
     b->submitted = 0;
+    for (int row = 0; row < b->h; ++row)
+        memset(marks + ((b->y + row) & 511) * 1024 + b->x, 0, b->x + b->w <= 1024 ? b->w : 1024 - b->x);
 }
 
 /* The buffer the current drawing area belongs to (NULL: offscreen), starting its scene if it was shown. */
@@ -174,6 +179,7 @@ typedef struct {
     int tw, th;                         /* DS texture size in texels */
     int unit, units;
     int dirty, wanted;
+    int conv, clut_x, clut_y;           /* conv: additive-blend copy, 4/8-bit texels through this CLUT as 15-bit */
 } Region;
 
 static Region regions[MAX_REGIONS];
@@ -204,27 +210,28 @@ static void free_region(Region *r) {
     r->used = 0;
 }
 
-static Region *region_containing(int depth, int x, int y, int wh, int h) {
+static Region *region_containing(int depth, int conv, int cx, int cy, int x, int y, int wh, int h) {
     for (int i = 0; i < MAX_REGIONS; ++i) {
         Region *r = &regions[i];
-        if (r->used && r->depth == depth && x >= r->x && y >= r->y && x + wh <= r->x + r->wh && y + h <= r->y + r->h)
+        if (r->used && r->depth == depth && r->conv == conv && (!conv || (r->clut_x == cx && r->clut_y == cy)) &&
+            x >= r->x && y >= r->y && x + wh <= r->x + r->wh && y + h <= r->y + r->h)
             return r;
     }
     return NULL;
 }
 
-static Region *place_region(int depth, int x, int y, int wh, int h) {
+static Region *place_region(int depth, int conv, int cx, int cy, int x, int y, int wh, int h) {
     int sw = log2_at_least(wh * texels_per_halfword(depth)), sh = log2_at_least(h);
     if (sw < 3) sw = 3;
     if (sh < 3) sh = 3;
     if (sw > 10 || sh > 10) return NULL;
-    int bytes = ((1 << sw) << sh) * (depth == 0 ? 4 : depth == 1 ? 8 : 16) / 8;
+    int bytes = ((1 << sw) << sh) * (conv ? 16 : depth == 0 ? 4 : depth == 1 ? 8 : 16) / 8;
     int units = 1 << log2_at_least((bytes + TEX_UNIT - 1) / TEX_UNIT);
     int unit = allocate_units(units);
     if (unit < 0) return NULL;
     for (int i = 0; i < MAX_REGIONS; ++i)
         if (!regions[i].used) {
-            regions[i] = (Region){1, depth, x, y, wh, h, 1 << sw, 1 << sh, unit, units, 1, 1};
+            regions[i] = (Region){1, depth, x, y, wh, h, 1 << sw, 1 << sh, unit, units, 1, 1, conv, cx, cy};
             return &regions[i];
         }
     memset(unit_used + unit, 0, units);
@@ -241,6 +248,8 @@ void psx_vram_touch(int x, int y, int w, int h) {
     for (int i = 0; i < MAX_REGIONS; ++i) {
         Region *r = &regions[i];
         if (r->used && x < r->x + r->wh && r->x < x + w && y < r->y + r->h && r->y < y + h) r->dirty = 1;
+        if (r->used && r->conv && y <= r->clut_y && r->clut_y < y + h && x < r->clut_x + (r->depth ? 256 : 16) &&
+            r->clut_x < x + w) r->dirty = 1;
     }
     for (int i = 0; i < PAL_SLOTS; ++i) {
         Palette *p = &palettes[i];
@@ -250,7 +259,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
 
 /* Per-scene texture plan: one group per (depth, page) with its texels' bounding box (halfwords, rows). */
 #define MAX_GROUPS 96
-typedef struct { int depth, tx, ty, x0, y0, x1, y1; Region *region; } Group;
+typedef struct { int depth, tx, ty, x0, y0, x1, y1; Region *region; int conv, cx, cy; } Group;
 static Group groups[MAX_GROUPS];
 static int group_count;
 static u8 prim_group[MAX_PRIMS];
@@ -272,16 +281,26 @@ static int plan_textures(Buffer *b) {
             if (p->v[i] < v0) v0 = p->v[i];
             if (p->v[i] > v1) v1 = p->v[i];
         }
-        /* Stable regions: the whole page height and U in 64-texel steps, so a page keeps one region (and copies
-         * nothing) while the camera moves over it. */
-        u0 &= ~63; u1 |= 63;
-        int x0 = p->tx + u0 / per, x1 = p->tx + u1 / per, y0 = p->ty, y1 = p->ty + 255;
+        /* Additive polygons (modes 1, 3) use a 15-bit copy through their CLUT whose dark texels are transparent:
+         * under alpha blending a black background would darken what an additive one leaves alone. */
+        int conv = (p->flags & P_SEMI) && (p->abr == 1 || p->abr == 3) && p->depth < 2;
+        int x0, x1, y0, y1;
+        if (conv) { /* effect-sized: the texels' own box, in 8-texel steps */
+            u0 &= ~7; u1 |= 7;
+            x0 = p->tx + u0 / per; x1 = p->tx + u1 / per; y0 = p->ty + (v0 & ~7); y1 = p->ty + (v1 | 7);
+        } else {
+            /* Stable regions: the whole page height and U in 64-texel steps, so a page keeps one region (and
+             * copies nothing) while the camera moves over it. */
+            u0 &= ~63; u1 |= 63;
+            x0 = p->tx + u0 / per; x1 = p->tx + u1 / per; y0 = p->ty; y1 = p->ty + 255;
+        }
         int g;
         for (g = 0; g < group_count; ++g)
-            if (groups[g].depth == p->depth && groups[g].tx == p->tx && groups[g].ty == p->ty) break;
+            if (groups[g].depth == p->depth && groups[g].tx == p->tx && groups[g].ty == p->ty &&
+                groups[g].conv == conv && (!conv || (groups[g].cx == p->clut_x && groups[g].cy == p->clut_y))) break;
         if (g == group_count) {
             if (group_count == MAX_GROUPS) continue;
-            groups[group_count++] = (Group){p->depth, p->tx, p->ty, x0, y0, x1, y1, NULL};
+            groups[group_count++] = (Group){p->depth, p->tx, p->ty, x0, y0, x1, y1, NULL, conv, p->clut_x, p->clut_y};
         } else {
             Group *q = &groups[g];
             if (x0 < q->x0) q->x0 = x0;
@@ -315,7 +334,8 @@ static int plan_textures(Buffer *b) {
     int missing = 0;
     for (int g = 0; g < group_count; ++g) {
         Group *q = &groups[g];
-        q->region = region_containing(q->depth, q->x0, q->y0, q->x1 - q->x0 + 1, q->y1 - q->y0 + 1);
+        q->region = region_containing(q->depth, q->conv, q->cx, q->cy, q->x0, q->y0, q->x1 - q->x0 + 1,
+                                      q->y1 - q->y0 + 1);
         if (q->region) q->region->wanted = 1;
         else missing = 1;
     }
@@ -336,8 +356,8 @@ static int plan_textures(Buffer *b) {
             Group *q = &groups[best];
             tried[best] = 1;
             int wh = q->x1 - q->x0 + 1, h = q->y1 - q->y0 + 1;
-            q->region = region_containing(q->depth, q->x0, q->y0, wh, h);
-            if (!q->region) q->region = place_region(q->depth, q->x0, q->y0, wh, h);
+            q->region = region_containing(q->depth, q->conv, q->cx, q->cy, q->x0, q->y0, wh, h);
+            if (!q->region) q->region = place_region(q->depth, q->conv, q->cx, q->cy, q->x0, q->y0, wh, h);
             if (q->region) q->region->wanted = 1;
             else failed = 1;
         }
@@ -359,8 +379,25 @@ static void upload(void) {
         Region *r = &regions[i];
         if (!r->used || !r->dirty) continue;
         r->dirty = 0;
-        int row_bytes = r->tw * (r->depth == 0 ? 4 : r->depth == 1 ? 8 : 16) / 8;
+        int row_bytes = r->tw * (r->conv ? 16 : r->depth == 0 ? 4 : r->depth == 1 ? 8 : 16) / 8;
         u8 *dst = base + r->unit * TEX_UNIT;
+        if (r->conv) {
+            const u16 *clut = psx_vram + (r->clut_y & 511) * 1024;
+            const int per = texels_per_halfword(r->depth), bits = 16 / per, mask = (1 << bits) - 1;
+            for (int row = 0; row < r->h; ++row) {
+                const u16 *src = psx_vram + ((r->y + row) & 511) * 1024;
+                u16 *out = (u16 *)(dst + row * row_bytes);
+                for (int k = 0; k < r->wh; ++k) {
+                    u16 word = src[(r->x + k) & 1023];
+                    for (int t = 0; t < per; ++t) {
+                        u16 c = clut[(r->clut_x + ((word >> (t * bits)) & mask)) & 1023];
+                        int lum = (c & 31) + ((c >> 5) & 31) + ((c >> 10) & 31);
+                        out[k * per + t] = lum > 6 ? c | 0x8000 : 0; /* near-black adds ~nothing: transparent */
+                    }
+                }
+            }
+            continue;
+        }
         for (int row = 0; row < r->h; ++row) {
             const u16 *src = psx_vram + ((r->y + row) & 511) * 1024;
             u16 *out = (u16 *)(dst + row * row_bytes);
@@ -429,13 +466,14 @@ static void emit_scene(Buffer *b) {
         if (p->flags & P_TEXTURED) {
             Region *r = prim_group[k] == 0xFF ? NULL : groups[prim_group[k]].region;
             if (!r) { gxh_stats_texture_fail++; continue; }
-            if (p->depth < 2 && prim_palette[k] == 0xFF) { gxh_stats_palette_fail++; continue; }
+            if (p->depth < 2 && !r->conv && prim_palette[k] == 0xFF) { gxh_stats_palette_fail++; continue; }
             int per = texels_per_halfword(p->depth);
             tu = (r->x - p->tx) * per;
             tv = r->y - p->ty;
             want_image = (u32)(r->unit * TEX_UNIT / 8) | (u32)(log2_at_least(r->tw) - 3) << 20 |
-                         (u32)(log2_at_least(r->th) - 3) << 23 | (u32)(p->depth == 0 ? 3 : p->depth == 1 ? 4 : 7) << 26;
-            if (p->depth < 2) {
+                         (u32)(log2_at_least(r->th) - 3) << 23 |
+                         (u32)(r->conv || p->depth == 2 ? 7 : p->depth == 0 ? 3 : 4) << 26;
+            if (p->depth < 2 && !r->conv) {
                 want_image |= 1u << 29; /* PS1 0x0000 at index 0 is transparent (FF9's CLUTs) */
                 u32 want_palette = (u32)prim_palette[k] * 512 / 16;
                 if (want_palette != palette) { fifo(CMD_PLTTBASE, want_palette); palette = want_palette; }
@@ -444,7 +482,7 @@ static void emit_scene(Buffer *b) {
         if (want_image != image) { fifo(CMD_TEXIMAGE, want_image); image = want_image; }
         int alpha = 31, id = 0;
         if (p->flags & P_SEMI) {
-            alpha = p->abr == 3 ? 8 : 16;
+            alpha = p->abr == 3 ? 8 : p->abr == 1 ? 24 : 16; /* additive: a brighter blend than 50% */
             if (p->abr == 2) {
                 alpha = (p->r[0] + p->g[0] + p->b[0]) * 31 / (3 * 255); /* darkening as black at source luminance */
                 if (!alpha) continue; /* alpha 0 would be wireframe */
@@ -487,7 +525,10 @@ static void soft_touch(int x0, int y0, int x1, int y1) {
 
 static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     Buffer *b = target();
-    if (b && b != displayed()) {
+    /* Untextured additive glows (Gouraud, black at the edges) have no per-vertex alpha on the DS: draw them in
+     * software over the scene's clear value instead, so dark parts stay transparent and bright ones show. */
+    int glow = m->semi && !m->textured && (m->abr == 1 || m->abr == 3);
+    if (b && b != displayed() && !glow) {
         if (!triangle_area(v, v + 1, v + 2) && (n == 3 || !triangle_area(v + 1, v + 2, v + 3))) return;
         int clipped = 0;
         for (int i = 0; i < n; ++i)
@@ -506,7 +547,9 @@ static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         if (v[i].y < y0) y0 = v[i].y;
         if (v[i].y > y1) y1 = v[i].y;
     }
+    if (glow && b) psx_softgpu_set_marks(marks, MARK_ADD);
     psx_softgpu.poly(m, v, n);
+    psx_softgpu_set_marks(NULL, 0);
     soft_touch(x0, y0, x1, y1);
 }
 
@@ -546,6 +589,7 @@ static void reset_colours(void);     /* the 2D layer: an 8-bit bitmap BG in bank
 
 void gxh_init(void) {
     for (int i = 0; i < 2; ++i) buffers[i].prims = malloc(MAX_PRIMS * sizeof(Prim));
+    marks = calloc(1024 * 512, 1);
     list = malloc(LIST_WORDS * 4);
 }
 
@@ -663,6 +707,14 @@ static u8 colour_of(u16 c) {
     return (u8)best;
 }
 
+/* A pixel is on the 2D layer when it isn't the clear value, unless an additive glow left it near black (its edge
+ * adds next to nothing; drawn opaque over the 3D layer it would be a dark fringe). */
+static inline int shows(u16 c, u16 clear, u8 mark) {
+    if (c == clear) return 0;
+    if (mark && (c & 31) <= 3 && ((c >> 5) & 31) <= 3 && ((c >> 10) & 31) <= 3) return 0;
+    return 1;
+}
+
 static void dirty_cells(int x0, int y0, int x1, int y1) {
     for (int y = y0 >> 3; y <= y1 >> 3; ++y)
         for (int x = x0 >> 3; x <= x1 >> 3; ++x) cell_dirty[y & 63][x & 127] = 1;
@@ -722,10 +774,12 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
                 u16 *out = bitmap + ((top + by + oy) * 256 + bx) / 2;
                 if (!any) { for (int k = 0; k < bw / 2; ++k) out[k] = 0; continue; }
                 const u16 *vrow = psx_vram + ((sy0 + oy * 5 / 4) & 511) * 1024;
+                const u8 *mrow = marks + ((sy0 + oy * 5 / 4) & 511) * 1024;
                 const u16 *frow = block + oy * 256;
                 for (int ox = 0; ox < bw; ox += 2) {
-                    u16 i0 = vrow[(sx0 + ox * 5 / 4) & 1023] != clear ? colour_of(frow[ox]) : 0;
-                    u16 i1 = ox + 1 < bw && vrow[(sx0 + (ox + 1) * 5 / 4) & 1023] != clear ? colour_of(frow[ox + 1]) : 0;
+                    int a = (sx0 + ox * 5 / 4) & 1023, b2 = (sx0 + (ox + 1) * 5 / 4) & 1023;
+                    u16 i0 = shows(vrow[a], clear, mrow[a]) ? colour_of(frow[ox]) : 0;
+                    u16 i1 = ox + 1 < bw && shows(vrow[b2], clear, mrow[b2]) ? colour_of(frow[ox + 1]) : 0;
                     out[ox / 2] = i0 | i1 << 8; /* halfword stores: VRAM ignores byte writes */
                 }
             }

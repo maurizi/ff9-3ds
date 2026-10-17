@@ -27,6 +27,13 @@ static struct {
     int clip_active, clip_x, clip_y, clip_w, clip_h;
 } target;
 
+/* psx_softgpu_set_marks: while set, every pixel a primitive writes gets `bit` in this 1024x512 plane (VRAM
+ * coordinates), and drawing takes the generic per-pixel path. The hybrid renderer marks its software-drawn
+ * additive glows this way (gx_hybrid.c). */
+static u8 *marks;
+static u8 marks_bit;
+void psx_softgpu_set_marks(u8 *plane, unsigned bit) { marks = plane; marks_bit = (u8)bit; }
+
 static inline u16 *px(int x, int y) {
     return &psx_vram[(y & (VRAM_H - 1)) * VRAM_W + (x & (VRAM_W - 1))];
 }
@@ -168,6 +175,7 @@ static inline void plot(const Gp0Mode *m, int x, int y, int r, int g, int b, int
     }
     *d = c | (gp0_state.set_mask ? 0x8000 : 0);
     if (target.pixels && !semi) target.known[index] = 1;
+    if (marks && !target.pixels) marks[(y & (VRAM_H - 1)) * VRAM_W + (x & (VRAM_W - 1))] |= marks_bit;
 }
 
 /* Interpolants outside a thin triangle can exceed signed 16.16 range while
@@ -477,7 +485,7 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
      * blending, mask tests, dithering and shadow targets keep the general path. */
     const int neutral = m->raw || (a->r == 128 && a->g == 128 && a->b == 128);
     const int fast_textured = m->textured && !m->gouraud && !m->semi && !gp0_state.check_mask &&
-                              !target.pixels;
+                              !target.pixels && !marks;
     const int modulate = !neutral;
     /* dither implies a modulated (non-raw) texture and no palette cache: see poly_row_dither_indexed */
     const int dither_indexed = fast_textured && dither && m->depth < 2 && !gp0_state.twin_mask_x &&
@@ -486,7 +494,7 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     const int flat_g = a->g < 0 ? 0 : a->g > 255 ? 255 : a->g;
     const int flat_b = a->b < 0 ? 0 : a->b > 255 ? 255 : a->b;
     /* the same for semi-transparent polygons (any depth), and untextured polygons */
-    const int plain_target = !gp0_state.check_mask && !target.pixels;
+    const int plain_target = !gp0_state.check_mask && !target.pixels && !marks;
     const int dither_semi = m->textured && !m->gouraud && m->semi && dither && plain_target &&
                             !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
                             (m->depth == 2 || m->clut_x + (m->depth ? 256 : 16) <= VRAM_W);
