@@ -97,7 +97,8 @@ static SPU_HOT unsigned steady_samples(const PsxSpuVoice *voice, uint16_t pitch,
     unsigned limit = 0xffffffffu;
     if (pitch) limit = ((PSX_SPU_BLOCK_SAMPLES << 12) - 1 - voice->source.counter) / pitch;
     *env_increment = 0;
-    if (adsr->phase == PSX_SPU_ADSR_OFF) return 0;
+    /* An off voice still fetching (SPU IRQs enabled) has no envelope ticks: steady until its block ends. */
+    if (adsr->phase == PSX_SPU_ADSR_OFF) return limit;
     if (adsr->phase != PSX_SPU_ADSR_SUSTAIN) {
         int reached = adsr->envelope.decrease ? adsr->level <= adsr->target : adsr->level >= adsr->target;
         if (reached) return 0;
