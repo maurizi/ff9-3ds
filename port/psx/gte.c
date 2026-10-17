@@ -12,6 +12,13 @@
 #include "gte.h"
 #include "profile.h"
 
+/* With the SPU on the DS's hardware channels (HWSOUND=1) its mixer leaves ITCM, and the GTE takes its place. */
+#if defined(PORT_GTE_ITCM) && defined(__arm__)
+#define GTE_HOT __attribute__((section(".itcm")))
+#else
+#define GTE_HOT
+#endif
+
 typedef int16_t i16;
 typedef int32_t i32;
 typedef int64_t i64;
@@ -151,7 +158,7 @@ static void init_unr(void) {
     }
 }
 
-static u32 gte_divide(u32 h, u32 sz3) {
+GTE_HOT static u32 gte_divide(u32 h, u32 sz3) {
     if (unr_table[0] == 0) init_unr();
     if (h >= sz3 * 2) {
         FLAG |= 1u << 17;
@@ -169,7 +176,7 @@ static u32 gte_divide(u32 h, u32 sz3) {
 
 /* ---- register access ------------------------------------------------------------------------------------ */
 
-void gte_mtc2(int reg, gte_u32 v) {
+GTE_HOT void gte_mtc2(int reg, gte_u32 v) {
     switch (reg) {
     case 15: /* SXYP: push */
         g.d[12] = g.d[13];
@@ -195,7 +202,7 @@ void gte_mtc2(int reg, gte_u32 v) {
     }
 }
 
-gte_u32 gte_mfc2(int reg) {
+GTE_HOT gte_u32 gte_mfc2(int reg) {
     switch (reg) {
     case 1: case 3: case 5: case 8: case 9: case 10: case 11:
         return (u32)(i32)(i16)g.d[reg];
@@ -235,7 +242,7 @@ gte_u32 gte_cfc2(int reg) {
 
 /* ---- commands ------------------------------------------------------------------------------------------- */
 
-static void rtp(int v, int sf, int lm, int last) {
+GTE_HOT static void rtp(int v, int sf, int lm, int last) {
     int shift = sf * 12;
     i64 x = V_X(v), y = V_Y(v), z = V_Z(v);
     i64 m1 = ((i64)TRX * 4096) + mtx(0, 0, 0) * x + mtx(0, 0, 1) * y + mtx(0, 0, 2) * z;
@@ -264,7 +271,7 @@ static void rtp(int v, int sf, int lm, int last) {
 }
 
 /* [MAC1..3] = (T << 12 + M * V) >> shift, IR = MAC (MVMVA and the lighting steps) */
-static void mat_mul(int mbase, i64 vx, i64 vy, i64 vz, i64 tx, i64 ty, i64 tz, int sf, int lm) {
+GTE_HOT static void mat_mul(int mbase, i64 vx, i64 vy, i64 vz, i64 tx, i64 ty, i64 tz, int sf, int lm) {
     int shift = sf * 12;
     set_ir(1, set_mac(1, (tx * 4096) + mtx(mbase, 0, 0) * vx + mtx(mbase, 0, 1) * vy + mtx(mbase, 0, 2) * vz, shift), lm);
     set_ir(2, set_mac(2, (ty * 4096) + mtx(mbase, 1, 0) * vx + mtx(mbase, 1, 1) * vy + mtx(mbase, 1, 2) * vz, shift), lm);
@@ -272,7 +279,7 @@ static void mat_mul(int mbase, i64 vx, i64 vy, i64 vz, i64 tx, i64 ty, i64 tz, i
 }
 
 /* Interpolate MAC (in .12 colour units) toward the far colour by IR0, then push the colour FIFO. */
-static void interpolate(i64 m1, i64 m2, i64 m3, int sf, int lm) {
+GTE_HOT static void interpolate(i64 m1, i64 m2, i64 m3, int sf, int lm) {
     int shift = sf * 12;
     set_ir(1, set_mac(1, ((i64)RFC * 4096) - m1, shift), 0);
     set_ir(2, set_mac(2, ((i64)GFC * 4096) - m2, shift), 0);
@@ -290,7 +297,7 @@ static void color_ir(u32 r, u32 gr, u32 b, i64 *m1, i64 *m2, i64 *m3) {
     *m3 = (i64)b * IR3 * 16;
 }
 
-static void light(int v, int sf, int lm, int kind) {
+GTE_HOT static void light(int v, int sf, int lm, int kind) {
     int shift = sf * 12;
     i64 m1, m2, m3;
     mat_mul(8, V_X(v), V_Y(v), V_Z(v), 0, 0, 0, sf, lm);  /* LLM * V */
@@ -310,7 +317,7 @@ static void light(int v, int sf, int lm, int kind) {
     }
 }
 
-void gte_cmd(gte_u32 op) {
+GTE_HOT void gte_cmd(gte_u32 op) {
     unsigned int profile_start=port_profile_begin();
     int sf = (op >> 19) & 1;
     int shift = sf * 12;
