@@ -458,6 +458,50 @@ static inline __attribute__((always_inline)) void sprite_pixel(
     *dst = colour | mask;
 }
 
+/* The row loops of fast_indexed_row, out of line so their few values stay in registers. src is the first
+ * texel's halfword, lead the texel's position inside it; width >= 1. */
+static SG_HOT __attribute__((noinline)) void row_direct8(const u16 *src, const u16 *cl, u16 *dst, unsigned lead,
+                                                         unsigned width, u16 mask) {
+    if (lead) { u16 c = cl[*src++ >> 8]; if (c) *dst = c | mask; ++dst; --width; }
+    for (; width >= 2; width -= 2, dst += 2) {
+        u16 w = *src++;
+        u16 a = cl[w & 255], b = cl[w >> 8];
+        if (a) dst[0] = a | mask;
+        if (b) dst[1] = b | mask;
+    }
+    if (width) { u16 c = cl[*src & 255]; if (c) *dst = c | mask; }
+}
+
+static SG_HOT __attribute__((noinline)) void row_palette8(const u16 *src, const u32 *pal, u16 *dst, unsigned lead,
+                                                          unsigned width, u16 mask) {
+    if (lead) { u32 p = pal[*src++ >> 8]; if ((u16)p) *dst = (u16)(p >> 16) | mask; ++dst; --width; }
+    for (; width >= 2; width -= 2, dst += 2) {
+        u16 w = *src++;
+        u32 a = pal[w & 255], b = pal[w >> 8];
+        if ((u16)a) dst[0] = (u16)(a >> 16) | mask;
+        if ((u16)b) dst[1] = (u16)(b >> 16) | mask;
+    }
+    if (width) { u32 p = pal[*src & 255]; if ((u16)p) *dst = (u16)(p >> 16) | mask; }
+}
+
+static SG_HOT __attribute__((noinline)) void row_direct4(const u16 *src, const u16 *cl, u16 *dst, unsigned lead,
+                                                         unsigned width, u16 mask) {
+    for (unsigned w = *src++ >> (lead * 4), k = lead; width; --width, ++dst) {
+        u16 c = cl[w & 15];
+        if (c) *dst = c | mask;
+        if (++k == 4 && width > 1) { k = 0; w = *src++; } else w >>= 4; /* no read past the last texel */
+    }
+}
+
+static SG_HOT __attribute__((noinline)) void row_palette4(const u16 *src, const u32 *pal, u16 *dst, unsigned lead,
+                                                          unsigned width, u16 mask) {
+    for (unsigned w = *src++ >> (lead * 4), k = lead; width; --width, ++dst) {
+        u32 p = pal[w & 15];
+        if ((u16)p) *dst = (u16)(p >> 16) | mask;
+        if (++k == 4 && width > 1) { k = 0; w = *src++; } else w >>= 4; /* no read past the last texel */
+    }
+}
+
 /* The common sprite row: indexed texels, no texture window, no wrap in u, texture X or CLUT, opaque, and a
  * destination that neither this row's texels nor its CLUT entries overlap (so reading each source halfword
  * once for its 2 or 4 pixels sees the same values as per-pixel reads). Returns 0 for the general loop. */
@@ -478,41 +522,11 @@ static inline __attribute__((always_inline)) int fast_indexed_row(
         m->clut_x + entries > (unsigned)x0) return 0;
     const u16 *src = row + tx0;
     if (direct) {
-        const u16 *cl = clut + m->clut_x;
-        if (m->depth) {
-            if (u & 1) { u16 c = cl[*src++ >> 8]; if (c) *dst = c | mask; ++dst; --width; }
-            for (; width >= 2; width -= 2, dst += 2) {
-                u16 w = *src++;
-                u16 a = cl[w & 255], b = cl[w >> 8];
-                if (a) dst[0] = a | mask;
-                if (b) dst[1] = b | mask;
-            }
-            if (width) { u16 c = cl[*src & 255]; if (c) *dst = c | mask; }
-        } else {
-            for (unsigned w = *src++ >> ((u & 3) * 4), k = u & 3; width; --width, ++dst) {
-                u16 c = cl[w & 15];
-                if (c) *dst = c | mask;
-                if (++k == 4 && width > 1) { k = 0; w = *src++; } else w >>= 4; /* no read past the last texel */
-            }
-        }
+        if (m->depth) row_direct8(src, clut + m->clut_x, dst, u & 1, width, mask);
+        else row_direct4(src, clut + m->clut_x, dst, u & 3, width, mask);
     } else {
-        const u32 *pal = shaded_palette;
-        if (m->depth) {
-            if (u & 1) { u32 p = pal[*src++ >> 8]; if ((u16)p) *dst = (u16)(p >> 16) | mask; ++dst; --width; }
-            for (; width >= 2; width -= 2, dst += 2) {
-                u16 w = *src++;
-                u32 a = pal[w & 255], b = pal[w >> 8];
-                if ((u16)a) dst[0] = (u16)(a >> 16) | mask;
-                if ((u16)b) dst[1] = (u16)(b >> 16) | mask;
-            }
-            if (width) { u32 p = pal[*src & 255]; if ((u16)p) *dst = (u16)(p >> 16) | mask; }
-        } else {
-            for (unsigned w = *src++ >> ((u & 3) * 4), k = u & 3; width; --width, ++dst) {
-                u32 p = pal[w & 15];
-                if ((u16)p) *dst = (u16)(p >> 16) | mask;
-                if (++k == 4 && width > 1) { k = 0; w = *src++; } else w >>= 4; /* no read past the last texel */
-            }
-        }
+        if (m->depth) row_palette8(src, shaded_palette, dst, u & 1, width, mask);
+        else row_palette4(src, shaded_palette, dst, u & 3, width, mask);
     }
     return 1;
 }

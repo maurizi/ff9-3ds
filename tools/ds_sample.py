@@ -130,6 +130,7 @@ def main():
     p.add_argument('--port', type=int, default=3333)
     p.add_argument('--display', default=':99')
     p.add_argument('--top', type=int, default=40)
+    p.add_argument('--detail', action='append', default=[], help='also histogram PCs inside this function')
     a = p.parse_args()
     rom, elf = a.rom.resolve(), a.elf.resolve()
     funcs = []
@@ -167,6 +168,7 @@ def main():
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     samples = collections.Counter()
     callers = collections.Counter()
+    detail = collections.Counter()
     try:
         pid = None
         for _ in range(120):
@@ -197,6 +199,8 @@ def main():
             pc, lr = stub.register(15), stub.register(14)
             samples[name(pc)] += 1
             callers[(name(pc), name(lr))] += 1
+            if name(pc) in a.detail:
+                detail[pc] += 1
             stub.resume()
             if sum(samples.values()) % 200 == 0 and reader() >= a.stop:
                 break
@@ -219,6 +223,14 @@ def main():
     print(f'{total} samples')
     for fn, count in samples.most_common(a.top):
         print(f'{100 * count / total:6.2f}%  {fn}')
+    if detail:
+        print('\nhot instructions:')
+        objdump = subprocess.run(['arm-none-eabi-objdump', '-d', str(elf)], capture_output=True, text=True).stdout \
+            if shutil.which('arm-none-eabi-objdump') else ''
+        lines = {int(l.split(':')[0], 16): l.strip() for l in objdump.splitlines()
+                 if re.match(r'^\s+[0-9a-f]+:', l)}
+        for pc, count in sorted(detail.items()):
+            print(f'{count:5d}  {lines.get(pc, f"{pc:08x}")}')
     print('\nhottest (function <- caller):')
     for (fn, caller), count in callers.most_common(20):
         print(f'{100 * count / total:6.2f}%  {fn} <- {caller}')
