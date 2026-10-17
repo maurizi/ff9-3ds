@@ -151,6 +151,14 @@ entries also reached 2,000 frames without a fatal. The two unavailable-target
 routes still fail, now with explicit diagnostics and exit 2 instead of signals.
 Its per-disc and combined reports stay under `build/validation`.
 
+After real movie playback and drive-rate CD streaming (2026-10-17), the same
+1,131 fixtures at 3,000 frames (`field_sweep_movies`, archived executable
+`ff9ds_sweep_movies.elf`) again give 1,129 passes with the requested field
+loaded. The two invalid-context routes still fail. Disc-2 field 70 now stops
+earlier: its script plays the opening FMV, which isn't on disc 2, so the
+player asks the drive for sector -1. Disc-4 field 2502 still redirects to the
+unavailable field 2500.
+
 Negative coverage matters: a 10-frame candle run exits zero and reaches its
 frame limit, but fails the new requirement because no field finished loading
 (`field_loader_too_short/report.json`). The four opening/NULL-regression
