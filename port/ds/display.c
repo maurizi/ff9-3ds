@@ -134,6 +134,7 @@ void display_present(void) {
             videoSetMode(MODE_5_2D);
             vramSetBankA(VRAM_A_MAIN_BG_0x06000000);
             vramSetBankB(VRAM_B_MAIN_BG_0x06020000);
+            bgShow(bg);
             bgUpdate();
         }
         shown_valid = 0;

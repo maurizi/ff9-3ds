@@ -212,13 +212,16 @@ OBJ bitmap blocks in E when the textures use A-D (battle), or BG bitmaps in C/D 
   scene (one region per page and depth, the texels' bounding box; regions that persist keep their place), dirty
   regions and CLUTs are copied in, and the commands go to the geometry FIFO by DMA, ending with the swap.
 - The 2D layer is the displayed buffer's pixels other than its scene's clear value (polygons never reach PS1
-  VRAM, so nothing else differs), as 32x32 bitmap OBJs in E. A 2D pixel exactly equal to the clear value shows
+  VRAM, so nothing else differs), on an 8-bit bitmap BG in E whose palette is built as colours appear (the battle
+  UI uses under 200 colours, so it is exact; a full palette falls back to nearest colours and a rebuild). A 2D pixel exactly equal to the clear value shows
   the 3D layer instead; 2D drawn before a polygon still lands on top (no coverage plane yet). Blocks are rebuilt
   when their source cells were drawn and their pixels hash differently.
 - Ark (frame 1633 window): 59.1 ms per virtual frame against 82.2 for software, 1722 polygons submitted, 112
   dropped at the vertex limit (a multi-pass scene is still to do), no texture failures.
+- Texture regions are stable (whole page height, U in 64-texel steps), so a page keeps its place across scenes.
 - To do: field layout (BG bitmaps, coverage-based under/over), scenes over budget, semi-transparent 2D over 3D,
-  readbacks of GX-drawn buffers, mode 1-3 blending.
+  readbacks of GX-drawn buffers, mode 1-3 blending (additive sparkles show as dark discs: a texture's black
+  background darkens under alpha blending instead of adding nothing), texture budget at battle entrances.
 
 ### 5.1 Earlier baseline: translate the whole OT (M2, superseded by 5.0)
 At `DrawOTag`, walk the ordering table in PS1 order: last slot first, and within a slot the most recently added

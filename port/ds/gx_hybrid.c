@@ -33,7 +33,8 @@ extern unsigned short *psx_vram;
 #define MAX_POLYS 2044
 #define MAX_VERTICES 6140
 
-int gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail, gxh_stats_blocks;
+int gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail, gxh_stats_palette_fail, gxh_stats_blocks;
+int gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced; /* the last plan: regions and 2 KB units in use */
 static int active;
 
 /* ---- recorded primitives ----------------------------------------------------------------------------------- */
@@ -271,7 +272,10 @@ static int plan_textures(Buffer *b) {
             if (p->v[i] < v0) v0 = p->v[i];
             if (p->v[i] > v1) v1 = p->v[i];
         }
-        int x0 = p->tx + u0 / per, x1 = p->tx + u1 / per, y0 = p->ty + v0, y1 = p->ty + v1;
+        /* Stable regions: the whole page height and U in 64-texel steps, so a page keeps one region (and copies
+         * nothing) while the camera moves over it. */
+        u0 &= ~63; u1 |= 63;
+        int x0 = p->tx + u0 / per, x1 = p->tx + u1 / per, y0 = p->ty, y1 = p->ty + 255;
         int g;
         for (g = 0; g < group_count; ++g)
             if (groups[g].depth == p->depth && groups[g].tx == p->tx && groups[g].ty == p->ty) break;
@@ -337,7 +341,11 @@ static int plan_textures(Buffer *b) {
             if (q->region) q->region->wanted = 1;
             else failed = 1;
         }
-        if (!failed || attempt) break;
+        if (!failed || attempt) {
+            gxh_stats_unplaced = 0;
+            for (int g = 0; g < group_count; ++g) gxh_stats_unplaced += !groups[g].region;
+            break;
+        }
         for (int g = 0; g < group_count; ++g) groups[g].region = NULL;
         for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) free_region(&regions[i]);
     }
@@ -420,7 +428,8 @@ static void emit_scene(Buffer *b) {
         u32 want_image = 0;
         if (p->flags & P_TEXTURED) {
             Region *r = prim_group[k] == 0xFF ? NULL : groups[prim_group[k]].region;
-            if (!r || (p->depth < 2 && prim_palette[k] == 0xFF)) { gxh_stats_texture_fail++; continue; }
+            if (!r) { gxh_stats_texture_fail++; continue; }
+            if (p->depth < 2 && prim_palette[k] == 0xFF) { gxh_stats_palette_fail++; continue; }
             int per = texels_per_halfword(p->depth);
             tu = (r->x - p->tx) * per;
             tv = r->y - p->ty;
@@ -528,12 +537,12 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
 
 /* ---- presentation ------------------------------------------------------------------------------------------ */
 
-#define OBJ_BLOCK 32
-#define OBJ_SLOTS 32   /* 2 KB each in bank E */
-static s8 block_slot[6][8];
-static u8 slot_used[OBJ_SLOTS];
+#define BLOCK 32
+static u8 block_shown[6][8];   /* the 2D layer has pixels in this 32x32 output block */
 static Buffer *last_shown;
 static u32 block_hash[6][8];
+static int layer_bg = -1;
+static void reset_colours(void);     /* the 2D layer: an 8-bit bitmap BG in bank E with a palette built as colours appear */
 
 void gxh_init(void) {
     for (int i = 0; i < 2; ++i) buffers[i].prims = malloc(MAX_PRIMS * sizeof(Prim));
@@ -546,16 +555,20 @@ void gxh_enable(int on) {
     if (on == active) return;
     active = on;
     if (on) {
-        memset(block_slot, -1, sizeof block_slot);
+        memset(block_shown, 0, sizeof block_shown);
         memset(block_hash, 0, sizeof block_hash);
-        memset(slot_used, 0, sizeof slot_used);
         last_shown = NULL;
-        videoSetMode(MODE_0_3D | DISPLAY_SPR_ACTIVE | SpriteMapping_Bmp_1D_128);
+        videoSetMode(MODE_5_3D);
         vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_TEXTURE, VRAM_C_TEXTURE, VRAM_D_TEXTURE);
-        vramSetBankE(VRAM_E_MAIN_SPRITE);
+        vramSetBankE(VRAM_E_MAIN_BG);
         vramSetBankF(VRAM_F_TEX_PALETTE_SLOT0);
         vramSetBankG(VRAM_G_TEX_PALETTE_SLOT1);
-        oamInit(&oamMain, SpriteMapping_Bmp_1D_128, false);
+        layer_bg = bgInit(2, BgType_Bmp8, BgSize_B8_256x256, 0, 0);
+        bgSetRotateScale(layer_bg, 0, 256, 256);
+        bgSetPriority(layer_bg, 0);
+        bgUpdate();
+        memset((void *)BG_BMP_RAM(0), 0, 256 * 256);
+        reset_colours();
         glInit();
         glEnable(GL_TEXTURE_2D | GL_BLEND);
         glClearPolyID(63);
@@ -569,8 +582,7 @@ void gxh_enable(int on) {
         for (int i = 0; i < 2; ++i) { buffers[i].valid = 0; buffers[i].count = 0; }
         gp0_backend = &hybrid_backend;
     } else {
-        oamClear(&oamMain, 0, 0);
-        oamUpdate(&oamMain);
+        if (layer_bg >= 0) bgHide(layer_bg);
         gp0_backend = &psx_softgpu;
     }
 }
@@ -580,6 +592,8 @@ static void submit(Buffer *b, int display_h) {
     unsigned int profile = port_profile_begin();
     while (dmaBusy(0)) {} /* the previous scene's list */
     plan_textures(b);
+    gxh_stats_regions = gxh_stats_units = 0;
+    for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) { gxh_stats_regions++; gxh_stats_units += regions[i].units; }
     u32 saved = vramSetPrimaryBanks(VRAM_A_LCD, VRAM_B_LCD, VRAM_C_LCD, VRAM_D_LCD);
     vramSetBankF(VRAM_F_LCD);
     vramSetBankG(VRAM_G_LCD);
@@ -605,13 +619,49 @@ static void submit(Buffer *b, int display_h) {
     port_profile_detail_end(PORT_PROFILE_UPLOAD, profile); /* reported as gx_texture_upload */
 }
 
-/* 2D layer: the displayed buffer's 2D pixels as 32x32 bitmap OBJs over the 3D layer. Polygons recorded for GX
+/* 2D layer: the displayed buffer's 2D pixels on an 8-bit bitmap BG over the 3D layer. Polygons recorded for GX
  * never reach PS1 VRAM, so the buffer holds its scene's clearing fill plus 2D pixels: a pixel other than the clear
- * value is 2D (one exactly equal to it shows the 3D layer instead). Blocks are rebuilt when their source cells
- * (8x8 PS1 pixels) were drawn and their pixels hash differently (the battle UI redraws every window each VBlank,
- * mostly unchanged); a block keeps its OBJ slot. */
+ * value is 2D (one exactly equal to it shows the 3D layer instead). Colours get palette entries as they appear
+ * (index 0 is transparent); the battle UI uses far fewer than 255, so it is exact. When the palette fills, a
+ * colour takes its nearest entry and the next frame rebuilds the layer with a fresh palette. 32x32 blocks are
+ * rebuilt when their source cells (8x8 PS1 pixels) were drawn and their pixels hash differently (the battle UI
+ * redraws every window each VBlank, mostly unchanged). */
 static u8 cell_dirty[512 / 8][1024 / 8];
 static int last_x, last_y, last_w, last_h;
+static u16 colour_key[512];   /* open addressing: RGB15 | 0x8000, 0 empty */
+static u8 colour_index[512];
+static int colours, colours_full;
+
+static void reset_colours(void) {
+    memset(colour_key, 0, sizeof colour_key);
+    colours = 0;
+    colours_full = 0;
+}
+
+static u8 colour_of(u16 c) {
+    c |= 0x8000;
+    unsigned h = ((c * 0x9E37u) >> 7) & 511;
+    for (;;) {
+        if (colour_key[h] == c) return colour_index[h];
+        if (!colour_key[h]) break;
+        h = (h + 1) & 511;
+    }
+    if (colours < 255) {
+        u8 i = (u8)++colours;
+        colour_key[h] = c; colour_index[h] = i;
+        BG_PALETTE[i] = c & 0x7FFF;
+        return i;
+    }
+    colours_full = 1; /* nearest existing entry for now */
+    int best = 1, best_d = 1 << 30;
+    for (int i = 1; i <= 255; ++i) {
+        u16 p = BG_PALETTE[i];
+        int dr = (p & 31) - (c & 31), dg = ((p >> 5) & 31) - ((c >> 5) & 31), db = ((p >> 10) & 31) - ((c >> 10) & 31);
+        int dd = dr * dr + dg * dg + db * db;
+        if (dd < best_d) { best_d = dd; best = i; }
+    }
+    return (u8)best;
+}
 
 static void dirty_cells(int x0, int y0, int x1, int y1) {
     for (int y = y0 >> 3; y <= y1 >> 3; ++y)
@@ -630,23 +680,25 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
     if (w > 320) w = 320;
     if (h > 240) h = 240;
     int out_w = w * 4 / 5, out_h = h * 4 / 5, top = (192 - out_h) / 2;
-    /* another buffer or area: every block's hash decides */
+    /* another buffer or area, or a full palette: every block's hash decides (a full palette rebuilds all) */
     int check_all = b != last_shown || d->x != last_x || d->y != last_y || w != last_w || h != last_h;
+    int rebuild = colours_full;
+    if (rebuild) { reset_colours(); check_all = 1; }
     last_shown = b; last_x = d->x; last_y = d->y; last_w = w; last_h = h;
-    static u16 block[OBJ_BLOCK * 256] __attribute__((aligned(4)));   /* a scaled block, stride 256 */
-    u16 *gfx = (u16 *)SPRITE_GFX;
-    int changed = 0;
-    for (int by = 0, row = 0; by < out_h; by += OBJ_BLOCK, ++row)
-        for (int bx = 0, col = 0; bx < out_w; bx += OBJ_BLOCK, ++col) {
+    static u16 block[BLOCK * 256] __attribute__((aligned(4)));   /* a scaled block, stride 256 */
+    u16 *bitmap = (u16 *)BG_BMP_RAM(0);
+    int shown = 0;
+    for (int by = 0, row = 0; by < out_h; by += BLOCK, ++row)
+        for (int bx = 0, col = 0; bx < out_w; bx += BLOCK, ++col) {
             int sx0 = d->x + bx * 5 / 4, sy0 = d->y + by * 5 / 4;
-            int bw = (bx + OBJ_BLOCK < out_w ? OBJ_BLOCK : out_w - bx), bh = (by + OBJ_BLOCK < out_h ? OBJ_BLOCK : out_h - by);
+            int bw = (bx + BLOCK < out_w ? BLOCK : out_w - bx), bh = (by + BLOCK < out_h ? BLOCK : out_h - by);
             int sw = bw * 5 / 4, sh = bh * 5 / 4;
             if (!check_all) {
                 int dirty = 0;
                 for (int y = sy0 >> 3; y <= (sy0 + sh) >> 3 && !dirty; ++y)
                     for (int x = sx0 >> 3; x <= (sx0 + sw) >> 3; ++x)
                         if (cell_dirty[y & 63][x & 127]) { dirty = 1; break; }
-                if (!dirty) continue;
+                if (!dirty) { shown += block_shown[row][col]; continue; }
             }
             u32 any = 0, hash = 2166136261u;
             int hx0 = sx0 & ~1, hx1 = (sx0 + sw + 1) & ~1; /* whole words: a wider span only rebuilds more often */
@@ -659,41 +711,29 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
                 const u32 *words = (const u32 *)(vrow + hx0);
                 for (int k = 0; k < (hx1 - hx0) / 2; ++k) { u32 c = words[k]; any |= c ^ clear2; hash = (hash ^ c) * 16777619u; }
             }
-            if (!check_all && hash == block_hash[row][col]) continue;
-            if (check_all && hash == block_hash[row][col] && (block_slot[row][col] >= 0) == (any != 0)) continue;
-            block_hash[row][col] = hash;
-            int s = block_slot[row][col];
-            if (!any) {
-                if (s >= 0) { oamClearSprite(&oamMain, s); slot_used[s] = 0; block_slot[row][col] = -1; changed = 1; }
+            if (!rebuild && hash == block_hash[row][col] && block_shown[row][col] == !!any) {
+                shown += block_shown[row][col];
                 continue;
             }
-            if (s < 0) {
-                for (s = 0; s < OBJ_SLOTS && slot_used[s]; ++s) {}
-                if (s == OBJ_SLOTS) { gxh_stats_blocks = -1; continue; }
-                slot_used[s] = 1; block_slot[row][col] = (s8)s;
-            }
-            scale(block, sx0, sy0, sw, sh);
-            u16 *dst = gfx + s * OBJ_BLOCK * OBJ_BLOCK;
-            for (int oy = 0; oy < OBJ_BLOCK; ++oy) {
-                u32 *out = (u32 *)(dst + oy * OBJ_BLOCK);
-                if (oy >= bh) { for (int k = 0; k < OBJ_BLOCK / 2; ++k) out[k] = 0; continue; }
+            block_hash[row][col] = hash;
+            block_shown[row][col] = !!any;
+            if (any) scale(block, sx0, sy0, sw, sh);
+            for (int oy = 0; oy < bh; ++oy) {
+                u16 *out = bitmap + ((top + by + oy) * 256 + bx) / 2;
+                if (!any) { for (int k = 0; k < bw / 2; ++k) out[k] = 0; continue; }
                 const u16 *vrow = psx_vram + ((sy0 + oy * 5 / 4) & 511) * 1024;
                 const u16 *frow = block + oy * 256;
-                for (int ox = 0; ox < OBJ_BLOCK; ox += 2) {
-                    u32 c0 = ox < bw && vrow[(sx0 + ox * 5 / 4) & 1023] != clear ? frow[ox] | 0x8000 : 0;
-                    u32 c1 = ox + 1 < bw && vrow[(sx0 + (ox + 1) * 5 / 4) & 1023] != clear ? frow[ox + 1] | 0x8000 : 0;
-                    out[ox / 2] = c0 | c1 << 16; /* word stores: VRAM ignores byte writes */
+                for (int ox = 0; ox < bw; ox += 2) {
+                    u16 i0 = vrow[(sx0 + ox * 5 / 4) & 1023] != clear ? colour_of(frow[ox]) : 0;
+                    u16 i1 = ox + 1 < bw && vrow[(sx0 + (ox + 1) * 5 / 4) & 1023] != clear ? colour_of(frow[ox + 1]) : 0;
+                    out[ox / 2] = i0 | i1 << 8; /* halfword stores: VRAM ignores byte writes */
                 }
             }
-            oamSet(&oamMain, s, bx, top + by, 0, 15, SpriteSize_32x32, SpriteColorFormat_Bmp,
-                   dst, -1, false, false, false, false, false);
-            changed = 1;
+            shown += !!any;
         }
     for (int y = (d->y >> 3); y <= (d->y + h) >> 3; ++y)
         for (int x = (d->x >> 3); x <= (d->x + w) >> 3; ++x) cell_dirty[y & 63][x & 127] = 0;
-    int n = 0;
-    for (int s = 0; s < OBJ_SLOTS; ++s) n += slot_used[s];
-    if (gxh_stats_blocks >= 0) gxh_stats_blocks = n;
-    if (changed) oamUpdate(&oamMain);
+    gxh_stats_blocks = colours_full ? -colours : colours;
+    (void)shown;
 }
 #endif
