@@ -8,6 +8,7 @@
  * every partial addition, which only matters for FLAG on pathological inputs.
  */
 #include <stdint.h>
+#define PORT_GTE_IMPL /* the real functions, not the inline wrappers */
 #include "gte.h"
 #include "profile.h"
 
@@ -17,10 +18,8 @@ typedef int64_t i64;
 typedef uint16_t u16;
 typedef uint32_t u32;
 
-static struct {
-    u32 d[32];
-    u32 c[32];
-} g;
+struct psx_gte_regs psx_gte; /* gte.h */
+#define g psx_gte
 
 /* ---- register views ------------------------------------------------------------------------------------- */
 
