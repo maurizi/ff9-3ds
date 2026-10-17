@@ -227,7 +227,7 @@ static SPU_HOT int span_independent(unsigned n) {
 
 static SPU_HOT void span_frames(int16_t *output, unsigned n) {
     uint16_t control = psx_spu_regs[0x1aa / 2];
-    int16_t noise_levels[PSX_SPU_BLOCK_SPAN];
+    static int16_t noise_levels[PSX_SPU_BLOCK_SPAN]; /* static: the DS stack is the small DTCM */
     for (unsigned s = 0; s < n; ++s) {
         noise_levels[s] = (int16_t)noise.level;
         psx_spu_noise_tick(&noise, (control >> 8) & 63);
@@ -252,7 +252,7 @@ SPU_HOT void psx_spu_advance(unsigned ticks) {
     sample_fraction += ticks % 96;
     frames += sample_fraction / 96;
     sample_fraction %= 96;
-    int16_t output[256 * 2];
+    static int16_t output[256 * 2]; /* static: the DS stack is the small DTCM, and this runs inside VSync */
     while (frames) {
         unsigned count = frames > 256 ? 256 : frames;
         unsigned i = 0;

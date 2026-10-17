@@ -91,9 +91,6 @@ SPU_HOT void psx_spu_mix_voices(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_
 
 /* The Gaussian coefficients a source phase uses, in sample order: {g[255-p], g[511-p], g[256+p], g[p]}.
  * The same values and summation order as spu_source_interpolate; one row per phase keeps them together. */
-#if defined(PORT_SPU_ITCM) && defined(__arm__)
-__attribute__((section(".sbss")))
-#endif
 static int16_t gauss4[256][4];
 static int gauss4_ready;
 static void gauss4_init(void) {
@@ -179,7 +176,7 @@ static SPU_HOT __attribute__((noinline)) unsigned fast_span(PsxSpuVoice *restric
 SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_t *ram, unsigned n,
                                       const int16_t *noise, uint32_t noise_mask, uint32_t modulation_mask,
                                       uint32_t reverb_mask, int fetch_off_voices, PsxSpuVoiceBlock *out) {
-    int32_t previous_buffer[2][PSX_SPU_BLOCK_SPAN];
+    static int32_t previous_buffer[2][PSX_SPU_BLOCK_SPAN]; /* static: the DS stack is the small DTCM */
     int32_t *previous = previous_buffer[0], *current = previous_buffer[1];
     if (!gauss4_ready) gauss4_init();
     memset(out, 0, sizeof *out);

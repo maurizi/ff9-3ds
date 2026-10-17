@@ -208,9 +208,9 @@ MDEC_ITCM static int block(const PsxMdecEnv *e,const uint8_t *qt,const uint16_t 
 
 MDEC_ITCM int psx_mdec_macroblock(const PsxMdecEnv *e,const uint16_t *rl,size_t halfwords,
                        uint32_t command,uint8_t *out,size_t capacity,size_t *consumed) {
-    /* Pixels are assembled on the stack (DTCM on the DS) and copied out once: the caller's buffer is in main
-     * RAM, where one bulk copy costs far less than 512 or 768 scattered byte stores. */
-    uint8_t pixels[768] __attribute__((aligned(4)));
+    /* Pixels are assembled here and copied out once: one bulk copy costs far less than 512 or 768 scattered
+     * byte stores. Static rather than on the stack, which on the DS is the small DTCM. Not reentrant. */
+    static uint8_t pixels[768] __attribute__((aligned(4)));
     *consumed=0;
     unsigned depth=(command>>27)&3;
     if ((command>>29)!=1 || depth<2) return PSX_MDEC_MODE;

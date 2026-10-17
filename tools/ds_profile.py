@@ -65,6 +65,8 @@ def main():
     p.add_argument('--out', type=Path, required=True, help='new .ml8 state path under build/')
     p.add_argument('--display', default=':99')
     p.add_argument('--timeout', type=float, default=900)
+    p.add_argument('--sd-folder', type=Path, help='DSi SD folder to sync (e.g. one holding ff9ds/raw/FF9 CD3.img)')
+    p.add_argument('--sd-image', type=Path, help='SD image for --sd-folder; a new path makes melonDS size it to fit')
     a = p.parse_args()
     rom, elf, out = a.rom.resolve(), a.elf.resolve(), a.out.resolve()
     if not out.is_relative_to(ROOT / 'build') or out.exists():
@@ -74,6 +76,17 @@ def main():
         p.error('ELF has no frames counter')
     backup = out.with_suffix('.melonDS.toml')
     shutil.copy(CONFIG, backup)
+    if a.sd_folder:
+        import re
+        text = CONFIG.read_text()
+        start = text.index('[DSi.SD]\n')
+        end = text.find('\n[', start + 1)
+        block = text[start:end]
+        block = re.sub(r'^FolderPath = .*$', f'FolderPath = "{a.sd_folder.resolve()}"', block, flags=re.M)
+        if a.sd_image:
+            block = re.sub(r'^ImagePath = .*$', f'ImagePath = "{a.sd_image.resolve()}"', block, flags=re.M)
+        block = re.sub(r'^FolderSync = .*$', 'FolderSync = true', block, flags=re.M)
+        CONFIG.write_text(text[:start] + block + text[end:])
     xvfb = None
     if subprocess.run(['xdpyinfo', '-display', a.display], capture_output=True).returncode != 0:
         xvfb = subprocess.Popen(['Xvfb', a.display, '-screen', '0', '1024x768x24'],

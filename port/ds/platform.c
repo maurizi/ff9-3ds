@@ -35,6 +35,24 @@ extern int psx_gx_stats_texture_fail, psx_gx_stats_budget_fail;
 extern int psx_gx_stats_composited, psx_gx_stats_blend_fallback;
 extern int psx_gx_fail_reason[8];
 
+/* The ARM9 stack is the 16 KiB DTCM, and deep game call chains (battles, with the SPU running inside VSync)
+ * come close to filling it; an overflow corrupts main RAM below 0x02FF4000 silently. Paint the free part at boot
+ * and measure what is still untouched: the status line shows it, and states expose port_stack_free_min. */
+extern char __sbss_end[];
+#define STACK_PAINT 0x5AC0FFEEu
+volatile unsigned int port_stack_free_min = ~0u;
+static __attribute__((noinline)) void stack_paint(void) {
+    unsigned int sp;
+    __asm__ volatile("mov %0, sp" : "=r"(sp));
+    for (unsigned int *p = (unsigned int *)(((unsigned int)__sbss_end + 3) & ~3u); (unsigned int)p < sp - 256; ++p)
+        *p = STACK_PAINT;
+}
+static unsigned int stack_free(void) {
+    const unsigned int *start = (const unsigned int *)(((unsigned int)__sbss_end + 3) & ~3u), *p = start;
+    while (*p == STACK_PAINT) ++p;
+    return (unsigned int)((const char *)p - (const char *)start);
+}
+
 void plat_wait_frame(void) {
 #ifndef PORT_SOFT_DISPLAY
     swiWaitForVBlank();
@@ -69,6 +87,9 @@ void plat_wait_frame(void) {
         status_row(17, "pcm %lu/%lu u%lu", (unsigned long)port_audio_stats[2],
                    (unsigned long)port_audio_stats[3], (unsigned long)port_audio_stats[4]);
 #endif
+        unsigned int free_stack = stack_free();
+        if (free_stack < port_stack_free_min) port_stack_free_min = free_stack;
+        status_row(16, "stack free %u (min %u)", free_stack, port_stack_free_min);
         unsigned char *gs = g_gameState;
         /* fixed line at the bottom of the console */
         status_row(23, "f%6ld m%d ovl %02X/%02X/%02X", frames, gs ? gs[8] : -1, psx_ovl_resident[0],
@@ -126,6 +147,7 @@ const char *plat_data_dir(void) {
 
 int main(void) {
     defaultExceptionHandler();
+    stack_paint();
     /* A 4bpp font and one tile map fit in bank H. Leave all four 128 KiB banks for GX textures. */
     videoSetModeSub(MODE_0_2D);
     vramSetBankH(VRAM_H_SUB_BG);
