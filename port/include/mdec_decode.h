@@ -9,11 +9,11 @@ typedef struct {
     uint32_t scale_max;  /* largest |scale|, for the IDCT's overflow bounds */
     int mirrored;        /* scale has the standard row symmetry (see psx_mdec_env_init) */
 } PsxMdecEnv;
-/* DS: decoder code in ITCM. Its tables stay in main RAM: DTCM also holds the ARM9 stack, which deep game call
- * chains (battles) need nearly all of. */
+/* DS: code and tables in main RAM. ITCM goes to the renderer and SPU, which run every frame; DTCM holds the ARM9
+ * stack, which deep game call chains (battles) need nearly all of. MDEC_ITCM=1 builds (benchmarks) can opt in. */
 #define MDEC_DTCM_BSS
 #define MDEC_DTCM_DATA
-#if defined(__arm__) && !defined(PORT_MDEC_NO_TCM)
+#if defined(__arm__) && defined(PORT_MDEC_ITCM)
 #define MDEC_ITCM __attribute__((section(".itcm"), long_call))
 #else
 #define MDEC_ITCM

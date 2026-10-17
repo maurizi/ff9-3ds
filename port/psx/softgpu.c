@@ -244,6 +244,50 @@ static SG_HOT __attribute__((noinline)) void poly_row_textured(const Gp0Mode *m,
 }
 #endif
 
+#ifndef PORT_SOFTGPU_REFERENCE
+/* The common battle polygon row: indexed texels, no texture window, unwrapped CLUT, dithered flat modulation.
+ * dither_colour's arithmetic as tables: dmod[ch][t5] = t5 * colour >> 4 (at most 494) for the polygon's colour,
+ * and dclamp[v + bias + 4] = clamp(v + bias, 0, 255) >> 3 for every v + bias in [-4, 497]. */
+static u16 dmod[3][32];
+static unsigned dmod_key = ~0u;
+static u8 dclamp[502];
+static void dither_tables(int r, int g, int b) {
+    unsigned key = (unsigned)r | (unsigned)g << 8 | (unsigned)b << 16;
+    if (!dclamp[501]) for (int i = 0; i < 502; ++i) { int v = i - 4; dclamp[i] = (v < 0 ? 0 : v > 255 ? 255 : v) >> 3; }
+    if (key == dmod_key) return;
+    dmod_key = key;
+    for (int t = 0; t < 32; ++t) dmod[0][t] = t * r >> 4, dmod[1][t] = t * g >> 4, dmod[2][t] = t * b >> 4;
+}
+
+static SG_HOT __attribute__((noinline)) void poly_row_dither_indexed(const Gp0Mode *m, u16 *dst, int width, int u,
+        int v, int dudx, int dvdx, u16 mask, int x, int y) {
+    static const signed char offsets[16] = {-4,0,-3,1,2,-2,3,-1,-3,1,-4,0,3,-1,2,-2};
+    const signed char *bias = offsets + ((y & 3) << 2);
+    const u16 *clut = psx_vram + (m->clut_y & 511) * 1024 + m->clut_x;
+    const unsigned tx = m->tx, ty = m->ty;
+    const u16 *m0 = dmod[0], *m1 = dmod[1], *m2 = dmod[2];
+    if (m->depth) {
+        for (; width > 0; --width, ++dst, ++x, u = step_attribute(u, dudx), v = step_attribute(v, dvdx)) {
+            unsigned uu = (unsigned)(u >> 16) & 0xFF, vv = (unsigned)(v >> 16) & 0xFF;
+            u16 t = clut[(psx_vram[((ty + vv) & 511) * 1024 + ((tx + (uu >> 1)) & 1023)] >> ((uu & 1) * 8)) & 255];
+            if (!t) continue;
+            unsigned k = bias[x & 3] + 4;
+            *dst = dclamp[m0[t & 31] + k] | dclamp[m1[(t >> 5) & 31] + k] << 5 | dclamp[m2[(t >> 10) & 31] + k] << 10 |
+                   (t & 0x8000) | mask;
+        }
+    } else {
+        for (; width > 0; --width, ++dst, ++x, u = step_attribute(u, dudx), v = step_attribute(v, dvdx)) {
+            unsigned uu = (unsigned)(u >> 16) & 0xFF, vv = (unsigned)(v >> 16) & 0xFF;
+            u16 t = clut[(psx_vram[((ty + vv) & 511) * 1024 + ((tx + (uu >> 2)) & 1023)] >> ((uu & 3) * 4)) & 15];
+            if (!t) continue;
+            unsigned k = bias[x & 3] + 4;
+            *dst = dclamp[m0[t & 31] + k] | dclamp[m1[(t >> 5) & 31] + k] << 5 | dclamp[m2[(t >> 10) & 31] + k] << 10 |
+                   (t & 0x8000) | mask;
+        }
+    }
+}
+#endif
+
 static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
     /* The GPU seeds attributes at the leftmost input vertex. Preserve input
      * order for tied X before changing winding for edge coverage below. */
@@ -365,9 +409,13 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     const int fast_textured = m->textured && !m->gouraud && !m->semi && !gp0_state.check_mask &&
                               !target.pixels;
     const int modulate = !neutral;
+    /* dither implies a modulated (non-raw) texture and no palette cache: see poly_row_dither_indexed */
+    const int dither_indexed = fast_textured && dither && m->depth < 2 && !gp0_state.twin_mask_x &&
+                               !gp0_state.twin_mask_y && m->clut_x + (m->depth ? 256 : 16) <= VRAM_W;
     const int flat_r = a->r < 0 ? 0 : a->r > 255 ? 255 : a->r;
     const int flat_g = a->g < 0 ? 0 : a->g > 255 ? 255 : a->g;
     const int flat_b = a->b < 0 ? 0 : a->b > 255 ? 255 : a->b;
+    if (dither_indexed) dither_tables(flat_r, flat_g, flat_b);
 #endif
     for (int y = miny; y < maxy; y++) {
         int w0 = w0row, w1 = w1row, w2 = w2row;
@@ -392,7 +440,12 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
         }
 #endif
 #ifndef PORT_SOFTGPU_REFERENCE
-        if (fast_textured && right <= VRAM_W) { /* rows past x 1023 wrap per pixel: general path */
+        if (dither_indexed && right <= VRAM_W) {
+            if (right > left) {
+                poly_row_dither_indexed(m, psx_vram + (y & 511) * 1024 + left, right - left, u, v, dudx, dvdx,
+                                        gp0_state.set_mask ? 0x8000 : 0, left, y);
+            }
+        } else if (fast_textured && right <= VRAM_W) { /* rows past x 1023 wrap per pixel: general path */
             if (right > left)
                 poly_row_textured(m, psx_vram + (y & 511) * 1024 + left, right - left, u, v, dudx, dvdx,
                                   gp0_state.set_mask ? 0x8000 : 0, modulate, flat_r, flat_g, flat_b, dither, left, y);
