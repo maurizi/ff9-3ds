@@ -102,7 +102,9 @@ SPU_HOT void psx_spu_reverb_tick(PsxSpuReverb *reverb, uint8_t *ram, int16_t lef
     unsigned active = (pos & 1) ^ 1; /* right on even ticks, left on odd ticks */
     const int16_t *down = reverb->down[active] + ((pos - 38) & 63);
     int32_t sum = down[19] * 16384;
-    /* fir is symmetric (fir[i] == fir[19 - i]): pair the taps. Same integer sum. */
+    /* fir is symmetric (fir[i] == fir[19 - i]): pair the taps. Same integer sum. Unrolled, the coefficients
+     * become constants and the taps fixed offsets. */
+#pragma GCC unroll 10
     for (unsigned i = 0; i < 10; ++i) sum += (down[i * 2] + down[38 - i * 2]) * fir[i];
     channel_step(reverb, ram, active, clip(sum >> 15), write_enabled);
     if (active == 1) {
@@ -113,6 +115,7 @@ SPU_HOT void psx_spu_reverb_tick(PsxSpuReverb *reverb, uint8_t *ram, int16_t lef
         const int16_t *up = reverb->up[ch] + (((pos >> 1) - 19) & 31);
         if (ch == active) {
             sum = 0;
+#pragma GCC unroll 10
             for (unsigned i = 0; i < 10; ++i) sum += (up[i] + up[19 - i]) * fir[i];
             output[ch] = clip(sum >> 14);
         } else output[ch] = up[9];
