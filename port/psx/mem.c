@@ -22,6 +22,20 @@ void psx_bad_overlay_call(const char *tramp) {
                psx_ovl_resident[2]);
 }
 
+/* PS1 RAM the port never touches: main's MIPS code range (0x800127A0-0x800665E0). The PS1 copies that code there;
+ * the port runs native code and loads only main's data, and the range stayed zero in field, battle and New Game
+ * runs (docs/ds-mode.md). Port buffers that would otherwise take DS heap live here, allocated once. */
+#define SPARE_LO 0x12800
+#define SPARE_HI 0x66500
+void *psx_spare_alloc(unsigned int size) {
+    static unsigned int next = SPARE_LO;
+    size = (size + 31) & ~31u;
+    if (next + size > SPARE_HI) port_fatal("psx_spare_alloc: %u bytes over the spare range", size);
+    void *p = psx_ram + next;
+    next += size;
+    return p;
+}
+
 void psx_load_image(const PsxImageChunk *img) {
     for (; img->size != 0; img++) {
         memcpy(psx_ram + img->offset, img->data, img->size);

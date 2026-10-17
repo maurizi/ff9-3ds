@@ -27,12 +27,11 @@ static struct {
     int clip_active, clip_x, clip_y, clip_w, clip_h;
 } target;
 
-/* psx_softgpu_set_marks: while set, every pixel a primitive writes gets `bit` in this 1024x512 plane (VRAM
- * coordinates), and drawing takes the generic per-pixel path. The hybrid renderer marks its software-drawn
+/* psx_softgpu_set_marks: while set, every pixel a primitive writes sets its bit in this 1024x512 bit plane (VRAM
+ * coordinates, 64 KB), and drawing takes the generic per-pixel path. The hybrid renderer marks its software-drawn
  * additive glows this way (gx_hybrid.c). */
 static u8 *marks;
-static u8 marks_bit;
-void psx_softgpu_set_marks(u8 *plane, unsigned bit) { marks = plane; marks_bit = (u8)bit; }
+void psx_softgpu_set_marks(u8 *plane, unsigned bit) { (void)bit; marks = plane; }
 
 static inline u16 *px(int x, int y) {
     return &psx_vram[(y & (VRAM_H - 1)) * VRAM_W + (x & (VRAM_W - 1))];
@@ -175,7 +174,10 @@ static inline void plot(const Gp0Mode *m, int x, int y, int r, int g, int b, int
     }
     *d = c | (gp0_state.set_mask ? 0x8000 : 0);
     if (target.pixels && !semi) target.known[index] = 1;
-    if (marks && !target.pixels) marks[(y & (VRAM_H - 1)) * VRAM_W + (x & (VRAM_W - 1))] |= marks_bit;
+    if (marks && !target.pixels) {
+        unsigned i = (unsigned)(y & (VRAM_H - 1)) * VRAM_W + (unsigned)(x & (VRAM_W - 1));
+        marks[i >> 3] |= (u8)(1u << (i & 7));
+    }
 }
 
 /* Interpolants outside a thin triangle can exceed signed 16.16 range while

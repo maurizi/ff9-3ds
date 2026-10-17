@@ -29,6 +29,8 @@ void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len);
 extern unsigned char psx_ovl_resident[3];
 
 void psx_load_image(const PsxImageChunk *img);
+/* Port buffers in PS1 RAM the port never uses (main's MIPS code range, ~335 KB); fatal when it runs out. */
+void *psx_spare_alloc(unsigned int size);
 
 /* Load main's data image and enter the game's main loop (decomp game_main). Never returns. */
 void psx_run_game(void);

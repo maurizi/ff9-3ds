@@ -26,10 +26,11 @@
 #include "psx_display.h"
 #include "profile.h"
 #include "gx_hybrid.h"
+#include "psx_runtime.h"
 
 extern unsigned short *psx_vram;
 
-#define MAX_PRIMS 2600   /* recorded; the hardware takes 2048 polygons and 6144 vertices a frame */
+#define MAX_PRIMS 2500   /* recorded; the hardware takes 2048 polygons and 6144 vertices a frame */
 #define MAX_POLYS 2044
 #define MAX_VERTICES 6140
 
@@ -93,7 +94,8 @@ static void start_scene(Buffer *b) {
     b->count = 0;
     b->submitted = 0;
     for (int row = 0; row < b->h; ++row)
-        memset(marks + ((b->y + row) & 511) * 1024 + b->x, 0, b->x + b->w <= 1024 ? b->w : 1024 - b->x);
+        memset(marks + (((b->y + row) & 511) * 1024 + b->x) / 8, 0,
+               ((b->x + b->w <= 1024 ? b->w : 1024 - b->x) + 7) / 8); /* buffers start on 8-pixel columns */
 }
 
 /* The buffer the current drawing area belongs to (NULL: offscreen), starting its scene if it was shown. */
@@ -805,8 +807,10 @@ static int layer_bg = -1;
 static void reset_colours(void);     /* the 2D layer: an 8-bit bitmap BG in bank E with a palette built as colours appear */
 
 void gxh_init(void) {
-    for (int i = 0; i < 2; ++i) buffers[i].prims = malloc(MAX_PRIMS * sizeof(Prim));
-    marks = calloc(1024 * 512, 1);
+    /* in PS1 RAM the port never uses (main's MIPS code range), see psx_spare_alloc */
+    for (int i = 0; i < 2; ++i) buffers[i].prims = psx_spare_alloc(MAX_PRIMS * sizeof(Prim));
+    marks = psx_spare_alloc(1024 * 512 / 8);
+    memset(marks, 0, 1024 * 512 / 8);
     list = malloc(LIST_WORDS * 4);
 }
 
@@ -898,7 +902,7 @@ static int colours, colours_full;
 static const u8 cube_level[4] = {0, 10, 21, 31};
 
 static void reset_colours(void) {
-    if (!colour_map) colour_map = malloc(32768);
+    if (!colour_map) colour_map = psx_spare_alloc(32768);
     memset(colour_map, 0, 32768);
     for (int i = 0; i < CUBE; ++i)
         BG_PALETTE[1 + i] = cube_level[i & 3] | cube_level[(i >> 2) & 3] << 5 | cube_level[i >> 4] << 10;
@@ -1008,13 +1012,14 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
                 u16 *out = bitmap + ((top + by + oy) * 256 + bx) / 2;
                 if (!any) { for (int k = 0; k < bw / 2; ++k) out[k] = 0; continue; }
                 const u16 *vrow = psx_vram + ((sy0 + oy * 5 / 4) & 511) * 1024;
-                const u8 *mrow = marks + ((sy0 + oy * 5 / 4) & 511) * 1024;
+                const u8 *mrow = marks + ((sy0 + oy * 5 / 4) & 511) * 128;
                 const u16 *frow = block + oy * 256;
                 for (int ox = 0; ox < bw; ox += 2) {
                     int a = (sx0 + ox * 5 / 4) & 1023, b2 = (sx0 + (ox + 1) * 5 / 4) & 1023;
-                    u16 i0 = shows(vrow[a], clear, mrow[a]) ? mrow[a] ? cube_of(frow[ox]) : colour_of(frow[ox]) : 0;
-                    u16 i1 = ox + 1 < bw && shows(vrow[b2], clear, mrow[b2])
-                                 ? mrow[b2] ? cube_of(frow[ox + 1]) : colour_of(frow[ox + 1]) : 0;
+                    u8 ma = (mrow[a >> 3] >> (a & 7)) & 1, mb = (mrow[b2 >> 3] >> (b2 & 7)) & 1;
+                    u16 i0 = shows(vrow[a], clear, ma) ? ma ? cube_of(frow[ox]) : colour_of(frow[ox]) : 0;
+                    u16 i1 = ox + 1 < bw && shows(vrow[b2], clear, mb)
+                                 ? mb ? cube_of(frow[ox + 1]) : colour_of(frow[ox + 1]) : 0;
                     out[ox / 2] = i0 | i1 << 8; /* halfword stores: VRAM ignores byte writes */
                 }
             }

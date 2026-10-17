@@ -14,6 +14,6 @@ void psx_softgpu_shadow_poly_region(const Gp0Mode *, const Gp0Vtx *, int,
                                    int, int, int, int);
 void psx_softgpu_shadow_rect(const Gp0Mode *, const Gp0Vtx *, int, int,
                             unsigned short *, unsigned char *, int, int, int, int);
-/* While plane is non-NULL, each pixel a primitive writes ORs `bit` into it (1024x512, VRAM coordinates). */
+/* While plane is non-NULL, each pixel a primitive writes sets its bit (1024x512 bit plane, VRAM coordinates). */
 void psx_softgpu_set_marks(unsigned char *plane, unsigned bit);
 #endif
