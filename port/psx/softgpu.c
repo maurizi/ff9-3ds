@@ -458,6 +458,65 @@ static inline __attribute__((always_inline)) void sprite_pixel(
     *dst = colour | mask;
 }
 
+/* The common sprite row: indexed texels, no texture window, no wrap in u, texture X or CLUT, opaque, and a
+ * destination that neither this row's texels nor its CLUT entries overlap (so reading each source halfword
+ * once for its 2 or 4 pixels sees the same values as per-pixel reads). Returns 0 for the general loop. */
+static inline __attribute__((always_inline)) int fast_indexed_row(
+        const Gp0Mode *m, const u16 *row, unsigned row_y, u16 *dst, int y, int x0, int x1, unsigned cursor,
+        unsigned keep_x, unsigned window_x, u16 mask, int direct) {
+    if (keep_x != ~0u || window_x) return 0;
+    unsigned u = cursor & 255, width = (unsigned)(x1 - x0);
+    if (!width || u + width > 256) return 0;
+    unsigned shift = m->depth ? 1 : 2; /* texels per halfword: 2 or 4 */
+    unsigned tx0 = m->tx + (u >> shift), tx1 = m->tx + ((u + width - 1) >> shift);
+    if (tx1 >= 1024) return 0;
+    unsigned entries = m->depth ? 256 : 16;
+    const u16 *clut = psx_vram + (m->clut_y & 511) * 1024;
+    if (direct && m->clut_x + entries > 1024) return 0;
+    if (row_y == (unsigned)y && tx0 < (unsigned)x1 && tx1 >= (unsigned)x0) return 0;
+    if (direct && (m->clut_y & 511) == (unsigned)y && m->clut_x < (unsigned)x1 &&
+        m->clut_x + entries > (unsigned)x0) return 0;
+    const u16 *src = row + tx0;
+    if (direct) {
+        const u16 *cl = clut + m->clut_x;
+        if (m->depth) {
+            if (u & 1) { u16 c = cl[*src++ >> 8]; if (c) *dst = c | mask; ++dst; --width; }
+            for (; width >= 2; width -= 2, dst += 2) {
+                u16 w = *src++;
+                u16 a = cl[w & 255], b = cl[w >> 8];
+                if (a) dst[0] = a | mask;
+                if (b) dst[1] = b | mask;
+            }
+            if (width) { u16 c = cl[*src & 255]; if (c) *dst = c | mask; }
+        } else {
+            for (unsigned w = *src++ >> ((u & 3) * 4), k = u & 3; width; --width, ++dst) {
+                u16 c = cl[w & 15];
+                if (c) *dst = c | mask;
+                if (++k == 4 && width > 1) { k = 0; w = *src++; } else w >>= 4; /* no read past the last texel */
+            }
+        }
+    } else {
+        const u32 *pal = shaded_palette;
+        if (m->depth) {
+            if (u & 1) { u32 p = pal[*src++ >> 8]; if ((u16)p) *dst = (u16)(p >> 16) | mask; ++dst; --width; }
+            for (; width >= 2; width -= 2, dst += 2) {
+                u16 w = *src++;
+                u32 a = pal[w & 255], b = pal[w >> 8];
+                if ((u16)a) dst[0] = (u16)(a >> 16) | mask;
+                if ((u16)b) dst[1] = (u16)(b >> 16) | mask;
+            }
+            if (width) { u32 p = pal[*src & 255]; if ((u16)p) *dst = (u16)(p >> 16) | mask; }
+        } else {
+            for (unsigned w = *src++ >> ((u & 3) * 4), k = u & 3; width; --width, ++dst) {
+                u32 p = pal[w & 15];
+                if ((u16)p) *dst = (u16)(p >> 16) | mask;
+                if (++k == 4 && width > 1) { k = 0; w = *src++; } else w >>= 4; /* no read past the last texel */
+            }
+        }
+    }
+    return 1;
+}
+
 static inline __attribute__((always_inline)) void sprite_rows(
         const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int effects, int direct) {
     unsigned keep_x=~gp0_state.twin_mask_x,keep_y=~gp0_state.twin_mask_y;
@@ -469,6 +528,9 @@ static inline __attribute__((always_inline)) void sprite_rows(
         const u16 *row=psx_vram+(((m->ty+tv)&511)*1024);
         u16 *dst=psx_vram+y*1024+x0;
         unsigned cursor=(unsigned)u0+(unsigned)x0;
+        if(m->depth<2 && !effects && fast_indexed_row(m, row, (unsigned)((m->ty+tv)&511), dst, y, x0, x1,
+                                                      cursor, keep_x, window_x, mask, direct))
+            continue;
         if(direct) {
             /* Unmodulated indexed texels: the colour is the CLUT entry itself, read live from VRAM as plot()
              * does, so a sprite that overwrites its own CLUT still sees each entry as it is at that pixel. */
