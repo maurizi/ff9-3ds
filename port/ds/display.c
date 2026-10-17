@@ -15,7 +15,6 @@ extern unsigned short *psx_vram;
 void psx_softgpu_enable(int on);
 
 static int bg = -1;
-static int previous_w[2], previous_h[2];
 static int back_buffer=1;
 static DsTextRect text_rects[1024];
 static DsTextRect previous_rects[1024];
@@ -99,10 +98,14 @@ void display_present(void) {
         h = 240;
     }
     unsigned int profile_scale=port_profile_begin();
-    u16 *dst = BG_BMP_RAM_MAIN(back_buffer*8);
-    if (w != previous_w[back_buffer] || h != previous_h[back_buffer]) {
-        memset(dst, 0, 256*256*sizeof *dst);
-        previous_w[back_buffer]=w; previous_h[back_buffer]=h;
+    /* Scale into cached main RAM, then DMA to the VRAM back buffer while waiting for VBlank: the ARM9's own
+     * stores to VRAM cross the slow external bus and cost most of the scaling time. */
+    static u16 frame[256*192] __attribute__((aligned(32)));
+    static int frame_w, frame_h;
+    u16 *dst = frame;
+    if (w != frame_w || h != frame_h) {
+        memset(frame, 0, sizeof frame);
+        frame_w=w; frame_h=h;
     }
     psx_display_font_presented=text_count;
     if (d->rgb24)
@@ -110,11 +113,13 @@ void display_present(void) {
     else
         ds_scale_display_text_pair(dst, psx_vram, d->x, d->y, w, h,
                                   text_rects, text_count, previous_rects, previous_count);
+    DC_FlushRange(frame, sizeof frame);
+    dmaCopyWordsAsynch(2, frame, BG_BMP_RAM_MAIN(back_buffer*8), sizeof frame);
     port_profile_end(PORT_PROFILE_SCALE,profile_scale);
-    /* The scaler has a nearest pass followed by font coverage. Never let
-     * scanout see the intermediate bitmap, even if rendering outlasts blank. */
+    /* The back buffer is only shown after the copy completes, so scanout never sees a partial frame. */
     unsigned int profile_wait=port_profile_begin();
     swiWaitForVBlank();
+    while (dmaBusy(2)) {}
     port_profile_end(PORT_PROFILE_WAIT,profile_wait);
     bgSetMapBase(bg,back_buffer*8);
     bgSetScroll(bg,0,-(192-h*4/5)/2);
