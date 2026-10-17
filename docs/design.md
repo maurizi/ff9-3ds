@@ -173,7 +173,41 @@ from a decomp mismatch.
 
 ## 5. Graphics
 
-### 5.1 Baseline: translate the OT (works for everything, from M2)
+### 5.0 Hybrid renderer (decided 2026-10-17)
+
+The software GPU (`port/psx/softgpu.c`) is exact but about 5x too slow for battles: one Ark scene (one per four
+VBlanks, a 66.7 ms PS1 budget) costs about 330 ms, most of it polygon fill. The all-GX translator (5.1) failed on
+texture VRAM (Ark's converted regions need 520 KB, overlapping and duplicated) and on its CPU shadow work.
+The port therefore splits the work:
+
+- **Polygons drawn into the scene's back buffer go to the 3D engine.** Everything else (sprites, tiles,
+  rectangles, lines, fills, and any primitive drawn straight into the displayed buffer, such as the battle UI's
+  per-VBlank windows, text and ATB bars) stays on the exact software path into the PS1 VRAM shadow.
+- **Ordering.** Each GX polygon's depth is its submission sequence. The CPU also rasterises polygon *coverage*
+  (no texturing) into a byte plane over PS1 VRAM. A 2D pixel drawn where an earlier polygon covers it goes to the
+  *over* layer, otherwise to the *under* layer, which the 3D layer hides wherever a polygon covers it. A sprite
+  sandwiched between two overlapping polygons is the known approximation.
+- **Semi-transparent 2D over 3D** blends in the 2D engine (mode 0: 50/50, mode 1: additive, mode 3: B + F/4,
+  by layer or OBJ alpha). Mode 2 (subtraction) over 3D is approximated.
+- **Textures mirror PS1 VRAM**, with no conversion. A DS texture bank holds a 256x256-halfword cell of PS1 VRAM
+  byte for byte. A 4-bit, 8-bit or 15-bit page is then just a texture format, base address and coordinate offset
+  over the same bytes (the PS1's nibble and byte orders match the DS's 16- and 256-colour formats). CLUT rows
+  mirror into texture palette VRAM the same way. PS1 transparency is CLUT colour 0x0000 and the DS's is palette
+  index 0; nearly all of FF9's CLUTs have 0x0000 at index 0 only, so the DS rule matches. Other CLUTs and
+  15-bit pages need a converted copy. Dirty rows are re-copied in VBlank.
+- **Polygon budget.** The 3D engine takes 2048 polygons and 6144 vertices per frame. Ark's scene is about 2,030
+  primitives and 6,800 vertices, so a scene over budget renders in passes over successive VBlanks (a battle scene
+  lasts four), with the earlier pass captured and shown behind the later one.
+- **Readbacks.** A game read of a framebuffer the 3D engine drew (`StoreImage`, `MoveImage`, a page sampled from
+  a framebuffer: battle swirl, blur) is served by display capture into the VRAM shadow.
+- **Fidelity.** 3D pixels are rasterised at 256x192 by the DS (no PS1 dithering; modulation above 1.0 and blend
+  modes 1-3 within the 3D layer are approximated). 2D pixels stay exact, including the scaler's text coverage.
+
+VRAM: textures need up to four 128 KB cells (A-D; Ark uses four). Texture palettes go in F and G. 2D layers are
+OBJ bitmap blocks in E when the textures use A-D (battle), or BG bitmaps in C/D when two texture banks suffice
+(field). The implementation is `port/ds/gx_hybrid.c`; `SOFTDISPLAY=1` keeps the all-software reference.
+
+### 5.1 Earlier baseline: translate the whole OT (M2, superseded by 5.0)
 At `DrawOTag`, walk the ordering table in PS1 order: last slot first, and within a slot the most recently added
 first. Each packet translates to DS GX commands:
 - **Coordinates** are already screen-space after the GTE. An orthographic projection maps the 320-wide frame
