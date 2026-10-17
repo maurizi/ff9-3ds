@@ -114,12 +114,30 @@ So instruction count is the main lever. Reaching the PSX field rate needs about
 2x across GPU, GTE and SPU, or work moved to the DS hardware (design M6: native
 field backgrounds and models).
 
+## Current numbers (2026-10-17), ms per virtual frame
+
+| scene (window) | interval | GPU commands | polygons | SPU total | display scaling |
+|---|---:|---:|---:|---:|---:|
+| field 259 (ends 609) | 47.5 | 18.2 | 5.9 | 16.6 | 1.3 (0.5 calls) |
+| field 259 transition (ends 865) | 65.2 | 29.7 | 16.4 | 20.7 | |
+| Ark battle (ends 1633) | 82.2 | 44.8 | 29.9 | | 7.8 |
+| intro FMV (ends 478) | 52.2 | 1.2 | | 16.7 | 2.0 (0.25 calls) |
+
+The field window plays the field's music (18 voices); until the BIOS `memcpy` fix (porting-notes) the host
+played none there, so host-side audio checks of field scenes before 2026-10-17 had no music.
+
+Code placement matters as much as instruction count in melonDS: the untextured and semi-transparent polygon rows
+first ran from main RAM and were slower than the inlined generic `plot` in ITCM (34.1 vs 27.2 ms); in ITCM
+they took 16.4. ITCM is full (about 0x7a38 of 0x8000), so a new hot routine needs something colder moved out.
+
 ## Next
 
-* SPU: event samples (block boundaries) and the reverb tail, about 1,000
-  cycles per output sample.
+* SPU (about 17 ms per frame in every mode, more than a VBlank by itself): voices about 105 cycles per voice
+  sample including ADPCM decode; reverb 5.8 ms. The DSi's Teak DSP is idle and could take the whole mixer
+  (BlocksDS supports Teak binaries), which no ARM9 tuning approaches.
+* Battle: one scene per four VBlanks (66.7 ms PS1 budget) costs about 330 ms of DS time; polygon fill is
+  most of it. The software path is about 5x short; the GX path (design §5) is the alternative.
 * Game logic (decomp code, Thumb, main RAM): about 16 ms of the field frame is
   outside the instrumented categories.
-* GPU: polygon fill; GP0 decode overhead per command.
 * GTE: about 540 cycles per command after the ARM change. Its 10 KB of code
   doesn't fit the remaining ITCM.
