@@ -135,6 +135,8 @@ PORT_ARCH_ds_ds/itcm_guard := -marm
 # Movie decoding: Thumb has no long multiply (SMLAL), which the IDCT's 64-bit fallback and VLC shifts use.
 PORT_ARCH_ds_psx/mdec_decode := -marm
 PORT_ARCH_ds_psx/movie_vlc := -marm
+# The GTE's 64-bit MAC arithmetic: Thumb has no SMLAL/SMULL and calls __aeabi_lmul instead.
+PORT_ARCH_ds_psx/gte := -marm
 # ARMv5TE DSP code generation; keep Thumb available for measured comparisons.
 ifeq ($(SPUARM),1)
 PORT_ARCH_ds_psx/spu_core := -marm
