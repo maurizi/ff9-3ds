@@ -318,6 +318,13 @@ $(BUILD)/tests/battle_math_probe: tests/battle/math_probe.c port/game/battle_mat
 # ARM/MIPS. psx_ram is placed with --defsym and mapped by port/pc before anything runs.
 PC_ARCH  := -m32 -malign-double -fno-pie
 PORT_EXTRA_pc :=
+# RASTER_REFERENCE=1: the PC software renderer without fast paths (tools/check_raster_frames.sh compares the two).
+PORT_ARCH_pc_psx/softgpu := $(if $(filter 1,$(RASTER_REFERENCE)),-DPORT_SOFTGPU_REFERENCE)
+$(BUILD)/pc/port/psx/softgpu.o: $(BUILD)/pc/raster-config
+$(BUILD)/pc/raster-config: FORCE_RASTER_CONFIG
+	@mkdir -p $(dir $@)
+	@echo '$(RASTER_REFERENCE)' > $@.tmp; cmp -s $@.tmp $@ || mv $@.tmp $@; rm -f $@.tmp
+.PHONY: FORCE_RASTER_CONFIG
 $(eval $(call target_rules,pc,gcc,objcopy,$(PC_ARCH),pc,x86,-no-pie -Wl$(,)-z$(,)noexecstack -Wl$(,)--defsym=psx_ram=0x02000000,-lm))
 
 # Diagnostic host run of the production GX translator (allocator model, no pixels).
