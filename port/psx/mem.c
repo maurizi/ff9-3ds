@@ -28,17 +28,6 @@ void psx_load_image(const PsxImageChunk *img) {
     }
 }
 
-int psx_overlay_load(unsigned int id) {
-    for (const PsxOverlay *o = psx_overlays; o->image != NULL; o++) {
-        if (o->id == id) {
-            psx_load_image(o->image);
-            psx_ovl_resident[o->slot] = (unsigned char)id;
-            return 1;
-        }
-    }
-    return 0;
-}
-
 void game_main(void); /* the game's main loop (decomp src/main/main.c) */
 
 extern unsigned short *psx_vram;
@@ -83,17 +72,21 @@ void psx_run_game(void) {
  * (rodata/data: pointers fixed up for the port; code bytes stay raw and are never executed), and mark the
  * overlay resident. Called from libcd for every sector of a dir-0 code file. */
 void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len) {
-    for (const PsxOverlay *o = psx_overlays; o->image != NULL; o++) {
+    for (const PsxOverlay *o = psx_overlays; o->relocs != NULL; o++) {
         if (o->id != id) {
             continue;
         }
         psx_ovl_resident[o->slot] = (unsigned char)id;
-        for (const PsxImageChunk *c = o->image; c->size; c++) {
-            unsigned int lo = off > c->offset ? off : c->offset;
-            unsigned int hi = off + len < c->offset + c->size ? off + len : c->offset + c->size;
-            if (lo < hi) {
-                memcpy(psx_ram + lo, (const unsigned char *)c->data + (lo - c->offset), hi - lo);
-            }
+        /* The disc bytes are in place; convert the pointer words in [off, off + len). A word that no longer holds a
+         * PS1 address (a sector read again after its conversion) is left alone. */
+        for (const unsigned int *r = o->relocs; *r != 0xFFFFFFFFu; r += (*r >> 29) == 2 ? 2 : 1) {
+            unsigned int at = *r & 0x1FFFFF, kind = *r >> 29;
+            if (at < off) continue;
+            if (at >= off + len) break;
+            unsigned int *word = (unsigned int *)(psx_ram + at);
+            if (kind == 0 && (*word >> 24) == 0x80) *word = (unsigned int)(psx_ram + (*word & 0x1FFFFF));
+            else if (kind == 1 && (*word >> 16) == 0x1F80) *word = (unsigned int)(psx_scratchpad + (*word & 0x3FF));
+            else if (kind == 2) *word = r[1];
         }
         return;
     }

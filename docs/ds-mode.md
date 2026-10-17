@@ -49,6 +49,16 @@ The map is `build/ds/ff9ds.map`. For a shipping budget, additionally measure hea
 and stack high-water marks across loading transitions, battle effects and movies;
 do not infer free runtime RAM from the ROM file size.
 
+## Progress (2026-10-17)
+
+* Overlay data images no longer stay resident: an overlay's bytes reach `psx_ram` from the disc as on the PS1,
+  and `psx_overlay_patch` converts only its pointer words from a generated relocation list (`tools/gen_link.py`:
+  offset and kind; code pointers carry the native address). ELF text+rodata 1,221,300 -> 850,776 bytes. PS1 RAM
+  after field 259 (700 frames) and Ark (2000) is identical to the image build; 18/18 scenarios pass. Main's
+  47 KB image is still linked in.
+* Totals now: about 0.85 MB code and read-only data, 2.35 MB bss (2 MB `psx_ram`), 1.5 MB VRAM/SPU shadows,
+  and (HYBRID=1) about 1.1 MB of renderer buffers: still about 5.8 MB against 4 MB.
+
 ## What already streams and what must change
 
 * **Disc assets already stream.** The CD replacement reads sectors from disc

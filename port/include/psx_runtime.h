@@ -11,17 +11,17 @@ typedef struct {
 
 extern const PsxImageChunk psximg_main[];
 
-/* Code overlays (generated): FF9.IMG dir-0 file id, slot (0x800A7000, 0x801EDF00, 0x80198700), data image. */
+/* Code overlays (generated): FF9.IMG dir-0 file id, slot (0x800A7000, 0x801EDF00, 0x80198700), and the pointer
+ * words to convert once the disc bytes are in (tools/gen_link.py: offset | kind << 29, code pointers followed by
+ * the native address; 0xFFFFFFFF ends). */
 typedef struct {
     unsigned int id;
     unsigned int slot;
-    const PsxImageChunk *image;
+    const unsigned int *relocs;
 } PsxOverlay;
 
 extern const PsxOverlay psx_overlays[];
 
-/* "Load" code overlay `id`: copy its data image into its slot and mark it resident (0 if `id` isn't code). */
-int psx_overlay_load(unsigned int id);
 void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len);
 
 /* Load addresses of the code overlay slots (index = PsxOverlay.slot). */
