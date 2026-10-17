@@ -9,6 +9,9 @@ import re
 import struct
 import subprocess
 ROOT = Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT / 'tools'))
+from ff9sym import asm_path
 spec = importlib.util.spec_from_file_location('ff9_equiv', ROOT / 'decomp/tools/equiv.py')
 e = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e)
@@ -26,7 +29,7 @@ class Cpu(e.Cpu):
         else: raise AssertionError(hex(op))
 images = []
 for address in (0x800CEED4, 0x800CF448):
-    path = ROOT / f'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_3/func_{address:08X}.s'
+    path = asm_path('ovl_0b', address, ROOT)
     words = re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/', path.read_text())
     images.append((address, b''.join(bytes.fromhex(w) for w in words)))
 rng = random.Random(9)

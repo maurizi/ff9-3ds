@@ -11,7 +11,7 @@ void psx_cd_select_disc(unsigned);
 void o14_func_800A7578(void);
 void o14_func_800A741C(void);
 void port_scenario_set_enemy_hp(const int *values);
-s32 func_80033C48(s32,s32,u8);
+s32 chr_resetToLevel(s32,s32,u8);
 static struct {
     int enabled,consumed,kind,disc,field,battle,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil;
     unsigned seed;
@@ -159,8 +159,8 @@ static void prepare_battle_resources(GameData *d) {
     if(size<=0) port_fatal("scenario: invalid encounter bundle extent");
     u8 *buffer=malloc((unsigned)size);
     if(!buffer) port_fatal("scenario: no memory for encounter metadata");
-    func_80022C60(g_gameState->unk20+d->unk7FC[0],size,buffer,NULL);
-    while(func_80022B18()) {}
+    cd_readAsync(g_gameState->unk20+d->unk7FC[0],size,buffer,NULL);
+    while(cd_getState()) {}
     FileTable *table=(FileTable *)func_8001C8B0((s32)buffer,4,0x140000,0);
     if((u8 *)table<buffer || (u8 *)table+4>buffer+size ||
        (u8 *)(table->unk4+table->unk2)>buffer+size)
@@ -179,17 +179,17 @@ void port_scenario_bootstrap(void) {
     scenario.consumed=1;
     /* Main has initialized allocator/file tables/GPU/GameData. Use the
      * title overlay's New Game initializer without entering its loop. */
-    func_80012900(0);o14_func_800A7578();
+    game_loadModeOverlay(0);o14_func_800A7578();
     GameData *d=g_gameState->unk1C;
-    d->unk55E=(u16)scenario.summons_seen;
+    d->firstUseFxSeen=(u16)scenario.summons_seen;
     if(scenario.gil>=0) d->gil=(u32)scenario.gil;
     _Static_assert(sizeof(Character)==0x90,"scenario character layout");
     load_blob(scenario.characters,d->characters,sizeof d->characters);
-    load_blob(scenario.event_blob,&D_8007AEF0,sizeof D_8007AEF0);
-    if(scenario.story>=0) D_8007AEF0.h[0]=(s16)scenario.story;
-    for(int i=0;i<0x800;++i) if(scenario.events[i]>=0) D_8007AEF0.b[i]=(u8)scenario.events[i];
+    load_blob(scenario.event_blob,&g_evtGlobalVars,sizeof g_evtGlobalVars);
+    if(scenario.story>=0) g_evtGlobalVars.h[0]=(s16)scenario.story;
+    for(int i=0;i<0x800;++i) if(scenario.events[i]>=0) g_evtGlobalVars.b[i]=(u8)scenario.events[i];
     for(int id=0;id<256;++id) if(scenario.items[id]>=0) {
-        ItemSlot *slot=func_80027EDC_inline(id);
+        ItemSlot *slot=item_findSlot_inline(id);
         if(!slot && scenario.items[id]) {
             for(int i=0;i<256;++i) if(!d->items.slots[i].count) {slot=&d->items.slots[i];break;}
             if(!slot) port_fatal("scenario: item inventory full");
@@ -198,7 +198,7 @@ void port_scenario_bootstrap(void) {
         if(slot) slot->count=(u8)scenario.items[id];
     }
     for(int i=0;i<4;++i) {
-        int ch=scenario.party[i];func_80033AF4(i,ch);if(ch<0) continue;
+        int ch=scenario.party[i];party_setMember(i,ch);if(ch<0) continue;
         Character *c=&d->characters[ch];
         if(scenario.preset[i]>=0) {
             int preset=scenario.preset[i];
@@ -207,13 +207,13 @@ void port_scenario_bootstrap(void) {
                 port_fatal("scenario: preset %d incompatible with character %d",preset,ch);
             c->unk34.b.row=preset;
             c->unkA=flags;
-            int defaults=func_80033A1C(c);
-            func_80033D38(c->unk0,defaults);
-            func_80033D8C(c->equip,defaults);
+            int defaults=chr_getDefaultSet(c);
+            chr_setDefaultName(c->unk0,defaults);
+            chr_setDefaultEquip(c->equip,defaults);
         }
         for(int j=0;j<5;++j) if(scenario.equip[i][j]>=0) c->equip[j]=(u8)scenario.equip[i][j];
         c->unk34.b.unk4=func_80033280(c->unk34.b.id,(c->unkA>>4)&1,c->equip);
-        if(scenario.level>0 || scenario.preset[i]>=0) func_80033C48(ch,scenario.level>0?scenario.level:c->level,1);
+        if(scenario.level>0 || scenario.preset[i]>=0) chr_resetToLevel(ch,scenario.level>0?scenario.level:c->level,1);
         if(scenario.trance[i]>=0) c->trance=(u8)scenario.trance[i];
         if(scenario.hp[i]>=0) {if(scenario.hp[i]>c->maxHp) port_fatal("scenario: HP exceeds maximum");c->hp=(u16)scenario.hp[i];}
     }

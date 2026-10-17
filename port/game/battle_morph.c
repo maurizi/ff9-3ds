@@ -16,7 +16,7 @@ static void load_vertices(unsigned first) {
 }
 /* Transform each bone's vertices, clamp them to the model's Y plane, then
  * project with the camera. Upper depth bits retain the plane-clipping tag. */
-void o0b_func_800DDF10(const void *model,u8 mesh_index) {
+void o0b_btlfx_projectSliceMesh(const void *model,u8 mesh_index) {
     const u8 *header=pointer(model,8),*mesh=pointer(header,16)+(unsigned)mesh_index*40;
     const u8 *bone=pointer(model,32),*vertices=pointer(mesh,24);
     const u16 *counts=(const u16 *)pointer(mesh,20);
@@ -49,7 +49,7 @@ void o0b_func_800DDF10(const void *model,u8 mesh_index) {
         first+=count;
     }
 }
-void o0b_func_800DF15C(const void *model,u32 mesh_index,u32 factor) {
+void o0b_btlfx_projectMorphMesh(const void *model,u32 mesh_index,u32 factor) {
     const u8 *header=pointer(model,8);
     unsigned offset=(mesh_index&255)*40;
     const u8 *source=pointer(header,16)+offset;

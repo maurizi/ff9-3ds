@@ -92,14 +92,14 @@ static u8 *emit_mesh_packets(void *model, u8 mesh_index, u8 *out, int blend_vari
     return out + 8;
 }
 
-u8 *o0b_func_800C58E4(void *model, u8 mesh_index, u8 *out) {
+u8 *o0b_btl_drawMesh(void *model, u8 mesh_index, u8 *out) {
     unsigned int profile_start = port_profile_begin();
     u8 *result = emit_mesh_packets(model, mesh_index, out, 0, 0);
     port_profile_detail_end(PORT_PROFILE_MESH_PACKETS, profile_start);
     return result;
 }
 
-u8 *o0b_func_800DD27C(void *model, u8 mesh_index, u8 *out, s32 ot_bias) {
+u8 *o0b_btl_drawMeshOffset(void *model, u8 mesh_index, u8 *out, s32 ot_bias) {
     unsigned int profile_start = port_profile_begin();
     u8 *result = emit_mesh_packets(model, mesh_index, out, 1, ot_bias);
     port_profile_detail_end(PORT_PROFILE_MESH_PACKETS, profile_start);

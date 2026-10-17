@@ -102,7 +102,7 @@ print('EXPORT_SIGNATURES='+json.dumps(rows))
             required = row['data_pointer_mask'] | reviewed
             row['missing_data_bits'] = required & ~mask
             row['additional_bridge_bits'] = mask & ~required
-        if row['symbol'] in ('o0b_func_800DF738', 'o0b_func_800DD0B0', 'o0b_func_800DD0DC') and row.get('return_type') != 'unsigned int':
+        if row['symbol'] in ('o0b_Hi_GetMdlVertexPtr', 'o0b_func_800DD0B0', 'o0b_func_800DD0DC') and row.get('return_type') != 'unsigned int':
             row['return_contract_error'] = 'effect modules consume the forwarded count as a full 32-bit result'
     print(json.dumps({'elf': str(args.elf), 'scope': __doc__, 'exports': rows,
                       'missing': [r for r in rows if r.get('missing_data_bits')],

@@ -38,7 +38,7 @@ void psx_pad_update(void) {
 
 /* PadGetState: a plain digital pad on port 1 reports PadStateFindCTP1 (2); PadStateStable (6) is for pads that
  * answer the extended (DualShock) queries. Port 2 is PadStateDiscon (0). The game clears its "set up this port"
- * flag on state 2 (func_80019194). */
+ * flag on state 2 (pad_update). */
 int PadGetState(int port) {
     return port == 0x00 ? 2 : 0;
 }

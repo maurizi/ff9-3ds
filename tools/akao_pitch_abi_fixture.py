@@ -13,10 +13,10 @@ p.add_argument('source', type=Path)
 p.add_argument('out', type=Path)
 a = p.parse_args()
 s = a.source.read_text()
-function = re.search(r'^u16 func_8005DFE0\([^\n]*\) \{.*?^}', s, re.M | re.S)
+function = re.search(r'^u16 akao_calcPitch\([^\n]*\) \{.*?^}', s, re.M | re.S)
 if not function:
     p.error('pitch function not found')
-calls = re.findall(r'^[ \t]+(?:r|vel) = .*func_8005DFE0.*?;', s, re.M)
+calls = re.findall(r'^[ \t]+(?:r|vel) = .*akao_calcPitch.*?;', s, re.M)
 if len(calls) != 3:
     p.error(f'expected three production pitch call expressions, found {len(calls)}')
 prefix = '#define M2CTX\n#include "ff9.h"\n'
@@ -30,7 +30,7 @@ caller = r'''
 #define printf ff9_game_printf
 #include "ff9.h"
 #undef printf
-u32 D_8006F410[12] = {4096,4096,4096,4096,4096,4096,4096,4096,4096,4096,4096,4096};
+u32 g_akaoSemitonePitch[12] = {4096,4096,4096,4096,4096,4096,4096,4096,4096,4096,4096,4096};
 Unk8005EBB4 D_8007F970[1];
 int akao_pitch_abi_tests(void) {
     static const s16 fine[] = {-32768,-129,-128,-1,0,1,127,128,255,256,32767};

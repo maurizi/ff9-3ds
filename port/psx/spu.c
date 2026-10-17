@@ -63,8 +63,8 @@ void *SpuSetTransferCallback(void (*func)(void)) {
     return (void *)old;
 }
 
-/* SpuWrite (decomp func_8005709C): copy `size` bytes (clamped like libspu, to 0x7EFF0) into SPU RAM. */
-u32 func_8005709C(u8 *addr, u32 size) {
+/* SpuWrite (decomp SpuWrite): copy `size` bytes (clamped like libspu, to 0x7EFF0) into SPU RAM. */
+u32 SpuWrite(u8 *addr, u32 size) {
     if (size > 0x7EFF0) {
         size = 0x7EFF0;
     }
@@ -81,8 +81,8 @@ u32 func_8005709C(u8 *addr, u32 size) {
     return size;
 }
 
-/* SpuRead (decomp func_8005703C) */
-s32 func_8005703C(s32 addr, s32 size) {
+/* SpuRead (decomp SpuRead) */
+s32 SpuRead(s32 addr, s32 size) {
     u32 n = (u32)size;
     /* Original libspu uses an unsigned comparison, just like SpuWrite. Bound
      * before adding transfer_addr so a negative/oversized size cannot wrap. */

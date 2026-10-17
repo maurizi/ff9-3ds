@@ -1,5 +1,5 @@
 /* Normal C interface for FF9's BS v2 expansion. Prefix groups and table
- * indices follow ovl_64 func_8019AEC0 / func_8019B00C, including escapes.
+ * indices follow ovl_64 mbg_vlcDecode / mbg_vlcDecodeBlock, including escapes.
  * Unlike the original register-ABI routine, every input/output is bounded. */
 #include "movie_vlc.h"
 

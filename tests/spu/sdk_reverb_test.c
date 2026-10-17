@@ -6,7 +6,7 @@
 #include "sdk_reverb_reference.h"
 
 extern u8 *psx_spu_ram;
-u32 func_8005709C(u8 *, u32);
+u32 SpuWrite(u8 *, u32);
 static u8 ram[0x80000];
 static u16 registers[0x200];
 void psx_spu_reset(void) { __builtin_memset(registers, 0, sizeof registers); }
@@ -51,7 +51,7 @@ int main(void) {
     assert(SpuClearReverbWorkArea(0) == 0 && callbacks == 0);
     assert(ram[0x7ff7f] == 0x5a && ram[0x7ff80] == 0 && ram[0x7ffff] == 0);
     u8 byte = 0x12;
-    assert(func_8005709C(&byte, 1) == 1 && callbacks == 1 && ram[0x1000] == byte);
+    assert(SpuWrite(&byte, 1) == 1 && callbacks == 1 && ram[0x1000] == byte);
     assert(SpuSetReverbModeType(0x101) == 0);
     assert(ram[0x7d93f] == 0x5a && ram[0x7d940] == 0);
     assert(SpuClearReverbWorkArea(10) == -1);

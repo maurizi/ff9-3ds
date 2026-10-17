@@ -19,8 +19,8 @@ class Cpu(e.Cpu):
         elif op&63==0x2d: g[7]=(((g[17]+g[18]+g[19])&0xffffffff)>>4)&65535
         else: raise AssertionError(hex(op))
 formats=[(24,4,21,8,16,19),(20,3,18,12,8,6),(32,4,28,8,16,29),(24,3,15,6,16,22),(24,4,20,0,8,0),(20,3,19,0,8,0),(16,4,13,0,8,0),(12,3,11,0,8,0)]
-variants=[(0x800C58E4,0x800C6528,'ovl_0b_4/func_800C58E4.s'),
-          (0x800DD27C,0x800DDF10,'ovl_0b_2/func_800DD27C.s')]
+variants=[(0x800C58E4,0x800C6528,'ovl_0b_4/btl_drawMesh.s'),
+          (0x800DD27C,0x800DDF10,'ovl_0b_2/btl_drawMeshOffset.s')]
 images=[b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',
         (ROOT/'decomp/asm/us/ovl_0b/nonmatchings'/path).read_text())) for _,_,path in variants]
 rng=random.Random(0xc58e4); cases=[]; expected=[]

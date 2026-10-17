@@ -5,15 +5,15 @@
 unsigned char psx_ram[PSX_RAM_SIZE] __attribute__((aligned(32)));
 unsigned char psx_scratchpad[0x400] __attribute__((aligned(32)));
 void port_fatal(const char *fmt, ...) { (void)fmt; abort(); }
-void o0b_func_800CF58C(s32);
-void o0b_func_800CF560(s32);
-s32 o0b_func_800CF574(void);
-s32 o0b_func_800CF690(void);
-s32 o0b_func_800CF708(s32, s32);
-s32 o0b_func_800CF748(s32);
-void o0b_func_800CF788(SVECTOR *);
-s32 o0b_func_800CF6B8(s32, s32);
-s32 o0b_func_800CF9DC(s32, s32, s32, s32);
+void o0b_btlbg_setOtShift(s32);
+void o0b_btlbg_setBrightness(s32);
+s32 o0b_btlbg_getBrightness(void);
+s32 o0b_btlfx_rand(void);
+s32 o0b_btlfx_randRange(s32, s32);
+s32 o0b_btlfx_randCentered(s32);
+void o0b_btlfx_randRotation(SVECTOR *);
+s32 o0b_btlfx_sqrt(s32, s32);
+s32 o0b_btlfx_lerpRatio(s32, s32, s32, s32);
 int main(void) {
     unsigned int kind, seed, a, b, c, d, phase;
     while (scanf("%u %x %x %x %x %x %x", &kind, &seed, &a, &b, &c, &d, &phase) == 7) {
@@ -24,15 +24,15 @@ int main(void) {
         SVECTOR rot = {0};
         u32 value = 0;
         switch (kind) {
-        case 0: o0b_func_800CF58C(a); break;
-        case 1: o0b_func_800CF560(a); break;
-        case 2: value = o0b_func_800CF574(); break;
-        case 3: value = o0b_func_800CF690(); break;
-        case 4: value = o0b_func_800CF708(a, b); break;
-        case 5: value = o0b_func_800CF748(a); break;
-        case 6: o0b_func_800CF788(&rot); break;
-        case 7: value = o0b_func_800CF6B8(a, b); break;
-        case 8: value = o0b_func_800CF9DC(a, b, c, d); break;
+        case 0: o0b_btlbg_setOtShift(a); break;
+        case 1: o0b_btlbg_setBrightness(a); break;
+        case 2: value = o0b_btlbg_getBrightness(); break;
+        case 3: value = o0b_btlfx_rand(); break;
+        case 4: value = o0b_btlfx_randRange(a, b); break;
+        case 5: value = o0b_btlfx_randCentered(a); break;
+        case 6: o0b_btlfx_randRotation(&rot); break;
+        case 7: value = o0b_btlfx_sqrt(a, b); break;
+        case 8: value = o0b_btlfx_lerpRatio(a, b, c, d); break;
         default: abort();
         }
         printf("%08x %08x %08x %08x %04x %04x %04x %04x\n", value,

@@ -17,14 +17,8 @@ void srand(unsigned int seed) {
     rand_seed = seed;
 }
 
-/* B(0Bh) TestEvent (decomp placeholder func_80065208): irq.c keeps the events */
-long TestEvent(unsigned long ev);
-long func_80065208(unsigned long ev) {
-    return TestEvent(ev);
-}
-
-/* A(19h) strcpy (func_80065238) */
-char *func_80065238(char *dst, const char *src) {
+/* A(19h) strcpy: the decomp's strcpy (port_prelude.h maps it here) */
+char *psx_bios_strcpy(char *dst, const char *src) {
     if (!dst || !src) return 0;
     char *original = dst;
     dst = PSX_PTR(dst); src = PSX_PTR(src);
@@ -37,7 +31,7 @@ char *func_80065238(char *dst, const char *src) {
 /* A(15h) strcat (80063108): BIOS strings end at zero, including when their
  * payload contains FF9 high-byte glyph/control values. NULL inputs refuse
  * the copy; nonzero KUSEG pointers address the PSX RAM image. */
-char *func_80063108(char *dst, const char *src) {
+char *psx_bios_strcat(char *dst, const char *src) {
     if (!dst || !src) return 0;
     char *original = dst;
     dst = PSX_PTR(dst); src = PSX_PTR(src);

@@ -5,6 +5,7 @@
 
 #ifdef PORT_BIN_main
 u8 func_8002F864(void);
+u32 func_8004E8D4(void);
 u32 func_8004E8EC(void);
 #endif
 

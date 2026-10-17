@@ -76,8 +76,8 @@ static u32 native_call(u32 target,u32 *r) {
         [0x6c/4]=0x1, /* o0b_func_800E8854 */
         [0x80/4]=0x4, /* o0b_func_800DC818 */
         [0x84/4]=0x4, /* o0b_func_800DC858 */
-        [0xd0/4]=0x1, /* o0b_func_800CF788 */
-        [0xe4/4]=0x3, /* o0b_func_800D006C */
+        [0xd0/4]=0x1, /* o0b_btlfx_randRotation */
+        [0xe4/4]=0x3, /* o0b_btlfx_turnToward */
         [0xe8/4]=0x3, /* o0b_func_800D0130 */
         [0xec/4]=0x7, /* o0b_func_800D01D4 */
         [0xf4/4]=0x3, /* o0b_func_800D0580 */
@@ -123,7 +123,7 @@ static u32 native_call(u32 target,u32 *r) {
         [0x2c4/4]=0x4, /* o0b_func_800DC8AC */
         [0x2c8/4]=0x4, /* o0b_func_800DC8EC */
         [0x2e0/4]=0x2, /* o0b_func_800E871C */
-        [0x310/4]=0x8, /* o0b_func_800DF738 */
+        [0x310/4]=0x8, /* o0b_Hi_GetMdlVertexPtr */
         [0x330/4]=0x20, /* o0b_func_800CFC2C */
         [0x340/4]=0xb, /* o0b_func_800E9000 */
         [0x35c/4]=0x3, /* o0b_func_800DD120 */

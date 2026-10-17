@@ -4,6 +4,9 @@ import importlib.util
 from pathlib import Path
 import random,re,struct,subprocess
 ROOT=Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT / 'tools'))
+from ff9sym import asm_path
 spec=importlib.util.spec_from_file_location('ff9_equiv',ROOT/'decomp/tools/equiv.py');e=importlib.util.module_from_spec(spec);spec.loader.exec_module(e)
 class Cpu(e.Cpu):
     def gte_cmd(self,op):
@@ -18,7 +21,7 @@ class Cpu(e.Cpu):
             g[12:15]=[g[13],g[14],g[0]];g[17:20]=[g[18],g[19],g[1]&65535]
 rng=random.Random(0xd4478);cases=[];expected=[]
 for kind,address in enumerate((0x800D4478,0x800D40CC,0x800D45FC,0x800D3ED4,0x800D4228,0x800D437C,0x800D57D0,0x800D59D0,0x800D5568)):
-    asm=ROOT/f'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_2/func_{address:08X}.s'
+    asm=asm_path('ovl_0b',address,ROOT)
     image=b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',asm.read_text()))
     image_address=address
     if kind==7:

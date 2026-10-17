@@ -39,44 +39,44 @@ static void card_timeout(void) {
     DeliverEvent(HW_CARD, EV_SP_TIMOUT);
 }
 
-/* A(70h) _bu_init (decomp placeholder func_80016BA0) */
-void func_80016BA0(void) {
+/* A(70h) _bu_init */
+void _bu_init(void) {
 }
 
-/* A(ABh) _card_info (func_80065218) */
-long func_80065218(long chan) {
+/* A(ABh) _card_info */
+long _card_info(long chan) {
     card_timeout();
     return 1;
 }
 
-/* B(5Dh) _card_wait (func_80065228) */
-long func_80065228(long chan) {
+/* B(5Dh) _card_wait */
+long _card_wait(long chan) {
     return 1;
 }
 
-/* B(32h) open, B(33h) lseek, B(34h) read, B(35h) write, B(36h) close (func_80065E60 ... func_80065EA0),
- * B(42h) firstfile, B(43h) nextfile (func_80065EB0): the card file system. No card: every call fails. */
-long func_80065E60(const char *name, long mode) {
+/* B(32h) open, B(33h) lseek, B(34h) read, B(35h) write, B(36h) close 
+ * B(42h) firstfile, B(43h) nextfile, as psx_bios_* (port_prelude.h maps the decomp's names): the card file system. No card: every call fails. */
+long psx_bios_open(const char *name, long mode) {
     return -1;
 }
 
-s32 func_80065E70(s32 fd, s32 offset, s32 whence) {
+s32 psx_bios_lseek(s32 fd, s32 offset, s32 whence) {
     return -1;
 }
 
-s32 func_80065E80(s32 fd, s32 buf, s32 n) {
+s32 psx_bios_read(s32 fd, s32 buf, s32 n) {
     return -1;
 }
 
-s32 func_80065E90(s32 fd, s32 buf, s32 n) {
+s32 psx_bios_write(s32 fd, s32 buf, s32 n) {
     return -1;
 }
 
-s32 func_80065EA0(s32 fd) {
+s32 psx_bios_close(s32 fd) {
     return -1;
 }
 
-s32 func_80065EB0(s32 dir) {
+s32 psx_bios_nextfile(s32 dir) {
     return 0;
 }
 

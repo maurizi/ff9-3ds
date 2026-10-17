@@ -21,3 +21,7 @@ FF9 (PS1 NTSC-U) port to Nintendo DS (DSi mode by default), built from the ff9-d
   source can say it more clearly without changing the PS1 output.
 - The decomp is a submodule; pull its latest with `git -C decomp fetch local && git -C decomp checkout local/main`.
   A patch that stops applying fails the build: that usually means the decomp fixed the site, so drop the patch.
+- After pulling, regenerate its splat output (`cd decomp && tools/docker.sh make split`; asm only, the C is kept)
+  and rebuild. The overlay trampolines and the MIPS comparison tests read `decomp/asm/` by function name, so stale
+  asm after a rename links calls into raw MIPS bytes (a crash at a `psx_ram` address). Names the decomp gives to
+  functions the port also uses must be renamed on the port side too, including the `oXX_`-prefixed overlay forms.

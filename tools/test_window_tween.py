@@ -12,7 +12,7 @@ spec = importlib.util.spec_from_file_location('ff9_equiv', ROOT/'decomp/tools/eq
 e = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e)
 address = 0x80063108
-asm = ROOT/'decomp/asm/us/main/nonmatchings/main/func_80063108.s'
+asm = ROOT/'decomp/asm/us/main/nonmatchings/main/strcat.s'
 image = b''.join(bytes.fromhex(w) for w in re.findall(
     r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/', asm.read_text()))
 

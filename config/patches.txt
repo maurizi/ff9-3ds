@@ -6,12 +6,12 @@
 
 # Optional test scenario enters after normal engine initialization, before mode dispatch.
 src/main/main.c | func_8001D268(); | func_8001D268(); port_scenario_bootstrap(); | 1
-src/main/main.c | func_80012900(1); | port_scenario_validate_return(); func_80012900(1); | 1
+src/main/main.c | game_loadModeOverlay(1); | port_scenario_validate_return(); game_loadModeOverlay(1); | 1
 src/main/main.c | rand_init(GetRCnt(2)); | rand_init(port_scenario_seed(GetRCnt(2))); | 1
 # Test-only field loader observations; ordinary play returns immediately from the hooks.
 src/ovl_0a/ovl_0a.c | fld_load(arg0); | port_scenario_field_entering(arg0); fld_load(arg0); port_scenario_field_ready(arg0); | 1
 # Blocking loader polls must service the virtual drive between sector events.
-src/main/main.c | return g_cdLoad.unk0; | psx_cd_pump(); return g_cdLoad.unk0; | 1
+src/main/main.c | return g_cdLoad.state; | psx_cd_pump(); return g_cdLoad.state; | 1
 src/main/main.c | while (func_80021FB4() > 0) { | while (func_80021FB4() > 0) { psx_cd_pump(); | 2
 # Apply optional enemy HP once units and entry animations are initialized, before combat.
 src/ovl_0b/ovl_0b.c | b->unkD80 = 4; | b->unkD80 = 4; port_scenario_battle_ready(); | 1
@@ -29,8 +29,8 @@ src/ovl_0b/ovl_0b_2.c | el->unk20 != -1 && !(el->unk20 & 0x80000000) | (u32)el->
 # Position fields can also be rewritten by the module after pool registration.
 # Decode the local read without changing the module's stored pointer bits.
 src/ovl_0b/ovl_0b_2.c | base = e->unk28; | base = (SVECTOR *)port_effect_data((u32)e->unk28); | 6
-src/ovl_0b/ovl_0b_2.c | func_800CF808((s16 *)e->unk28, (s16 *)e->unk2C, &ang.vx); | func_800CF808((s16 *)port_effect_data((u32)e->unk28), (s16 *)port_effect_data((u32)e->unk2C), &ang.vx); | 1
-src/ovl_0b/ovl_0b_2.c | func_800CFA00((s16 *)e->unk28, (s16 *)e->unk2C, acc, &off.vx); | func_800CFA00((s16 *)port_effect_data((u32)e->unk28), (s16 *)port_effect_data((u32)e->unk2C), acc, &off.vx); | 1
+src/ovl_0b/ovl_0b_2.c | btlfx_aimAngles((s16 *)e->unk28, (s16 *)e->unk2C, &ang.vx); | btlfx_aimAngles((s16 *)port_effect_data((u32)e->unk28), (s16 *)port_effect_data((u32)e->unk2C), &ang.vx); | 1
+src/ovl_0b/ovl_0b_2.c | btlfx_lerpVec((s16 *)e->unk28, (s16 *)e->unk2C, acc, &off.vx); | btlfx_lerpVec((s16 *)port_effect_data((u32)e->unk28), (s16 *)port_effect_data((u32)e->unk2C), acc, &off.vx); | 1
 # Effect output buffers may be supplied directly from a module-owned pool slot.
 src/ovl_0b/ovl_0b_2.c | n = ((Unk800D1494 *)p)->unk2; | p = (u8 *)port_effect_data((u32)p); out = (u8 *)port_effect_data((u32)out); n = ((Unk800D1494 *)p)->unk2; | 1
 # Particle motion and element hooks are also callbacks into loaded modules.
@@ -45,14 +45,14 @@ src/ovl_0b/ovl_0b_2.c | ((EffTailSpawn *)e->unk24)->unk3C(&off, &rot, frame, dur
 src/ovl_0b/ovl_0b_2.c | arg13(&v[1]); | port_effect_call_words((u32)arg13, (u32[]){(u32)&v[1]}, 1); | 1
 # Loaded effects consume DF738's forwarded primitive count in v0. Its void
 # C declaration lets native inlining discard the count calculation entirely.
-src/ovl_0b/ovl_0b_2.c | void func_800DF738(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) | u32 func_800DF738(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) | 1
-src/ovl_0b/ovl_0b_2.c | func_800DF7A0(func_800DCFB0(arg0, D_800A825C)->unk0, arg1, arg2, arg3, arg4); | return func_800DF7A0(func_800DCFB0(arg0, D_800A825C)->unk0, arg1, arg2, arg3, arg4); | 1
+src/ovl_0b/ovl_0b_2.c | void Hi_GetMdlVertexPtr(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) | u32 Hi_GetMdlVertexPtr(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) | 1
+src/ovl_0b/ovl_0b_2.c | func_800DF7A0(btlfx_getEffModel(arg0, D_800A825C)->unk0, arg1, arg2, arg3, arg4); | return func_800DF7A0(btlfx_getEffModel(arg0, D_800A825C)->unk0, arg1, arg2, arg3, arg4); | 1
 # Mesh-count wrappers likewise forward DD10C's v0; promote narrow values to
 # the effect bridge's full 32-bit result on both host and ARM ABIs.
 src/ovl_0b/ovl_0b_2.c | void func_800DD0B0(s32 arg0) | u32 func_800DD0B0(s32 arg0) | 1
 src/ovl_0b/ovl_0b_2.c | void func_800DD0DC(s32 arg0) | u32 func_800DD0DC(s32 arg0) | 1
-src/ovl_0b/ovl_0b_2.c | func_800DD10C(func_800E716C(arg0)->unk9C); | return func_800DD10C(func_800E716C(arg0)->unk9C); | 1
-src/ovl_0b/ovl_0b_2.c | func_800DD10C(func_800DCFB0(arg0, D_800A81A8)->unk0); | return func_800DD10C(func_800DCFB0(arg0, D_800A81A8)->unk0); | 1
+src/ovl_0b/ovl_0b_2.c | func_800DD10C(btl_getUnit(arg0)->unk9C); | return func_800DD10C(btl_getUnit(arg0)->unk9C); | 1
+src/ovl_0b/ovl_0b_2.c | func_800DD10C(btlfx_getEffModel(arg0, D_800A81A8)->unk0); | return func_800DD10C(btlfx_getEffModel(arg0, D_800A81A8)->unk0); | 1
 
 # Battle sound panning accepts unit IDs 0..17 or an SVECTOR pointer. The PS1
 # address-bit test misses native ARM stack pointers (DS crash SystemError S/310).
@@ -67,7 +67,7 @@ docs/wip/ovl_0a_800B4A5C.c | (u32 *)g_gameState->unk1C->unk10[g_gameState->unk1C
 # Script values are 26 bits; on the PS1 a RAM pointer popped back (0x00xxxxxx, the RAM mirror) works as is. DS
 # pointers (0x02xxxxxx) set bit 25, which the 26-bit sign extension turns into 0xFExxxxxx: mask it back.
 # (func_80037ACC opcodes 0x70/0x71; reported by the decomp, 2026-10-11)
-src/main/main.c | o = (Unk8004AB64 *)func_80052D40(); | o = (Unk8004AB64 *)PORT_SCRIPT_PTR(func_80052D40()); | 2
+src/main/main.c | o = (Unk8004AB64 *)evt_popResult(); | o = (Unk8004AB64 *)PORT_SCRIPT_PTR(evt_popResult()); | 2
 
 # "This header field is already a RAM pointer (relocated from a file offset)": on the PS1 that's > 0x80000000,
 # in the port it's an address inside psx_ram.
@@ -119,7 +119,7 @@ src/main/main.c | ((u16 *)func_8001C7FC( | ((u16 *)PSX_NZ(func_8001C7FC( | 1
 src/main/main.c | 0x30000, 0))[1] | 0x30000, 0)))[1] | 1
 # Angle/distance opcodes restore the PSX KSEG0 base even for an absent object.
 # 80052640..54 reads its position at physical +14/+1C without a NULL guard.
-src_equiv/main/script_text.c | q = (Unk8004AB64 *)SCRIPT_PTR_RESTORE(func_80051D4C()); | q = PSX_NZ((Unk8004AB64 *)SCRIPT_PTR_RESTORE(func_80051D4C())); | 1
+src_equiv/main/script_text.c | q = (Unk8004AB64 *)SCRIPT_PTR_RESTORE(evt_popValue()); | q = PSX_NZ((Unk8004AB64 *)SCRIPT_PTR_RESTORE(evt_popValue())); | 1
 
 # TEMPORARY until the decomp fixes it (reported 2026-10-11): defined void in ovl_0a but declared s32 in ff9.h and
 # used by script opcode 0x8F (retry while non-zero); $v0 carries func_800B31B8's result on MIPS. Without it the
@@ -148,7 +148,7 @@ src/ovl_0b/ovl_0b.c | u->unk9C->unk50 | PSX_NZ(u->unk9C->unk50) | 2
 src/ovl_0b/ovl_0b.c | m->unk50[2].unk4 |= 1; | PSX_NZ(m->unk50)[2].unk4 |= 1; | 1
 src/ovl_0b/ovl_0b_2.c | u->unk9C->unk50 | PSX_NZ(u->unk9C->unk50) | 7
 src/ovl_0b/ovl_0b_2.c | (u8 *)p->unk0->unk50 + off | (u8 *)PSX_NZ(p->unk0->unk50) + off | 4
-src/ovl_0b/ovl_0b_2.c | &func_800DD02C(arg0, "Hi_StopSummonTexAnim()\nid:%d cannot use!")->unk0->unk50[arg1] | &PSX_NZ(func_800DD02C(arg0, "Hi_StopSummonTexAnim()\nid:%d cannot use!")->unk0->unk50)[arg1] | 1
+src/ovl_0b/ovl_0b_2.c | &btlfx_getSummonModel(arg0, "Hi_StopSummonTexAnim()\nid:%d cannot use!")->unk0->unk50[arg1] | &PSX_NZ(btlfx_getSummonModel(arg0, "Hi_StopSummonTexAnim()\nid:%d cannot use!")->unk0->unk50)[arg1] | 1
 src/ovl_0b/ovl_0b_3.c | arg1->unk9C->unk50 | PSX_NZ(arg1->unk9C->unk50) | 6
 src/ovl_0b/ovl_0b_3.c | e = m->unk50 + i | e = PSX_NZ(m->unk50) + i | 1
 # A model's default motion may be 0xFFFF (Steiner model 0x028F). Original
@@ -181,4 +181,4 @@ src/ovl_65/ovl_65.c | DrawOTagEnv(cur->unk70, &cur->draw); | PutDrawEnv(&cur->dr
 # AKAO pitch: an unprototyped s32 function cast bypasses AAPCS u8 argument
 # extension. Signed fine=-1 reaches the ARM callee as ffffffff instead of ff.
 # Use the real u16-return/u8-argument prototype at all three call sites.
-src/main/main.c | ((s32 (*)())func_8005DFE0) | func_8005DFE0 | 3
+src/main/main.c | ((s32 (*)())akao_calcPitch) | akao_calcPitch | 3

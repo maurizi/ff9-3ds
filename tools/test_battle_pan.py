@@ -5,7 +5,7 @@ import subprocess
 
 root = Path(__file__).resolve().parents[1]
 source = (root / 'build/portified/src/ovl_0b/ovl_0b_2.c').read_text()
-start = source.index('s32 func_800E976C(s32 arg0) {')
+start = source.index('s32 btl_soundPan(s32 arg0) {')
 end = source.index('\n}\n', start) + 3
 function = source[start:end]
 probe = r'''
@@ -37,22 +37,22 @@ int main(void) {
     matrix.m[0][0] = matrix.m[1][1] = matrix.m[2][2] = 4096;
     matrix.t[2] = 4096;
     gte_ctc2(24, 160u << 16); gte_ctc2(25, 112u << 16); gte_ctc2(26, 256);
-    int expected = func_800E976C(0);
+    int expected = btl_soundPan(0);
     assert(lookups == 1 && expected > 128);
     for (int id = 0; id <= 17; id++) {
         lookups = 0;
-        assert(func_800E976C(id) == expected && lookups == 1);
+        assert(btl_soundPan(id) == expected && lookups == 1);
     }
     lookups = 0;
-    assert(func_800E976C(-1) == 128 && lookups == 0);
-    assert(func_800E976C((s32)&point) == expected && lookups == 0);
+    assert(btl_soundPan(-1) == 128 && lookups == 0);
+    assert(btl_soundPan((s32)&point) == expected && lookups == 0);
     SVECTOR local = point;
-    assert(func_800E976C((s32)&local) == expected && lookups == 0);
+    assert(btl_soundPan((s32)&local) == expected && lookups == 0);
     SVECTOR *ds = mmap((void *)0x02000000, 4096, PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     assert(ds == (void *)0x02000000);
     *ds = point;
-    assert(func_800E976C((s32)ds) == expected && lookups == 0);
+    assert(btl_soundPan((s32)ds) == expected && lookups == 0);
     munmap(ds, 4096);
     puts("Battle panning dispatch passed: 18 unit IDs, sentinel, static/stack/DS pointers");
 }

@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 extern u32 g_vtxScreenXY[],g_vtxScreenZ[];
-void o0b_func_800DF15C(const void *,u32,u32);
-void o0b_func_800DDF10(const void *,u8);
+void o0b_btlfx_projectMorphMesh(const void *,u32,u32);
+void o0b_btlfx_projectSliceMesh(const void *,u8);
 void oracle_set(const void *);
 void oracle_get(void *);
 int main(void) {
@@ -15,8 +15,8 @@ int main(void) {
            fread(g_vtxScreenZ,512,1,stdin)!=1 || fread(state,sizeof state,1,stdin)!=1) abort();
         *(u32 *)(psx_ram+0x6794c)=(u32)(psx_ram+0x180100);
         oracle_set(state);
-        if(args[0]) o0b_func_800DDF10(psx_ram+0x180000,(u8)args[1]);
-        else o0b_func_800DF15C(psx_ram+0x180000,args[1],args[2]);
+        if(args[0]) o0b_btlfx_projectSliceMesh(psx_ram+0x180000,(u8)args[1]);
+        else o0b_btlfx_projectMorphMesh(psx_ram+0x180000,args[1],args[2]);
         oracle_get(state);
         fwrite(g_vtxScreenXY,512,1,stdout);fwrite(g_vtxScreenZ,512,1,stdout);fwrite(state,sizeof state,1,stdout);
     }

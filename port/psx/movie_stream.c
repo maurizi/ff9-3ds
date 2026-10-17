@@ -1,5 +1,5 @@
 /* FF9's reverse-chunk STR/MBG framing, following ovl_64's CD ring reader
- * (func_8019BA70 / func_8019C434). No I/O, allocation or decoder state. */
+ * (mbg_streamOnVideoSector / mbg_streamReadyCallback). No I/O, allocation or decoder state. */
 #include "movie_stream.h"
 #include <string.h>
 

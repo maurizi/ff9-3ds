@@ -12,7 +12,7 @@ static s32 radial_root(u32 remainder) {
     }
     return (s32)root >> 2;
 }
-s32 o0b_func_800CF5F8(const SVECTOR *from,const SVECTOR *to) {
+s32 o0b_btlfx_distance(const SVECTOR *from,const SVECTOR *to) {
     from=PSX_NZ(from);to=PSX_NZ(to);
     /* Preserve the handwritten register selection: IR2 receives from.x,
      * not dz. The assembly computes dz but never uses it in the square sum. */
@@ -23,7 +23,7 @@ s32 o0b_func_800CF5F8(const SVECTOR *from,const SVECTOR *to) {
     s32 root=radial_root(gte_mfc2(25)+gte_mfc2(26)+gte_mfc2(27));
     return root ? root : 1;
 }
-void o0b_func_800CF808(const s16 *from, const s16 *to, s16 *rotation) {
+void o0b_btlfx_aimAngles(const s16 *from, const s16 *to, s16 *rotation) {
     s32 dx = (s32)to[0] - from[0], dz = (s32)to[2] - from[2];
     s32 dy = (s32)to[1] - from[1];
     gte_mtc2(9, (u32)dx); gte_mtc2(10, (u32)dz);
@@ -33,7 +33,7 @@ void o0b_func_800CF808(const s16 *from, const s16 *to, s16 *rotation) {
     rotation[2] = 0;
     rotation[0] = (s16)(-ratan2(dy, radius));
 }
-s32 o0b_func_800CF91C(const SVECTOR *vector, s32 *depth, s32 *radius) {
+s32 o0b_btlfx_transformPolar(const SVECTOR *vector, s32 *depth, s32 *radius) {
     gte_mtc2(0, *(const u32 *)vector);
     gte_mtc2(1, *((const u32 *)vector + 1));
     gte_cmd(0x480012);
@@ -44,12 +44,12 @@ s32 o0b_func_800CF91C(const SVECTOR *vector, s32 *depth, s32 *radius) {
     *radius = radial_root(gte_mfc2(25) + gte_mfc2(26));
     return ratan2(x, y);
 }
-void o0b_func_800CF8EC(s32 depth, s32 packed_xy, s16 *out) {
+void o0b_btlfx_transformPoint(s32 depth, s32 packed_xy, s16 *out) {
     gte_mtc2(0, (u32)packed_xy); gte_mtc2(1, (u32)depth);
     gte_cmd(0x480012);
     for (unsigned i = 0; i < 3; i++) out[i] = (s16)gte_mfc2(25 + i);
 }
-void o0b_func_800CFA00(const s16 *from, const s16 *to, s32 factor, s16 *out) {
+void o0b_btlfx_lerpVec(const s16 *from, const s16 *to, s32 factor, s16 *out) {
     gte_mtc2(8, (u32)factor);
     for (unsigned i = 0; i < 3; i++) {
         gte_mtc2(9 + i, (u32)(s32)from[i]);
@@ -58,7 +58,7 @@ void o0b_func_800CFA00(const s16 *from, const s16 *to, s32 factor, s16 *out) {
     gte_cmd(0x980011); /* INTPL sf=1 */
     for (unsigned i = 0; i < 3; i++) out[i] = (s16)gte_mfc2(25 + i);
 }
-s32 o0b_func_800CF9B0(s32 from, s32 to, s32 factor) {
+s32 o0b_btlfx_lerp(s32 from, s32 to, s32 factor) {
     gte_mtc2(8, (u32)factor);
     gte_mtc2(9, (u32)from);
     gte_ctc2(21, (u32)to);

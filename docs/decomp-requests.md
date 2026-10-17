@@ -709,3 +709,18 @@ integer macroblock reconstruction now agrees with DuckStation MDEC DMA output
 on 3,492 synthetic/real cases; see `movie-validation.md` for the exact coverage,
 ARM9 evidence and original-hardware accuracy limits. This does not replace the
 original player's DMA callback, frame pacing, MBG masks or streaming sound yet.
+
+### F31 (2026-10-17). Call before declaration of the pad read helper
+
+After the decomp's main-exe naming merge (`f024a5f`), `src/main/main.c` calls
+`func_8004E8D4()` (returns `g_padPortHeld[0] & 0x3FFFFFF`) about 2,700 lines
+before its `u32` definition, with no prototype. gcc 2.8 accepts the implicit
+`int` declaration; modern gcc rejects the later definition as conflicting. The
+port declares it in `port/include/port_decls_gen.h`. A prototype in `ff9.h`
+(or a name, since it is the masked held-buttons read) would remove the need,
+if it keeps the PS1 output identical.
+
+The same merge names the BIOS file and string calls `open`, `lseek`, `read`,
+`write`, `close`, `nextfile`, `strcpy` and `strcat`. The port maps these to
+`psx_bios_*` in its prelude so they don't replace the C library on ARM/x86;
+no decomp change is needed for that.

@@ -12,6 +12,9 @@ import struct
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT / 'tools'))
+from ff9sym import asm_path
 spec = importlib.util.spec_from_file_location('ff9_equiv', ROOT / 'decomp/tools/equiv.py')
 equiv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(equiv)
@@ -20,7 +23,7 @@ addresses = [0x800CF58C, 0x800CF560, 0x800CF574, 0x800CF690, 0x800CF708,
 rng = random.Random(0xFF09)
 rows, expected = [], []
 for kind, address in enumerate(addresses):
-    asm = ROOT / f'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_3/func_{address:08X}.s'
+    asm = asm_path('ovl_0b', address, ROOT)
     words = re.findall(r'/\* [0-9A-F]+ ([0-9A-F]{8}) ([0-9A-F]{8}) \*/', asm.read_text())
     image = b''.join(bytes.fromhex(value) for _, value in words)
     for trial in range(300):

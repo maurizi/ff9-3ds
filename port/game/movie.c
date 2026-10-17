@@ -2,7 +2,7 @@
  *
  * The PS1 player streams STR sectors and decodes them with the MDEC (libpress). Real playback is not implemented
  * yet: a placeholder movie is HEADLESS_FRAMES long. See docs/movie-validation.md. As on the PS1, where the player's
- * interrupt callbacks advance it, the frame number (D_80071E34) moves on its own, at 15 fps from the frame
+ * interrupt callbacks advance it, the frame number (g_mbgFrame) moves on its own, at 15 fps from the frame
  * interrupt (psx_movie_tick); the game's per-frame call reports whether a new frame is ready. The game waits for
  * frame > 0 before it watches for the end.
  * Config: config/overrides.txt.
@@ -12,7 +12,7 @@
 
 #define HEADLESS_FRAMES 2
 
-s32 o64_func_8019AAF8(void);
+s32 o64_mbg_stop(void);
 
 static s32 movie_end;
 static s32 shown; /* last frame number reported by the per-frame call */
@@ -20,26 +20,26 @@ static int tick;
 
 /* from psx_frame(): one 60 Hz frame */
 void psx_movie_tick(void) {
-    if (D_80071E32 >= 2 && D_80071E34 < movie_end && ++tick % 4 == 0) {
-        D_80071E34++;
+    if (g_mbgState >= 2 && g_mbgFrame < movie_end && ++tick % 4 == 0) {
+        g_mbgFrame++;
     }
 }
 
 /* MBG_init(mode, buffers) */
-s32 o64_func_801999B4(s32 mode, u8 **buf) {
-    D_80071E32 = 1;
+s32 o64_MBG_init(s32 mode, u8 **buf) {
+    g_mbgState = 1;
     return 1;
 }
 
 /* start movie `movie` (0..4), entry `idx` */
-s32 o64_func_80199B28(u32 movie, s32 idx) {
-    if (movie >= 5 || idx < 0 || idx >= D_8019DC5C[movie].unk0) {
+s32 o64_mbg_play(u32 movie, s32 idx) {
+    if (movie >= 5 || idx < 0 || idx >= g_mbgMovieLists[movie].count) {
         return 0;
     }
-    D_8019DCF8 = &D_8019DC5C[movie].unk4[idx];
-    D_80071E30 = D_8019DCF8->unk5;
-    D_80071E32 = 2;
-    D_80071E34 = 0;
+    g_mbgMovie = &g_mbgMovieLists[movie].entries[idx];
+    D_80071E30 = g_mbgMovie->unk5;
+    g_mbgState = 2;
+    g_mbgFrame = 0;
     movie_end = HEADLESS_FRAMES;
     shown = 0;
     tick = 0;
@@ -47,30 +47,30 @@ s32 o64_func_80199B28(u32 movie, s32 idx) {
 }
 
 /* per frame: returns non-zero when a new frame was drawn */
-s32 o64_func_80199F30(s32 arg0) {
-    if (D_80071E32 < 2) {
+s32 o64_mbg_update(s32 arg0) {
+    if (g_mbgState < 2) {
         return 0;
     }
-    if (shown == D_80071E34) {
+    if (shown == g_mbgFrame) {
         if (shown >= movie_end) {
-            o64_func_8019AAF8(); /* the stream ended: the player stops itself (and runs the end callback) */
+            o64_mbg_stop(); /* the stream ended: the player stops itself (and runs the end callback) */
         }
         return 0;
     }
-    shown = D_80071E34;
+    shown = g_mbgFrame;
     return 1;
 }
 
 /* the movie's last frame number */
-s32 o64_func_8019AD0C(void) {
-    return D_80071E32 < 2 ? -1 : movie_end;
+s32 o64_mbg_getLastFrame(void) {
+    return g_mbgState < 2 ? -1 : movie_end;
 }
 
 /* stop */
-s32 o64_func_8019AAF8(void) {
-    D_80071E32--;
-    if (D_8019DC94.unk60 != NULL) {
-        D_8019DC94.unk60();
+s32 o64_mbg_stop(void) {
+    g_mbgState--;
+    if (g_mbgPlayer.endCallback != NULL) {
+        g_mbgPlayer.endCallback();
     }
     return 0;
 }

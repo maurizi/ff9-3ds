@@ -135,3 +135,24 @@ def data_words(binary):
             raw = bytes.fromhex(m.group(3))
             seen[vram] = (vram, int.from_bytes(raw, "little"), m.group(4))
     return [seen[k] for k in sorted(seen)]
+
+
+_ASM_INDEX = {}
+
+
+def asm_path(binary, address, root=Path(".")):
+    """The splat .s file of the function at `address` in `binary` (e.g. "ovl_0b"), whatever the decomp names it.
+
+    Tests read original instructions by address, so they keep working when a function gets a name.
+    """
+    if binary not in _ASM_INDEX:
+        index = {}
+        for path in (root / DECOMP / "asm" / VERSION / binary / "nonmatchings").rglob("*.s"):
+            first = re.search(r"/\* [0-9A-F]+ ([0-9A-F]{8}) [0-9A-F]{8} \*/", path.read_text())
+            if first:
+                index[int(first.group(1), 16)] = path
+        _ASM_INDEX[binary] = index
+    try:
+        return _ASM_INDEX[binary][address]
+    except KeyError:
+        raise FileNotFoundError(f"no asm for {binary} 0x{address:08X} (matched in C, or `make extract` not run)")

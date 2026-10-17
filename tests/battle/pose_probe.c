@@ -47,7 +47,7 @@ void func_80031264(void *rotation, void *matrix) {
     s16 *r = rotation, *m = matrix;
     for (unsigned i = 0; i < 9; i++) m[i] = (s16)((i%4 == 0 ? 4096 : 0) + r[i%3]);
 }
-u8 *o0b_func_800C7DAC(void *, s32, u8 *);
+u8 *o0b_btl_calcBoneMatrices(void *, s32, u8 *);
 #ifndef POSE_LIBRARY
 int main(void) {
     if (mmap(psx_ram, PSX_RAM_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != psx_ram) abort();
@@ -56,7 +56,7 @@ int main(void) {
         memset(psx_ram, 0, sizeof psx_ram); memset(psx_scratchpad, 0, sizeof psx_scratchpad); memset(g, 0, sizeof g);
         if (fread(psx_ram + 0x180000, 8192, 1, stdin) != 1) abort();
         u8 *out = psx_ram + 0x190000;
-        u32 result[2] = {(u32)(o0b_func_800C7DAC(psx_ram+0x180000, frame, out)-out), *(u32 *)(psx_ram+0x180020) & 0xffffff};
+        u32 result[2] = {(u32)(o0b_btl_calcBoneMatrices(psx_ram+0x180000, frame, out)-out), *(u32 *)(psx_ram+0x180020) & 0xffffff};
         fwrite(result, sizeof result, 1, stdout); fwrite(g, sizeof g, 1, stdout);
         fwrite(psx_scratchpad, sizeof psx_scratchpad, 1, stdout); fwrite(out, 4096, 1, stdout);
     }

@@ -246,13 +246,13 @@ void __main(void) {
     /* SN startup: walks an empty constructor list */
 }
 
-/* B(17h)-style critical sections (func_80012D08 = EnterCriticalSection, func_80012D18 = ExitCriticalSection):
+/* B(17h)-style critical sections (EnterCriticalSection, ExitCriticalSection):
  * nothing runs asynchronously in the port. */
-long func_80012D08(void) {
+long EnterCriticalSection(void) {
     return 1;
 }
 
-void func_80012D18(void) {
+void ExitCriticalSection(void) {
 }
 
 void FlushCache(void) {

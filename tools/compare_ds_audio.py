@@ -49,7 +49,7 @@ def main():
     # Verify relevant loaded code against this ELF before interpreting globals.
     shoff = struct.unpack_from('<I',elf,32)[0]
     shsize, shnum = struct.unpack_from('<HH',elf,46)
-    for name in ['plat_audio_samples','psx_spu_write','func_8005DFE0']:
+    for name in ['plat_audio_samples','psx_spu_write','akao_calcPitch']:
         address = symbols[name] & ~1
         for i in range(shnum):
             section = struct.unpack_from('<10I',elf,shoff+i*shsize)

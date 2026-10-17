@@ -13,6 +13,17 @@
 #define INCLUDE_RODATA(FOLDER, NAME)
 #define M2CTX /* include_asm.h: skip the top-level `.include "labels.inc"` */
 
+/* BIOS calls the decomp names after their libc counterparts. Their PSX behaviour differs (memory card file
+ * descriptors, KUSEG string pointers), so they link to port/psx's psx_bios_* instead of replacing the C library. */
+#define strcpy psx_bios_strcpy
+#define strcat psx_bios_strcat
+#define open psx_bios_open
+#define lseek psx_bios_lseek
+#define read psx_bios_read
+#define write psx_bios_write
+#define close psx_bios_close
+#define nextfile psx_bios_nextfile
+
 #include PORT_HEADER
 #include "port_hw.h"
 #include "psx_runtime.h"

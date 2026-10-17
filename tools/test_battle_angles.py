@@ -8,6 +8,9 @@ import re
 import struct
 import subprocess
 ROOT=Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT / 'tools'))
+from ff9sym import asm_path
 spec=importlib.util.spec_from_file_location('ff9_equiv',ROOT/'decomp/tools/equiv.py'); e=importlib.util.module_from_spec(spec); spec.loader.exec_module(e)
 def short(v): return struct.unpack('<h',struct.pack('<H',v&65535))[0]
 class Cpu(e.Cpu):
@@ -35,7 +38,7 @@ class Cpu(e.Cpu):
             g[25+row]=value&0xffffffff; g[9+row]=max(-32768,min(32767,value))&0xffffffff
 rng=random.Random(0xcf808); cases=[]; expected=[]
 for kind,address in enumerate((0x800CF808,0x800CF91C,0x800CF8EC,0x800CFA00,0x800CF9B0,0x800CF5F8)):
-    asm=ROOT/f'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_3/func_{address:08X}.s'
+    asm=asm_path('ovl_0b',address,ROOT)
     image=b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',asm.read_text()))
     for trial in range(200):
         data=rng.randbytes(16); registers=[rng.getrandbits(32) for _ in range(64)]

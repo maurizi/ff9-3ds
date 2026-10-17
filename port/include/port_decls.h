@@ -26,25 +26,25 @@ s32 func_800C6C04(u8 *, Unk800C6C04A *, Unk800C6C04B *, s16);
  * original register stores inside akao_tick before link-time weakening, so
  * replacing the standalone symbols cannot intercept those stores. */
 #ifdef PORT_BIN_main
-void func_800575B4(u32 x) __attribute__((noipa));
-void func_800575D0(s32 x) __attribute__((noipa));
-void func_800575EC(u32 x) __attribute__((noipa));
-void func_80057608(u32 x) __attribute__((noipa));
-void func_80057624(u32 x) __attribute__((noipa));
-void func_80057640(s32 v, u32 l, u32 r, s32 vol) __attribute__((noipa));
-void func_80057688(s32 v, s32 x) __attribute__((noipa));
-void func_800576A0(s32 v, s32 x) __attribute__((noipa));
-void func_800576BC(s32 v, s32 x) __attribute__((noipa));
-void func_800576D8(s32 v, u16 x) __attribute__((noipa));
-void func_800576F0(s32 v, u16 x) __attribute__((noipa));
-void func_80057708(s32 v, s32 a, s32 b) __attribute__((noipa));
-void func_80057738(s32 v, s32 x) __attribute__((noipa));
-void func_80057760(s32 v, s32 x) __attribute__((noipa));
-void func_80057788(s32 v, s32 a, s32 b) __attribute__((noipa));
-void func_800577BC(s32 v, s32 a, s32 b) __attribute__((noipa));
-void func_800577EC(s32 v, Unk800577EC *p, s32 vol) __attribute__((noipa));
-void func_8005CDE4(void) __attribute__((noipa));
-void func_8005681C(void) __attribute__((noipa));
+void akao_keyOn(u32 x) __attribute__((noipa));
+void akao_keyOff(s32 x) __attribute__((noipa));
+void akao_setReverbVoices(u32 x) __attribute__((noipa));
+void akao_setNoiseVoices(u32 x) __attribute__((noipa));
+void akao_setPitchModVoices(u32 x) __attribute__((noipa));
+void akao_setVoiceVolume(s32 v, u32 l, u32 r, s32 vol) __attribute__((noipa));
+void akao_setVoicePitch(s32 v, s32 x) __attribute__((noipa));
+void akao_setVoiceStartAddr(s32 v, s32 x) __attribute__((noipa));
+void akao_setVoiceLoopAddr(s32 v, s32 x) __attribute__((noipa));
+void akao_setVoiceAdsr1(s32 v, u16 x) __attribute__((noipa));
+void akao_setVoiceAdsr2(s32 v, u16 x) __attribute__((noipa));
+void akao_setVoiceAttack(s32 v, s32 a, s32 b) __attribute__((noipa));
+void akao_setVoiceDecay(s32 v, s32 x) __attribute__((noipa));
+void akao_setVoiceSustainLevel(s32 v, s32 x) __attribute__((noipa));
+void akao_setVoiceSustain(s32 v, s32 a, s32 b) __attribute__((noipa));
+void akao_setVoiceRelease(s32 v, s32 a, s32 b) __attribute__((noipa));
+void akao_writeVoice(s32 v, AkaoVoiceRegs *p, s32 vol) __attribute__((noipa));
+void akao_applyCdVolume(void) __attribute__((noipa));
+void akao_initState(void) __attribute__((noipa));
 #endif
 
 #endif

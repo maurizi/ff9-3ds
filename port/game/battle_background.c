@@ -29,7 +29,7 @@ static void transform_three(const u8 *vertices, unsigned offset) {
 
 /* Original batches are padded to six vertices, with a lookahead read after the
  * final batch. That read has no observable output; preserve the final GTE state. */
-void o0b_func_800CF448(u32 unused0, u32 unused1, const u8 *vertices, u32 count) {
+void o0b_btlbg_projectVertices(u32 unused0, u32 unused1, const u8 *vertices, u32 count) {
     (void)unused0; (void)unused1;
     if (!count || count % 6 || count > 128)
         port_fatal("battle background: invalid padded vertex count %u", count);
@@ -54,7 +54,7 @@ static u32 shade(u32 color, u16 brightness) {
     return rgb;
 }
 
-u8 *o0b_func_800CEED4(const void *record, u8 *out, u32 *ot, const void *group) {
+u8 *o0b_btlbg_drawRecord(const void *record, u8 *out, u32 *ot, const void *group) {
     const u8 *rec = record, *grp = group;
     u32 flags = half(rec, 0), shift = half((const void *)PSX_ADDR(0x800CF5A0), 0);
     u16 brightness = half((const void *)PSX_ADDR(0x800CF588), 0);
@@ -62,7 +62,7 @@ u8 *o0b_func_800CEED4(const void *record, u8 *out, u32 *ot, const void *group) {
     const u8 *indices = rec + half(rec, 8);
     const u8 *uvs = rec + half(rec, 10);
     const u8 *pages = grp + half(grp, 10);
-    o0b_func_800CF448(0, 0, grp + half(grp, 14) + half(rec, 4) * 6, half(rec, 2));
+    o0b_btlbg_projectVertices(0, 0, grp + half(grp, 14) + half(rec, 4) * 6, half(rec, 2));
     for (unsigned triangle = 0; triangle < 2; triangle++) {
         unsigned n = half(rec, triangle ? 14 : 12);
         unsigned stride = triangle ? 6 : 8;

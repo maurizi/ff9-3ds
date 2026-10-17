@@ -42,7 +42,7 @@ static void parent_root(const void *model, void *matrix) {
         putw(matrix, 20 + i * 4, w(matrix, 20 + i * 4) + (s32)(s16)gte_mfc2(9 + i));
 }
 
-u8 *o0b_func_800C7DAC(void *model, s32 frame, u8 *out) {
+u8 *o0b_btl_calcBoneMatrices(void *model, s32 frame, u8 *out) {
     const u8 *anim = ptr(model, 12), *mesh = ptr(model, 8);
     putw(model, 32, (u32)out);
     if (!anim) {

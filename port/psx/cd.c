@@ -51,7 +51,7 @@ void psx_cd_select_disc(unsigned selected) {
     disc_no=(int)selected;
 }
 
-/* libcd's own globals, which game C reads directly (func_80021310 CdStatus, func_80021320 CdMode, CdLastPos):
+/* libcd's own globals, which game C reads directly (CdStatus CdStatus, CdMode CdMode, CdLastPos):
  * kept in PS1 RAM at their original addresses so those reads see the drive's state. */
 extern u8 D_8006825C;      /* status byte */
 extern s32 D_8006826C;     /* mode */
@@ -417,38 +417,38 @@ int CD_getsector2(void *madr, int size) {
     return CD_getsector(madr, size);
 }
 
-/* libcd callback setters (decomp placeholders func_80021380 / func_800213A0 / func_800236A4): each stores the
+/* libcd callback setters (decomp placeholders CdSyncCallback / CdReadyCallback / CdSetDebug): each stores the
  * callback and returns the previous one. */
-CdCallback func_80021380(CdCallback f) {
+CdCallback CdSyncCallback(CdCallback f) {
     CdCallback old = sync_cb;
     sync_cb = f;
     return old;
 }
 
-CdCallback func_800213A0(CdCallback f) {
+CdCallback CdReadyCallback(CdCallback f) {
     CdCallback old = ready_cb;
     ready_cb = f;
     return old;
 }
 
-CdCallback func_800236A4(CdCallback f) {
+CdCallback CdSetDebug(CdCallback f) {
     CdCallback old = read_cb;
     read_cb = f;
     return old;
 }
 
-/* CdLastPos, CdFlush, CdReady (decomp placeholders func_80021330 ... func_80021360); CdStatus and CdMode are
+/* CdLastPos, CdFlush, CdReady (decomp placeholders CdLastPos ... CdReady); CdStatus and CdMode are
  * matched C in the decomp and read the globals above. */
-u8 *func_80021330(void) {
+u8 *CdLastPos(void) {
     return last_pos;
 }
 
-void func_80021340(void) {
+void CdFlush(void) {
 }
 
 /* CdReady(mode, result): a sector is waiting (CdlDataReady) or not (CdlNoIntr). Sectors are delivered through
  * the ready callback, so a polling caller gets the pump. */
-s32 func_80021360(s32 m, u8 *result) {
+s32 CdReady(s32 m, u8 *result) {
     psx_cd_pump();
     result_status(result);
     return CdlNoIntr;

@@ -33,7 +33,8 @@ weak_src  = $(filter src_equiv/% docs/wip/%,$(1))
 header_of = $(if $(filter main,$(1)),ff9.h,$(1).h)
 
 PORT_HDRS := $(wildcard port/include/*.h)
-PSX_SRCS  := $(wildcard port/psx/*.c port/game/*.c)
+# window_tween.c reimplemented func_80063118 before the decomp matched it; only its PSX comparison test uses it now.
+PSX_SRCS  := $(filter-out port/game/window_tween.c,$(wildcard port/psx/*.c port/game/*.c))
 
 # PS1 semantics: signed char, no strict aliasing, wrapping overflow; K&R-era C (gcc 2.8) needs gnu89 + permissive.
 DECOMP_CFLAGS := -std=gnu89 -fpermissive -O2 -g -fsigned-char -fno-strict-aliasing -fwrapv \

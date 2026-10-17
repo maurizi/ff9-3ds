@@ -9,6 +9,9 @@ import struct
 import subprocess
 
 ROOT=Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT / 'tools'))
+from ff9sym import asm_path
 spec=importlib.util.spec_from_file_location('ribbon_oracle',ROOT/'tools/test_battle_ribbons.py')
 r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
 rng=random.Random(0x800DF15C)
@@ -17,7 +20,7 @@ def matrix(z):
     values=[(4096 if i%4==0 else 0)+rng.randrange(-400,401) for i in range(9)]
     return struct.pack('<9hH3i',*values,rng.getrandbits(16),rng.randrange(-100,101),rng.randrange(-100,101),z)
 for kind,address in enumerate((0x800DF15C,0x800DDF10)):
-    asm=ROOT/f'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_2/func_{address:08X}.s'
+    asm=asm_path('ovl_0b',address,ROOT)
     image=b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',asm.read_text()))
     for trial in range(300):
         data=bytearray(rng.randbytes(8192));parts=trial%5

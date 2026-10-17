@@ -12,6 +12,9 @@ import struct
 import subprocess
 
 ROOT=Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT / 'tools'))
+from ff9sym import asm_path
 spec=importlib.util.spec_from_file_location('equiv',ROOT/'decomp/tools/equiv.py')
 e=importlib.util.module_from_spec(spec);spec.loader.exec_module(e)
 lib=ctypes.CDLL(str(ROOT/'build/tests/gte_oracle.so'))
@@ -35,7 +38,7 @@ class Cpu(e.Cpu):
 
 def main():
     rng=random.Random(0xd5c30)
-    asm=ROOT/'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_2/func_800D5C30.s'
+    asm=asm_path('ovl_0b',0x800D5C30,ROOT)
     image=b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',asm.read_text()))
     binary=(ROOT/'decomp/disks/us/ovl/0b.bin').read_bytes()
     table=binary[0xcfa00-0xa7000:0xcfa00-0xa7000+512]

@@ -1,7 +1,7 @@
 /* 800CF5A4: append a packed position/width to an effect's circular trail. */
 #include "psyq_port.h"
 #include "effect_vm.h"
-s32 o0b_func_800CF5A4(u8 *buffer, s32 capacity, s32 width, s32 position) {
+s32 o0b_btlfx_pushTrailPoint(u8 *buffer, s32 capacity, s32 width, s32 position) {
     const u8 *source = (const u8 *)port_effect_data((u32)position);
     s32 index = (s32)buffer[1] - 1;
     if (index < 0) index = capacity;

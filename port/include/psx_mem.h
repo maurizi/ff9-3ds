@@ -28,7 +28,7 @@ void psx_load_low_ram(void);
 
 /* A pointer the game passes to a library call that is really a small PS1 address (KUSEG, below 2 MB): Square's
  * code sometimes passes a constant where a pointer is expected (CdControlB(CdlSetmode, (u8 *)0x80, 0) in
- * func_80022A28), which on the PS1 reads that physical address. Map such values into psx_ram. */
+ * cd_init), which on the PS1 reads that physical address. Map such values into psx_ram. */
 #define PSX_PTR(p) ((unsigned int)(p) < PSX_RAM_SIZE ? (void *)(psx_ram + (unsigned int)(p)) : (void *)(p))
 
 /* A pointer the original game dereferences while NULL: PS1 low RAM is valid

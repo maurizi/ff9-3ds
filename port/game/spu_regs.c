@@ -12,60 +12,60 @@ static void flags_write(unsigned offset, u32 value) {
     psx_spu_write(offset, value);
     psx_spu_write(offset + 2, value >> 16);
 }
-void func_800575B4(u32 x) { flags_write(0x188, x); }
-void func_800575D0(s32 x) { flags_write(0x18c, (u32)x); }
-void func_800575EC(u32 x) { flags_write(0x198, x); }
-void func_80057608(u32 x) { flags_write(0x194, x); }
-void func_80057624(u32 x) { flags_write(0x190, x); }
+void akao_keyOn(u32 x) { flags_write(0x188, x); }
+void akao_keyOff(s32 x) { flags_write(0x18c, (u32)x); }
+void akao_setReverbVoices(u32 x) { flags_write(0x198, x); }
+void akao_setNoiseVoices(u32 x) { flags_write(0x194, x); }
+void akao_setPitchModVoices(u32 x) { flags_write(0x190, x); }
 
-void func_80057640(s32 v, u32 l, u32 r, s32 vol) {
+void akao_setVoiceVolume(s32 v, u32 l, u32 r, s32 vol) {
     if (vol) { l *= vol; r *= vol; l >>= 7; r >>= 7; }
     psx_spu_voice_register(v, 0, l & 0x7fff);
     psx_spu_voice_register(v, 2, r & 0x7fff);
 }
-void func_80057688(s32 v, s32 x) { psx_spu_voice_register(v, 4, x); }
-void func_800576A0(s32 v, s32 x) { psx_spu_voice_register(v, 6, (u32)x >> 3); }
-void func_800576BC(s32 v, s32 x) { psx_spu_voice_register(v, 14, (u32)x >> 3); }
-void func_800576D8(s32 v, u16 x) { psx_spu_voice_register(v, 8, x); }
-void func_800576F0(s32 v, u16 x) { psx_spu_voice_register(v, 10, x); }
-void func_80057708(s32 v, s32 a, s32 b) {
+void akao_setVoicePitch(s32 v, s32 x) { psx_spu_voice_register(v, 4, x); }
+void akao_setVoiceStartAddr(s32 v, s32 x) { psx_spu_voice_register(v, 6, (u32)x >> 3); }
+void akao_setVoiceLoopAddr(s32 v, s32 x) { psx_spu_voice_register(v, 14, (u32)x >> 3); }
+void akao_setVoiceAdsr1(s32 v, u16 x) { psx_spu_voice_register(v, 8, x); }
+void akao_setVoiceAdsr2(s32 v, u16 x) { psx_spu_voice_register(v, 10, x); }
+void akao_setVoiceAttack(s32 v, s32 a, s32 b) {
     psx_spu_voice_register(v, 8, (voice_read(v, 8) & 255) | (((u32)b >> 2) << 15) | ((u32)a << 8));
 }
-void func_80057738(s32 v, s32 x) {
+void akao_setVoiceDecay(s32 v, s32 x) {
     psx_spu_voice_register(v, 8, (voice_read(v, 8) & 0xff0f) | ((u32)x << 4));
 }
-void func_80057760(s32 v, s32 x) {
+void akao_setVoiceSustainLevel(s32 v, s32 x) {
     psx_spu_voice_register(v, 8, (voice_read(v, 8) & 0xfff0) | (u32)x);
 }
-void func_80057788(s32 v, s32 a, s32 b) {
+void akao_setVoiceSustain(s32 v, s32 a, s32 b) {
     psx_spu_voice_register(v, 10, (voice_read(v, 10) & 0x3f) | (((u32)b >> 1) << 14) | ((u32)a << 6));
 }
-void func_800577BC(s32 v, s32 a, s32 b) {
+void akao_setVoiceRelease(s32 v, s32 a, s32 b) {
     psx_spu_voice_register(v, 10, (voice_read(v, 10) & 0xffc0) | (((u32)b >> 2) << 5) | (u32)a);
 }
-void func_800577EC(s32 v, Unk800577EC *p, s32 vol) {
-    p->unk4 = 0;
-    s32 left = p->unk18, right = p->unk1A;
+void akao_writeVoice(s32 v, AkaoVoiceRegs *p, s32 vol) {
+    p->dirty = 0;
+    s32 left = p->volL, right = p->volR;
     if (vol) {
         left = (s32)((u32)left * (u32)vol) >> 7;
         right = (s32)((u32)right * (u32)vol) >> 7;
     }
     psx_spu_voice_register(v, 0, left & 0x7fff);
     psx_spu_voice_register(v, 2, right & 0x7fff);
-    psx_spu_voice_register(v, 4, p->unk10);
-    psx_spu_voice_register(v, 6, p->unk8 >> 3);
-    psx_spu_voice_register(v, 8, p->unk12);
-    psx_spu_voice_register(v, 10, p->unk14);
-    psx_spu_voice_register(v, 14, p->unkC >> 3);
+    psx_spu_voice_register(v, 4, p->pitch);
+    psx_spu_voice_register(v, 6, p->startAddr >> 3);
+    psx_spu_voice_register(v, 8, p->adsr1);
+    psx_spu_voice_register(v, 10, p->adsr2);
+    psx_spu_voice_register(v, 14, p->loopAddr >> 3);
 }
-void func_8005CDE4(void) {
-    psx_spu_write(0x1b0, D_80080AC2);
-    psx_spu_write(0x1b2, D_80080AC2);
+void akao_applyCdVolume(void) {
+    psx_spu_write(0x1b0, g_akaoCdVolumeHi);
+    psx_spu_write(0x1b2, g_akaoCdVolumeHi);
 }
 
 /* AKAO initialization from its existing C equivalent, with hardware writes
  * routed through the same boundary as the per-tick voice updates. */
-void func_8005681C(void) {
+void akao_initState(void) {
     u16 i;
     AkaoChannel *c;
 
@@ -95,14 +95,14 @@ void func_8005681C(void) {
     D_8007F8F0.unk4 = 0;
     g_akaoMainSeq.unk50 = 0x7F0000;
     g_akaoMainSeq.unk5C = 0x400000;
-    D_80080AC0 = 0x7FFF0000;
+    g_akaoCdVolume = 0x7FFF0000;
     D_8007F96C = 0;
     D_80083150 = 0;
     g_akaoMainSeq.unk58 = 0;
     g_akaoMainSeq.unk64 = 0;
     D_8007F96E = 0;
     D_80083154 = 0;
-    D_80080A2C = 0;
+    g_akaoCdVolumeFadeTicks = 0;
     psx_spu_write(0x180, 0x3FFF);
     psx_spu_write(0x182, 0x3FFF);
     psx_spu_write(0x1b0, 0x7FFF);
@@ -130,14 +130,14 @@ void func_8005681C(void) {
     psx_spu_write(0x1aa, (i & ~5) | 1);
     for (c = g_akaoChannels, i = 0; i < 32; i++, c++) {
         c->unk34 = 0;
-        c->unk118 = 0x18;
+        c->voice = 0x18;
         c->unk94 = 0;
         c->unk88 = 0;
     }
     c = D_8007E3D8;
     for (i = 8; i < 24;) {
         c->unk34 = 0;
-        c->unk118 = i;
+        c->voice = i;
         i++;
         c->unk94 = 1;
         c->unk88 = 0;
@@ -160,10 +160,10 @@ void func_8005681C(void) {
     g_akaoSeq->unk4C = 0;
     g_akaoSeq->unk66 = 0;
     D_80083158.unk8 |= 0x80;
-    func_8005C86C(4);
+    akao_setReverbMode(4);
     SpuSetReverb(1);
     for (i = 0; i < 24; i++) {
-        func_800576BC(i, 0x1030);
+        akao_setVoiceLoopAddr(i, 0x1030);
     }
     D_8007E3C8[1] = 0;
     D_8007E3C8[0] = 0;

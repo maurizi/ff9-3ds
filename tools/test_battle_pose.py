@@ -27,7 +27,7 @@ class Cpu(e.Cpu):
             value += sum(matrix[row*3+c]*vector[c] for c in range(3))
             value >>= 12
             g[25+row] = value & 0xffffffff; g[9+row] = max(-32768,min(32767,value)) & 0xffffffff
-asm = ROOT/'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_4/func_800C7DAC.s'
+asm = ROOT/'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_4/btl_calcBoneMatrices.s'
 image = b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',asm.read_text()))
 rng = random.Random(0xc7dac)
 cases, expected = [], []

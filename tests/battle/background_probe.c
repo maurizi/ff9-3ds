@@ -46,7 +46,7 @@ void gte_cmd(u32 op) {
     default: abort();
     }
 }
-u8 *o0b_func_800CEED4(const void *, u8 *, u32 *, const void *);
+u8 *o0b_btlbg_drawRecord(const void *, u8 *, u32 *, const void *);
 int main(void) {
     if (mmap(psx_ram, PSX_RAM_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != psx_ram) abort();
     u32 settings[2];
@@ -56,7 +56,7 @@ int main(void) {
         if (fread(psx_ram + 0x180000, 512, 1, stdin) != 1 || fread(psx_ram + 0x181000, 512, 1, stdin) != 1) abort();
         *(u32 *)(psx_ram + 0xCF588) = settings[0]; *(u32 *)(psx_ram + 0xCF5A0) = settings[1];
         u8 *out = psx_ram + 0x190000;
-        u32 size = o0b_func_800CEED4(psx_ram + 0x180000, out, (u32 *)(psx_ram + 0x188000), psx_ram + 0x181000) - out;
+        u32 size = o0b_btlbg_drawRecord(psx_ram + 0x180000, out, (u32 *)(psx_ram + 0x188000), psx_ram + 0x181000) - out;
         fwrite(&size, 4, 1, stdout); fwrite(g, sizeof g, 1, stdout);
         fwrite(psx_scratchpad, sizeof psx_scratchpad, 1, stdout);
         fwrite(psx_ram + 0x188000, 16384, 1, stdout); fwrite(out, 4096, 1, stdout);

@@ -39,7 +39,7 @@ int psx_overlay_load(unsigned int id) {
     return 0;
 }
 
-void func_800127A0(void); /* the game's main loop (decomp src/main/main.c) */
+void game_main(void); /* the game's main loop (decomp src/main/main.c) */
 
 extern unsigned short *psx_vram;
 extern unsigned char *psx_spu_ram;
@@ -61,7 +61,7 @@ void psx_run_game(void) {
     psx_mem_init();
     plat_video_init();
     psx_load_image(psximg_main);
-    func_800127A0();
+    game_main();
     port_fatal("the game's main loop returned");
 }
 

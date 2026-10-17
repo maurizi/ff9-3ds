@@ -52,11 +52,11 @@ void ReadGeomOffset(long *ofx, long *ofy) {
 }
 
 /* SetGeomScreen / ReadGeomScreen (decomp placeholders): ctc2/cfc2 H. */
-void func_800639D4(s32 h) {
+void SetGeomScreen(s32 h) {
     gte_ctc2(26, (u32)h);
 }
 
-s32 func_800645C4(void) {
+s32 ReadGeomScreen(void) {
     return (s32)gte_cfc2(26);
 }
 

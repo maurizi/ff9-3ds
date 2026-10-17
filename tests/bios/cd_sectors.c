@@ -14,7 +14,7 @@ extern Loc *CdIntToPos(int,Loc *);
 extern int CdInit(void), CdControlB(unsigned char,unsigned char *,unsigned char *);
 extern int CdControlF(unsigned char,unsigned char *), CD_getsector(void *,int);
 extern void psx_cd_pump(void);
-extern void (*func_800213A0(void (*)(unsigned char,unsigned char *)))(unsigned char,unsigned char *);
+extern void (*CdReadyCallback(void (*)(unsigned char,unsigned char *)))(unsigned char,unsigned char *);
 const char *plat_data_dir(void) {return "build/tests/cd_fixture";}
 void port_fatal(const char *format,...) {
     va_list ap;va_start(ap,format);vfprintf(stderr,format,ap);va_end(ap);abort();
@@ -45,7 +45,7 @@ int main(void) {
         assert(fwrite(sector,1,sizeof sector,file)==sizeof sector);
     }
     assert(fclose(file)==0 && CdInit());
-    func_800213A0(ready);
+    CdReadyCallback(ready);
     Loc start;CdIntToPos(32,&start);
     CdControlB(2,(unsigned char *)&start,NULL);assert(delivered==0);
     CdControlB(6,NULL,NULL);assert(delivered==1);

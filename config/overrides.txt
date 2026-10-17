@@ -3,29 +3,29 @@
 
 # ovl_64: the MBG / FMV player (MBG_init ...). Replaced by port/game/movie.c, which drives the DS movie player
 # (real playback pending; see docs/movie-validation.md). Movies currently use placeholder timing.
-o64_func_801999B4
-o64_func_80199B28
-o64_func_80199F30
-o64_func_8019AD0C
-o64_func_8019AAF8
+o64_MBG_init
+o64_mbg_play
+o64_mbg_update
+o64_mbg_getLastFrame
+o64_mbg_stop
 
 # AKAO hardware writes: port/game/spu_regs.c preserves repeated register events.
-func_800575B4
-func_800575D0
-func_800575EC
-func_80057608
-func_80057624
-func_80057640
-func_80057688
-func_800576A0
-func_800576BC
-func_800576D8
-func_800576F0
-func_80057708
-func_80057738
-func_80057760
-func_80057788
-func_800577BC
-func_800577EC
-func_8005CDE4
-func_8005681C
+akao_keyOn
+akao_keyOff
+akao_setReverbVoices
+akao_setNoiseVoices
+akao_setPitchModVoices
+akao_setVoiceVolume
+akao_setVoicePitch
+akao_setVoiceStartAddr
+akao_setVoiceLoopAddr
+akao_setVoiceAdsr1
+akao_setVoiceAdsr2
+akao_setVoiceAttack
+akao_setVoiceDecay
+akao_setVoiceSustainLevel
+akao_setVoiceSustain
+akao_setVoiceRelease
+akao_writeVoice
+akao_applyCdVolume
+akao_initState

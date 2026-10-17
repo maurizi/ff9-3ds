@@ -30,7 +30,7 @@ extern unsigned char psx_ovl_resident[3];
 
 void psx_load_image(const PsxImageChunk *img);
 
-/* Load main's data image and enter the game's main loop (decomp func_800127A0). Never returns. */
+/* Load main's data image and enter the game's main loop (decomp game_main). Never returns. */
 void psx_run_game(void);
 void port_scenario_load(const char *path);
 void port_scenario_bootstrap(void);

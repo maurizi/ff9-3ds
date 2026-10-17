@@ -12,7 +12,7 @@ spec = importlib.util.spec_from_file_location('ff9_equiv', ROOT/'decomp/tools/eq
 e = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e)
 address = 0x800CF5A4
-asm = ROOT/'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_3/func_800CF5A4.s'
+asm = ROOT/'decomp/asm/us/ovl_0b/nonmatchings/ovl_0b_3/btlfx_pushTrailPoint.s'
 image = b''.join(bytes.fromhex(w) for w in re.findall(
     r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/', asm.read_text()))
 rng = random.Random(address)
