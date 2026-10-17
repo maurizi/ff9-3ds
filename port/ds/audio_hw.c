@@ -25,6 +25,7 @@ typedef struct {
     u8 volume, pan;
     u16 freq;
     int flush_from;        /* first ring sample not yet flushed from the data cache */
+    int lost;              /* sounding but without a channel (quieter than 16 others) */
 } Voice;
 
 static Voice voices[VOICES];
@@ -38,6 +39,7 @@ static void key_on(unsigned v, void *user) {
     p->write = 0;
     p->flush_from = 0;
     p->restart = 1;
+    p->lost = 0;
 }
 
 static void block(unsigned v, const int16_t *samples, void *user) {
@@ -55,7 +57,7 @@ static const PsxSpuSink sink = {key_on, block, NULL};
 void port_hw_sound_init(void) {
     soundEnable();
     for (int i = 0; i < VOICES; ++i)
-        voices[i] = (Voice){rings[i], 0, 0, -1, -1, 0, 64, 0, 0};
+        voices[i] = (Voice){rings[i], 0, 0, -1, -1, 0, 64, 0, 0, 0};
     psx_spu_set_hw(&sink);
 }
 
@@ -65,20 +67,44 @@ static void stop(Voice *p) {
     p->sound_id = p->channel = -1;
 }
 
-/* Once per emulated frame, after the SPU advanced. */
+/* Once per emulated frame, after the SPU advanced. When more than 16 voices sound, the loudest 16 have channels. */
 void port_hw_sound_frame(void) {
-    int sounding = 0;
+    static PsxSpuVoiceOutput outs[VOICES];
+    static int amps[VOICES];
+    int candidates = 0;
+    for (int v = 0; v < VOICES; ++v) {
+        PsxSpuVoiceOutput *out = &outs[v];
+        psx_spu_voice_output(v, out);
+        int l = out->left < 0 ? -out->left : out->left, r = out->right < 0 ? -out->right : out->right;
+        amps[v] = out->on && !out->noise ? (l > r ? l : r) + 1 : 0;
+        candidates += amps[v] > 0;
+    }
+    /* the 16th largest amplitude: voices below it give their channel up */
+    int cut = 1;
+    if (candidates > 16) {
+        int sorted[VOICES], n = 0;
+        for (int v = 0; v < VOICES; ++v) if (amps[v]) sorted[n++] = amps[v];
+        for (int i = 1; i < n; ++i)
+            for (int j = i; j > 0 && sorted[j - 1] < sorted[j]; --j) { int t = sorted[j]; sorted[j] = sorted[j - 1]; sorted[j - 1] = t; }
+        cut = sorted[15];
+    }
+    int sounding = 0, granted = 0;
     for (int v = 0; v < VOICES; ++v) {
         Voice *p = &voices[v];
-        PsxSpuVoiceOutput out;
-        psx_spu_voice_output(v, &out);
-        if (!out.on || out.noise) { stop(p); continue; }
-        int l = out.left < 0 ? -out.left : out.left, r = out.right < 0 ? -out.right : out.right;
-        int amp = l > r ? l : r;
-        int vol = amp * 127 / 0x4000;
+        PsxSpuVoiceOutput *out = &outs[v];
+        int keep = amps[v] && amps[v] >= cut && granted < 16;
+        if (!keep) {
+            if (amps[v]) port_hw_sound_stats[1]++;
+            if (amps[v]) p->lost = 1; /* still sounding without a channel: its ring falls behind */
+            stop(p);
+            continue;
+        }
+        ++granted;
+        int l = out->left < 0 ? -out->left : out->left, r = out->right < 0 ? -out->right : out->right;
+        int vol = (amps[v] - 1) * 127 / 0x4000;
         if (vol > 127) vol = 127;
         int pan = l + r ? 64 + 63 * (r - l) / (l + r) : 64;
-        unsigned rate = 44100u * out.pitch / 4096;
+        unsigned rate = 44100u * out->pitch / 4096;
         u16 freq = rate > 65535 ? 65535 : rate < 1 ? 1 : (u16)rate;
         /* make this frame's samples visible to the sound DMA */
         if (p->write) {
@@ -92,11 +118,17 @@ void port_hw_sound_frame(void) {
             stop(p);
             p->restart = 0;
         }
+        if (p->sound_id < 0 && p->lost) {
+            /* back from losing its channel: start over from the samples written from now on */
+            p->lost = 0;
+            p->write = p->flush_from = 0;
+            continue;
+        }
         if (p->sound_id < 0) {
             if (!p->write) continue;
             int ch = -1;
             for (int c = 0; c < 16; ++c) if (!(channel_used & (1u << c))) { ch = c; break; }
-            if (ch < 0) { port_hw_sound_stats[1]++; continue; } /* more than 16 voices: the quietest wait */
+            if (ch < 0) continue;
             p->channel = ch;
             channel_used |= 1u << ch;
             p->sound_id = soundPlaySampleChannel(ch, p->ring, SoundFormat_16Bit, RING * 2, freq, (u8)vol, (u8)pan,
