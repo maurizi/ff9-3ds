@@ -123,22 +123,24 @@ static void prepare_return_field(GameData *d) {
 }
 /* Scenario diagnostics only. Validate the current archive's directory before
  * a synthetic story state can send the loader to an absent resource. The IDs are
- * copied at the first field entry: the in-RAM directory shares its area with
- * movie buffers (MBG_init), and the game reloads it before its own lookups. */
-void port_scenario_field_entering(int field) {
-    if(!scenario.enabled || !scenario.consumed) return;
+ * copied at bootstrap, while the in-RAM directory is intact: its area is later
+ * shared with movie buffers (MBG_init) and battle data, and the game reloads it
+ * before its own lookups. */
+static u16 field_ids[512];
+static int n_field_ids=-1;
+static void cache_field_ids(void) {
     typedef struct {u16 field,area;u32 sector;} FieldEntry;
     _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
-    static u16 ids[512];
-    static int n_ids=-1;
-    if(n_ids<0) {
-        FileDirEntry *dirs=(FileDirEntry *)g_gameState->unk14;
-        const FieldEntry *entries=(const FieldEntry *)(D_80067944+0x14c700+(dirs[4].unk8<<11));
-        if(dirs[4].unk4>(s32)(sizeof ids/sizeof ids[0])) port_fatal("scenario: %d field entries",(int)dirs[4].unk4);
-        for(n_ids=0;n_ids<dirs[4].unk4;n_ids++) ids[n_ids]=entries[n_ids].field;
-    }
+    FileDirEntry *dirs=(FileDirEntry *)g_gameState->unk14;
+    const FieldEntry *entries=(const FieldEntry *)(D_80067944+0x14c700+(dirs[4].unk8<<11));
+    if(dirs[4].unk4>(s32)(sizeof field_ids/sizeof field_ids[0])) port_fatal("scenario: %d field entries",(int)dirs[4].unk4);
+    for(n_field_ids=0;n_field_ids<dirs[4].unk4;n_field_ids++) field_ids[n_field_ids]=entries[n_field_ids].field;
+}
+void port_scenario_field_entering(int field) {
+    if(!scenario.enabled || !scenario.consumed) return;
+    if(n_field_ids<0) cache_field_ids();
     port_log("scenario field entering: %d\n",field);
-    for(int i=0;i<n_ids;i++) if(ids[i]==field) return;
+    for(int i=0;i<n_field_ids;i++) if(field_ids[i]==field) return;
     port_fatal("scenario: unavailable field %d in current archive (initial fixture disc %d, field %d); supply appropriate story/event state",
                field,scenario.disc,scenario.field);
 }
@@ -188,6 +190,7 @@ void port_scenario_bootstrap(void) {
     /* Main has initialized allocator/file tables/GPU/GameData. Use the
      * title overlay's New Game initializer without entering its loop. */
     game_loadModeOverlay(0);o14_func_800A7578();
+    cache_field_ids();
     GameData *d=g_gameState->unk1C;
     d->firstUseFxSeen=(u16)scenario.summons_seen;
     if(scenario.gil>=0) d->gil=(u32)scenario.gil;

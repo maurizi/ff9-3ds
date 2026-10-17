@@ -202,6 +202,44 @@ static inline int clip_span(int edge,int step,int width,int *left,int *right) {
 
 /* ---- triangle: edge functions and 12-fractional-bit GPU interpolants -------------------------------- */
 
+#ifndef PORT_SOFTGPU_REFERENCE
+/* A textured polygon row on the common path: opaque, no mask test, no dithering, drawn into VRAM, with the
+ * colour per texel either from the shaded palette, the texel itself (raw or neutral 128 modulation), or a flat
+ * modulation (`mod`, r/g/b fixed for the polygon). Texel and CLUT reads happen per pixel, as plot() does, so a
+ * polygon that draws over its own texture or CLUT sees the same values. */
+static SG_HOT __attribute__((noinline)) void poly_row_textured(const Gp0Mode *m, u16 *dst, int width, int u, int v,
+        int dudx, int dvdx, u16 mask, int mod, int r, int g, int b) {
+    const Gp0State *st = &gp0_state;
+    const unsigned keep_x = ~st->twin_mask_x, wx = st->twin_off_x & st->twin_mask_x;
+    const unsigned keep_y = ~st->twin_mask_y, wy = st->twin_off_y & st->twin_mask_y;
+    const u16 *clut = psx_vram + (m->clut_y & 511) * 1024;
+    const unsigned clut_x = m->clut_x, tx = m->tx, ty = m->ty, depth = m->depth;
+    for (; width > 0; --width, ++dst, u = step_attribute(u, dudx), v = step_attribute(v, dvdx)) {
+        unsigned uu = (((unsigned)(u >> 16) & keep_x) | wx) & 0xFF;
+        unsigned vv = (((unsigned)(v >> 16) & keep_y) | wy) & 0xFF;
+        const u16 *row = psx_vram + ((ty + vv) & 511) * 1024;
+        u16 t, c;
+        if (depth == 0) {
+            unsigned i = (row[(tx + (uu >> 2)) & 1023] >> ((uu & 3) * 4)) & 15;
+            if (palette_ready) { u32 p = shaded_palette[i]; t = (u16)p; c = p >> 16; }
+            else t = c = clut[(clut_x + i) & 1023];
+        } else if (depth == 1) {
+            unsigned i = (row[(tx + (uu >> 1)) & 1023] >> ((uu & 1) * 8)) & 255;
+            if (palette_ready) { u32 p = shaded_palette[i]; t = (u16)p; c = p >> 16; }
+            else t = c = clut[(clut_x + i) & 1023];
+        } else {
+            t = c = row[(tx + uu) & 1023];
+        }
+        if (!t) continue;
+        if (mod && !palette_ready) {
+            int tr = (t & 31) * r >> 7, tg = ((t >> 5) & 31) * g >> 7, tb = ((t >> 10) & 31) * b >> 7;
+            c = (u16)((tr > 31 ? 31 : tr) | (tg > 31 ? 31 : tg) << 5 | (tb > 31 ? 31 : tb) << 10 | (t & 0x8000));
+        }
+        *dst = c | mask;
+    }
+}
+#endif
+
 static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
     /* The GPU seeds attributes at the leftmost input vertex. Preserve input
      * order for tied X before changing winding for edge coverage below. */
@@ -316,6 +354,17 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
         urow = ADVANCE(urow, dudx, dudy); vrow = ADVANCE(vrow, dvdx, dvdy);
 #undef ADVANCE
     }
+#ifndef PORT_SOFTGPU_REFERENCE
+    /* plot()'s colour for these pixels, decided once per polygon: see poly_row_textured. Gouraud texturing,
+     * blending, mask tests, dithering and shadow targets keep the general path. */
+    const int neutral = m->raw || (a->r == 128 && a->g == 128 && a->b == 128);
+    const int fast_textured = m->textured && !m->gouraud && !m->semi && !gp0_state.check_mask &&
+                              !target.pixels && !dither;
+    const int modulate = !neutral;
+    const int flat_r = a->r < 0 ? 0 : a->r > 255 ? 255 : a->r;
+    const int flat_g = a->g < 0 ? 0 : a->g > 255 ? 255 : a->g;
+    const int flat_b = a->b < 0 ? 0 : a->b > 255 ? 255 : a->b;
+#endif
     for (int y = miny; y < maxy; y++) {
         int w0 = w0row, w1 = w1row, w2 = w2row;
         int r = rrow, g = grow, bl = brow, u = urow, v = vrow;
@@ -339,7 +388,11 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
         }
 #endif
 #ifndef PORT_SOFTGPU_REFERENCE
-        if (!m->gouraud) {
+        if (fast_textured && right <= VRAM_W) { /* rows past x 1023 wrap per pixel: general path */
+            if (right > left)
+                poly_row_textured(m, psx_vram + (y & 511) * 1024 + left, right - left, u, v, dudx, dvdx,
+                                  gp0_state.set_mask ? 0x8000 : 0, modulate, flat_r, flat_g, flat_b);
+        } else if (!m->gouraud) {
             for (int x = left; x < right; x++) {
                 if (RASTER_COVERED)
                     plot(m, x, y, a->r, a->g, a->b, u >> 16, v >> 16, dither);
