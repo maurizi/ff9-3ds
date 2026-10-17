@@ -113,6 +113,13 @@ void plat_wait_frame(void) {
         status_row(20, "gx %d polys drop %d", psx_gx_stats_polys, psx_gx_stats_dropped);
         status_row(21, "blend %d exact %d approx", psx_gx_stats_composited, psx_gx_stats_blend_fallback);
 #endif
+#ifdef PORT_GX_HYBRID
+        {
+            extern int gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail, gxh_stats_blocks;
+            status_row(20, "gxh %d polys drop %d tex %d obj %d", gxh_stats_polys, gxh_stats_dropped,
+                       gxh_stats_texture_fail, gxh_stats_blocks);
+        }
+#endif
 #ifdef PORT_AUDIO
         status_row(17, "pcm %lu/%lu u%lu", (unsigned long)port_audio_stats[2],
                    (unsigned long)port_audio_stats[3], (unsigned long)port_audio_stats[4]);

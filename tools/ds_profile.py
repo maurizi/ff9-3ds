@@ -67,10 +67,14 @@ def main():
     p.add_argument('--timeout', type=float, default=900)
     p.add_argument('--sd-folder', type=Path, help='DSi SD folder to sync (e.g. one holding ff9ds/raw/FF9 CD3.img)')
     p.add_argument('--sd-image', type=Path, help='SD image for --sd-folder; a new path makes melonDS size it to fit')
+    p.add_argument('--screenshot', type=Path, help='new PNG under build/: the emulator window at the capture frame '
+                   '(the only view of GX output, which is not in RAM)')
     a = p.parse_args()
     rom, elf, out = a.rom.resolve(), a.elf.resolve(), a.out.resolve()
     if not out.is_relative_to(ROOT / 'build') or out.exists():
         p.error('--out must be a new path under build/')
+    if a.screenshot and (not a.screenshot.resolve().is_relative_to(ROOT / 'build') or a.screenshot.exists()):
+        p.error('--screenshot must be a new path under build/')
     sym = symbols(elf)
     if 'frames' not in sym:
         p.error('ELF has no frames counter')
@@ -130,6 +134,8 @@ def main():
         win = window(a.display)
         if not win:
             sys.exit('no melonDS window')
+        if a.screenshot:
+            subprocess.run(['import', '-window', win, str(a.screenshot.resolve())], env=env, check=True)
         subprocess.run([sys.executable, str(ROOT / 'tools/save_ds_state.py'), '--window', win, '--rom', str(rom),
                         '--elf', str(elf), '--out', str(out)], env=env, check=True)
     finally:

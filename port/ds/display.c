@@ -10,6 +10,10 @@
 #include "psx_mem.h"
 #include "profile.h"
 #include "psx_display.h"
+#ifdef PORT_GX_HYBRID
+#include "gx_hybrid.h"
+extern unsigned char *g_gameState;
+#endif
 
 extern unsigned short *psx_vram;
 void psx_softgpu_enable(int on);
@@ -55,6 +59,9 @@ void display_init(void) {
     render_gx_init();
     return;
 #endif
+#ifdef PORT_GX_HYBRID
+    gxh_init();
+#endif
     videoSetMode(MODE_5_2D);
     vramSetBankA(VRAM_A_MAIN_BG_0x06000000);
     vramSetBankB(VRAM_B_MAIN_BG_0x06020000);
@@ -97,6 +104,13 @@ static void pace(void) {
     port_profile_end(PORT_PROFILE_WAIT, profile_wait);
 }
 
+#ifdef PORT_GX_HYBRID
+/* The hybrid renderer scales its 2D layer a block at a time (dst stride 256). */
+static void scale_region(u16 *dst, int x, int y, int w, int h) {
+    ds_scale_display_text_pair(dst, psx_vram, x, y, w, h, text_rects, text_count, previous_rects, previous_count);
+}
+#endif
+
 void display_present(void) {
 #ifndef PORT_SOFT_DISPLAY
     return;
@@ -108,11 +122,25 @@ void display_present(void) {
     PsxDisplayInfo info;
     psx_gpu_display_info(&info);
     const PsxDisplayInfo *d = &info;
-    /* Nothing written over the shown area and the same display area: the bitmap already shows this frame. Keep
-     * it rather than scaling an identical copy (battle scenes change every fourth VSync, movies too). */
     static PsxDisplayInfo shown;
     static unsigned int shown_generation;
     static int shown_valid;
+#ifdef PORT_GX_HYBRID
+    /* Battle (mode 2) uses the hybrid renderer; its 3D scenes and VRAM layout replace the software bitmaps. */
+    int hybrid = g_gameState && g_gameState[8] == 2;
+    if (hybrid != gxh_active()) {
+        gxh_enable(hybrid);
+        if (!hybrid) {
+            videoSetMode(MODE_5_2D);
+            vramSetBankA(VRAM_A_MAIN_BG_0x06000000);
+            vramSetBankB(VRAM_B_MAIN_BG_0x06020000);
+            bgUpdate();
+        }
+        shown_valid = 0;
+    }
+#endif
+    /* Nothing written over the shown area and the same display area: the bitmap already shows this frame. Keep
+     * it rather than scaling an identical copy (battle scenes change every fourth VSync, movies too). */
     if (shown_valid && shown_generation == psx_display_generation && !memcmp(&shown, d, sizeof shown)) {
         drawing = 0;
         pace();
@@ -143,6 +171,15 @@ void display_present(void) {
         frame_w=w; frame_h=h;
     }
     psx_display_font_presented=text_count;
+#ifdef PORT_GX_HYBRID
+    if (gxh_active()) {
+        gxh_present(d, scale_region);
+        port_profile_end(PORT_PROFILE_SCALE,profile_scale);
+        drawing = 0;
+        pace();
+        return;
+    }
+#endif
     if (d->rgb24)
         ds_scale_display_rgb24(dst, psx_vram, d->x, d->y, w, h);
     else

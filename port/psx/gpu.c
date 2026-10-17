@@ -60,10 +60,16 @@ __attribute__((weak)) unsigned int psx_vram_generation; /* also in gp0.c */
 __attribute__((weak)) unsigned int psx_display_generation;
 __attribute__((weak)) int psx_display_watch[4];
 
+/* A renderer that keeps scenes outside VRAM learns their clearing fills here (gx_hybrid.c). */
+__attribute__((weak)) void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
+    (void)x; (void)y; (void)w; (void)h; (void)rgb15;
+}
+
 static void vram_fill(int x, int y, int w, int h, u16 c) {
     if (!psx_vram) {
         return;
     }
+    psx_vram_filled(x, y, w, h, c);
     psx_vram_generation++;
     psx_display_written(x, y, w, h);
     psx_vram_touch(x, y, w, h);
