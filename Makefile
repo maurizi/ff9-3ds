@@ -9,6 +9,7 @@
 #   AUTOPRESS="..."   DS: scripted presses, as the PC's --press ("CROSS@2500,UP@2900+3")
 #   SOFTDISPLAY=0     DS: experimental GX renderer (software display is the default)
 #   HYBRID=1          DS: hybrid renderer in battle (GX polygons, software 2D; docs/design.md §5.0)
+#   HWSOUND=1         DS: SPU voices on the DS hardware channels instead of the exact mixer (design §7.0)
 
 DECOMP   := decomp
 VERSION  := us
@@ -156,7 +157,7 @@ $(BUILD)/ds/port/ds/video_gl.o: third_party/libnds/videoGL.c
 $(BUILD)/ds/port/ds/render_gx.o $(BUILD)/tests/gx_backend.o: port/ds/gx_shadow_lazy.h port/include/profile.h
 SPECS    := $(BLOCKSDS)/sys/crts/dsi_arm9.specs
 DS_ARCH  := -mcpu=arm946e-s -mthumb -mthumb-interwork
-PORT_EXTRA_ds := $(if $(filter 1,$(SPUITCM)),-DPORT_SPU_ITCM) $(if $(filter 1,$(AUDIO)),-DPORT_AUDIO) $(if $(filter 1,$(AUDIOHASH)),-DPORT_AUDIO_HASH) $(if $(AUDIOCAPTURE),-DPORT_AUDIO_CAPTURE=$(AUDIOCAPTURE)) -I$(BLOCKSDS)/libs/maxmod/include -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include $(if $(AUTORUN),-DPORT_AUTORUN) \
+PORT_EXTRA_ds := $(if $(filter 1,$(SPUITCM)),-DPORT_SPU_ITCM) $(if $(filter 1,$(HWSOUND)),-DPORT_HW_SOUND,$(if $(filter 1,$(AUDIO)),-DPORT_AUDIO)) $(if $(filter 1,$(AUDIOHASH)),-DPORT_AUDIO_HASH) $(if $(AUDIOCAPTURE),-DPORT_AUDIO_CAPTURE=$(AUDIOCAPTURE)) -I$(BLOCKSDS)/libs/maxmod/include -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include $(if $(AUTORUN),-DPORT_AUTORUN) \
                  $(if $(CAPTURE_FRAME),-DPORT_CAPTURE_FRAME=$(CAPTURE_FRAME)) \
                  $(if $(filter 1,$(CAPTURE_READBACK)),-DPORT_CAPTURE_READBACK) \
                  $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') $(if $(filter 1,$(SOFTDISPLAY) $(HYBRID)),-DPORT_SOFT_DISPLAY) $(if $(filter 1,$(HYBRID)),-DPORT_GX_HYBRID) $(if $(filter 0,$(GXMERGE)),-DPORT_GX_NO_MERGE) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) $(if $(filter 1,$(GXEXPERIMENTAL)),-DPORT_GX_EXPERIMENTAL) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXLAZY)),-DPORT_GX_LAZY) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD) $(if $(filter 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD_LOW) $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 1,$(CANARY)),-DPORT_CANARY)
@@ -167,7 +168,7 @@ $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH)
 .PHONY: FORCE_DS_CONFIG
 $(BUILD)/ds/runtime-config: FORCE_DS_CONFIG
 	@mkdir -p $(dir $@)
-	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(AUDIO)' '$(AUDIOHASH)' '$(AUDIOCAPTURE)' '$(SPUARM)' '$(SPUITCM)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' '$(GXLAZY)' '$(CAPTURE_READBACK)' '$(CANARY)' '$(HYBRID)' > $@.tmp
+	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(AUDIO)' '$(AUDIOHASH)' '$(AUDIOCAPTURE)' '$(SPUARM)' '$(SPUITCM)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' '$(GXLAZY)' '$(CAPTURE_READBACK)' '$(CANARY)' '$(HYBRID)' '$(HWSOUND)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(ds_PORTOBJS): $(BUILD)/ds/runtime-config

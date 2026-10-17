@@ -83,7 +83,14 @@ void port_canary(const char *where) {
 }
 #endif
 
+#ifdef PORT_HW_SOUND
+#include "audio_hw.h"
+#endif
+
 void plat_wait_frame(void) {
+#ifdef PORT_HW_SOUND
+    port_hw_sound_frame();
+#endif
 #ifndef PORT_SOFT_DISPLAY
     swiWaitForVBlank();
 #endif
@@ -123,6 +130,10 @@ void plat_wait_frame(void) {
             status_row(21, "rg %d u%d np%d col %d ui %d/%d", gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced,
                        gxh_stats_blocks, gxh_stats_ui_drawn, gxh_stats_ui_skipped);
         }
+#endif
+#ifdef PORT_HW_SOUND
+        status_row(17, "snd %d on, %d starts, %d waiting", port_hw_sound_stats[2], port_hw_sound_stats[0],
+                   port_hw_sound_stats[1]);
 #endif
 #ifdef PORT_AUDIO
         status_row(17, "pcm %lu/%lu u%lu", (unsigned long)port_audio_stats[2],
@@ -226,6 +237,10 @@ int main(void) {
     port_profile_init();
 #ifdef PORT_AUDIO
     printf("SPU PCM: %s\n", port_audio_init() ? "44100 Hz stereo" : "initialization failed");
+#endif
+#ifdef PORT_HW_SOUND
+    port_hw_sound_init();
+    printf("SPU: DS hardware channels\n");
 #endif
     psx_run_game();
 }
