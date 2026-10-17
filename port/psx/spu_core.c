@@ -29,6 +29,45 @@ static SPU_HOT uint32_t flags(unsigned offset) {
 
 SPU_HOT void psx_spu_set_rendering(int enabled) { rendering = !!enabled; }
 
+typedef struct {
+    uint32_t magic, size;
+    PsxSpuVoice voices[PSX_SPU_VOICES];
+    PsxSpuVolume main_volume[2];
+    PsxSpuNoise noise;
+    PsxSpuReverb reverb;
+    uint32_t key_on, key_off, ended, sample_fraction, capture_offset;
+    uint16_t regs[0x200];
+} SpuSnapshot;
+
+unsigned psx_spu_snapshot_size(void) { return sizeof(SpuSnapshot); }
+
+void psx_spu_snapshot(void *out) {
+    SpuSnapshot *s = out;
+    memset(s, 0, sizeof *s);
+    s->magic = PSX_SPU_SNAPSHOT_MAGIC;
+    s->size = sizeof *s;
+    memcpy(s->voices, voices, sizeof voices);
+    memcpy(s->main_volume, main_volume, sizeof main_volume);
+    s->noise = noise;
+    s->reverb = reverb;
+    s->key_on = key_on; s->key_off = key_off; s->ended = ended;
+    s->sample_fraction = sample_fraction; s->capture_offset = capture_offset;
+    memcpy(s->regs, psx_spu_regs, sizeof s->regs);
+}
+
+int psx_spu_restore(const void *in) {
+    const SpuSnapshot *s = in;
+    if (s->magic != PSX_SPU_SNAPSHOT_MAGIC || s->size != sizeof *s) return 0;
+    memcpy(voices, s->voices, sizeof voices);
+    memcpy(main_volume, s->main_volume, sizeof main_volume);
+    noise = s->noise;
+    reverb = s->reverb;
+    key_on = s->key_on; key_off = s->key_off; ended = s->ended;
+    sample_fraction = s->sample_fraction; capture_offset = s->capture_offset;
+    memcpy(psx_spu_regs, s->regs, sizeof s->regs);
+    return 1;
+}
+
 SPU_HOT void psx_spu_reset(void) {
     psx_spu_trace(PSX_SPU_TRACE_RESET, 0, 0, NULL);
     memset(voices, 0, sizeof voices);
@@ -194,11 +233,15 @@ static SPU_HOT void span_frames(int16_t *output, unsigned n) {
         psx_spu_noise_tick(&noise, (control >> 8) & 63);
     }
     static PsxSpuVoiceBlock block;
+    unsigned profile_voices = port_profile_begin();
     psx_spu_mix_voices_block(voices, psx_spu_ram, n, noise_levels, flags(0x194), flags(0x190), flags(0x198),
                              !!(control & 0x40), &block);
+    port_profile_detail_end(PORT_PROFILE_SPU_VOICES, profile_voices);
     ended |= block.ended;
+    unsigned profile_output = port_profile_begin();
     for (unsigned s = 0; s < n; ++s)
         finish_sample(block.dry[s], block.reverb_send[s], block.capture[s], output + s * 2);
+    port_profile_detail_end(PORT_PROFILE_SPU_OUTPUT, profile_output);
 }
 
 SPU_HOT void psx_spu_advance(unsigned ticks) {

@@ -19,9 +19,38 @@
 #include "psx_mem.h"
 #include "psx_runtime.h"
 #include "psx_spu.h"
+#include "psx_spu_trace.h"
 
 static const char *data_dir = "disks/us";
 static long frame_limit = -1;
+static long spu_snapshot_at = -1;
+static const char *spu_snapshot_path;
+/* After the snapshot, the next SPU_REPLAY_FRAMES frames of register writes and RAM uploads follow it in the
+ * file, by output sample: {u32 sample, type, a, b, b bytes of RAM data padded to 4}, then sample 0xffffffff. */
+enum { SPU_REPLAY_FRAMES = 120 };
+static FILE *spu_replay;
+static unsigned long spu_replay_samples;
+static void spu_replay_u32(unsigned v) {
+    unsigned char b[4] = {v, v >> 8, v >> 16, v >> 24};
+    fwrite(b, 1, 4, spu_replay);
+}
+static void spu_replay_event(unsigned type, unsigned a, unsigned b, const void *data) {
+    if (type == PSX_SPU_TRACE_SAMPLE) { spu_replay_samples++; return; }
+    if (type != PSX_SPU_TRACE_WRITE && type != PSX_SPU_TRACE_RAM) return;
+    spu_replay_u32(spu_replay_samples); spu_replay_u32(type); spu_replay_u32(a); spu_replay_u32(b);
+    if (type == PSX_SPU_TRACE_RAM) {
+        static const unsigned char pad[3];
+        fwrite(data, 1, b, spu_replay);
+        fwrite(pad, 1, (4 - b % 4) % 4, spu_replay);
+    }
+}
+static void spu_replay_close(void) {
+    if (!spu_replay) return;
+    psx_spu_set_trace(NULL);
+    spu_replay_u32(0xffffffffu);
+    if (fclose(spu_replay)) perror("spu snapshot");
+    spu_replay = NULL;
+}
 static long frames;
 static long status_every = 60;
 static long dump_every; /* --dump N: write the displayed area every N frames to build/frames/ */
@@ -142,6 +171,24 @@ void plat_wait_frame(void) {
         }
         fprintf(stderr, "\n");
     }
+    if (frames == spu_snapshot_at) {
+        /* SPU state followed by the 512 KiB SPU RAM, for make spu-snapshot-ds */
+        extern unsigned char *psx_spu_ram;
+        static unsigned char state[1 << 16];
+        if (psx_spu_snapshot_size() > sizeof state) { fprintf(stderr, "snapshot too large\n"); exit(1); }
+        psx_spu_snapshot(state);
+        FILE *f = fopen(spu_snapshot_path, "wbx");
+        if (!f || fwrite(state, 1, psx_spu_snapshot_size(), f) != psx_spu_snapshot_size() ||
+            fwrite(psx_spu_ram, 1, 0x80000, f) != 0x80000) {
+            perror("spu snapshot");
+            exit(1);
+        }
+        spu_replay = f;
+        atexit(spu_replay_close);
+        psx_spu_set_trace(spu_replay_event);
+        fprintf(stderr, "SPU snapshot at frame %ld: %s\n", frames, spu_snapshot_path);
+    }
+    if (spu_replay && frames == spu_snapshot_at + SPU_REPLAY_FRAMES) spu_replay_close();
     if (frame_limit >= 0 && frames >= frame_limit) {
         fprintf(stderr, "frame limit %ld reached\n", frame_limit);
         exit(0);
@@ -206,10 +253,17 @@ int main(int argc, char **argv) {
             vram_at = atol(argv[++i]);
         } else if (!strcmp(argv[i], "--status") && i + 1 < argc) {
             status_every = atol(argv[++i]);
+        } else if (!strcmp(argv[i], "--spu-snapshot") && i + 1 < argc) {
+            static char path[512];
+            if (sscanf(argv[++i], "%ld:%511s", &spu_snapshot_at, path) != 2) {
+                fprintf(stderr, "bad --spu-snapshot %s (FRAME:NEW_PATH)\n", argv[i]);
+                return 1;
+            }
+            spu_snapshot_path = path;
         } else if (!strcmp(argv[i], "--frames") && i + 1 < argc) {
             frame_limit = atol(argv[++i]);
         } else {
-            fprintf(stderr, "usage: %s [--data DIR] [--scenario PATH] [--frames N] [--status N] [--watch ADDR:SIZE] [--press BUTTON@FRAME[+N]] [--render] [--dump N] [--audio NEW.wav] [--spu-trace NEW.bin]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--data DIR] [--scenario PATH] [--frames N] [--status N] [--watch ADDR:SIZE] [--press BUTTON@FRAME[+N]] [--render] [--dump N] [--audio NEW.wav] [--spu-trace NEW.bin] [--spu-snapshot FRAME:NEW_PATH]\n", argv[0]);
             return 1;
         }
     }

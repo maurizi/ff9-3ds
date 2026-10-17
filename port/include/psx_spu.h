@@ -17,4 +17,11 @@ void psx_spu_voice_register(unsigned voice, unsigned offset, uint16_t value);
 void psx_spu_set_rendering(int enabled);
 /* Root counter clock is master/8: one output sample per 96 ticks. */
 void psx_spu_advance(unsigned ticks);
+
+/* Diagnostics: the complete SPU state except its RAM, so a benchmark can replay a moment of the game
+ * (host --spu-snapshot, make spu-snapshot-ds). Plain fixed-width fields: the same bytes on host and DS. */
+enum { PSX_SPU_SNAPSHOT_MAGIC = 0x50555331 /* "SPU1" */ };
+unsigned psx_spu_snapshot_size(void);
+void psx_spu_snapshot(void *out);
+int psx_spu_restore(const void *in);
 #endif

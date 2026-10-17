@@ -53,9 +53,13 @@ if len(details)==1:
               if len(row.split())==4 and row.split()[3]=='port_profile_detail_stats')
     if size>=64:
         names+=('spu_total_including_sink','audio_sink')
-    if size==80:
+    if size>=80:
         names+=('movie_vlc','movie_mdec')
-    elif size not in (48,64):
+    if size>=96:
+        names+=('spu_voices','spu_output_and_reverb')
+    if size==112:
+        names+=('spu_steady_runs','spu_event_samples')
+    elif size not in (48,64,80,96):
         p.error('unsupported compatibility timing block size')
     count=len(names)
     detail=struct.unpack_from('<'+str(2*count+2)+'I',data,36+details[0]-0x02000000)

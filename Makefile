@@ -535,6 +535,22 @@ $(BUILD)/tests/spu_throughput_ds.nds: $(BUILD)/tests/spu_throughput_ds.elf $(ARM
 $(BUILD)/tests/spu_throughput_host: tests/spu/throughput.c $(addprefix port/psx/,$(addsuffix .c,$(SPU_IMPL_NAMES))) port/psx/spu_trace.c $(PORT_HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu17 -O2 -Iport/include $< $(addprefix port/psx/,$(addsuffix .c,$(SPU_IMPL_NAMES))) port/psx/spu_trace.c -o $@
+# Replay a game moment's SPU state (build/pc/ff9ds --spu-snapshot FRAME:PATH) on the DS/host and time it.
+SPU_SNAPSHOT ?= $(BUILD)/validation/spu_snapshot.bin
+SPU_SNAPSHOT_SRCS := tests/spu/snapshot_bench.c $(addprefix port/psx/,$(addsuffix .c,$(SPU_IMPL_NAMES))) port/psx/spu_trace.c
+.PHONY: spu-snapshot-ds
+spu-snapshot-ds: $(BUILD)/tests/spu_snapshot_ds.nds
+$(BUILD)/tests/spu_snapshot_data.s: $(SPU_SNAPSHOT)
+	@mkdir -p $(dir $@)
+	printf '\t.section .rodata\n\t.balign 4\n\t.global snapshot_data, snapshot_data_end\nsnapshot_data:\n\t.incbin "%s"\nsnapshot_data_end:\n' $< > $@
+$(BUILD)/tests/spu_snapshot_ds.elf: $(SPU_SNAPSHOT_SRCS) $(BUILD)/tests/spu_snapshot_data.s $(PORT_HDRS) port/psx/spu_hot.h port/psx/spu_inline.h
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -DPORT_SPU_ITCM -DPORT_PROFILE -DARM9 $(SPU_SNAPSHOT_SRCS) $(BUILD)/tests/spu_snapshot_data.s \
+	    -L$(BLOCKSDS)/libs/libnds/lib -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/spu_snapshot_ds.nds: $(BUILD)/tests/spu_snapshot_ds.elf $(ARM7ELF)
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "SPU snapshot;ARM9;User game state"
+$(BUILD)/tests/spu_snapshot_host: $(SPU_SNAPSHOT_SRCS) $(PORT_HDRS) port/psx/spu_hot.h port/psx/spu_inline.h
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu17 -O2 -DPORT_PROFILE -Iport/include $(SPU_SNAPSHOT_SRCS) -o $@
 .PHONY: spu-core-ds
 spu-core-ds: $(BUILD)/tests/spu_core_ds.nds
 $(BUILD)/tests/spu_core_ds_main.o: tests/spu/core_ds_main.c

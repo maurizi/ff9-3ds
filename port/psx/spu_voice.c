@@ -2,6 +2,7 @@
 #include "spu_hot.h"
 #include "spu_inline.h"
 #include "psx_spu_gauss.h"
+#include "profile.h"
 #include <string.h>
 
 static SPU_HOT int16_t clamp_sample(int32_t value) {
@@ -158,6 +159,52 @@ static SPU_HOT __attribute__((noinline)) int32_t steady_keep(const int16_t *samp
     return steady_mix(samples, counter, pitch, level, left, right, dry, send, keep, run);
 }
 
+/* Samples before the voice's source block ends (no fetch, loop or end inside), when its volumes are constant. */
+static SPU_HOT unsigned block_samples(const PsxSpuVoice *voice, uint16_t pitch) {
+    if (!voice->source.fetched || voice->volume[0].active || voice->volume[1].active) return 0;
+    if (pitch > 0x3fff) pitch = 0x3fff;
+    if (!pitch) return 0xffffffffu;
+    return ((PSX_SPU_BLOCK_SAMPLES << 12) - 1 - voice->source.counter) / pitch;
+}
+
+/* A run inside one source block whose envelope ticks: the single-sample order (sample at the current ENVX,
+ * then the ADSR tick, then the position) with the same inline ADSR step, phase changes included. Stops after
+ * a sample that switched the voice off when off voices don't fetch. Returns the samples done. */
+static SPU_HOT __attribute__((noinline)) unsigned ticking_run(PsxSpuVoice *voice, unsigned run, uint32_t pitch,
+        int32_t *dry, int32_t *send, int32_t *keep, int16_t *capture, int fetch_off, int32_t *last) {
+    PsxSpuAdsr *adsr = &voice->adsr;
+    const int16_t *samples = voice->source.samples;
+    const int32_t left = voice->volume[0].level, right = voice->volume[1].level;
+    uint32_t counter = voice->source.counter;
+    int32_t sample = 0;
+    unsigned k = 0;
+    while (k < run) {
+        sample = 0;
+        if (adsr->level) {
+            unsigned phase = (counter >> 4) & 255;
+            const int16_t *at = samples + (counter >> 12);
+            const int16_t *up = psx_spu_gauss + phase, *down = psx_spu_gauss + 255 - phase;
+            int32_t total = at[0] * down[0] + at[1] * down[256] + at[2] * up[256] + at[3] * up[0];
+            sample = ((int16_t)(total >> 15) * adsr->level) >> 15;
+        }
+        if (adsr->phase != PSX_SPU_ADSR_OFF &&
+            (adsr->phase != PSX_SPU_ADSR_SUSTAIN || adsr->envelope.increment))
+            spu_adsr_tick(adsr);
+        counter += pitch;
+        int32_t l = (sample * left) >> 15, r = (sample * right) >> 15;
+        dry[k * 2] += l;
+        dry[k * 2 + 1] += r;
+        if (send) send[k * 2] += l, send[k * 2 + 1] += r;
+        if (keep) keep[k] = sample;
+        if (capture) capture[k * 2] = clamp_sample(sample);
+        ++k;
+        if (adsr->phase == PSX_SPU_ADSR_OFF && !fetch_off) break;
+    }
+    voice->source.counter = counter;
+    *last = sample;
+    return k;
+}
+
 /* The same arithmetic as psx_spu_mix_voices, for n consecutive samples at once: each voice runs its whole span
  * before the next, with its state kept local. Pitch modulation reads the previous voice's post-ADSR samples
  * from a buffer, so voice order and values are identical. The caller applies key events before the span and
@@ -182,10 +229,23 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
             int32_t sample = 0;
             for (unsigned s = 0; s < n; ++s) {
                 uint32_t env_increment;
-                unsigned run;
-                if (!noisy && !modulated &&
-                    (run = steady_samples(voice, voice->registers[2], &env_increment)) != 0) {
+                unsigned run = 0, block_run = 0;
+                if (!noisy && !modulated && (block_run = block_samples(voice, voice->registers[2])) != 0)
+                    run = steady_samples(voice, voice->registers[2], &env_increment);
+                if (block_run >= 2 && run < block_run && run < n - s) {
+                    /* The envelope steps or changes phase inside this block: tick it per sample. */
+                    unsigned todo = block_run > n - s ? n - s : block_run;
+                    uint32_t pitch = voice->registers[2] > 0x3fff ? 0x3fff : voice->registers[2];
+                    unsigned done = ticking_run(voice, todo, pitch, out->dry[s], reverb ? out->reverb_send[s] : NULL,
+                                                keep ? current + s : NULL,
+                                                (i == 1 || i == 3) ? &out->capture[s][i >> 1] : NULL,
+                                                fetch_off_voices, &sample);
+                    s += done - 1;
+                    continue;
+                }
+                if (run) {
                     /* Steady run: everything but the source position and the envelope counter is constant. */
+                    unsigned profile_steady = port_profile_begin();
                     if (run > n - s) run = n - s;
                     uint32_t counter = voice->source.counter, pitch = voice->registers[2];
                     if (pitch > 0x3fff) pitch = 0x3fff;
@@ -214,6 +274,7 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
                     s += run;
                     voice->source.counter = counter;
                     voice->adsr.envelope.counter += env_increment * run;
+                    port_profile_detail_end(PORT_PROFILE_SPU_STEADY, profile_steady);
                     --s; /* the loop's ++s: continue with the event sample */
                     continue;
                 }
@@ -222,6 +283,7 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
                     current[s] = sample = 0;
                     continue;
                 }
+                unsigned profile_event = port_profile_begin();
                 if (!voice->source.fetched)
                     psx_spu_source_fetch(&voice->source, ram, &voice->registers[7]);
                 sample = 0;
@@ -249,6 +311,7 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
                     if (voice->volume[channel].active) spu_volume_tick(&voice->volume[channel]);
                 }
                 if (i == 1 || i == 3) out->capture[s][i >> 1] = clamp_sample(sample);
+                port_profile_detail_end(PORT_PROFILE_SPU_EVENT, profile_event);
             }
             voice->last_sample = sample;
         }
