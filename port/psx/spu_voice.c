@@ -112,34 +112,53 @@ static inline __attribute__((always_inline)) int32_t gauss_sample(const int16_t 
 }
 
 /* A voice without noise, pitch modulation or a volume sweep, from sample s to the span's end: exactly the
- * single-sample mixer's steps, with the source position, pitch and stereo volumes held locally and block
- * fetches, loops and ends handled in place. Stops early only when the voice switched off and off voices don't
- * fetch (the caller's per-sample loop then skips it). Returns the next sample to process. */
+ * single-sample mixer's steps. The source position and the whole ADSR state are kept in locals whose address
+ * never escapes, so stores to the mix buffers don't force reloads; the voice struct is written back around the
+ * rare out-of-line steps (block crossing and fetch, ADSR phase change, mute). Stops early only when the voice
+ * switched off and off voices don't fetch (the caller's per-sample loop then skips it). Returns the next sample. */
 static SPU_HOT __attribute__((noinline)) unsigned fast_span(PsxSpuVoice *restrict voice, unsigned s, unsigned n,
         const uint8_t *ram, int32_t (*restrict dry)[2], int32_t (*restrict send)[2], int32_t *restrict keep,
         int16_t (*restrict capture)[2], unsigned capture_channel, int fetch_off, uint32_t bit,
         uint32_t *restrict ended, int32_t *restrict last) {
     PsxSpuSource *src = &voice->source;
-    PsxSpuAdsr *adsr = &voice->adsr;
     const uint32_t pitch = voice->registers[2] > 0x3fff ? 0x3fff : voice->registers[2];
     const int32_t left = voice->volume[0].level, right = voice->volume[1].level;
+    const int16_t *samples = src->samples;
+    PsxSpuAdsr adsr = voice->adsr;
+    uint32_t counter = src->counter;
     int32_t sample = *last;
+    if (!src->fetched) {
+        psx_spu_source_fetch(src, ram, &voice->registers[7]);
+    }
     for (; s < n; ++s) {
-        if (adsr->phase == PSX_SPU_ADSR_OFF && !fetch_off) break;
-        if (!src->fetched) psx_spu_source_fetch(src, ram, &voice->registers[7]);
+        if (adsr.phase == PSX_SPU_ADSR_OFF && !fetch_off) break;
         sample = 0;
-        if (adsr->level) sample = ((int16_t)(gauss_sample(src->samples, src->counter) >> 15) * adsr->level) >> 15;
-        if (adsr->phase != PSX_SPU_ADSR_OFF &&
-            (adsr->phase != PSX_SPU_ADSR_SUSTAIN || adsr->envelope.increment))
-            spu_adsr_tick(adsr);
+        if (adsr.level) sample = ((int16_t)(gauss_sample(samples, counter) >> 15) * adsr.level) >> 15;
+        /* spu_adsr_tick, on the local copy; the phase change itself runs on the voice. */
+        if (adsr.phase != PSX_SPU_ADSR_OFF && (adsr.phase != PSX_SPU_ADSR_SUSTAIN || adsr.envelope.increment)) {
+            if (adsr.envelope.increment) spu_envelope_tick(&adsr.envelope, &adsr.level);
+            if (adsr.phase != PSX_SPU_ADSR_SUSTAIN &&
+                (adsr.envelope.decrease ? adsr.level <= adsr.target : adsr.level >= adsr.target)) {
+                voice->adsr = adsr;
+                psx_spu_adsr_advance_phase(&voice->adsr);
+                adsr = voice->adsr;
+            }
+        }
         if (keep) keep[s] = sample;
-        uint32_t counter = src->counter + pitch;
-        if (counter < (PSX_SPU_BLOCK_SAMPLES << 12)) {
-            src->counter = counter;
-        } else {
+        counter += pitch;
+        if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) {
+            /* spu_source_advance's block step; then the fetch the next sample would do first. */
+            src->counter = counter - pitch;
             unsigned action = spu_source_advance(src, pitch, voice->registers[7], 0);
             if (action & PSX_SPU_SOURCE_END) *ended |= bit;
-            if (action & PSX_SPU_SOURCE_MUTE) psx_spu_adsr_force_off(adsr);
+            if (action & PSX_SPU_SOURCE_MUTE) {
+                voice->adsr = adsr;
+                psx_spu_adsr_force_off(&voice->adsr);
+                adsr = voice->adsr;
+            }
+            counter = src->counter;
+            if (s + 1 < n && (adsr.phase != PSX_SPU_ADSR_OFF || fetch_off))
+                psx_spu_source_fetch(src, ram, &voice->registers[7]);
         }
         int32_t l = (sample * left) >> 15, r = (sample * right) >> 15;
         dry[s][0] += l;
@@ -147,6 +166,8 @@ static SPU_HOT __attribute__((noinline)) unsigned fast_span(PsxSpuVoice *restric
         if (send) send[s][0] += l, send[s][1] += r;
         if (capture) capture[s][capture_channel] = clamp_sample(sample);
     }
+    src->counter = counter;
+    voice->adsr = adsr;
     *last = sample;
     return s;
 }
