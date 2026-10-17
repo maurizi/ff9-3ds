@@ -6,6 +6,7 @@
 typedef struct {
     uint8_t quant[2][64]; /* luminance, chroma; stream/zigzag order */
     int16_t scale[64];   /* original uploaded matrix, frequency-major */
+    uint32_t scale_max;  /* largest |scale|, for the IDCT's overflow bounds */
 } PsxMdecEnv;
 enum { PSX_MDEC_OK=0, PSX_MDEC_TRUNCATED=-1, PSX_MDEC_CAPACITY=-2, PSX_MDEC_MODE=-3 };
 void psx_mdec_env_init(PsxMdecEnv *env, const uint8_t quant[128], const uint8_t scale[128]);
