@@ -246,43 +246,45 @@ static SG_HOT __attribute__((noinline)) void poly_row_textured(const Gp0Mode *m,
 
 #ifndef PORT_SOFTGPU_REFERENCE
 /* The common battle polygon row: indexed texels, no texture window, unwrapped CLUT, dithered flat modulation.
- * dither_colour's arithmetic as tables: dmod[ch][t5] = t5 * colour >> 4 (at most 494) for the polygon's colour,
- * and dclamp[v + bias + 4] = clamp(v + bias, 0, 255) >> 3 for every v + bias in [-4, 497]. */
-static u16 dmod[3][32];
-static unsigned dmod_key = ~0u;
-static u8 dclamp[502];
+ * dither_colour's arithmetic as a table per 4x4 dither position and channel, rebuilt when the polygon colour
+ * changes (rarely: a few hundred times per thousand battle frames): dtab[y & 3][x & 3][ch][t5] is
+ * clamp((t5 * colour >> 4) + offset, 0, 255) >> 3, shifted into the channel's place. */
+static u16 dtab[4][4][3][32];
+static unsigned dtab_key = ~0u;
 static void dither_tables(int r, int g, int b) {
+    static const signed char offsets[16] = {-4,0,-3,1,2,-2,3,-1,-3,1,-4,0,3,-1,2,-2};
     unsigned key = (unsigned)r | (unsigned)g << 8 | (unsigned)b << 16;
-    if (!dclamp[501]) for (int i = 0; i < 502; ++i) { int v = i - 4; dclamp[i] = (v < 0 ? 0 : v > 255 ? 255 : v) >> 3; }
-    if (key == dmod_key) return;
-    dmod_key = key;
-    for (int t = 0; t < 32; ++t) dmod[0][t] = t * r >> 4, dmod[1][t] = t * g >> 4, dmod[2][t] = t * b >> 4;
+    if (key == dtab_key) return;
+    dtab_key = key;
+    const int colour[3] = {r, g, b};
+    for (int p = 0; p < 16; ++p)
+        for (int ch = 0; ch < 3; ++ch)
+            for (int t = 0; t < 32; ++t) {
+                int v = (t * colour[ch] >> 4) + offsets[p];
+                dtab[p >> 2][p & 3][ch][t] = (u16)(((v < 0 ? 0 : v > 255 ? 255 : v) >> 3) << (5 * ch));
+            }
 }
 
 static SG_HOT __attribute__((noinline)) void poly_row_dither_indexed(const Gp0Mode *m, u16 *dst, int width, int u,
         int v, int dudx, int dvdx, u16 mask, int x, int y) {
-    static const signed char offsets[16] = {-4,0,-3,1,2,-2,3,-1,-3,1,-4,0,3,-1,2,-2};
-    const signed char *bias = offsets + ((y & 3) << 2);
+    const u16 (*phase)[3][32] = dtab[y & 3];
     const u16 *clut = psx_vram + (m->clut_y & 511) * 1024 + m->clut_x;
     const unsigned tx = m->tx, ty = m->ty;
-    const u16 *m0 = dmod[0], *m1 = dmod[1], *m2 = dmod[2];
     if (m->depth) {
         for (; width > 0; --width, ++dst, ++x, u = step_attribute(u, dudx), v = step_attribute(v, dvdx)) {
             unsigned uu = (unsigned)(u >> 16) & 0xFF, vv = (unsigned)(v >> 16) & 0xFF;
             u16 t = clut[(psx_vram[((ty + vv) & 511) * 1024 + ((tx + (uu >> 1)) & 1023)] >> ((uu & 1) * 8)) & 255];
             if (!t) continue;
-            unsigned k = bias[x & 3] + 4;
-            *dst = dclamp[m0[t & 31] + k] | dclamp[m1[(t >> 5) & 31] + k] << 5 | dclamp[m2[(t >> 10) & 31] + k] << 10 |
-                   (t & 0x8000) | mask;
+            const u16 (*d)[32] = phase[x & 3];
+            *dst = d[0][t & 31] | d[1][(t >> 5) & 31] | d[2][(t >> 10) & 31] | (t & 0x8000) | mask;
         }
     } else {
         for (; width > 0; --width, ++dst, ++x, u = step_attribute(u, dudx), v = step_attribute(v, dvdx)) {
             unsigned uu = (unsigned)(u >> 16) & 0xFF, vv = (unsigned)(v >> 16) & 0xFF;
             u16 t = clut[(psx_vram[((ty + vv) & 511) * 1024 + ((tx + (uu >> 2)) & 1023)] >> ((uu & 3) * 4)) & 15];
             if (!t) continue;
-            unsigned k = bias[x & 3] + 4;
-            *dst = dclamp[m0[t & 31] + k] | dclamp[m1[(t >> 5) & 31] + k] << 5 | dclamp[m2[(t >> 10) & 31] + k] << 10 |
-                   (t & 0x8000) | mask;
+            const u16 (*d)[32] = phase[x & 3];
+            *dst = d[0][t & 31] | d[1][(t >> 5) & 31] | d[2][(t >> 10) & 31] | (t & 0x8000) | mask;
         }
     }
 }
