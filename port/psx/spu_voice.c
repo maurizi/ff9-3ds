@@ -120,6 +120,43 @@ static SPU_HOT unsigned steady_samples(const PsxSpuVoice *voice, uint16_t pitch,
     return limit;
 }
 
+/* The steady run's per-sample work: Gaussian interpolation at the moving source position, ENVX and the two
+ * volumes applied, added into dry (and reverb send) pairs. Inlined per case, so the inner loop has no tests. */
+static inline __attribute__((always_inline)) int32_t steady_mix(
+        const int16_t *samples, uint32_t counter, uint32_t pitch, int32_t level, int32_t left, int32_t right,
+        int32_t *dry, int32_t *send, int32_t *keep, unsigned run) {
+    int32_t sample = 0;
+    for (unsigned k = 0; k < run; ++k) {
+        unsigned phase = (counter >> 4) & 255;
+        const int16_t *at = samples + (counter >> 12);
+        const int16_t *up = psx_spu_gauss + phase, *down = psx_spu_gauss + 255 - phase;
+        int32_t total = at[0] * down[0] + at[1] * down[256] + at[2] * up[256] + at[3] * up[0];
+        sample = ((int16_t)(total >> 15) * level) >> 15;
+        counter += pitch;
+        int32_t l = (sample * left) >> 15, r = (sample * right) >> 15;
+        dry[0] += l;
+        dry[1] += r;
+        dry += 2;
+        if (send) send[0] += l, send[1] += r, send += 2;
+        if (keep) *keep++ = sample;
+    }
+    return sample;
+}
+
+static SPU_HOT __attribute__((noinline)) int32_t steady_dry(const int16_t *samples, uint32_t counter, uint32_t pitch,
+        int32_t level, int32_t left, int32_t right, int32_t *dry, unsigned run) {
+    return steady_mix(samples, counter, pitch, level, left, right, dry, NULL, NULL, run);
+}
+static SPU_HOT __attribute__((noinline)) int32_t steady_send(const int16_t *samples, uint32_t counter,
+        uint32_t pitch, int32_t level, int32_t left, int32_t right, int32_t *dry, int32_t *send, unsigned run) {
+    return steady_mix(samples, counter, pitch, level, left, right, dry, send, NULL, run);
+}
+static SPU_HOT __attribute__((noinline)) int32_t steady_keep(const int16_t *samples, uint32_t counter,
+        uint32_t pitch, int32_t level, int32_t left, int32_t right, int32_t *dry, int32_t *send, int32_t *keep,
+        unsigned run) {
+    return steady_mix(samples, counter, pitch, level, left, right, dry, send, keep, run);
+}
+
 /* The same arithmetic as psx_spu_mix_voices, for n consecutive samples at once: each voice runs its whole span
  * before the next, with its state kept local. Pitch modulation reads the previous voice's post-ADSR samples
  * from a buffer, so voice order and values are identical. The caller applies key events before the span and
@@ -153,26 +190,27 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
                     if (pitch > 0x3fff) pitch = 0x3fff;
                     const int32_t level = voice->adsr.level;
                     const int32_t left = voice->volume[0].level, right = voice->volume[1].level;
-                    const int16_t *samples = voice->source.samples;
-                    for (unsigned k = 0; k < run; ++k, ++s) {
+                    const int capture = i == 1 || i == 3;
+                    if (!level) {
+                        /* ENVX 0: every product is zero; only the position moves. */
                         sample = 0;
-                        if (level) {
-                            unsigned phase = (counter >> 4) & 255;
-                            const int16_t *at = samples + (counter >> 12);
-                            int32_t total = at[0] * psx_spu_gauss[255 - phase];
-                            total += at[1] * psx_spu_gauss[511 - phase];
-                            total += at[2] * psx_spu_gauss[256 + phase];
-                            total += at[3] * psx_spu_gauss[phase];
-                            sample = ((int16_t)(total >> 15) * level) >> 15;
-                        }
-                        if (keep) current[s] = sample;
-                        counter += pitch;
-                        int32_t l = (sample * left) >> 15, r = (sample * right) >> 15;
-                        out->dry[s][0] += l;
-                        out->dry[s][1] += r;
-                        if (reverb) out->reverb_send[s][0] += l, out->reverb_send[s][1] += r;
-                        if (i == 1 || i == 3) out->capture[s][i >> 1] = clamp_sample(sample);
+                        if (keep) memset(current + s, 0, run * sizeof *current);
+                        if (capture) for (unsigned k = 0; k < run; ++k) out->capture[s + k][i >> 1] = 0;
+                    } else if (!keep && !capture) {
+                        sample = reverb ? steady_send(voice->source.samples, counter, pitch, level, left, right,
+                                                      out->dry[s], out->reverb_send[s], run)
+                                        : steady_dry(voice->source.samples, counter, pitch, level, left, right,
+                                                     out->dry[s], run);
+                    } else {
+                        int32_t scratch[PSX_SPU_BLOCK_SPAN], *samples_out = keep ? current + s : scratch;
+                        sample = steady_keep(voice->source.samples, counter, pitch, level, left, right,
+                                             out->dry[s], reverb ? out->reverb_send[s] : NULL, samples_out, run);
+                        if (capture)
+                            for (unsigned k = 0; k < run; ++k)
+                                out->capture[s + k][i >> 1] = clamp_sample(samples_out[k]);
                     }
+                    counter += pitch * run;
+                    s += run;
                     voice->source.counter = counter;
                     voice->adsr.envelope.counter += env_increment * run;
                     --s; /* the loop's ++s: continue with the event sample */
