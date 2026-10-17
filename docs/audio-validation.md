@@ -593,6 +593,45 @@ tools/docker.sh make -j16 spu-throughput-ds SPUARM=0 SPUITCM=0
 tools/docker.sh make -j16 ds pc
 ```
 
+## Block mixing (2026-10-17)
+
+`psx_spu_advance` now mixes in spans of up to 64 samples. The first sample of
+a call still takes the single-sample path, because key events apply after it.
+After that, `psx_spu_mix_voices_block` runs each voice through the whole span
+before the next voice. Pitch modulation reads the previous voice's post-ADSR
+samples from a buffer and the noise sequence is precomputed, so order and values
+are unchanged. Capture, reverb and output then run per sample over the span.
+`span_independent` falls back to sample-by-sample mixing when any playing voice
+could fetch SPU RAM that this span's capture or reverb writes change first.
+
+Inside a span, a steady voice (no noise, no pitch modulation, no volume sweep)
+runs to its next event in a tight loop: the end of its ADPCM block, its next
+envelope step, or an ADSR phase change. Those counts follow exactly from its
+counters, and the event sample itself takes the full per-sample path. The
+step arithmetic is shared through `spu_inline.h` by the single-step functions
+and the block mixer. The reverb FIR pairs its symmetric taps, and reverb and
+capture RAM use halfword accesses.
+
+Exactness: the throughput hashes are unchanged (`39a85811`, `e3bef436`,
+`5fea8fe6`, `c3caf725`) and the SPU unit, journal and SDK reverb suites pass. The
+host title's first 600 frames (including intro-movie audio) and 4,000 frames of
+the `disc3_valia_pira` battle hash identically with the block path forced off.
+
+`spu-throughput-ds` in melonDS, DSi, JIT, ms per 735-sample interval:
+
+| voices | reverb writes | before | after |
+|---|---|---:|---:|
+| 4 | off | 13.58 | 8.29 |
+| 4 | on | 14.92 | 9.27 |
+| 24 | off | 39.23 | 25.16 |
+| 24 | on | 40.58 | 26.14 |
+
+Still above the 16.7 ms budget at 24 voices. About 5 ms of each interval is
+per-sample work independent of voice count (reverb, output). melonDS's JIT
+timing in this configuration charges main RAM and DTCM data accesses the same
+(`build/bench/cache_probe.c`); with the JIT off, main RAM costs about 1.25x.
+Its figures mostly track instruction counts and code placement.
+
 ## Remaining sound work
 
 Resolve original-game timing/capture differences beyond the matched stage

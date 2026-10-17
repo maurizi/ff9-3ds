@@ -33,4 +33,16 @@ void psx_spu_voice_key_off(PsxSpuVoice *voice);
 void psx_spu_mix_voices(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_t *ram,
                          int16_t noise, uint32_t noise_mask, uint32_t modulation_mask,
                          uint32_t reverb_mask, int fetch_off_voices, PsxSpuVoiceMix *mix);
+
+/* psx_spu_mix_voices for n <= PSX_SPU_BLOCK_SPAN consecutive samples with no key events or register writes
+ * between them; noise[s] is sample s's shared noise value. Identical results, voice by voice. */
+enum { PSX_SPU_BLOCK_SPAN = 64 };
+typedef struct {
+    int32_t dry[PSX_SPU_BLOCK_SPAN][2], reverb_send[PSX_SPU_BLOCK_SPAN][2];
+    int16_t capture[PSX_SPU_BLOCK_SPAN][2];
+    uint32_t ended;
+} PsxSpuVoiceBlock;
+void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_t *ram, unsigned n,
+                              const int16_t *noise, uint32_t noise_mask, uint32_t modulation_mask,
+                              uint32_t reverb_mask, int fetch_off_voices, PsxSpuVoiceBlock *out);
 #endif

@@ -28,15 +28,13 @@ static SPU_HOT unsigned address(const PsxSpuReverb *reverb, uint16_t reg, int de
     return (sum & 0x3ffff) * 2;
 }
 
+/* Addresses are even byte offsets into the little-endian RAM image: halfword accesses. */
 static SPU_HOT int16_t load(const PsxSpuReverb *reverb, const uint8_t *ram, uint16_t reg, int delta) {
-    unsigned p = address(reverb, reg, delta);
-    return (int16_t)((uint16_t)ram[p] | (uint16_t)ram[p + 1] << 8);
+    return *(const int16_t *)__builtin_assume_aligned(ram + address(reverb, reg, delta), 2);
 }
 
 static SPU_HOT void store(const PsxSpuReverb *reverb, uint8_t *ram, uint16_t reg, int16_t value) {
-    unsigned p = address(reverb, reg, 0);
-    ram[p] = (uint16_t)value;
-    ram[p + 1] = (uint16_t)value >> 8;
+    *(int16_t *)__builtin_assume_aligned(ram + address(reverb, reg, 0), 2) = value;
 }
 
 static SPU_HOT int32_t complement_product(int16_t old, int16_t alpha) {
@@ -104,7 +102,8 @@ SPU_HOT void psx_spu_reverb_tick(PsxSpuReverb *reverb, uint8_t *ram, int16_t lef
     unsigned active = (pos & 1) ^ 1; /* right on even ticks, left on odd ticks */
     const int16_t *down = reverb->down[active] + ((pos - 38) & 63);
     int32_t sum = down[19] * 16384;
-    for (unsigned i = 0; i < 20; ++i) sum += down[i * 2] * fir[i];
+    /* fir is symmetric (fir[i] == fir[19 - i]): pair the taps. Same integer sum. */
+    for (unsigned i = 0; i < 10; ++i) sum += (down[i * 2] + down[38 - i * 2]) * fir[i];
     channel_step(reverb, ram, active, clip(sum >> 15), write_enabled);
     if (active == 1) {
         reverb->cursor = (reverb->cursor + 1) & 0x3ffff;
@@ -114,7 +113,7 @@ SPU_HOT void psx_spu_reverb_tick(PsxSpuReverb *reverb, uint8_t *ram, int16_t lef
         const int16_t *up = reverb->up[ch] + (((pos >> 1) - 19) & 31);
         if (ch == active) {
             sum = 0;
-            for (unsigned i = 0; i < 20; ++i) sum += up[i] * fir[i];
+            for (unsigned i = 0; i < 10; ++i) sum += (up[i] + up[19 - i]) * fir[i];
             output[ch] = clip(sum >> 14);
         } else output[ch] = up[9];
     }

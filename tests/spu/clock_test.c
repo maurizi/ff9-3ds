@@ -12,7 +12,7 @@ static int stop_in_callback;
 void plat_audio_samples(const short *pcm, unsigned count) { (void)pcm; samples += count; }
 void plat_wait_frame(void) { ++frames; }
 void psx_cd_pump(void) {}
-void psx_movie_tick(void) {}
+void psx_cd_frame(void) {}
 void psx_drawsync_pending(void) {}
 void psx_pad_update(void) {}
 
