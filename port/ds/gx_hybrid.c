@@ -290,6 +290,7 @@ static u8 prim_group[MAX_PRIMS];
 static u8 prim_palette[MAX_PRIMS];
 
 static int plan_textures(Buffer *b) {
+    int last_group = 0, last_palette = 0;
     group_count = 0;
     for (int i = 0; i < MAX_REGIONS; ++i) regions[i].wanted = 0;
     for (int i = 0; i < PAL_SLOTS; ++i) palettes[i].wanted = 0;
@@ -318,10 +319,15 @@ static int plan_textures(Buffer *b) {
             u0 &= ~63; u1 |= 63;
             x0 = p->tx + u0 / per; x1 = p->tx + u1 / per; y0 = p->ty; y1 = p->ty + 255;
         }
-        int g;
-        for (g = 0; g < group_count; ++g)
-            if (groups[g].depth == p->depth && groups[g].tx == p->tx && groups[g].ty == p->ty &&
-                groups[g].conv == conv && (!conv || (groups[g].cx == p->clut_x && groups[g].cy == p->clut_y))) break;
+        /* consecutive primitives nearly always share a page and CLUT: try the last match first */
+#define SAME_GROUP(q) ((q).depth == p->depth && (q).tx == p->tx && (q).ty == p->ty && (q).conv == conv && \
+                       (!conv || ((q).cx == p->clut_x && (q).cy == p->clut_y)))
+        int g = last_group;
+        if (g >= group_count || !SAME_GROUP(groups[g]))
+            for (g = 0; g < group_count; ++g)
+                if (SAME_GROUP(groups[g])) break;
+#undef SAME_GROUP
+        last_group = g;
         if (g == group_count) {
             if (group_count == MAX_GROUPS) continue;
             groups[group_count++] = (Group){p->depth, p->tx, p->ty, x0, y0, x1, y1, NULL, conv, p->clut_x, p->clut_y};
@@ -336,12 +342,14 @@ static int plan_textures(Buffer *b) {
         /* palette */
         prim_palette[k] = 0xFF;
         if (p->depth < 2) {
-            int count = p->depth ? 256 : 16, s, empty = -1;
-            for (s = 0; s < PAL_SLOTS; ++s) {
-                Palette *q = &palettes[s];
-                if (q->used && q->x == p->clut_x && q->y == p->clut_y && q->count >= count) break;
-                if (!q->used && empty < 0) empty = s;
-            }
+            int count = p->depth ? 256 : 16, s = last_palette, empty = -1;
+            Palette *lq = &palettes[s];
+            if (!(lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count))
+                for (s = 0; s < PAL_SLOTS; ++s) {
+                    Palette *q = &palettes[s];
+                    if (q->used && q->x == p->clut_x && q->y == p->clut_y && q->count >= count) break;
+                    if (!q->used && empty < 0) empty = s;
+                }
             if (s == PAL_SLOTS) {
                 if (empty < 0)
                     for (int t = 0; t < PAL_SLOTS; ++t) if (!palettes[t].wanted) { empty = t; break; }
@@ -351,6 +359,7 @@ static int plan_textures(Buffer *b) {
             }
             palettes[s].wanted = 1;
             prim_palette[k] = (u8)s;
+            last_palette = s;
         }
     }
     /* Keep regions that already hold a group's texels; place the rest, largest first, after freeing the unwanted.
@@ -1019,6 +1028,8 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
             block_hash[row][col] = hash;
             block_shown[row][col] = !!any;
             if (any) scale(block, sx0, sy0, sw, sh);
+            u16 col[BLOCK];
+            for (int ox = 0; ox < bw; ++ox) col[ox] = (u16)((sx0 + ox * 5 / 4) & 1023);
             for (int oy = 0; oy < bh; ++oy) {
                 u16 *out = bitmap + ((top + by + oy) * 256 + bx) / 2;
                 if (!any) { for (int k = 0; k < bw / 2; ++k) out[k] = 0; continue; }
@@ -1026,7 +1037,7 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
                 const u8 *mrow = marks + ((sy0 + oy * 5 / 4) & 511) * 128;
                 const u16 *frow = block + oy * 256;
                 for (int ox = 0; ox < bw; ox += 2) {
-                    int a = (sx0 + ox * 5 / 4) & 1023, b2 = (sx0 + (ox + 1) * 5 / 4) & 1023;
+                    int a = col[ox], b2 = col[ox + 1 < bw ? ox + 1 : ox];
                     u8 ma = (mrow[a >> 3] >> (a & 7)) & 1, mb = (mrow[b2 >> 3] >> (b2 & 7)) & 1;
                     u16 i0 = shows(vrow[a], clear, ma) ? ma ? cube_of(frow[ox]) : colour_of(frow[ox]) : 0;
                     u16 i1 = ox + 1 < bw && shows(vrow[b2], clear, mb)

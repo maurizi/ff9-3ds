@@ -139,7 +139,7 @@ def main():
     funcs = []
     for row in subprocess.check_output(['nm', '-C', '--defined-only', '-n', str(elf)], text=True).splitlines():
         parts = row.split(maxsplit=2)
-        if len(parts) == 3 and parts[1] in 'tTwW':
+        if len(parts) == 3 and parts[1] in 'tTwW' and not parts[2].startswith('$'):  # not ARM mapping symbols
             funcs.append((int(parts[0], 16) & ~1, parts[2]))
     funcs.sort()
     addrs = [f[0] for f in funcs]
