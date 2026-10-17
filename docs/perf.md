@@ -34,6 +34,11 @@ Component benchmarks that run in seconds, with exactness hashes:
 * `make spu-throughput-ds`: synthetic 4/24-voice SPU load.
 * `make mdec-bench-ds`: movie macroblock reconstruction on real movie data.
 
+Where the time goes inside the uninstrumented remainder:
+`tools/ds_sample.py --rom R --elf E --from F1 --to F2 [--detail FUNC]` samples the
+ARM9 PC through melonDS's GDB stub (interpreter mode). It reports a histogram by
+function, callers, and with `--detail` the sampled instructions.
+
 ## Field 259 (Evil Forest), window ending at frame 609, ms per 60 Hz frame
 
 | | first measured (this session) | now |
@@ -60,6 +65,21 @@ multiply.
 
 175 at first (movie decode uninstrumented), 47 after the MDEC, display-skip and
 SPU work. See `movie-validation.md` and `audio-validation.md`.
+
+## Sampled field profile (frames 450-660, current build, 800 samples)
+
+16% waiting for VBlank; 14% SPU voices (`fast_span`); 9% background sprite row
+loop; 7% reverb; 5% sprite setup (`sg_rect`); 5% `plot` + 3% `triangle`
+(polygons); about 13% GTE (`rtp`, `mat_mul`, `gte_cmd`, register moves); 3% display
+scaling; ~5% profiling hooks (PROFILE builds only). The game's own code
+(`o0a_*`, `func_*`) is only a few percent. `vram_fill` was 13% before its row
+fill.
+
+melonDS's JIT charges about two ARM9 cycles per instruction in these loops
+(the 8bpp sprite loop: 16 instructions per pixel pair, about 18 cycles a pixel).
+So instruction count is the main lever. Reaching the PSX field rate needs about
+2x across GPU, GTE and SPU, or work moved to the DS hardware (design M6: native
+field backgrounds and models).
 
 ## Next
 
