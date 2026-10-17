@@ -116,6 +116,12 @@ void ds_scale_display_text_pair(uint16_t *dst, const uint16_t *vram,
                 int ox=group*32+bit, sx=ox*5/4, fx=ox&3;
                 int next_x=sx+1<width ? sx+1 : width-1;
                 unsigned x0=(x+sx)&1023,x1=(x+next_x)&1023;
+                /* Four equal colours average to that colour ((25v+12)*1311>>15 == v for every 5-bit v), which
+                 * the nearest pass already wrote: skip them. STP is ignored by both. */
+                if(!((a[x0]^a[x1])&0x7fff) && !((a[x0]^b[x0])&0x7fff) && !((a[x0]^b[x1])&0x7fff)) {
+                    mask&=mask-1;
+                    continue;
+                }
                 uint32_t top=spread(a[x0])*(4-fx)+spread(a[x1])*(fx+1);
                 uint32_t bottom=spread(b[x0])*(4-fx)+spread(b[x1])*(fx+1);
                 uint32_t c=top*(4-fy)+bottom*(fy+1);
