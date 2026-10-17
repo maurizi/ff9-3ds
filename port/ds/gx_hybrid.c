@@ -243,8 +243,30 @@ static Region *place_region(int depth, int conv, int cx, int cy, int x, int y, i
 typedef struct { int used, x, y, count, dirty, wanted; } Palette;
 static Palette palettes[PAL_SLOTS];
 
+static void regions_touch(int x, int y, int w, int h);
+static void dirty_cells(int x0, int y0, int x1, int y1);
+static void ui_flush(void);
+static void ui_note_write(int x, int y, int w, int h);
+static void ui_dirty_rect(int x0, int y0, int x1, int y1);
+static int ui_flushing;
+
+/* gpu.c: StoreImage and MoveImage are about to read this rectangle: deferred UI drawing lands first. */
+void psx_vram_read(int x, int y, int w, int h) {
+    (void)x; (void)y; (void)w; (void)h;
+    if (active) ui_flush();
+}
+
+/* gpu.c: LoadImage, MoveImage, fills are about to write this rectangle. */
 void psx_vram_touch(int x, int y, int w, int h) {
     if (!active) return;
+    ui_flush();
+    ui_note_write(x, y, w, h);
+    ui_dirty_rect(x, y, x + w - 1, y + h - 1);
+    dirty_cells(x, y, x + w - 1, y + h - 1);
+    regions_touch(x, y, w, h);
+}
+
+static void regions_touch(int x, int y, int w, int h) {
     for (int i = 0; i < MAX_REGIONS; ++i) {
         Region *r = &regions[i];
         if (r->used && x < r->x + r->wh && r->x < x + w && y < r->y + r->h && r->y < y + h) r->dirty = 1;
@@ -451,15 +473,51 @@ static inline u32 rgb_for(const Prim *p, int i) {
     return (u32)(r | g << 5 | b << 10);
 }
 
+/* Twice a primitive's screen area. */
+static int prim_area2(const Prim *p) {
+    int a = (p->x[1] - p->x[0]) * (p->y[2] - p->y[0]) - (p->y[1] - p->y[0]) * (p->x[2] - p->x[0]);
+    if (a < 0) a = -a;
+    if (p->n == 4) {
+        int c = (p->x[2] - p->x[1]) * (p->y[3] - p->y[1]) - (p->y[2] - p->y[1]) * (p->x[3] - p->x[1]);
+        a += c < 0 ? -c : c;
+    }
+    return a;
+}
+
+/* A scene over the 3D engine's budget (2048 polygons, 6144 vertices: Ark has about 6800 vertices) drops its
+ * smallest primitives, the least visible, rather than the last drawn (often the party). Returns the smallest
+ * area that is kept; primitives of exactly that area are kept while the budget lasts. */
+static int area_cut(Buffer *b) {
+    int vertices = 0;
+    for (int k = 0; k < b->count; ++k) vertices += b->prims[k].n;
+    if (b->count <= MAX_POLYS && vertices <= MAX_VERTICES) return 0;
+    enum { BUCKETS = 64 };
+    static int count[BUCKETS], verts[BUCKETS];
+    memset(count, 0, sizeof count); memset(verts, 0, sizeof verts);
+    for (int k = 0; k < b->count; ++k) {
+        int a = prim_area2(&b->prims[k]);
+        int bucket = a >= BUCKETS - 1 ? BUCKETS - 1 : a;
+        count[bucket]++; verts[bucket] += b->prims[k].n;
+    }
+    int kept = 0, kept_v = 0, cut = BUCKETS - 1;
+    for (; cut > 0; --cut) {
+        if (kept + count[cut] > MAX_POLYS || kept_v + verts[cut] > MAX_VERTICES) break;
+        kept += count[cut]; kept_v += verts[cut];
+    }
+    return cut;
+}
+
 static void emit_scene(Buffer *b) {
     u32 attr = INITIAL_ATTR, image = 0, palette = ~0u;
     list_words = 0;
     fifo(CMD_POLYATTR, attr);
     fifo(CMD_TEXIMAGE, 0);
     int polys = 0, vertices = 0, z = 0;
+    const int cut = area_cut(b);
     for (int k = 0; k < b->count; ++k) {
         Prim *p = &b->prims[k];
         ++z;
+        if (cut && prim_area2(p) < cut) { gxh_stats_dropped++; continue; }
         if (polys >= MAX_POLYS || vertices + p->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
         int tu = 0, tv = 0;
         u32 want_image = 0;
@@ -511,8 +569,6 @@ static void emit_scene(Buffer *b) {
 
 /* ---- backend ----------------------------------------------------------------------------------------------- */
 
-static void dirty_cells(int x0, int y0, int x1, int y1);
-
 static void soft_touch(int x0, int y0, int x1, int y1) {
     if (x0 < gp0_state.area_x0) x0 = gp0_state.area_x0;
     if (y0 < gp0_state.area_y0) y0 = gp0_state.area_y0;
@@ -520,11 +576,167 @@ static void soft_touch(int x0, int y0, int x1, int y1) {
     if (y1 > gp0_state.area_y1) y1 = gp0_state.area_y1;
     if (x1 < x0 || y1 < y0) return;
     dirty_cells(x0, y0, x1, y1);
-    psx_vram_touch(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    regions_touch(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    if (!ui_flushing) { ui_note_write(x0, y0, x1 - x0 + 1, y1 - y0 + 1); ui_dirty_rect(x0, y0, x1, y1); }
+}
+
+/* ---- UI redraw skipping ------------------------------------------------------------------------------------
+ * The battle UI redraws every window, glyph and gauge into the displayed buffer each VBlank, nearly all of it as
+ * before. Those primitives are deferred; at the next flush the list is compared with the previous one entry by
+ * entry. Entries that differ (or whose texture page or CLUT row was written), their old positions and any other
+ * writes to the buffer make a dirty area, and only primitives overlapping it are drawn, in order. That is exact
+ * for opaque primitives: drawing one over its own pixels again changes nothing, and like the PS1 nothing restores
+ * what a removed one left. A list with semi-transparent or mask-tested primitives is drawn whole. Any other VRAM
+ * operation flushes first, so order against uploads, moves, fills, readbacks and scene drawing is kept. */
+enum { UI_POLY, UI_LINE, UI_RECT };
+typedef struct {
+    u8 kind, n;
+    s16 w, h;
+    Gp0Mode m;
+    Gp0Vtx v[4];
+    Gp0State state;
+} UiPrim;
+#define UI_MAX 384
+static UiPrim ui_list[2][UI_MAX];     /* [0] the previous VBlank's, [1] this one's */
+static int ui_count[2], ui_overflow;
+static Buffer *ui_buffer;             /* the displayed buffer the list belongs to */
+#define UI_RECTS 64
+static s16 ui_dirty[UI_RECTS][4];     /* x0, y0, x1, y1 inclusive */
+static int ui_dirty_count, ui_dirty_all;
+
+static void ui_bounds(const UiPrim *p, int *x0, int *y0, int *x1, int *y1) {
+    if (p->kind == UI_RECT) { *x0 = p->v[0].x; *y0 = p->v[0].y; *x1 = p->v[0].x + p->w - 1; *y1 = p->v[0].y + p->h - 1; }
+    else {
+        *x0 = *x1 = p->v[0].x; *y0 = *y1 = p->v[0].y;
+        for (int i = 1; i < p->n; ++i) {
+            if (p->v[i].x < *x0) *x0 = p->v[i].x;
+            if (p->v[i].x > *x1) *x1 = p->v[i].x;
+            if (p->v[i].y < *y0) *y0 = p->v[i].y;
+            if (p->v[i].y > *y1) *y1 = p->v[i].y;
+        }
+    }
+    /* drawing offset already applied; the drawing area clips */
+    if (*x0 < p->state.area_x0) *x0 = p->state.area_x0;
+    if (*y0 < p->state.area_y0) *y0 = p->state.area_y0;
+    if (*x1 > p->state.area_x1) *x1 = p->state.area_x1;
+    if (*y1 > p->state.area_y1) *y1 = p->state.area_y1;
+}
+
+static void ui_dirty_rect(int x0, int y0, int x1, int y1) {
+    if (x1 < x0 || y1 < y0 || ui_dirty_all) return;
+    if (ui_dirty_count == UI_RECTS) { ui_dirty_all = 1; return; }
+    s16 *r = ui_dirty[ui_dirty_count++];
+    r[0] = (s16)x0; r[1] = (s16)y0; r[2] = (s16)x1; r[3] = (s16)y1;
+}
+
+static int ui_overlaps_dirty(int x0, int y0, int x1, int y1) {
+    if (ui_dirty_all) return 1;
+    for (int i = 0; i < ui_dirty_count; ++i) {
+        const s16 *r = ui_dirty[i];
+        if (x0 <= r[2] && r[0] <= x1 && y0 <= r[3] && r[1] <= y1) return 1;
+    }
+    return 0;
+}
+
+/* Texture sources written since the previous list: an entry sampling them must count as changed. */
+#define UI_SOURCES 64
+static s16 ui_written[UI_SOURCES][4];
+static int ui_written_count, ui_written_all;
+
+static void ui_note_write(int x, int y, int w, int h) {
+    if (ui_written_all) return;
+    if (ui_written_count == UI_SOURCES) { ui_written_all = 1; return; }
+    s16 *r = ui_written[ui_written_count++];
+    r[0] = (s16)x; r[1] = (s16)y; r[2] = (s16)(x + w - 1); r[3] = (s16)(y + h - 1);
+}
+
+static int ui_source_written(const UiPrim *p) {
+    if (!p->m.textured) return 0;
+    if (ui_written_all) return 1;
+    int per = texels_per_halfword(p->m.depth > 2 ? 2 : p->m.depth);
+    int px0 = p->m.tx, px1 = p->m.tx + 256 / per - 1, py0 = p->m.ty, py1 = p->m.ty + 255;
+    for (int i = 0; i < ui_written_count; ++i) {
+        const s16 *r = ui_written[i];
+        if (px0 <= r[2] && r[0] <= px1 && py0 <= r[3] && r[1] <= py1) return 1;
+        if (p->m.depth < 2 && r[1] <= p->m.clut_y && p->m.clut_y <= r[3] && r[0] <= p->m.clut_x + 255 &&
+            p->m.clut_x <= r[2]) return 1;
+    }
+    return 0;
+}
+
+static void soft_touch(int x0, int y0, int x1, int y1);
+
+static void ui_draw(const UiPrim *p) {
+    Gp0State saved = gp0_state;
+    gp0_state = p->state;
+    if (p->kind == UI_RECT) psx_softgpu.rect(&p->m, p->v, p->w, p->h);
+    else if (p->kind == UI_LINE) psx_softgpu.line(&p->m, &p->v[0], &p->v[1]);
+    else psx_softgpu.poly(&p->m, p->v, p->n);
+    int x0, y0, x1, y1;
+    ui_bounds(p, &x0, &y0, &x1, &y1);
+    if (x1 >= x0 && y1 >= y0) soft_touch(x0, y0, x1, y1);
+    gp0_state = saved;
+}
+
+int gxh_stats_ui_drawn, gxh_stats_ui_skipped;
+
+static void ui_flush(void) {
+    if (!ui_count[1] || ui_flushing) return;
+    ui_flushing = 1;
+    UiPrim *prev = ui_list[0], *cur = ui_list[1];
+    int n = ui_count[1], m = ui_count[0];
+    int whole = ui_overflow;
+    for (int i = 0; i < n && !whole; ++i)
+        if (cur[i].m.semi || cur[i].state.check_mask) whole = 1;
+    if (!whole) {
+        for (int i = 0; i < n || i < m; ++i) {
+            int x0, y0, x1, y1;
+            int same = i < n && i < m && !memcmp(&cur[i], &prev[i], sizeof *cur) && !ui_source_written(&cur[i]);
+            if (same) continue;
+            if (i < n) { ui_bounds(&cur[i], &x0, &y0, &x1, &y1); ui_dirty_rect(x0, y0, x1, y1); }
+            if (i < m) { ui_bounds(&prev[i], &x0, &y0, &x1, &y1); ui_dirty_rect(x0, y0, x1, y1); }
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        int x0, y0, x1, y1;
+        ui_bounds(&cur[i], &x0, &y0, &x1, &y1);
+        if (whole || ui_overlaps_dirty(x0, y0, x1, y1)) { ui_draw(&cur[i]); gxh_stats_ui_drawn++; }
+        else gxh_stats_ui_skipped++;
+    }
+    /* this list is the next one's reference; written sources and dirty areas start over */
+    memcpy(prev, cur, n * sizeof *cur);
+    ui_count[0] = n;
+    ui_count[1] = 0;
+    ui_overflow = 0;
+    ui_dirty_count = ui_dirty_all = 0;
+    ui_written_count = ui_written_all = 0;
+    ui_flushing = 0;
+}
+
+/* Defer a primitive drawn into the displayed buffer. Returns 0 when it has to be drawn now. */
+static int ui_defer(int kind, const Gp0Mode *m, const Gp0Vtx *v, int n, int w, int h) {
+    Buffer *b = displayed();
+    if (!b || buffer_at(gp0_state.area_x0, gp0_state.area_y0) != b) return 0;
+    if (ui_buffer != b) {
+        /* another buffer is shown: its previous list is stale, and everything it holds may differ */
+        ui_flush();
+        ui_buffer = b;
+        ui_count[0] = 0;
+    }
+    if (ui_count[1] == UI_MAX) { ui_overflow = 1; ui_flush(); return 0; }
+    UiPrim *p = &ui_list[1][ui_count[1]++];
+    memset(p, 0, sizeof *p); /* padding compares equal */
+    p->kind = (u8)kind; p->n = (u8)n; p->w = (s16)w; p->h = (s16)h;
+    p->m = *m;
+    for (int i = 0; i < n; ++i) p->v[i] = v[i];
+    p->state = gp0_state;
+    return 1;
 }
 
 static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     Buffer *b = target();
+    if (b && b == displayed() && ui_defer(UI_POLY, m, v, n, 0, 0)) return;
+    ui_flush();
     /* Untextured additive glows (Gouraud, black at the edges) have no per-vertex alpha on the DS: draw them in
      * software over the scene's clear value instead, so dark parts stay transparent and bright ones show. */
     int glow = m->semi && !m->textured && (m->abr == 1 || m->abr == 3);
@@ -554,14 +766,19 @@ static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
 }
 
 static void hybrid_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b2) {
-    target();
+    Buffer *b = target();
+    Gp0Vtx pair[2] = {*a, *b2};
+    if (b && b == displayed() && ui_defer(UI_LINE, m, pair, 2, 0, 0)) return;
+    ui_flush();
     psx_softgpu.line(m, a, b2);
     soft_touch(a->x < b2->x ? a->x : b2->x, a->y < b2->y ? a->y : b2->y,
                a->x > b2->x ? a->x : b2->x, a->y > b2->y ? a->y : b2->y);
 }
 
 static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
-    target();
+    Buffer *b = target();
+    if (b && b == displayed() && ui_defer(UI_RECT, m, v, 1, w, h)) return;
+    ui_flush();
     psx_softgpu.rect(m, v, w, h);
     soft_touch(v->x, v->y, v->x + w - 1, v->y + h - 1);
 }
@@ -672,39 +889,38 @@ static void submit(Buffer *b, int display_h) {
  * redraws every window each VBlank, mostly unchanged). */
 static u8 cell_dirty[512 / 8][1024 / 8];
 static int last_x, last_y, last_w, last_h;
-static u16 colour_key[512];   /* open addressing: RGB15 | 0x8000, 0 empty */
-static u8 colour_index[512];
+static u8 *colour_map;          /* 32768 RGB15 -> palette index (0: not mapped yet) */
 static int colours, colours_full;
 
 static void reset_colours(void) {
-    memset(colour_key, 0, sizeof colour_key);
+    if (!colour_map) colour_map = malloc(32768);
+    memset(colour_map, 0, 32768);
     colours = 0;
     colours_full = 0;
 }
 
+/* A colour's palette index: a new entry while there is room, else the nearest entry (remembered, so each colour
+ * is searched once). Software glows are gradients with many shades; the battle UI alone uses under 200. */
 static u8 colour_of(u16 c) {
-    c |= 0x8000;
-    unsigned h = ((c * 0x9E37u) >> 7) & 511;
-    for (;;) {
-        if (colour_key[h] == c) return colour_index[h];
-        if (!colour_key[h]) break;
-        h = (h + 1) & 511;
-    }
+    c &= 0x7FFF;
+    u8 i = colour_map[c];
+    if (i) return i;
     if (colours < 255) {
-        u8 i = (u8)++colours;
-        colour_key[h] = c; colour_index[h] = i;
-        BG_PALETTE[i] = c & 0x7FFF;
-        return i;
+        i = (u8)++colours;
+        BG_PALETTE[i] = c;
+    } else {
+        colours_full = 1;
+        int best = 1, best_d = 1 << 30;
+        for (int k = 1; k <= 255; ++k) {
+            u16 p = BG_PALETTE[k];
+            int dr = (p & 31) - (c & 31), dg = ((p >> 5) & 31) - ((c >> 5) & 31), db = ((p >> 10) & 31) - ((c >> 10) & 31);
+            int dd = dr * dr + dg * dg + db * db;
+            if (dd < best_d) { best_d = dd; best = k; }
+        }
+        i = (u8)best;
     }
-    colours_full = 1; /* nearest existing entry for now */
-    int best = 1, best_d = 1 << 30;
-    for (int i = 1; i <= 255; ++i) {
-        u16 p = BG_PALETTE[i];
-        int dr = (p & 31) - (c & 31), dg = ((p >> 5) & 31) - ((c >> 5) & 31), db = ((p >> 10) & 31) - ((c >> 10) & 31);
-        int dd = dr * dr + dg * dg + db * db;
-        if (dd < best_d) { best_d = dd; best = i; }
-    }
-    return (u8)best;
+    colour_map[c] = i;
+    return i;
 }
 
 /* A pixel is on the 2D layer when it isn't the clear value, unless an additive glow left it near black (its edge
@@ -721,6 +937,7 @@ static void dirty_cells(int x0, int y0, int x1, int y1) {
 }
 
 void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, int w, int h)) {
+    ui_flush();
     Buffer *b = buffer_at(d->x, d->y);
     if (b) {
         b->shown = 1;
@@ -732,10 +949,11 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
     if (w > 320) w = 320;
     if (h > 240) h = 240;
     int out_w = w * 4 / 5, out_h = h * 4 / 5, top = (192 - out_h) / 2;
-    /* another buffer or area, or a full palette: every block's hash decides (a full palette rebuilds all) */
+    /* another buffer or area: every block's hash decides; a palette that filled starts over then (rebuilding
+     * everything), so colours that left the screen give their entries back */
     int check_all = b != last_shown || d->x != last_x || d->y != last_y || w != last_w || h != last_h;
-    int rebuild = colours_full;
-    if (rebuild) { reset_colours(); check_all = 1; }
+    int rebuild = check_all && colours_full;
+    if (rebuild) reset_colours();
     last_shown = b; last_x = d->x; last_y = d->y; last_w = w; last_h = h;
     static u16 block[BLOCK * 256] __attribute__((aligned(4)));   /* a scaled block, stride 256 */
     u16 *bitmap = (u16 *)BG_BMP_RAM(0);
