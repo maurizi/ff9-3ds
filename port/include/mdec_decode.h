@@ -7,7 +7,18 @@ typedef struct {
     uint8_t quant[2][64]; /* luminance, chroma; stream/zigzag order */
     int16_t scale[64];   /* original uploaded matrix, frequency-major */
     uint32_t scale_max;  /* largest |scale|, for the IDCT's overflow bounds */
+    int mirrored;        /* scale has the standard row symmetry (see psx_mdec_env_init) */
 } PsxMdecEnv;
+/* DS: hot decoder data in DTCM (BlocksDS places .sbss there and copies .dtcm). */
+#if defined(__arm__) && !defined(PORT_MDEC_NO_TCM)
+#define MDEC_DTCM_BSS __attribute__((section(".sbss")))
+#define MDEC_DTCM_DATA __attribute__((section(".dtcm")))
+#define MDEC_ITCM __attribute__((section(".itcm"), long_call))
+#else
+#define MDEC_ITCM
+#define MDEC_DTCM_BSS
+#define MDEC_DTCM_DATA
+#endif
 enum { PSX_MDEC_OK=0, PSX_MDEC_TRUNCATED=-1, PSX_MDEC_CAPACITY=-2, PSX_MDEC_MODE=-3 };
 void psx_mdec_env_init(PsxMdecEnv *env, const uint8_t quant[128], const uint8_t scale[128]);
 /* Decode six RLE blocks (Cr,Cb,Y1..Y4) to one row-major 16x16 macroblock.

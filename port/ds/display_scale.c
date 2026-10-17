@@ -2,17 +2,39 @@
 #include "../include/psx_display.h"
 #include <string.h>
 
+static inline uint32_t rgb24_to_ds(uint32_t rgb) {
+    return 0x8000 | ((rgb >> 3) & 31) | ((rgb >> 6) & 0x3e0) | ((rgb >> 9) & 0x7c00);
+}
+
+#ifdef PORT_SCALE_ITCM
+__attribute__((section(".itcm"), long_call))
+#endif
 void ds_scale_display_rgb24(uint16_t *dst, const uint16_t *vram,
                            int x, int y, int width, int height) {
     if (width <= 0 || height <= 0) return;
     if (width > 320) width = 320;
     if (height > 240) height = 240;
-    for (int oy = 0; oy < height * 4 / 5; oy++) {
-        for (int ox = 0; ox < width * 4 / 5; ox++) {
-            uint32_t rgb = psx_display_rgb24(vram, x, y + oy * 5 / 4, ox * 5 / 4);
-            dst[oy * 256 + ox] = 0x8000 | ((rgb >> 3) & 31)
-                | ((rgb >> 6) & 0x3e0) | ((rgb >> 9) & 0x7c00);
+    int out_w = width * 4 / 5, out_h = height * 4 / 5;
+    unsigned start = ((unsigned)x & 1022) * 2; /* display X counts halfwords; bit 0 is ignored */
+    for (int oy = 0; oy < out_h; oy++) {
+        const uint8_t *row = (const uint8_t *)(vram + ((unsigned)(y + oy * 5 / 4) & 511) * 1024);
+        uint16_t *out = dst + oy * 256;
+        int ox = 0;
+        /* Four nearest samples (source pixels 0, 1, 2, 3 of each five) from 15 bytes, unless the row wraps. */
+        if (start + (unsigned)width * 3 <= 2048 && !((uintptr_t)out & 3)) {
+            const uint8_t *in = row + start;
+            uint32_t *pairs = (uint32_t *)out;
+            for (; ox + 4 <= out_w; ox += 4, in += 15) {
+                uint32_t p0 = rgb24_to_ds(in[0] | (uint32_t)in[1] << 8 | (uint32_t)in[2] << 16);
+                uint32_t p1 = rgb24_to_ds(in[3] | (uint32_t)in[4] << 8 | (uint32_t)in[5] << 16);
+                uint32_t p2 = rgb24_to_ds(in[6] | (uint32_t)in[7] << 8 | (uint32_t)in[8] << 16);
+                uint32_t p3 = rgb24_to_ds(in[9] | (uint32_t)in[10] << 8 | (uint32_t)in[11] << 16);
+                pairs[ox / 2] = p0 | p1 << 16;
+                pairs[ox / 2 + 1] = p2 | p3 << 16;
+            }
         }
+        for (; ox < out_w; ox++)
+            out[ox] = rgb24_to_ds(psx_display_rgb24(vram, x, y + oy * 5 / 4, ox * 5 / 4));
     }
 }
 

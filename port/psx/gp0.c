@@ -2,9 +2,12 @@
  * "GPU Rendering Attributes". */
 #include "gp0.h"
 #include "profile.h"
+#include "psx_display.h"
 
 Gp0State gp0_state = {0, 0, 1023, 511, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 const Gp0Backend *gp0_backend;
+/* psx_display.h; weak here and in gpu.c, since unit tests link either file alone */
+__attribute__((weak)) unsigned int psx_vram_generation;
 /* Snapshot counters for diagnosing the DS font presentation handoff. */
 unsigned int psx_gp0_font_probe[16];
 
@@ -44,7 +47,10 @@ static void set_clut(Gp0Mode *m, unsigned int uv) {
 /* One GP0 command at w[0]; returns the words it used. */
 static unsigned int command(const unsigned int *w, unsigned int avail) {
     unsigned int cmd = w[0] >> 24;
-    if ((cmd >= 0x20 && cmd < 0x80) || cmd == 2) psx_display_drawing();
+    if ((cmd >= 0x20 && cmd < 0x80) || cmd == 2) {
+        psx_display_drawing();
+        psx_vram_generation++;
+    }
     Gp0Mode m = {0};
     apply_texpage(&m, gp0_state.texpage);
 

@@ -78,6 +78,19 @@ void display_present(void) {
     PsxDisplayInfo info;
     psx_gpu_display_info(&info);
     const PsxDisplayInfo *d = &info;
+    /* Nothing written to VRAM and the same display area: the front bitmap is already this frame (movies change
+     * every fourth VSync). Keep it rather than scaling an identical copy. */
+    static PsxDisplayInfo shown;
+    static unsigned int shown_generation;
+    static int shown_valid;
+    if (shown_valid && shown_generation == psx_vram_generation && !memcmp(&shown, d, sizeof shown)) {
+        swiWaitForVBlank();
+        drawing = 0;
+        return;
+    }
+    shown = info;
+    shown_generation = psx_vram_generation;
+    shown_valid = 1;
     int w = d->w ? d->w : 320, h = d->h ? d->h : 224;
     if (w > 320) {
         w = 320;

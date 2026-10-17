@@ -294,6 +294,32 @@ Observed on the PC build (software renderer frame dumps):
 * Movie audio through AKAO's streamed-sound commands: the intro's 44 seconds
   have no silent 20 ms window once the music starts.
 
+## DS cost of movie playback (2026-10-17)
+
+`PROFILE=1` now has `movie_vlc` and `movie_mdec` detail categories (the
+inspector accepts the 80-byte block). melonDS 1.1, DSi mode, 134 MHz, the intro
+FMV, 128-frame windows; milliseconds per 60 Hz frame:
+
+| build | interval | MDEC | VLC | display scale | SPU |
+|---|---:|---:|---:|---:|---:|
+| first working player | 175.2 | (uninstrumented, ~120) | | 19.1 | 29.2 |
+| sparse IDCT, tables, ARM code | 100.3 | 35.2 | 5.7 | 10.0 | 29.4 |
+| + DTCM tables, unchanged-frame skip | 81.4 | 29.6 | 5.2 | 2.5 | 28.7 |
+
+The real time budget is 16.7 ms, so movies still run about 5x slow on the DS.
+`make mdec-bench-ds` builds a DSi ROM that times reconstruction alone on the
+2,688 real-movie macroblocks of the PSX comparison set: 395 us per macroblock
+before, 257 us after moving the decoder into ITCM and assembling each macroblock
+on the DTCM stack (parse + IDCT 177 us, colour 80 us). A 320x224 frame has 280
+macroblocks. Every change was checked with `tools/check_mdec_replay.py`: all
+3,492 DuckStation macroblocks still match byte for byte, and the RGB24 scaler
+still matches the three stored PSX screenshots.
+
+The display now skips scaling when nothing was written to VRAM and the display
+area is unchanged (`psx_vram_generation`), which covers three of every four
+VSyncs during a 15 fps movie. The SPU is now the largest single cost here and
+everywhere else in the game.
+
 ## Still incomplete
 
 Not yet compared frame-by-frame with a PSX capture of the same movie (timing,

@@ -5,6 +5,8 @@
 /* X is a VRAM halfword coordinate; W is visible pixels even in RGB24 mode. */
 typedef struct { int x, y, w, h, rgb24; } PsxDisplayInfo;
 void psx_gpu_display_info(PsxDisplayInfo *info);
+/* Counts VRAM writes (draw commands, fills, copies, uploads): a presenter can skip an unchanged frame. */
+extern unsigned int psx_vram_generation;
 
 /* Packed RGB bytes in a 2048-byte VRAM row. Display-start X ignores bit 0.
  * Wrap within the same row rather than carrying into the next scanline. */

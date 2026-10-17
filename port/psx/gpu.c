@@ -56,10 +56,13 @@ __attribute__((weak)) void psx_vram_touch(int x, int y, int w, int h) {
 __attribute__((weak)) void psx_vram_read(int x, int y, int w, int h) {
 }
 
+__attribute__((weak)) unsigned int psx_vram_generation; /* also in gp0.c */
+
 static void vram_fill(int x, int y, int w, int h, u16 c) {
     if (!psx_vram) {
         return;
     }
+    psx_vram_generation++;
     psx_vram_touch(x, y, w, h);
     for (int j = 0; j < h; j++) {
         for (int i = 0; i < w; i++) {
@@ -83,6 +86,7 @@ static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
     if (check_mask && (((sx ^ dx) & 1023) || ((sy ^ dy) & 511)))
         psx_vram_read(dx, dy, w, h);
     psx_vram_touch(dx, dy, w, h);
+    psx_vram_generation++;
     /* Snapshot each source row. Non-wrapping overlaps match the published
      * ps1-tests reference; cross-boundary overlap behavior remains unverified. */
     static u16 row[VRAM_W];
@@ -112,6 +116,7 @@ int LoadImage(RECT *r, u32 *p) {
     const u16 set_mask=gp0_state.set_mask?0x8000:0;
     if (check_mask) psx_vram_read(r->x,r->y,r->w,r->h);
     psx_vram_touch(r->x, r->y, r->w, r->h);
+    psx_vram_generation++;
     const u16 *src = (const u16 *)p;
     for (int j = 0; j < r->h; j++) {
         for (int i = 0; i < r->w; i++) {

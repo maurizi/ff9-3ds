@@ -132,6 +132,9 @@ SPUITCM ?= 1
 PORT_ARCH_ds_psx/softgpu := -marm -DPORT_RASTER_ITCM
 PORT_ARCH_ds_ds/display_scale := -marm -DPORT_SCALE_ITCM
 PORT_ARCH_ds_ds/itcm_guard := -marm
+# Movie decoding: Thumb has no long multiply (SMLAL), which the IDCT's 64-bit fallback and VLC shifts use.
+PORT_ARCH_ds_psx/mdec_decode := -marm
+PORT_ARCH_ds_psx/movie_vlc := -marm
 # ARMv5TE DSP code generation; keep Thumb available for measured comparisons.
 ifeq ($(SPUARM),1)
 PORT_ARCH_ds_psx/spu_core := -marm
@@ -654,6 +657,17 @@ $(BUILD)/tests/mdec.elf: $(BUILD)/tests/mdec_ds.o $(BUILD)/tests/mdec_ds_test.o 
 	arm-none-eabi-gcc $(DS_COMPONENT_FLAGS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
 $(BUILD)/tests/mdec.nds: $(BUILD)/tests/mdec.elf
 	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "MDEC pixels;ARM9;User PSX pixel fixtures"
+# DSi timing of MDEC reconstruction on the real-movie macroblocks of MDEC_REFERENCE (contains game data: local only).
+.PHONY: mdec-bench-ds
+mdec-bench-ds: $(BUILD)/tests/mdec_bench.nds
+$(BUILD)/tests/mdec_bench.bin: tools/check_mdec_replay.py $(MDEC_REFERENCE)/report.json $(BUILD)/tests/mdec_probe
+	$(PYTHON) tools/check_mdec_replay.py $(MDEC_REFERENCE) --bench-out $@
+$(BUILD)/tests/mdec_bench_data.s: $(BUILD)/tests/mdec_bench.bin
+	printf '\t.section .rodata\n\t.balign 4\n\t.global bench_data, bench_data_end\nbench_data:\n\t.incbin "%s"\nbench_data_end:\n' $< > $@
+$(BUILD)/tests/mdec_bench.elf: tests/display/mdec_bench_ds.c port/psx/mdec_decode.c port/include/mdec_decode.h $(BUILD)/tests/mdec_bench_data.s
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm tests/display/mdec_bench_ds.c $(BUILD)/tests/mdec_bench_data.s -L$(BLOCKSDS)/libs/libnds/lib -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/mdec_bench.nds: $(BUILD)/tests/mdec_bench.elf
+	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "MDEC timing;ARM9;User movie data"
 test-mdec: $(BUILD)/tests/mdec_test
 	@$<
 $(BUILD)/tests/mdec_test: tests/display/mdec_test.c port/psx/mdec_decode.c port/include/mdec_decode.h

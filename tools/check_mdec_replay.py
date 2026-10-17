@@ -18,6 +18,7 @@ p.add_argument('reference', type=Path, nargs='?', default=ROOT / 'build/validati
 p.add_argument('--probe', type=Path, default=ROOT / 'build/tests/mdec_probe')
 p.add_argument('--overlay', type=Path, default=ROOT / 'decomp/disks/us/ovl/64.bin')
 p.add_argument('--repeat', type=int, default=1, help='decode the suite this many times (timing)')
+p.add_argument('--bench-out', type=Path, help='also write the real-movie cases (tables + inputs) for the DS benchmark')
 a = p.parse_args()
 
 overlay = a.overlay.read_bytes()
@@ -28,6 +29,11 @@ if len(quant) != 128 or len(scale) != 128:
 cases = json.loads((a.reference / 'report.json').read_text())
 one = b''.join(struct.pack('<II', c['command'], len(c['rl'])) + struct.pack(f"<{len(c['rl'])}H", *c['rl'])
                for c in cases)
+if a.bench_out:
+    a.bench_out.parent.mkdir(parents=True, exist_ok=True)
+    a.bench_out.write_bytes(quant + scale + b''.join(
+        struct.pack('<II', c['command'], len(c['rl'])) + struct.pack(f"<{len(c['rl'])}H", *c['rl'])
+        for c in cases if c['name'].startswith('disc')))
 start = time.perf_counter()
 out = subprocess.run([str(a.probe)], input=quant + scale + one * a.repeat, capture_output=True, check=True).stdout
 elapsed = time.perf_counter() - start

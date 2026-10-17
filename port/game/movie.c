@@ -19,6 +19,7 @@
 #include "psx_mem.h"
 #include "mdec_decode.h"
 #include "movie_vlc.h"
+#include "profile.h"
 
 /* ---- VLC ---------------------------------------------------------------------------------------------------- */
 
@@ -38,7 +39,9 @@ void o64_mbg_vlcDecode(u8 *bs, u32 *out, void *table) {
         bytes = 18336;
     }
     Ff9MovieVlcInfo info;
+    unsigned int t = port_profile_begin();
     int r = ff9_movie_vlc_v2(bs, bytes & ~1u, (const u8 *)g_mbgVlcPairs, (u16 *)out, 0x10000 / 2, &info);
+    port_profile_detail_end(PORT_PROFILE_MOVIE_VLC, t);
     if (r != FF9_VLC_OK) {
         static int reported;
         if (!reported++) {
@@ -182,7 +185,7 @@ s32 o64_mbg_applyMask(Ovl64Vlc4C8 *c, u32 *out, u16 bit) {
 extern u8 D_8019DEC8[128]; /* luma + chroma quantization, uploaded after command 40000001h */
 extern u8 D_8019DF4C[128]; /* scale matrix, uploaded after command 60000000h */
 
-static PsxMdecEnv env;
+MDEC_DTCM_BSS static PsxMdecEnv env;
 static const u16 *in_rl;
 static u32 in_left; /* halfwords */
 static u32 in_cmd;
@@ -269,7 +272,10 @@ int o64_DecDCTout(u32 *buf, int words) {
     out_running = 1;
     while (out_queued) {
         out_queued = 0;
-        if (!decode_request(out_buf, out_words)) {
+        unsigned int t = port_profile_begin();
+        int filled = decode_request(out_buf, out_words);
+        port_profile_detail_end(PORT_PROFILE_MOVIE_MDEC, t);
+        if (!filled) {
             break; /* stalled: stays busy, no callback */
         }
         out_busy = 0;
