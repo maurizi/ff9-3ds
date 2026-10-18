@@ -330,10 +330,10 @@ static int plan_textures(Buffer *b) {
             u0 &= ~7; u1 |= 7;
             x0 = p->tx + u0 / per; x1 = p->tx + u1 / per; y0 = p->ty + (v0 & ~7); y1 = p->ty + (v1 | 7);
         } else {
-            /* Stable regions: the whole page height and U in 64-texel steps, so a page keeps one region (and
-             * copies nothing) while the camera moves over it. */
-            u0 &= ~63; u1 |= 63;
-            x0 = p->tx + u0 / per; x1 = p->tx + u1 / per; y0 = p->ty; y1 = p->ty + 255;
+            /* Stable regions: U and V in 64-texel steps, so a page keeps its region (and copies nothing) while the
+             * camera moves over it, without holding the parts of the page no primitive uses. */
+            u0 &= ~63; u1 |= 63; v0 &= ~63; v1 |= 63;
+            x0 = p->tx + u0 / per; x1 = p->tx + u1 / per; y0 = p->ty + v0; y1 = p->ty + v1;
         }
         /* consecutive primitives nearly always share a page and CLUT: try the last match first */
 #define SAME_GROUP(q) ((q).depth == p->depth && (q).tx == p->tx && (q).ty == p->ty && (q).conv == conv && \
@@ -648,27 +648,24 @@ static int prim_area2(const Prim *p) {
     return a;
 }
 
-/* A scene over the 3D engine's budget (2048 polygons, 6144 vertices: Ark has about 6800 vertices) drops its
- * smallest primitives, the least visible, rather than the last drawn (often the party). Returns the smallest
- * area that is kept; primitives of exactly that area are kept while the budget lasts. */
-static int area_cut(Buffer *b) {
+/* A scene over the 3D engine's budget (2048 polygons, 6144 vertices: Ark and Taharka run 4-6% over) drops small
+ * primitives from the start of the drawing order: in painter's order that is the far scene, whose small pieces are
+ * the least visible and often covered later. Size alone would take the nearest characters, whose models are many
+ * tiny triangles drawn last. The size bound grows only while the budget isn't met. */
+static u8 prim_drop[MAX_PRIMS];
+static void plan_drops(Buffer *b) {
     int vertices = 0;
     for (int k = 0; k < b->count; ++k) vertices += b->prims[k].n;
-    if (b->count <= MAX_POLYS && vertices <= MAX_VERTICES) return 0;
-    enum { BUCKETS = 64 };
-    static int count[BUCKETS], verts[BUCKETS];
-    memset(count, 0, sizeof count); memset(verts, 0, sizeof verts);
-    for (int k = 0; k < b->count; ++k) {
-        int a = prim_area2(&b->prims[k]);
-        int bucket = a >= BUCKETS - 1 ? BUCKETS - 1 : a;
-        count[bucket]++; verts[bucket] += b->prims[k].n;
-    }
-    int kept = 0, kept_v = 0, cut = BUCKETS - 1;
-    for (; cut > 0; --cut) {
-        if (kept + count[cut] > MAX_POLYS || kept_v + verts[cut] > MAX_VERTICES) break;
-        kept += count[cut]; kept_v += verts[cut];
-    }
-    return cut;
+    memset(prim_drop, 0, b->count);
+    int over_p = b->count - MAX_POLYS, over_v = vertices - MAX_VERTICES;
+    static const int bounds[] = {16, 64, 256, 1024, 4096, 1 << 30}; /* twice the area */
+    for (unsigned t = 0; t < sizeof bounds / sizeof *bounds && (over_p > 0 || over_v > 0); ++t)
+        for (int k = 0; k < b->count && (over_p > 0 || over_v > 0); ++k)
+            if (!prim_drop[k] && prim_area2(&b->prims[k]) < bounds[t]) {
+                prim_drop[k] = 1;
+                --over_p;
+                over_v -= b->prims[k].n;
+            }
 }
 
 /* Translucent polygons with one ID don't blend over each other. Each gets its own, so overlapping layers add up,
@@ -699,11 +696,11 @@ static void emit_scene(Buffer *b) {
     fifo(CMD_POLYATTR, attr);
     fifo(CMD_TEXIMAGE, 0);
     int polys = 0, vertices = 0, z = 0;
-    const int cut = area_cut(b);
+    plan_drops(b);
     for (int k = 0; k < b->count; ++k) {
         Prim *p = &b->prims[k];
         ++z;
-        if (cut && prim_area2(p) < cut) { gxh_stats_dropped++; continue; }
+        if (prim_drop[k]) { gxh_stats_dropped++; continue; }
         if (polys >= MAX_POLYS || vertices + p->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
         int tu = 0, tv = 0, additive = 0;
         u32 want_image = 0;
