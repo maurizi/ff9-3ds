@@ -232,20 +232,22 @@ static SG_HOT __attribute__((noinline)) void poly_row_textured(const Gp0Mode *m,
     const Gp0State *st = &gp0_state;
     const unsigned keep_x = ~st->twin_mask_x, wx = st->twin_off_x & st->twin_mask_x;
     const unsigned keep_y = ~st->twin_mask_y, wy = st->twin_off_y & st->twin_mask_y;
-    const u16 *clut = psx_vram + (m->clut_y & 511) * 1024;
+    const u16 *const vram = psx_vram; /* locals: the stores below could otherwise alias the globals */
+    const int ready = palette_ready;
+    const u16 *clut = vram + (m->clut_y & 511) * 1024;
     const unsigned clut_x = m->clut_x, tx = m->tx, ty = m->ty, depth = m->depth;
     for (; width > 0; --width, ++dst, ++x, u = step_attribute(u, dudx), v = step_attribute(v, dvdx)) {
         unsigned uu = (((unsigned)(u >> 16) & keep_x) | wx) & 0xFF;
         unsigned vv = (((unsigned)(v >> 16) & keep_y) | wy) & 0xFF;
-        const u16 *row = psx_vram + ((ty + vv) & 511) * 1024;
+        const u16 *row = vram + ((ty + vv) & 511) * 1024;
         u16 t, c;
         if (depth == 0) {
             unsigned i = (row[(tx + (uu >> 2)) & 1023] >> ((uu & 3) * 4)) & 15;
-            if (palette_ready) { u32 p = shaded_palette[i]; t = (u16)p; c = p >> 16; }
+            if (ready) { u32 p = shaded_palette[i]; t = (u16)p; c = p >> 16; }
             else t = c = clut[(clut_x + i) & 1023];
         } else if (depth == 1) {
             unsigned i = (row[(tx + (uu >> 1)) & 1023] >> ((uu & 1) * 8)) & 255;
-            if (palette_ready) { u32 p = shaded_palette[i]; t = (u16)p; c = p >> 16; }
+            if (ready) { u32 p = shaded_palette[i]; t = (u16)p; c = p >> 16; }
             else t = c = clut[(clut_x + i) & 1023];
         } else {
             t = c = row[(tx + uu) & 1023];
@@ -255,7 +257,7 @@ static SG_HOT __attribute__((noinline)) void poly_row_textured(const Gp0Mode *m,
             /* plot()'s dithered modulation: eight-bit products, the 4x4 offset, then five bits (palette is off) */
             c = dither_colour((t & 31) * r >> 4, ((t >> 5) & 31) * g >> 4, ((t >> 10) & 31) * b >> 4, x, y) |
                 (t & 0x8000);
-        } else if (mod && !palette_ready) {
+        } else if (mod && !ready) {
             int tr = (t & 31) * r >> 7, tg = ((t >> 5) & 31) * g >> 7, tb = ((t >> 10) & 31) * b >> 7;
             c = (u16)((tr > 31 ? 31 : tr) | (tg > 31 ? 31 : tg) << 5 | (tb > 31 ? 31 : tb) << 10 | (t & 0x8000));
         }
@@ -294,12 +296,13 @@ static void dither_tables(int r, int g, int b, int dither) {
 static SG_HOT __attribute__((noinline)) void poly_row_dither_indexed(const Gp0Mode *m, u16 *dst, int width, int u,
         int v, int dudx, int dvdx, u16 mask, int x, int y) {
     const u16 (*phase)[3][32] = dtab[y & 3];
-    const u16 *clut = psx_vram + (m->clut_y & 511) * 1024 + m->clut_x;
+    const u16 *const vram = psx_vram; /* a local: the stores below could otherwise alias the global pointer */
+    const u16 *clut = vram + (m->clut_y & 511) * 1024 + m->clut_x;
     const unsigned tx = m->tx, ty = m->ty;
     if (m->depth) {
         for (; width > 0; --width, ++dst, ++x, u = step_attribute(u, dudx), v = step_attribute(v, dvdx)) {
             unsigned uu = (unsigned)(u >> 16) & 0xFF, vv = (unsigned)(v >> 16) & 0xFF;
-            u16 t = clut[(psx_vram[((ty + vv) & 511) * 1024 + ((tx + (uu >> 1)) & 1023)] >> ((uu & 1) * 8)) & 255];
+            u16 t = clut[(vram[((ty + vv) & 511) * 1024 + ((tx + (uu >> 1)) & 1023)] >> ((uu & 1) * 8)) & 255];
             if (!t) continue;
             const u16 (*d)[32] = phase[x & 3];
             *dst = d[0][t & 31] | d[1][(t >> 5) & 31] | d[2][(t >> 10) & 31] | (t & 0x8000) | mask;
@@ -307,7 +310,7 @@ static SG_HOT __attribute__((noinline)) void poly_row_dither_indexed(const Gp0Mo
     } else {
         for (; width > 0; --width, ++dst, ++x, u = step_attribute(u, dudx), v = step_attribute(v, dvdx)) {
             unsigned uu = (unsigned)(u >> 16) & 0xFF, vv = (unsigned)(v >> 16) & 0xFF;
-            u16 t = clut[(psx_vram[((ty + vv) & 511) * 1024 + ((tx + (uu >> 2)) & 1023)] >> ((uu & 3) * 4)) & 15];
+            u16 t = clut[(vram[((ty + vv) & 511) * 1024 + ((tx + (uu >> 2)) & 1023)] >> ((uu & 3) * 4)) & 15];
             if (!t) continue;
             const u16 (*d)[32] = phase[x & 3];
             *dst = d[0][t & 31] | d[1][(t >> 5) & 31] | d[2][(t >> 10) & 31] | (t & 0x8000) | mask;
@@ -376,12 +379,13 @@ static SG_HOT __attribute__((noinline)) void poly_row_untextured(const Gp0Mode *
 static SG_HOT __attribute__((noinline)) void poly_row_dither_semi(const Gp0Mode *m, u16 *dst, int width, int u, int v,
         int dudx, int dvdx, u16 mask, int x, int y) {
     const u16 (*phase)[3][32] = dtab[y & 3];
-    const u16 *clut = psx_vram + (m->clut_y & 511) * 1024 + m->clut_x;
+    const u16 *const vram = psx_vram; /* a local: the stores below could otherwise alias the global pointer */
+    const u16 *clut = vram + (m->clut_y & 511) * 1024 + m->clut_x;
     const unsigned tx = m->tx, ty = m->ty, depth = m->depth;
     const int abr = m->abr;
     for (; width > 0; --width, ++dst, ++x, u = step_attribute(u, dudx), v = step_attribute(v, dvdx)) {
         unsigned uu = (unsigned)(u >> 16) & 0xFF, vv = (unsigned)(v >> 16) & 0xFF;
-        const u16 *row = psx_vram + ((ty + vv) & 511) * 1024;
+        const u16 *row = vram + ((ty + vv) & 511) * 1024;
         u16 t;
         if (depth == 2) t = row[(tx + uu) & 1023];
         else if (depth == 1) t = clut[(row[(tx + (uu >> 1)) & 1023] >> ((uu & 1) * 8)) & 255];
