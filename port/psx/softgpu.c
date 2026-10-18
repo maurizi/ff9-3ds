@@ -72,22 +72,7 @@ static void prepare_palette(const Gp0Mode *m, const Gp0Vtx *v,
 #ifndef PORT_SOFTGPU_REFERENCE
     if (!m->textured || m->gouraud || m->depth > 1) return;
     int count = m->depth == 0 ? 16 : 256;
-    /* Building the shaded palette pays off for a large primitive, or when the same CLUT and colour come again
-     * (a tinted background's 16x16 tiles): the palette stays valid while the CLUT's entries are unchanged. */
-    static struct { int valid, x, y, depth, raw, r, g, b; u16 clut[256]; } built;
-    static int asked_x = -1, asked_y, asked_depth, asked_raw, asked_r, asked_g, asked_b;
-    const int ar = v->r < 0 ? 0 : v->r > 255 ? 255 : v->r;
-    const int ag = v->g < 0 ? 0 : v->g > 255 ? 255 : v->g;
-    const int ab = v->b < 0 ? 0 : v->b > 255 ? 255 : v->b;
-    int key_built = built.valid && built.x == m->clut_x && built.y == m->clut_y && built.depth == m->depth &&
-                    built.raw == m->raw && built.r == ar && built.g == ag && built.b == ab;
-    int key_asked = asked_x == m->clut_x && asked_y == m->clut_y && asked_depth == m->depth &&
-                    asked_raw == m->raw && asked_r == ar && asked_g == ag && asked_b == ab;
-    if ((x1-x0)*(y1-y0) < count*4 && !key_built && !key_asked) {
-        asked_x = m->clut_x; asked_y = m->clut_y; asked_depth = m->depth; asked_raw = m->raw;
-        asked_r = ar; asked_g = ag; asked_b = ab;
-        return;
-    }
+    if ((x1-x0)*(y1-y0) < count*4) return;
     /* Palette reads must remain live when drawing can modify the CLUT.
      * Shadow polygons write a separate destination and cannot do so. */
     if (!target.pixels) {
@@ -100,17 +85,11 @@ static void prepare_palette(const Gp0Mode *m, const Gp0Vtx *v,
             }
         }
     }
-    if (key_built) {
-        int same = 1;
-        for (int i = 0; i < count && same; ++i) same = built.clut[i] == *px(m->clut_x+i, m->clut_y);
-        if (same) { palette_ready = 1; return; }
-    }
-    int r = ar, g = ag, b = ab;
-    built.valid = 1; built.x = m->clut_x; built.y = m->clut_y; built.depth = m->depth; built.raw = m->raw;
-    built.r = ar; built.g = ag; built.b = ab;
+    int r = v->r < 0 ? 0 : v->r > 255 ? 255 : v->r;
+    int g = v->g < 0 ? 0 : v->g > 255 ? 255 : v->g;
+    int b = v->b < 0 ? 0 : v->b > 255 ? 255 : v->b;
     for (int i=0; i<count; ++i) {
         u16 t = *px(m->clut_x+i, m->clut_y);
-        built.clut[i] = t;
         int tr = (t & 31)*r >> 7, tg = ((t >> 5)&31)*g >> 7, tb = ((t >> 10)&31)*b >> 7;
         u16 c = (tr > 31 ? 31 : tr) | ((tg > 31 ? 31 : tg) << 5)
               | ((tb > 31 ? 31 : tb) << 10) | (t & 0x8000);
@@ -844,9 +823,12 @@ static inline __attribute__((always_inline)) void sprite_rows(
 #endif
 
 #ifndef PORT_SOFTGPU_REFERENCE
-/* A tinted sprite (colour other than 128) whose shaded palette isn't built: each texel's channels are scaled
+/* A tinted indexed sprite (colour other than 128) whose shaded palette isn't built: each texel's channels are scaled
  * through three 32-entry tables, read live like plot() but without its per-pixel setup. */
-static __attribute__((noinline)) void tinted_rows(const Gp0Mode *m, const Gp0Vtx *v, int u0, int v0,
+static __attribute__((noinline)) void tinted_pixel(const Gp0Mode *m, u16 *dst, u16 t, u16 c, u16 mask) {
+    sprite_pixel(m, dst, t, c, mask, 1);
+}
+static SG_HOT __attribute__((noinline)) void tinted_rows(const Gp0Mode *m, const Gp0Vtx *v, int u0, int v0,
                                                   int x0, int y0, int x1, int y1) {
     u16 tr[32], tg[32], tb[32];
     int r = v->r < 0 ? 0 : v->r > 255 ? 255 : v->r;
@@ -865,6 +847,8 @@ static __attribute__((noinline)) void tinted_rows(const Gp0Mode *m, const Gp0Vtx
     u16 mask = gp0_state.set_mask ? 0x8000 : 0;
     const u16 *clut = psx_vram + (m->clut_y & 511) * 1024;
     unsigned clut_x = m->clut_x;
+    /* 4-bit: 4 texels a halfword; 8-bit: 2 */
+    const unsigned per = m->depth ? 1 : 2, low = m->depth ? 1 : 3, bits = m->depth ? 3 : 2, entries = m->depth ? 255 : 15;
     for (int y = y0; y < y1; y++) {
         unsigned tv = ((((unsigned)v0 + (unsigned)y) & keep_y) | window_y) & 255;
         const u16 *row = psx_vram + (((m->ty + tv) & 511) * 1024);
@@ -872,13 +856,10 @@ static __attribute__((noinline)) void tinted_rows(const Gp0Mode *m, const Gp0Vtx
         unsigned cursor = (unsigned)u0 + (unsigned)x0;
         for (int x = x0; x < x1; x++, cursor++, dst++) {
             unsigned u = ((cursor & keep_x) | window_x) & 255;
-            u16 t;
-            if (m->depth == 0) t = clut[(clut_x + ((row[(m->tx + (u >> 2)) & 1023] >> ((u & 3) * 4)) & 15)) & 1023];
-            else if (m->depth == 1) t = clut[(clut_x + ((row[(m->tx + (u >> 1)) & 1023] >> ((u & 1) * 8)) & 255)) & 1023];
-            else t = row[(m->tx + u) & 1023];
+            u16 t = clut[(clut_x + ((row[(m->tx + (u >> per)) & 1023] >> ((u & low) << bits)) & entries)) & 1023];
             if (!t) continue;
             u16 c = tr[t & 31] | tg[(t >> 5) & 31] | tb[(t >> 10) & 31] | (t & 0x8000);
-            if (effects) sprite_pixel(m, dst, t, c, mask, 1);
+            if (effects) tinted_pixel(m, dst, t, c, mask);
             else *dst = c | mask;
         }
     }
@@ -932,7 +913,7 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         port_profile_draw_end(1,profile_start);
         return;
     }
-    if (m->textured && !target.pixels && x0>=0 && y0>=0 && x1<=VRAM_W && y1<=VRAM_H) {
+    if (m->textured && m->depth < 2 && !target.pixels && x0>=0 && y0>=0 && x1<=VRAM_W && y1<=VRAM_H) {
         tinted_rows(m, v, u0, v0, x0, y0, x1, y1);
         port_profile_draw_end(1,profile_start);
         return;

@@ -79,7 +79,8 @@ void psx_spu_reset(void) {
     psx_spu_write(0x1aa, 0xc000); /* libspu initializes enabled/unmuted */
 }
 
-SPU_HOT uint16_t psx_spu_read(unsigned offset) {
+/* Register reads and writes (the game's, a few hundred a frame) run from main RAM: ITCM is kept for the mixer. */
+uint16_t psx_spu_read(unsigned offset) {
     if ((offset & 1) || offset >= 0x400) return 0xffff;
     if (offset < 0x180) return psx_spu_voice_read(&voices[offset / 16], (offset & 15) / 2);
     if (offset == 0x19c) return ended;
@@ -94,7 +95,7 @@ SPU_HOT void psx_spu_voice_register(unsigned voice, unsigned offset, uint16_t va
     if (voice < PSX_SPU_VOICES && offset < 16) psx_spu_write(voice * 16 + offset, value);
 }
 
-SPU_HOT void psx_spu_write(unsigned offset, uint16_t value) {
+void psx_spu_write(unsigned offset, uint16_t value) {
     if ((offset & 1) || offset >= 0x400) return;
     if (offset == 0x19c || offset == 0x19e || offset == 0x1ae) return;
     psx_spu_trace(PSX_SPU_TRACE_WRITE, offset, value, NULL);
@@ -246,6 +247,15 @@ static SPU_HOT void span_frames(int16_t *output, unsigned n) {
 
 static const PsxSpuSink *hw_sink;
 void psx_spu_set_hw(const PsxSpuSink *sink) { hw_sink = sink; }
+
+/* The noise generator's step rate in Hz (SPUCNT bits 8-13, as psx_spu_noise_tick advances it), for HWSOUND's
+ * DS noise channels. */
+unsigned psx_spu_noise_hz(void) {
+    static const unsigned fraction[4] = {0, 84, 140, 180}; /* x/210 extra per sample, as the tick */
+    unsigned clock = (psx_spu_regs[0x1aa / 2] >> 8) & 63;
+    unsigned samples = 0x8000u >> (clock >> 2); /* per step at fraction 0 */
+    return 44100u * (210u + fraction[clock & 3]) / (210u * samples);
+}
 
 void psx_spu_voice_output(unsigned i, PsxSpuVoiceOutput *out) {
     const PsxSpuVoice *v = &voices[i];
