@@ -159,7 +159,12 @@ void display_present(void) {
     /* Watch the VRAM this frame reads (RGB24 spans 1.5 halfwords a pixel); a wrapping area watches everything. */
     int watch_w = d->rgb24 ? (w * 3 + 1) / 2 + 1 : w;
     if (d->x + watch_w > 1024 || d->y + h > 512) watch_w = 0;
-    psx_display_watch[0] = d->x; psx_display_watch[1] = d->y; psx_display_watch[2] = watch_w; psx_display_watch[3] = h;
+    if (psx_display_watch[0] != d->x || psx_display_watch[1] != d->y || psx_display_watch[2] != watch_w ||
+        psx_display_watch[3] != h) {
+        psx_display_watch[0] = d->x; psx_display_watch[1] = d->y; psx_display_watch[2] = watch_w;
+        psx_display_watch[3] = h;
+        ++psx_display_watch_version;
+    }
     shown_generation = psx_display_generation;
     unsigned int profile_scale=port_profile_begin();
     /* Scale into cached main RAM, then DMA to the VRAM back buffer: the ARM9's own stores to VRAM cross the

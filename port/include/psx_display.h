@@ -11,11 +11,15 @@ extern unsigned int psx_vram_generation;
  * rectangle a presenter last showed. Draws into a back buffer or texture pages elsewhere leave it alone. */
 extern unsigned int psx_display_generation;
 extern int psx_display_watch[4];
-static inline void psx_display_written(int x, int y, int w, int h) {
+/* bumped whenever psx_display_watch changes (gp0.c keeps its drawing area's answer until then) */
+extern unsigned int psx_display_watch_version;
+static inline int psx_display_hits(int x, int y, int w, int h) {
     const int *r = psx_display_watch;
-    if (!r[2] || x < 0 || y < 0 || x + w > 1024 || y + h > 512 ||
-        (x < r[0] + r[2] && r[0] < x + w && y < r[1] + r[3] && r[1] < y + h))
-        psx_display_generation++;
+    return !r[2] || x < 0 || y < 0 || x + w > 1024 || y + h > 512 ||
+           (x < r[0] + r[2] && r[0] < x + w && y < r[1] + r[3] && r[1] < y + h);
+}
+static inline void psx_display_written(int x, int y, int w, int h) {
+    if (psx_display_hits(x, y, w, h)) psx_display_generation++;
 }
 
 /* Packed RGB bytes in a 2048-byte VRAM row. Display-start X ignores bit 0.

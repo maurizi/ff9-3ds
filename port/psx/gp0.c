@@ -11,6 +11,11 @@ const Gp0Backend *gp0_backend;
 __attribute__((weak)) unsigned int psx_vram_generation;
 __attribute__((weak)) unsigned int psx_display_generation;
 __attribute__((weak)) int psx_display_watch[4];
+__attribute__((weak)) unsigned int psx_display_watch_version;
+/* whether draws inside the drawing area touch the watched display: recomputed after E3/E4 or a new watch (other
+ * code that changes the area for a draw of its own restores it before the next command) */
+static int area_hits_valid, area_hits;
+static unsigned int area_hits_version;
 /* psx_runtime.h; weak here too, for unit tests that link gp0.c without runtime.c */
 __attribute__((weak)) void port_canary(const char *where) { (void)where; }
 /* Snapshot counters for diagnosing the DS font presentation handoff. */
@@ -55,9 +60,16 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
     if ((cmd >= 0x20 && cmd < 0x80) || cmd == 2) {
         psx_display_drawing();
         psx_vram_generation++;
-        if (cmd != 2) /* draws stay inside the drawing area; fills count their own rectangle (vram_fill) */
-            psx_display_written(gp0_state.area_x0, gp0_state.area_y0, gp0_state.area_x1 - gp0_state.area_x0 + 1,
-                                gp0_state.area_y1 - gp0_state.area_y0 + 1);
+        if (cmd != 2) { /* draws stay inside the drawing area; fills count their own rectangle (vram_fill) */
+            if (!area_hits_valid || area_hits_version != psx_display_watch_version) {
+                area_hits = psx_display_hits(gp0_state.area_x0, gp0_state.area_y0,
+                                             gp0_state.area_x1 - gp0_state.area_x0 + 1,
+                                             gp0_state.area_y1 - gp0_state.area_y0 + 1);
+                area_hits_version = psx_display_watch_version;
+                area_hits_valid = 1;
+            }
+            if (area_hits) psx_display_generation++;
+        }
     }
     Gp0Mode m = {0};
     apply_texpage(&m, gp0_state.texpage);
@@ -208,10 +220,12 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
     case 0xE3:
         gp0_state.area_x0 = w[0] & 0x3FF;
         gp0_state.area_y0 = (w[0] >> 10) & 0x1FF;
+        area_hits_valid = 0;
         break;
     case 0xE4:
         gp0_state.area_x1 = w[0] & 0x3FF;
         gp0_state.area_y1 = (w[0] >> 10) & 0x1FF;
+        area_hits_valid = 0;
         break;
     case 0xE5:
         gp0_state.ofs_x = sext11((int)(w[0] & 0x7FF));
