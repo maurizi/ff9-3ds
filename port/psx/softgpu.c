@@ -842,9 +842,53 @@ static SG_HOT __attribute__((noinline)) void row_semi_direct(const u16 *src, con
 /* An opaque indexed sprite whose texels and CLUT lie outside its own destination, without texture window or
  * wrap: each row is the same row loop over the next texture row, so the per-row checks are made once for the
  * rectangle (stricter than fast_indexed_row's per-row ones; 0 means the caller's path draws it). */
+/* rect_rows with a texture window: a row is runs of consecutive texture coordinates (until the window's free low
+ * bits or the page wrap), each drawn by the row routines. The texture page and CLUT must lie apart from the
+ * destination (checked as whole page and CLUT row: conservative). */
+static __attribute__((noinline)) int window_rows(const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1,
+                                                 int direct) {
+    const unsigned page_w = m->depth ? 128 : 64, entries = m->depth ? 256 : 16;
+    if (m->tx + page_w > 1024 || (direct && m->clut_x + entries > 1024)) return 0;
+    if ((unsigned)m->tx < (unsigned)x1 && m->tx + page_w > (unsigned)x0 && (unsigned)m->ty < (unsigned)y1 &&
+        (unsigned)m->ty + 256 > (unsigned)y0) return 0;
+    if (direct && (unsigned)m->clut_y < (unsigned)y1 && (unsigned)m->clut_y >= (unsigned)y0 &&
+        (unsigned)m->clut_x < (unsigned)x1 && m->clut_x + entries > (unsigned)x0) return 0;
+    const unsigned keep_x = ~gp0_state.twin_mask_x, window_x = gp0_state.twin_off_x & gp0_state.twin_mask_x;
+    const unsigned keep_y = ~gp0_state.twin_mask_y, window_y = gp0_state.twin_off_y & gp0_state.twin_mask_y;
+    /* the coordinates run on until the lowest masked bit carries (or past 255) */
+    const unsigned span = gp0_state.twin_mask_x ? (gp0_state.twin_mask_x & -gp0_state.twin_mask_x) : 256;
+    const unsigned shift = m->depth ? 1 : 2, low = m->depth ? 1 : 3;
+    const u16 *cl = psx_vram + m->clut_y * 1024 + m->clut_x;
+    u16 mask = gp0_state.set_mask ? 0x8000 : 0;
+    for (int y = y0; y < y1; ++y) {
+        unsigned tv = ((((unsigned)v0 + (unsigned)y) & keep_y) | window_y) & 255;
+        const u16 *row = psx_vram + ((m->ty + tv) & 511) * 1024 + m->tx;
+        u16 *dst = psx_vram + y * 1024 + x0;
+        unsigned cursor = (unsigned)u0 + (unsigned)x0, left = (unsigned)(x1 - x0);
+        while (left) {
+            unsigned u = ((cursor & keep_x) | window_x) & 255;
+            unsigned run = span - (cursor & (span - 1));
+            if (run > 256 - u) run = 256 - u;
+            if (run > left) run = left;
+            const u16 *src = row + (u >> shift);
+            if (m->semi) row_semi_direct(src, cl, dst, u & low, run, mask, m->depth, m->abr);
+            else if (direct) {
+                if (m->depth) row_direct8(src, cl, dst, u & low, run, mask);
+                else row_direct4(src, cl, dst, u & low, run, mask);
+            } else {
+                if (m->depth) row_palette8(src, shaded_palette, dst, u & low, run, mask);
+                else row_palette4(src, shaded_palette, dst, u & low, run, mask);
+            }
+            dst += run; cursor += run; left -= run;
+        }
+    }
+    return 1;
+}
+
 static __attribute__((noinline)) int rect_rows(const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int direct) {
-    if (gp0_state.twin_mask_x || gp0_state.twin_mask_y || x1 <= x0 || y1 <= y0) return 0;
+    if (x1 <= x0 || y1 <= y0) return 0;
     if (gp0_state.check_mask || (m->semi && !direct)) return 0; /* semi-transparent: unmodulated ones only */
+    if (gp0_state.twin_mask_x || gp0_state.twin_mask_y) return window_rows(m, u0, v0, x0, y0, x1, y1, direct);
     unsigned u = (unsigned)(u0 + x0) & 255, tv = (unsigned)(v0 + y0) & 255;
     unsigned width = (unsigned)(x1 - x0), rows = (unsigned)(y1 - y0);
     if (u + width > 256 || tv + rows > 256) return 0;
