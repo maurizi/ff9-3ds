@@ -40,7 +40,8 @@ static int active;
 
 /* ---- recorded primitives ----------------------------------------------------------------------------------- */
 
-enum { P_TEXTURED = 1, P_RAW = 2, P_SEMI = 4, P_GOURAUD = 8 };
+enum { P_TEXTURED = 1, P_RAW = 2, P_SEMI = 4, P_GOURAUD = 8,
+       P_RECT = 16 /* a sprite: u, v are its last texels; the right and bottom vertices sample one further */ };
 
 typedef struct {
     u8 n, flags, abr, depth;
@@ -187,6 +188,11 @@ typedef struct {
 
 static Region regions[MAX_REGIONS];
 static u8 unit_used[TEX_UNITS];
+/* Untextured additive glows sample a fixed ramp whose alpha rises along U (A5I3, 32x8, white): each vertex's U is
+ * its brightness, so the interpolated coordinate is a per-pixel alpha (the DS has none per vertex). */
+#define RAMP_UNIT (TEX_UNITS - 1)
+#define RAMP_PALETTE 31   /* its palette among ADD_SLOT's 8-colour palettes */
+static int ramp_written;
 
 static inline int texels_per_halfword(int depth) { return depth == 0 ? 4 : depth == 1 ? 2 : 1; }
 
@@ -232,8 +238,8 @@ static Region *place_region(int depth, int conv, int cx, int cy, int x, int y, i
     if (conv) { /* a free 8-colour palette */
         u32 taken = 0;
         for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used && regions[i].conv) taken |= 1u << regions[i].cpal;
-        while (cpal < 32 && (taken >> cpal & 1)) ++cpal;
-        if (cpal == 32) return NULL;
+        while (cpal < RAMP_PALETTE && (taken >> cpal & 1)) ++cpal;
+        if (cpal == RAMP_PALETTE) return NULL;
     }
     int bytes = ((1 << sw) << sh) * (conv ? 8 : depth == 0 ? 4 : depth == 1 ? 8 : 16) / 8;
     int units = 1 << log2_at_least((bytes + TEX_UNIT - 1) / TEX_UNIT);
@@ -533,6 +539,14 @@ static void conv_upload(Region *r, u8 *dst, int row_bytes) {
 /* Copy dirty regions and palettes from PS1 VRAM. Banks A-D, F and G must be mapped to the CPU (LCDC). */
 static void upload(void) {
     u8 *base = (u8 *)VRAM_A;
+    if (!ramp_written) {
+        u16 *ramp = (u16 *)(base + RAMP_UNIT * TEX_UNIT);
+        for (int row = 0; row < 8; ++row)
+            for (int u = 0; u < 32; u += 2) ramp[row * 16 + u / 2] = (u16)(u << 3 | (u + 1) << 11);
+        u16 *pal = (u16 *)VRAM_F + ADD_SLOT * 256 + RAMP_PALETTE * 8;
+        for (int k = 0; k < 8; ++k) pal[k] = 0x7FFF;
+        ramp_written = 1;
+    }
     for (int i = 0; i < MAX_REGIONS; ++i) {
         Region *r = &regions[i];
         if (!r->used || !r->dirty) continue;
@@ -545,6 +559,15 @@ static void upload(void) {
             u16 *out = (u16 *)(dst + row * row_bytes);
             if (r->depth < 2 && r->x + r->wh <= 1024) {
                 memcpy(out, src + r->x, r->wh * 2);
+            } else if (r->depth == 2 && !(r->x & 1) && !(r->wh & 1) && r->x + r->wh <= 1024) {
+                /* two texels a word: bit 15 set on each nonzero one (adding 0x7FFF to its low 15 bits carries
+                 * into bit 15 exactly when they aren't all zero) */
+                const u32 *in = (const u32 *)(src + r->x);
+                u32 *out2 = (u32 *)out;
+                for (int k = 0; k < r->wh / 2; ++k) {
+                    u32 w = in[k];
+                    out2[k] = w | ((((w & 0x7FFF7FFFu) + 0x7FFF7FFFu) | w) & 0x80008000u);
+                }
             } else {
                 for (int k = 0; k < r->wh; ++k) {
                     u16 c = src[(r->x + k) & 1023];
@@ -704,9 +727,17 @@ static void emit_scene(Buffer *b) {
                 if (want_palette != palette) { fifo(CMD_PLTTBASE, want_palette); palette = want_palette; }
             }
         }
+        int glow = !(p->flags & P_TEXTURED) && (p->flags & P_SEMI) && (p->abr == 1 || p->abr == 3);
+        if (glow) {
+            want_image = (u32)(RAMP_UNIT * TEX_UNIT / 8) | 2u << 20 | 0u << 23 | 6u << 26; /* 32x8 A5I3 */
+            u32 want_palette = (u32)(ADD_SLOT * 512 + RAMP_PALETTE * 16) / 16;
+            if (want_palette != palette) { fifo(CMD_PLTTBASE, want_palette); palette = want_palette; }
+        }
         if (want_image != image) { fifo(CMD_TEXIMAGE, want_image); image = want_image; }
         int alpha = 31, id = 0;
-        if (additive) {
+        if (glow) {
+            id = translucent_id(p, polys);
+        } else if (additive) {
             /* the source's brightness (PS1 128 = x1; mode 3 adds a quarter), at most opaque */
             int m = 0;
             for (int j = 0; j < p->n; ++j) {
@@ -734,9 +765,21 @@ static void emit_scene(Buffer *b) {
         fifo(CMD_BEGIN, p->n == 4 ? 1 : 0);
         for (int j = 0; j < p->n; ++j) {
             int i = p->n == 4 ? quad_order[j] : j;
-            if (j == 0 || (p->flags & P_GOURAUD)) fifo(CMD_COLOR, rgb_for(p, i, additive));
-            if (p->flags & P_TEXTURED)
-                fifo(CMD_TEXCOORD, (u32)(u16)((p->u[i] - tu) * 16) | (u32)(u16)((p->v[i] - tv) * 16) << 16);
+            if (glow) {
+                /* hue at full brightness; the brightness (a quarter of it in mode 3) is the ramp's U */
+                int m = p->r[i] > p->g[i] ? (p->r[i] > p->b[i] ? p->r[i] : p->b[i]) : (p->g[i] > p->b[i] ? p->g[i] : p->b[i]);
+                int k = p->flags & P_GOURAUD ? i : 0;
+                if (k != i) m = p->r[k] > p->g[k] ? (p->r[k] > p->b[k] ? p->r[k] : p->b[k]) : (p->g[k] > p->b[k] ? p->g[k] : p->b[k]);
+                u32 colour = m ? (u32)(p->r[k] * 31 / m | (p->g[k] * 31 / m) << 5 | (p->b[k] * 31 / m) << 10) : 0;
+                int a = m * 31 / (p->abr == 3 ? 1020 : 255);
+                fifo(CMD_COLOR, colour);
+                fifo(CMD_TEXCOORD, (u32)(u16)(a * 16 + 8) | (u32)(u16)(4 * 16) << 16);
+            } else if (j == 0 || (p->flags & P_GOURAUD)) fifo(CMD_COLOR, rgb_for(p, i, additive));
+            if (p->flags & P_TEXTURED) {
+                int u = p->u[i] - tu, v = p->v[i] - tv;
+                if (p->flags & P_RECT) { u += i & 1; v += i >> 1; } /* vertices 1, 3 right; 2, 3 bottom */
+                fifo(CMD_TEXCOORD, (u32)(u16)(u * 16) | (u32)(u16)(v * 16) << 16);
+            }
             put(CMD_VTX16);
             put((u32)(u16)p->x[i] | (u32)(u16)p->y[i] << 16);
             put((u32)(u16)z);
@@ -810,15 +853,6 @@ static void ui_dirty_rect(int x0, int y0, int x1, int y1) {
     r[0] = (s16)x0; r[1] = (s16)y0; r[2] = (s16)x1; r[3] = (s16)y1;
 }
 
-static int ui_overlaps_dirty(int x0, int y0, int x1, int y1) {
-    if (ui_dirty_all) return 1;
-    for (int i = 0; i < ui_dirty_count; ++i) {
-        const s16 *r = ui_dirty[i];
-        if (x0 <= r[2] && r[0] <= x1 && y0 <= r[3] && r[1] <= y1) return 1;
-    }
-    return 0;
-}
-
 /* Texture sources written since the previous list: an entry sampling them must count as changed. */
 #define UI_SOURCES 64
 static s16 ui_written[UI_SOURCES][4];
@@ -847,9 +881,17 @@ static int ui_source_written(const UiPrim *p) {
 
 static void soft_touch(int x0, int y0, int x1, int y1);
 
-static void ui_draw(const UiPrim *p) {
+/* Draw p, within clip (x0, y0, x1, y1 inclusive) when given: its drawing area narrowed to it. */
+static void ui_draw(const UiPrim *p, const s16 *clip) {
     Gp0State saved = gp0_state;
     gp0_state = p->state;
+    if (clip) {
+        if (gp0_state.area_x0 < clip[0]) gp0_state.area_x0 = clip[0];
+        if (gp0_state.area_y0 < clip[1]) gp0_state.area_y0 = clip[1];
+        if (gp0_state.area_x1 > clip[2]) gp0_state.area_x1 = clip[2];
+        if (gp0_state.area_y1 > clip[3]) gp0_state.area_y1 = clip[3];
+        if (gp0_state.area_x1 < gp0_state.area_x0 || gp0_state.area_y1 < gp0_state.area_y0) { gp0_state = saved; return; }
+    }
     if (p->kind == UI_RECT) psx_softgpu.rect(&p->m, p->v, p->w, p->h);
     else if (p->kind == UI_LINE) psx_softgpu.line(&p->m, &p->v[0], &p->v[1]);
     else psx_softgpu.poly(&p->m, p->v, p->n);
@@ -878,10 +920,19 @@ static void ui_flush(void) {
             if (i < m) { ui_bounds(&prev[i], &x0, &y0, &x1, &y1); ui_dirty_rect(x0, y0, x1, y1); }
         }
     }
+    /* An entry over the dirty area is drawn clipped to it: drawn whole, an unchanged window background would
+     * cover a skipped glyph outside the dirty area. (Only opaque lists get here, so dirty rectangles that
+     * overlap each other draw some pixels twice, harmlessly.) */
     for (int i = 0; i < n; ++i) {
         int x0, y0, x1, y1;
         ui_bounds(&cur[i], &x0, &y0, &x1, &y1);
-        if (whole || ui_overlaps_dirty(x0, y0, x1, y1)) { ui_draw(&cur[i]); gxh_stats_ui_drawn++; }
+        if (whole || ui_dirty_all) { ui_draw(&cur[i], NULL); gxh_stats_ui_drawn++; continue; }
+        int drawn = 0;
+        for (int k = 0; k < ui_dirty_count; ++k) {
+            const s16 *r = ui_dirty[k];
+            if (x0 <= r[2] && r[0] <= x1 && y0 <= r[3] && r[1] <= y1) { ui_draw(&cur[i], r); drawn = 1; }
+        }
+        if (drawn) gxh_stats_ui_drawn++;
         else gxh_stats_ui_skipped++;
     }
     /* this list is the next one's reference; written sources and dirty areas start over */
@@ -918,10 +969,10 @@ static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     Buffer *b = target();
     if (b && b == displayed() && ui_defer(UI_POLY, m, v, n, 0, 0)) return;
     ui_flush();
-    /* Untextured additive glows (Gouraud, black at the edges) have no per-vertex alpha on the DS: draw them in
-     * software over the scene's clear value instead, so dark parts stay transparent and bright ones show. */
+    /* Untextured additive glows (Gouraud, black at the edges) go to the 3D layer through the alpha ramp; outside a
+     * scene (offscreen) they are drawn in software, marked, over the clear value. */
     int glow = m->semi && !m->textured && (m->abr == 1 || m->abr == 3);
-    if (b && b != displayed() && !glow) {
+    if (b && b != displayed()) {
         if (!triangle_area(v, v + 1, v + 2) && (n == 3 || !triangle_area(v + 1, v + 2, v + 3))) return;
         int clipped = 0;
         for (int i = 0; i < n; ++i)
@@ -970,6 +1021,29 @@ static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     Buffer *b = target();
     if (b && b == displayed() && ui_defer(UI_RECT, m, v, 1, w, h)) return;
     ui_flush();
+    /* A sprite or tile in the scene is a quad of the 3D layer like a polygon (so it blends with it), unless it
+     * uses a texture window or its texels wrap past the page edge, which 8-bit coordinates can't say. */
+    if (b && b != displayed() && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
+        (!m->textured || (v->u + w <= 256 && v->v + h <= 256))) {
+        /* clipped to the drawing area: texels follow pixels one to one */
+        Gp0Vtx c = *v;
+        int dx = gp0_state.area_x0 - c.x, dy = gp0_state.area_y0 - c.y;
+        if (dx > 0) { c.x += dx; c.u += dx; w -= dx; }
+        if (dy > 0) { c.y += dy; c.v += dy; h -= dy; }
+        if (c.x + w > gp0_state.area_x1 + 1) w = gp0_state.area_x1 + 1 - c.x;
+        if (c.y + h > gp0_state.area_y1 + 1) h = gp0_state.area_y1 + 1 - c.y;
+        if (w <= 0 || h <= 0) return;
+        Gp0Vtx q[4] = {c, c, c, c};
+        q[1].x += w; q[1].u += w - 1;
+        q[2].y += h; q[2].v += h - 1;
+        q[3].x += w; q[3].u += w - 1; q[3].y += h; q[3].v += h - 1;
+        Gp0Mode flat = *m;
+        flat.gouraud = 0;
+        int before = b->count;
+        record(b, &flat, q, 4);
+        if (b->count > before) b->prims[b->count - 1].flags |= P_RECT;
+        return;
+    }
     psx_softgpu.rect(m, v, w, h);
     soft_touch(v->x, v->y, v->x + w - 1, v->y + h - 1);
 }
@@ -1031,6 +1105,8 @@ void gxh_enable(int on) {
         bgSetPriority(0, 1);
         memset(regions, 0, sizeof regions);
         memset(unit_used, 0, sizeof unit_used);
+        unit_used[RAMP_UNIT] = 1;
+        ramp_written = 0;
         memset(palettes, 0, sizeof palettes);
         for (int i = 0; i < 2; ++i) { buffers[i].valid = 0; buffers[i].count = 0; }
         gp0_backend = &hybrid_backend;
