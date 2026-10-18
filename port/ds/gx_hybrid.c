@@ -472,24 +472,39 @@ static void conv_upload(Region *r, u8 *dst, int row_bytes) {
                 alpha[count++] = texel_alpha(c, m);
             }
     }
-    /* representatives: the brightest entry's colour, then repeatedly the colour farthest from those chosen */
+    /* representatives: the brightest entry's colour, then repeatedly the colour farthest from those chosen. A
+     * CLUT's entries mostly share a few hues, so the search runs over the distinct normalised colours (the
+     * brightest entry of each), with each one's distance to the chosen set kept as it grows. */
+    static u32 seen[32768 / 32];
+    static u16 cand[CHOICES];
+    static u8 cand_alpha[CHOICES];
+    static int cand_d[CHOICES];
+    int ncand = 0;
+    for (int i = 0; i < count; ++i) {
+        if (!alpha[i]) continue;
+        u16 n = norm[i];
+        if (seen[n >> 5] >> (n & 31) & 1) {
+            for (int k = 0; k < ncand; ++k) if (cand[k] == n && alpha[i] > cand_alpha[k]) cand_alpha[k] = alpha[i];
+            continue;
+        }
+        seen[n >> 5] |= 1u << (n & 31);
+        cand[ncand] = n; cand_alpha[ncand] = alpha[i]; cand_d[ncand] = 1 << 30; ++ncand;
+    }
+    for (int k = 0; k < ncand; ++k) seen[cand[k] >> 5] = 0;
     u16 reps[8];
     int nreps = 0;
-    for (;;) {
+    while (nreps < 8) {
         int best = -1, best_d = 0;
-        for (int i = 0; i < count; ++i) {
-            if (!(alpha[i])) continue;
-            int d = 1 << 30;
-            for (int k = 0; k < nreps; ++k) {
-                int e = colour_distance(norm[i], reps[k]);
-                if (e < d) d = e;
-            }
-            if (!nreps) d = alpha[i]; /* first: the brightest */
-            if (d > best_d) { best_d = d; best = i; }
+        for (int k = 0; k < ncand; ++k) {
+            int d = nreps ? cand_d[k] : cand_alpha[k]; /* first: the brightest */
+            if (d > best_d) { best_d = d; best = k; }
         }
         if (best < 0) break;
-        reps[nreps++] = norm[best];
-        if (nreps == 8) break;
+        reps[nreps++] = cand[best];
+        for (int k = 0; k < ncand; ++k) {
+            int e = colour_distance(cand[k], cand[best]);
+            if (e < cand_d[k]) cand_d[k] = e;
+        }
     }
     if (!nreps) reps[nreps++] = 0x7FFF;
     u16 *pal = (u16 *)VRAM_F + ADD_SLOT * 256 + r->cpal * 8;
@@ -504,14 +519,21 @@ static void conv_upload(Region *r, u8 *dst, int row_bytes) {
             }
             code[i] = (u8)(alpha[i] << 3 | best);
         }
-        const int per = texels_per_halfword(r->depth), bits = 16 / per, mask = (1 << bits) - 1;
+        /* texel pairs (VRAM ignores byte writes): 4-bit, one source byte is a pair, through a 256-entry table */
+        static u16 pair4[256];
+        if (!r->depth)
+            for (int b = 0; b < 256; ++b) pair4[b] = code[b & 15] | code[b >> 4] << 8;
         for (int row = 0; row < r->h; ++row) {
             const u16 *src = psx_vram + ((r->y + row) & 511) * 1024;
-            u16 *out = (u16 *)(dst + row * row_bytes); /* texel pairs: VRAM ignores byte writes */
-            for (int k = 0; k < r->wh; ++k) {
-                u16 word = src[(r->x + k) & 1023];
-                for (int t = 0; t < per; t += 2)
-                    out[(k * per + t) / 2] = code[(word >> (t * bits)) & mask] | code[(word >> ((t + 1) * bits)) & mask] << 8;
+            u16 *out = (u16 *)(dst + row * row_bytes);
+            if (r->depth) {
+                for (int k = 0; k < r->wh; ++k) { u16 w = src[(r->x + k) & 1023]; out[k] = code[w & 255] | code[w >> 8] << 8; }
+            } else {
+                for (int k = 0; k < r->wh; ++k) {
+                    u16 w = src[(r->x + k) & 1023];
+                    out[2 * k] = pair4[w & 255];
+                    out[2 * k + 1] = pair4[w >> 8];
+                }
             }
         }
         return;
@@ -691,6 +713,7 @@ static void plan_drops(Buffer *b) {
  * both layers blend as on the PS1. */
 #define RECENT 16
 static const Prim *recent[RECENT];
+static u32 recent_xy[RECENT][4]; /* their vertices packed (x | y << 16), for the cheap shared-vertex test */
 static u8 recent_id[RECENT];
 static int recent_at;
 
@@ -718,9 +741,19 @@ static int neighbours(const Prim *p, const Prim *q) {
 
 static int translucent_id(const Prim *p, int polys) {
     int id = 1 + (polys & 31);
-    for (int k = 0; k < RECENT; ++k)
-        if (recent[k] && neighbours(p, recent[k])) { id = recent_id[k]; break; }
-    recent[recent_at] = p; recent_id[recent_at] = (u8)id; recent_at = (recent_at + 1) % RECENT;
+    u32 xy[4];
+    for (int i = 0; i < p->n; ++i) xy[i] = (u16)p->x[i] | (u32)(u16)p->y[i] << 16;
+    for (int k = 0; k < RECENT; ++k) {
+        const Prim *q = recent[k];
+        if (!q) continue;
+        int shared = 0; /* two vertices in common before the side test */
+        for (int i = 0; i < p->n; ++i)
+            for (int j = 0; j < q->n; ++j) shared += xy[i] == recent_xy[k][j];
+        if (shared >= 2 && neighbours(p, q)) { id = recent_id[k]; break; }
+    }
+    recent[recent_at] = p; recent_id[recent_at] = (u8)id;
+    for (int i = 0; i < p->n; ++i) recent_xy[recent_at][i] = xy[i];
+    recent_at = (recent_at + 1) % RECENT;
     return id;
 }
 
