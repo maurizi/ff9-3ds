@@ -11,6 +11,7 @@
 #include <string.h>
 #include "psx_spu.h"
 #include "audio_hw.h"
+#include "psx_runtime.h"
 
 #define VOICES 24
 #define RING 4096          /* samples per voice ring: ~93 ms at 44.1 kHz, longer at lower pitches */
@@ -29,7 +30,7 @@ typedef struct {
 } Voice;
 
 static Voice voices[VOICES];
-static s16 rings[VOICES][RING] __attribute__((aligned(32)));
+static s16 (*rings)[RING]; /* VOICES x RING, in PS1 RAM the port never uses (psx_spare_alloc) */
 static u32 channel_used; /* bit per DS channel */
 int port_hw_sound_stats[4];
 
@@ -56,6 +57,7 @@ static const PsxSpuSink sink = {key_on, block, NULL};
 
 void port_hw_sound_init(void) {
     soundEnable();
+    rings = psx_spare_alloc(VOICES * RING * sizeof(s16));
     for (int i = 0; i < VOICES; ++i)
         voices[i] = (Voice){rings[i], 0, 0, -1, -1, 0, 64, 0, 0, 0};
     psx_spu_set_hw(&sink);
