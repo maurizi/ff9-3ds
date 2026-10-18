@@ -786,11 +786,31 @@ static inline __attribute__((always_inline)) int fast_indexed_row(
     return 1;
 }
 
+/* An unmodulated indexed sprite's row with semi-transparency (blend mode abr on texels with bit 15; no mask
+ * test): 4-bit (depth 0) or 8-bit texels from src, colours from the CLUT cl. Mode 0, the average, takes all three
+ * channels at once: (b + f) >> 1 per channel is ((b & ~1) + (f & ~1)) >> 1 plus the bit both have at 1. */
+static SG_HOT __attribute__((noinline)) void row_semi_direct(const u16 *src, const u16 *cl, u16 *dst, unsigned lead,
+                                                             unsigned width, u16 mask, int depth, int abr) {
+    const unsigned per = depth ? 1 : 2, low = depth ? 1 : 3, bits = depth ? 3 : 2, entries = depth ? 255 : 15;
+    for (unsigned k = lead; width; --width, ++k, ++dst) {
+        u16 t = cl[(src[k >> per] >> ((k & low) << bits)) & entries];
+        if (!t) continue;
+        u16 c = t;
+        if (t & 0x8000) {
+            u16 d = *dst;
+            c = abr ? blend(d, t, abr) | 0x8000
+                    : (u16)((((d & 0x7BDE) + (t & 0x7BDE)) >> 1) + (d & t & 0x0421)) | 0x8000;
+        }
+        *dst = c | mask;
+    }
+}
+
 /* An opaque indexed sprite whose texels and CLUT lie outside its own destination, without texture window or
  * wrap: each row is the same row loop over the next texture row, so the per-row checks are made once for the
  * rectangle (stricter than fast_indexed_row's per-row ones; 0 means the caller's path draws it). */
 static __attribute__((noinline)) int rect_rows(const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int direct) {
     if (gp0_state.twin_mask_x || gp0_state.twin_mask_y || x1 <= x0 || y1 <= y0) return 0;
+    if (gp0_state.check_mask || (m->semi && !direct)) return 0; /* semi-transparent: unmodulated ones only */
     unsigned u = (unsigned)(u0 + x0) & 255, tv = (unsigned)(v0 + y0) & 255;
     unsigned width = (unsigned)(x1 - x0), rows = (unsigned)(y1 - y0);
     if (u + width > 256 || tv + rows > 256) return 0;
@@ -807,6 +827,10 @@ static __attribute__((noinline)) int rect_rows(const Gp0Mode *m, int u0, int v0,
     u16 *dst = psx_vram + y0 * 1024 + x0;
     u16 mask = gp0_state.set_mask ? 0x8000 : 0;
     unsigned lead = u & (m->depth ? 1 : 3);
+    if (m->semi) {
+        for (; rows; --rows, src += 1024, dst += 1024) row_semi_direct(src, cl, dst, lead, width, mask, m->depth, m->abr);
+        return 1;
+    }
     for (; rows; --rows, src += 1024, dst += 1024) {
         if (direct) {
             if (m->depth) row_direct8(src, cl, dst, lead, width, mask);
@@ -916,6 +940,16 @@ static SG_HOT __attribute__((noinline)) void tinted_rows(const Gp0Mode *m, const
 }
 #endif
 
+#ifndef PORT_SOFTGPU_REFERENCE
+/* sprite_rows for semi-transparent or mask-tested sprites that rect_rows doesn't take (texture window, wrap,
+ * overlap, modulated through the palette): out of line, to leave ITCM to the common paths */
+static __attribute__((noinline)) void sprite_rows_effects(const Gp0Mode *m, int u0, int v0, int x0, int y0,
+                                                          int x1, int y1, int direct) {
+    if (direct) sprite_rows(m, u0, v0, x0, y0, x1, y1, 1, 1);
+    else sprite_rows(m, u0, v0, x0, y0, x1, y1, 1, 0);
+}
+#endif
+
 static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (!psx_vram) {
         return;
@@ -953,10 +987,9 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
          * for overlapping source/dest. prepare_palette rejects CLUT feedback; shadows use generic plot.
          * Neutral 128 modulation reproduces each texel exactly, as raw does. */
         const int direct = !palette_ready && m->depth < 2;
-        if (m->semi || gp0_state.check_mask) {
-            if (direct) sprite_rows(m, u0, v0, x0, y0, x1, y1, 1, 1);
-            else sprite_rows(m, u0, v0, x0, y0, x1, y1, 1, 0);
-        } else if (m->depth < 2 && rect_rows(m, u0, v0, x0, y0, x1, y1, direct)) {
+        if (m->depth < 2 && rect_rows(m, u0, v0, x0, y0, x1, y1, direct)) {
+        } else if (m->semi || gp0_state.check_mask) {
+            sprite_rows_effects(m, u0, v0, x0, y0, x1, y1, direct);
         } else {
             if (direct) sprite_rows(m, u0, v0, x0, y0, x1, y1, 0, 1);
             else sprite_rows(m, u0, v0, x0, y0, x1, y1, 0, 0);
