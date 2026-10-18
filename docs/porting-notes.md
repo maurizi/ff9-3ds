@@ -1527,3 +1527,13 @@ directly on the host with the software renderer on (`tools/scenario_smoke.py --r
 failures are fixture limits, not port faults: disc 4 field 2502 redirects to field 2500, which needs story state;
 disc 2 field 70 is the opening scene, whose FMV001 exists only on disc 1. Entry alone exercises each field's load,
 setup scripts and first 25 seconds; events reached later in play still need their own fixtures.
+
+## Battle sweep (2026-10-18)
+
+Every encounter in each disc's encounter directory (`tools/scenario_catalog.py`: 337 + 387 + 413 + 356 = 1493)
+entered directly on the host with rendering (2500 frames each): 1068 pass. All 425 failures are fixture limits:
+408 encounters carry no background of their own (the field or world map that starts them supplies it, by an ID the
+encounter's scene data names; borrowing another encounter's background makes `btlbg_init` find nothing), 11 ended
+within the run and returned to a field the fixture never set up, and 6 returned to field 70 on disc 2 (the
+opening, whose FMV is on disc 1). Covering the 408 needs fixtures that start each encounter from a field that uses
+it (its encounter table and background), still to do.
