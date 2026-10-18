@@ -769,6 +769,39 @@ static inline __attribute__((always_inline)) int fast_indexed_row(
     return 1;
 }
 
+/* An opaque indexed sprite whose texels and CLUT lie outside its own destination, without texture window or
+ * wrap: each row is the same row loop over the next texture row, so the per-row checks are made once for the
+ * rectangle (stricter than fast_indexed_row's per-row ones; 0 means the caller's path draws it). */
+static __attribute__((noinline)) int rect_rows(const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int direct) {
+    if (gp0_state.twin_mask_x || gp0_state.twin_mask_y || x1 <= x0 || y1 <= y0) return 0;
+    unsigned u = (unsigned)(u0 + x0) & 255, tv = (unsigned)(v0 + y0) & 255;
+    unsigned width = (unsigned)(x1 - x0), rows = (unsigned)(y1 - y0);
+    if (u + width > 256 || tv + rows > 256) return 0;
+    unsigned shift = m->depth ? 1 : 2;
+    unsigned tx0 = m->tx + (u >> shift), tx1 = m->tx + ((u + width - 1) >> shift);
+    unsigned ty0 = m->ty + tv;
+    if (tx1 >= 1024 || ty0 + rows > 512) return 0;
+    if (tx0 < (unsigned)x1 && tx1 >= (unsigned)x0 && ty0 < (unsigned)y1 && ty0 + rows > (unsigned)y0) return 0;
+    unsigned entries = m->depth ? 256 : 16;
+    if (direct && (m->clut_x + entries > 1024 ||
+                   ((unsigned)m->clut_y < (unsigned)y1 && (unsigned)m->clut_y >= (unsigned)y0 &&
+                    (unsigned)m->clut_x < (unsigned)x1 && m->clut_x + entries > (unsigned)x0))) return 0;
+    const u16 *src = psx_vram + ty0 * 1024 + tx0, *cl = psx_vram + m->clut_y * 1024 + m->clut_x;
+    u16 *dst = psx_vram + y0 * 1024 + x0;
+    u16 mask = gp0_state.set_mask ? 0x8000 : 0;
+    unsigned lead = u & (m->depth ? 1 : 3);
+    for (; rows; --rows, src += 1024, dst += 1024) {
+        if (direct) {
+            if (m->depth) row_direct8(src, cl, dst, lead, width, mask);
+            else row_direct4(src, cl, dst, lead, width, mask);
+        } else {
+            if (m->depth) row_palette8(src, shaded_palette, dst, lead, width, mask);
+            else row_palette4(src, shaded_palette, dst, lead, width, mask);
+        }
+    }
+    return 1;
+}
+
 static inline __attribute__((always_inline)) void sprite_rows(
         const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int effects, int direct) {
     unsigned keep_x=~gp0_state.twin_mask_x,keep_y=~gp0_state.twin_mask_y;
@@ -906,6 +939,7 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         if (m->semi || gp0_state.check_mask) {
             if (direct) sprite_rows(m, u0, v0, x0, y0, x1, y1, 1, 1);
             else sprite_rows(m, u0, v0, x0, y0, x1, y1, 1, 0);
+        } else if (m->depth < 2 && rect_rows(m, u0, v0, x0, y0, x1, y1, direct)) {
         } else {
             if (direct) sprite_rows(m, u0, v0, x0, y0, x1, y1, 0, 1);
             else sprite_rows(m, u0, v0, x0, y0, x1, y1, 0, 0);
