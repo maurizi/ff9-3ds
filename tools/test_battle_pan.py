@@ -24,7 +24,7 @@ Unk800F78A4 *g_btlfxEnv = &context;
 static MATRIX matrix;
 static SVECTOR point = {100, 0, 1000, 0};
 static int lookups;
-void func_800E750C(s32 id, s16 *out) {
+void btlfx_getUnitPos(s32 id, s16 *out) {
     assert(id >= 0 && id <= 17);
     lookups++;
     out[0] = point.vx; out[1] = point.vy; out[2] = point.vz;

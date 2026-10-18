@@ -74,7 +74,7 @@ printf "PROBE_CHARACTER model=%u preset=%u flags=%x\\n",g_gameState->unk1C->char
 end
 continue
 end
-break o0b_func_800C2598
+break o0b_btl_playCmdEffect
 commands
 silent
 if (arg0->unk4->unk68 & 1) && arg0->cmdNo==59 && (arg0->unk4->status & 0x4000){actor}

@@ -3,9 +3,9 @@
 #include "psyq_port.h"
 extern void o0b_func_800D0940(void);
 extern void o0b_func_800E702C(void);
-extern void o0b_func_800D650C(void);
-extern void o0b_func_800DA92C(void);
-extern s32 o0b_func_800D7094(void);
+extern void o0b_btlfx_runScript(void);
+extern void o0b_btlfx_updateLoader(void);
+extern s32 o0b_btlfx_updateTasks(void);
 extern void o0b_func_800E3C98(void);
 extern void o0b_func_800E3E08(void);
 extern void o0b_func_800E9578(void);
@@ -26,14 +26,14 @@ u8 *o0b_func_800E3EEC(u8 *out) {
     AddPrim(getptr(context(), 32) + 0x3FFC, stp);
     *(u32 *)(psx_scratchpad + 0x3FC) = state(0x800F78A8);
     getptr(context(), 0)[32] = 0;
-    o0b_func_800D650C();
-    o0b_func_800DA92C();
+    o0b_btlfx_runScript();
+    o0b_btlfx_updateLoader();
     if (!getptr(context(), 0)[32]) {
         if (state(0x800F78AC)) {
             set_state(0x800F78AC, 0);
             func_80055698(2);
         }
-        o0b_func_800D7094();
+        o0b_btlfx_updateTasks();
         o0b_func_800E3C98();
         func_80054B78();
     } else {
