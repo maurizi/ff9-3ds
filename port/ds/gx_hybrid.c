@@ -898,7 +898,8 @@ typedef struct {
     Gp0State state;
 } UiPrim;
 #define UI_MAX 256   /* the battle UI draws about 110 a VBlank */
-static UiPrim ui_list[2][UI_MAX];     /* [0] the previous VBlank's, [1] this one's */
+static UiPrim ui_lists[2][UI_MAX];
+static UiPrim *ui_list[2] = {ui_lists[0], ui_lists[1]}; /* [0] the previous VBlank's, [1] this one's (swapped) */
 static int ui_count[2], ui_overflow;
 static Buffer *ui_buffer;             /* the displayed buffer the list belongs to */
 #define UI_RECTS 64
@@ -980,6 +981,14 @@ static void ui_draw(const UiPrim *p, const s16 *clip) {
 
 int gxh_stats_ui_drawn, gxh_stats_ui_skipped;
 
+/* entries are zeroed before they're filled (ui_defer), so padding compares equal */
+static int ui_same(const UiPrim *a, const UiPrim *b) {
+    _Static_assert(sizeof(UiPrim) % 4 == 0, "UiPrim compares by words");
+    const u32 *x = (const u32 *)a, *y = (const u32 *)b;
+    for (unsigned i = 0; i < sizeof(UiPrim) / 4; ++i) if (x[i] != y[i]) return 0;
+    return 1;
+}
+
 static void ui_flush(void) {
     if (!ui_count[1] || ui_flushing) return;
     ui_flushing = 1;
@@ -991,7 +1000,7 @@ static void ui_flush(void) {
     if (!whole) {
         for (int i = 0; i < n || i < m; ++i) {
             int x0, y0, x1, y1;
-            int same = i < n && i < m && !memcmp(&cur[i], &prev[i], sizeof *cur) && !ui_source_written(&cur[i]);
+            int same = i < n && i < m && ui_same(&cur[i], &prev[i]) && !ui_source_written(&cur[i]);
             if (same) continue;
             if (i < n) { ui_bounds(&cur[i], &x0, &y0, &x1, &y1); ui_dirty_rect(x0, y0, x1, y1); }
             if (i < m) { ui_bounds(&prev[i], &x0, &y0, &x1, &y1); ui_dirty_rect(x0, y0, x1, y1); }
@@ -1013,7 +1022,7 @@ static void ui_flush(void) {
         else gxh_stats_ui_skipped++;
     }
     /* this list is the next one's reference; written sources and dirty areas start over */
-    memcpy(prev, cur, n * sizeof *cur);
+    ui_list[0] = cur; ui_list[1] = prev;
     ui_count[0] = n;
     ui_count[1] = 0;
     ui_overflow = 0;
