@@ -326,6 +326,9 @@ static int group_count;
 static u8 prim_group[MAX_PRIMS];
 static u8 prim_palette[MAX_PRIMS];
 
+/* hints for plan_textures' searches: the group or palette slot a key's hash last found (checked before use) */
+static u8 group_hash[256], palette_hash[256];
+
 static __attribute__((noinline)) int plan_textures(Buffer *b) {
     int last_group = 0, last_palette = 0;
     group_count = 0;
@@ -360,9 +363,17 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
 #define SAME_GROUP(q) ((q).depth == p->depth && (q).tx == p->tx && (q).ty == p->ty && (q).conv == conv && \
                        (!conv || p->depth == 2 || ((q).cx == p->clut_x && (q).cy == p->clut_y)))
         int g = last_group;
-        if (g >= group_count || !SAME_GROUP(groups[g]))
-            for (g = 0; g < group_count; ++g)
-                if (SAME_GROUP(groups[g])) break;
+        if (g >= group_count || !SAME_GROUP(groups[g])) {
+            /* then the group this key last mapped to (a hash of page, depth and CLUT), then a search */
+            unsigned h = (p->tx >> 6 ^ p->ty >> 4 ^ p->depth << 4 ^ conv << 6 ^ p->clut_x >> 4 ^ p->clut_y * 7) & 255;
+            g = group_hash[h];
+            if (g >= group_count || !SAME_GROUP(groups[g])) {
+                for (g = 0; g < group_count; ++g)
+                    if (SAME_GROUP(groups[g])) break;
+                if (g < group_count) group_hash[h] = (u8)g;
+                else if (group_count < MAX_GROUPS) group_hash[h] = (u8)group_count;
+            }
+        }
 #undef SAME_GROUP
         last_group = g;
         if (g == group_count) {
@@ -381,12 +392,20 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
         if (p->depth < 2) {
             int count = p->depth ? 256 : 16, s = last_palette, empty = -1;
             Palette *lq = &palettes[s];
-            if (!(lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count))
-                for (s = 0; s < PAL_SLOTS; ++s) {
-                    Palette *q = &palettes[s];
-                    if (q->used && q->x == p->clut_x && q->y == p->clut_y && q->count >= count) break;
-                    if (!q->used && empty < 0) empty = s;
+            if (!(lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count)) {
+                /* then the slot this CLUT last had, then a search (which also finds the first free slot) */
+                unsigned h = (p->clut_x >> 4 ^ p->clut_y * 13) & 255;
+                s = palette_hash[h];
+                lq = &palettes[s];
+                if (!(s < PAL_SLOTS && lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count)) {
+                    for (s = 0; s < PAL_SLOTS; ++s) {
+                        Palette *q = &palettes[s];
+                        if (q->used && q->x == p->clut_x && q->y == p->clut_y && q->count >= count) break;
+                        if (!q->used && empty < 0) empty = s;
+                    }
+                    if (s < PAL_SLOTS) palette_hash[h] = (u8)s;
                 }
+            }
             if (s == PAL_SLOTS) {
                 if (empty < 0)
                     for (int t = 0; t < PAL_SLOTS; ++t) if (!palettes[t].wanted) { empty = t; break; }
