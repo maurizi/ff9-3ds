@@ -200,15 +200,25 @@ static inline int step_attribute(int value, int delta) {
 #ifndef PORT_SOFTGPU_REFERENCE
 /* Intersect a row with one biased half-plane. Only a crossing edge needs
  * division; fully accepted/rejected rows use their endpoint signs. */
-static inline int clip_span(int edge,int step,int width,int *left,int *right) {
+/* n / d for n >= 0, d > 0, through *inv = 0xFFFFFFFF / d (made on first use: an edge's divisor is the same on
+ * every row) and at most two corrections */
+static inline int div_edge(u32 n, u32 d, u32 *inv) {
+    if (!*inv) *inv = 0xFFFFFFFFu / d;
+    u32 q = (u32)(((unsigned long long)n * *inv) >> 32);
+    u32 r = n - q * d;
+    if (r >= d) { ++q; r -= d; }
+    if (r >= d) ++q;
+    return (int)q;
+}
+static inline int clip_span(int edge,int step,int width,int *left,int *right,u32 *inv) {
     int end=edge+step*(width-1);
     if(edge>=0 && end>=0) return 1;
     if(edge<0 && end<0) return 0;
     if(step>0) {
-        int first=(-edge+step-1)/step;
+        int first=div_edge((u32)(-edge+step-1),(u32)step,inv); /* -edge > 0 here */
         if(first>*left) *left=first;
     } else {
-        int last=edge/(-step)+1;
+        int last=div_edge((u32)edge,(u32)-step,inv)+1; /* edge >= 0 here */
         if(last<*right) *right=last;
     }
     return *left<*right;
@@ -563,15 +573,18 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     if (dither_indexed) dither_tables(flat_r, flat_g, flat_b, 1);
     if (dither_semi) dither_tables(m->raw ? 128 : flat_r, m->raw ? 128 : flat_g, m->raw ? 128 : flat_b, dither);
 #endif
+#ifndef PORT_SOFTGPU_REFERENCE
+    u32 inv0 = 0, inv1 = 0, inv2 = 0;
+#endif
     for (int y = miny; y < maxy; y++) {
         int w0 = w0row, w1 = w1row, w2 = w2row;
         int r = rrow, g = grow, bl = brow, u = urow, v = vrow;
         int left=minx,right=maxx;
 #ifndef PORT_SOFTGPU_REFERENCE
         int first=0,last=maxx-minx,width=last;
-        if(!clip_span(w0+bias0,A0,width,&first,&last) ||
-           !clip_span(w1+bias1,A1,width,&first,&last) ||
-           !clip_span(w2+bias2,A2,width,&first,&last)) last=first;
+        if(!clip_span(w0+bias0,A0,width,&first,&last,&inv0) ||
+           !clip_span(w1+bias1,A1,width,&first,&last,&inv1) ||
+           !clip_span(w2+bias2,A2,width,&first,&last,&inv2)) last=first;
         left+=first;right=minx+last;
         /* Skipping uncovered pixels must reproduce repeated 32-bit adds,
          * including thin-triangle interpolants that wrap outside coverage. */
