@@ -649,7 +649,8 @@ void psx_softgpu_shadow_poly_region(const Gp0Mode *m, const Gp0Vtx *v, int n,
     target.clip_active = 0;
 }
 
-static SG_HOT void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
+/* Lines are rare in FF9: kept out of ITCM. */
+static void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
     palette_ready = 0;
     if (!psx_vram) {
         return;
