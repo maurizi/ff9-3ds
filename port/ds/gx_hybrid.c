@@ -79,13 +79,17 @@ static Buffer *displayed(void) {
     return buffer_at(d.x, d.y);
 }
 
+static unsigned buffers_version; /* bumped when a buffer's place or size changes (target's cache) */
+
 static void note_buffer(int x, int y, int w, int h) {
     if (w < 256 || h < 192) return;
     for (int i = 0; i < 2; ++i)
         if (buffers[i].valid && buffers[i].x == x && buffers[i].y == y) {
+            if (buffers[i].w != w || buffers[i].h != h) ++buffers_version;
             buffers[i].w = w; buffers[i].h = h;
             return;
         }
+    ++buffers_version;
     Buffer *b = !buffers[0].valid ? &buffers[0] : !buffers[1].valid ? &buffers[1] : NULL;
     if (!b) b = displayed() == &buffers[0] ? &buffers[1] : &buffers[0]; /* a third area replaces the hidden one */
     b->x = x; b->y = y; b->w = w; b->h = h; b->valid = 1; b->shown = 1; b->count = 0; b->submitted = 0;
@@ -103,11 +107,23 @@ static void start_scene(Buffer *b) {
 /* The buffer the current drawing area belongs to (NULL: offscreen), starting its scene if it was shown; *shown is
  * the displayed buffer. */
 static Buffer *target(Buffer **shown) {
-    int x, y, w, h;
+    /* the lookups depend only on the drawing environment, the display position and the buffers' places */
+    static struct { int x, y, w, h, ax, ay, dx, dy; unsigned version; Buffer *shown, *b; } last = {.w = -1};
+    int x, y, w, h, dx, dy, dw, dh;
     psx_gpu_draw_area(&x, &y, &w, &h);
-    note_buffer(x, y, w, h);
-    *shown = displayed();
-    Buffer *b = buffer_at(gp0_state.area_x0, gp0_state.area_y0);
+    psx_gpu_display_area(&dx, &dy, &dw, &dh);
+    Buffer *b;
+    if (x == last.x && y == last.y && w == last.w && h == last.h && gp0_state.area_x0 == last.ax &&
+        gp0_state.area_y0 == last.ay && dx == last.dx && dy == last.dy && buffers_version == last.version) {
+        *shown = last.shown;
+        b = last.b;
+    } else {
+        note_buffer(x, y, w, h);
+        *shown = displayed();
+        b = buffer_at(gp0_state.area_x0, gp0_state.area_y0);
+        last.x = x; last.y = y; last.w = w; last.h = h; last.ax = gp0_state.area_x0; last.ay = gp0_state.area_y0;
+        last.dx = dx; last.dy = dy; last.version = buffers_version; last.shown = *shown; last.b = b;
+    }
     if (b && b->shown && b != *shown) start_scene(b);
     return b;
 }
@@ -1217,6 +1233,7 @@ void gxh_enable(int on) {
         ramp_written = 0;
         memset(palettes, 0, sizeof palettes);
         for (int i = 0; i < 2; ++i) { buffers[i].valid = 0; buffers[i].count = 0; }
+        ++buffers_version;
         gp0_backend = &hybrid_backend;
     } else {
         if (layer_bg >= 0) bgHide(layer_bg);
