@@ -667,15 +667,13 @@ static void flush_chunk(void) {
 /* Room for one primitive's words (at most 3 state commands, a begin and 4 vertices of colour, texcoord and
  * position: 36), made before each, so put() needn't check. */
 #define PRIM_WORDS 40
-static inline void reserve(void) {
-    if (chunk_words > CHUNK_WORDS - PRIM_WORDS) flush_chunk();
-}
-
-static inline void put(u32 word) {
-    chunks[chunk][chunk_words++] = word;
-}
-
-static inline void fifo(u32 cmd, u32 param) { put(cmd); put(param); }
+/* emit_scene writes through a local pointer (wp; with the port's -fno-strict-aliasing, the globals would be
+ * reloaded at every word); reserve() hands its count back for a flush. */
+#define reserve() do { \
+        if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; } \
+    } while (0)
+#define put(word) (*wp++ = (word))
+#define fifo(cmd, param) (put(cmd), put(param))
 
 /* c * 31 / d for c, d <= 255, d > 0, by a reciprocal (ceil(2^24 / d); exact over that range) */
 static u32 recip24[256];
@@ -797,6 +795,7 @@ static int translucent_id(const Prim *p, int polys) {
 static __attribute__((noinline)) void emit_scene(Buffer *b) {
     memset(recent, 0, sizeof recent);
     u32 attr = INITIAL_ATTR, image = 0, palette = ~0u;
+    u32 *wp = chunks[chunk] + chunk_words;
     reserve();
     fifo(CMD_POLYATTR, attr);
     fifo(CMD_TEXIMAGE, 0);
@@ -893,8 +892,12 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     }
     reserve();
     fifo(0x50, GL_TRANS_MANUALSORT); /* SWAP_BUFFERS: shown from the next VBlank */
+    chunk_words = wp - chunks[chunk];
     gxh_stats_polys = polys;
 }
+#undef reserve
+#undef put
+#undef fifo
 
 /* ---- backend ----------------------------------------------------------------------------------------------- */
 
