@@ -97,11 +97,11 @@ static void vblank_irq(void) {
 }
 
 static void pace(void) {
-    unsigned int profile_wait = port_profile_begin();
+    unsigned int profile_wait = port_profile_wait_begin();
     ++virtual_frames;
     if ((int)(real_vblanks - virtual_frames) > MAX_LAG) virtual_frames = real_vblanks;
     while ((int)(real_vblanks - virtual_frames) < 0) swiWaitForVBlank();
-    port_profile_end(PORT_PROFILE_WAIT, profile_wait);
+    port_profile_wait_end(profile_wait);
 }
 
 #ifdef PORT_GX_HYBRID
@@ -194,9 +194,9 @@ void display_present(void) {
     DC_FlushRange(frame, sizeof frame);
     port_profile_end(PORT_PROFILE_SCALE,profile_scale);
     /* The back buffer is scanned out until a queued swap happens: wait for it before overwriting. */
-    unsigned int profile_wait=port_profile_begin();
+    unsigned int profile_wait=port_profile_wait_begin();
     while (queued_buffer >= 0) swiWaitForVBlank();
-    port_profile_end(PORT_PROFILE_WAIT,profile_wait);
+    port_profile_wait_end(profile_wait);
     dmaCopyWords(2, frame, BG_BMP_RAM_MAIN(back_buffer*8), sizeof frame);
     queued_scroll = -(192-h*4/5)/2;
     queued_buffer = back_buffer;

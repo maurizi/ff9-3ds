@@ -9,6 +9,14 @@ enum { PORT_PROFILE_TEXTURE, PORT_PROFILE_UPLOAD, PORT_PROFILE_PALETTE,
        PORT_PROFILE_DETAIL_CATEGORIES };
 /* PORT_PROFILE: frame times and the categories' timers; with PORT_PROFILE_FRAME_ONLY (PROFILE=2) frame times
  * alone, so the total is what an ordinary build takes (the timers cost about 7% in a battle). */
+/* The VBlank wait is timed in both modes, so busy time (frame minus wait) is known without the other timers. */
+#ifdef PORT_PROFILE
+unsigned int port_profile_wait_begin(void);
+void port_profile_wait_end(unsigned int start);
+#else
+#define port_profile_wait_begin() 0u
+#define port_profile_wait_end(start) ((void)(start))
+#endif
 #if defined(PORT_PROFILE) && !defined(PORT_PROFILE_FRAME_ONLY)
 unsigned int port_profile_begin(void);
 void port_profile_end(unsigned int category,unsigned int start);

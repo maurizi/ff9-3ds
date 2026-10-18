@@ -16,6 +16,10 @@ static unsigned int clock_now(void) {
     do {high=TIMER_DATA(3);low=TIMER_DATA(2);} while(high!=TIMER_DATA(3));
     return (high<<16)|low;
 }
+unsigned int port_profile_wait_begin(void) { return clock_now(); }
+void port_profile_wait_end(unsigned int start) {
+    ticks[PORT_PROFILE_WAIT]+=clock_now()-start;calls[PORT_PROFILE_WAIT]++;
+}
 #ifndef PORT_PROFILE_FRAME_ONLY
 unsigned int port_profile_begin(void) { return clock_now(); }
 void port_profile_end(unsigned int category,unsigned int start) {
