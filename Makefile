@@ -384,7 +384,7 @@ $(BUILD)/tests/battle_quads_probe: tests/battle/quads_probe.c tests/battle/backg
 
 $(BUILD)/tests/battle_strips_probe: tests/battle/strips_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c
 	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/strips_probe.c port/game/battle_quads.c port/game/battle_background.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include -DPORT_GTE_IMPL tests/battle/strips_probe.c port/game/battle_quads.c port/game/battle_background.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
 
 .PHONY: test-battle-strips
 test-battle-strips: $(BUILD)/tests/battle_strips_probe

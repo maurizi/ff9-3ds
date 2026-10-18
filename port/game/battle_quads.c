@@ -80,7 +80,7 @@ void o0b_func_800D4228(const u8 *points,const void *context,u8 *out,u32 *ot) {
         *ot=(previous&0xff000000)|((u32)out&0xffffff);
     }
 }
-void o0b_func_800D3ED4(const u8 *points,const void *context,u8 *out,u32 *ot) {
+void o0b_btlfx_emitAnimQuads(const u8 *points,const void *context,u8 *out,u32 *ot) {
     const u16 *uv=(const u16 *)word(context,0);
     const u8 *colors=(const u8 *)word(context,4);
     u32 width=word(context,8),height=word(context,12),page=word(context,16)<<16;
@@ -169,7 +169,7 @@ void o0b_func_800D59D0(const u8 *points, const void *context, u8 *out, u32 *ot) 
 /* Project the circular position trail as Gouraud line segments. The original
  * adjusts the previous endpoint by one pixel toward the current point and
  * links a draw-mode packet before each line in its depth bucket. */
-void o0b_func_800D5568(s32 count, const void *context, u8 *out, u32 *ot) {
+void o0b_btlfx_emitTrailLines(s32 count, const void *context, u8 *out, u32 *ot) {
     const u8 *ring=(const u8 *)port_effect_data(word(context,4));
     unsigned size=ring[0]+1u,index=ring[1];ring+=4;
     u32 fade=word(context,8),color=word(context,12),previous=color,target=word(context,16);
@@ -356,7 +356,7 @@ void o0b_func_800D4A30(u32 stride, void *context, u8 *out, u32 *ot) {
         colors0 += stride;colors1 += stride;
     } while (--ctx[9]);
 }
-void o0b_func_800D4478(const u8 *rect, const void *context, u8 *out, u32 *ot) {
+void o0b_btlfx_emitParticles(const u8 *rect, const void *context, u8 *out, u32 *ot) {
     u32 clut = word(context, 16) << 16;
     u32 count = word(context, 20), bias = word(context, 24);
     u32 color = word(context, 0), page = word(context, 12);

@@ -54,7 +54,7 @@ void o0b_func_800E0014(u8 *particle,s32 gravity,const s16 *bias,s16 *out) {
 /* 3D ribbon: the width direction is the normalized cross product of each
  * segment and its view vector. Preserve OP/SQR/GPF register side effects and
  * the original RTPT's existing MAC0 cull; it never issues NCLIP. */
-void o0b_func_800D50A0(s32 count,void *context,u8 *out,u32 *ot) {
+void o0b_btlfx_emitTrailRibbon3D(s32 count,void *context,u8 *out,u32 *ot) {
     u32 *c=context;
     const u8 *ring=(const u8 *)port_effect_data(c[1]);
     u32 fade=c[2],color=c[3],previous_color=color;
@@ -135,7 +135,7 @@ void o0b_func_800D50A0(s32 count,void *context,u8 *out,u32 *ot) {
 }
 /* Fixed X/Z width direction, with Y unchanged. The projected join lives in
  * registers in the original, so this variant leaves its context untouched. */
-void o0b_func_800D4D6C(s32 count,const void *context,u8 *out,u32 *ot) {
+void o0b_btlfx_emitTrailRibbonFlat(s32 count,const void *context,u8 *out,u32 *ot) {
     const u32 *c=context;
     const u8 *ring=(const u8 *)port_effect_data(c[1]);
     u32 fade=c[2],color=c[3],previous_color=color;
@@ -187,7 +187,7 @@ void o0b_func_800D4D6C(s32 count,const void *context,u8 *out,u32 *ot) {
         fade+=c[8];
     }
 }
-void o0b_func_800D5C30(s32 count,void *context,u8 *out,u32 *ot) {
+void o0b_btlfx_emitTrailRibbonScreen(s32 count,void *context,u8 *out,u32 *ot) {
     u32 *c=context;
     const u8 *ring=(const u8 *)c[1];
     u32 color=c[3],fade=c[2],previous_color=color;

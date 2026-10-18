@@ -77,7 +77,7 @@ static u32 native_call(u32 target,u32 *r) {
         [0x50/4]=1, /* printf: fixed format parameter; variadic tail stays raw. */
         [0x0/4]=0x3, /* LoadImage */
         [0x4/4]=0x3, /* StoreImage */
-        [0xc/4]=0x600, /* o0b_func_800D12C4 */
+        [0xc/4]=0x600, /* o0b_btlfx_drawTrailScreen */
         [0x18/4]=0x1, /* o0b_Hi_RegisterGouEffModel */
         [0x1c/4]=0x3, /* SetDrawMove */
         [0x24/4]=0x7, /* CompMatrix */
@@ -99,12 +99,12 @@ static u32 native_call(u32 target,u32 *r) {
         [0xf4/4]=0x3, /* o0b_func_800D0580 */
         [0xf8/4]=0x27, /* o0b_func_800D0674 */
         [0x100/4]=0x1, /* o0b_btlfx_drawScreenTint */
-        [0x108/4]=0xc02, /* o0b_func_800D0E14 */
-        [0x10c/4]=0x600, /* o0b_func_800D0FFC */
+        [0x108/4]=0xc02, /* o0b_btlfx_drawTrail3D */
+        [0x10c/4]=0x600, /* o0b_btlfx_drawTrailFlat */
         [0x118/4]=0x3, /* o0b_func_800D198C */
         [0x11c/4]=0x2, /* o0b_func_800D1BC4 */
-        [0x120/4]=0x7, /* o0b_func_800D1D74 */
-        [0x124/4]=0x7, /* o0b_func_800D1FFC */
+        [0x120/4]=0x7, /* o0b_btlfx_drawAnimQuads */
+        [0x124/4]=0x7, /* o0b_btlfx_drawSprites */
         [0x128/4]=0x7, /* o0b_func_800D23D8 */
         [0x12c/4]=0x7, /* o0b_func_800D2938 */
         [0x130/4]=0x1, /* o0b_func_800D2DBC */

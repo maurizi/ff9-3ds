@@ -31,7 +31,7 @@ s32 func_800C7BC4(u32, s16);
 
 #ifdef PORT_BIN_ovl_0b
 Unk800CC278 *btl_popupText(s32, u8, s16, s8);
-s16 func_800AA140(Battle11C0 *, s32, Unk800AA08C *);
+s16 btl_loadBackgroundStep(Battle11C0 *, s32, Unk800AA08C *);
 #endif
 
 #ifdef PORT_BIN_ovl_0c

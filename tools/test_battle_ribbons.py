@@ -78,7 +78,7 @@ def main():
     # The 3D sibling preserves diagonal rotation words and joins projected
     # +/- normal edges. Its nested ring word may be guest or native heap data.
     for kind,address in ((3,0x800d50a0),(4,0x800d4d6c)):
-        ribbon3d=asm.parent/f'func_{address:08X}.s'
+        ribbon3d=asm_path('ovl_0b',address,ROOT)
         image3d=b''.join(bytes.fromhex(w) for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',ribbon3d.read_text()))
         for trial in range(300):
             count=0 if trial%29==0 else -1 if trial%31==0 else rng.randint(1,8)
@@ -121,7 +121,7 @@ def main():
     asmroot=asm.parent
     particle_image=b''.join(bytes.fromhex(w) for address in (0x800dff5c,0x800dff64)
                            for w in re.findall(r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',
-                                               (asmroot/f'func_{address:08X}.s').read_text()))
+                                               asm_path('ovl_0b',address,ROOT).read_text()))
     for kind in (1,2):
         for trial in range(100):
             data=rng.randbytes(512);out=rng.randbytes(1024);ot=rng.randbytes(16384)
@@ -140,7 +140,7 @@ def main():
     particle_address=0x800e0014
     particle_image=b''.join(bytes.fromhex(w) for w in re.findall(
         r'/\* [0-9A-F]+ [0-9A-F]{8} ([0-9A-F]{8}) \*/',
-        (asmroot/'func_800E0014.s').read_text()))
+        asm_path('ovl_0b',0x800E0014,ROOT).read_text()))
     for trial in range(200):
         data=rng.randbytes(512);out=rng.randbytes(1024);ot=rng.randbytes(16384)
         gravity=rng.getrandbits(32);regs=[rng.getrandbits(32) for _ in range(64)]

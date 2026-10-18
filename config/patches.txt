@@ -171,8 +171,6 @@ src/ovl_0b/ovl_0b.c | && (!(arg0->unk68 & 1) || (s32)m->unkC != arg0->unkA4[9]) 
 docs/wip/ovl_0b_800E4A3C.c | Pool6CEntry *func_800E4A3C(s32 arg0, s32 arg1, E4Arg arg2) { | Pool6CEntry *func_800E4A3C(s32 arg0, s32 arg1, s16 *arg2_a, s16 *arg2_b) { E4Arg arg2 = {arg2_a, arg2_b, NULL}; | 1
 # Battle help-text measurement explicitly passes the PS1 hidden structure-return pointer.
 src/ovl_0b/ovl_0b_2.c | func_8002AF70(&v.unk0, (s32)&g_btlBanner); | port_measure_text_into(&v.unk0, &g_btlBanner); | 1
-# The main dispatcher still uses the old numeric label for overlay 65's renamed entry.
-src/main/main.c | func_801EF284(); | battleEnd_main(); | 1
 # Effect setup can submit a native local packet/OT buffer; preserve its exact bounds.
 src/ovl_0b/ovl_0b_2.c | DrawOTag(ot); | port_draw_ot_buffer(ot, p, sizeof(*p)); | 1
 # Game Over owns both display buffers and their packet lists on the native stack.
