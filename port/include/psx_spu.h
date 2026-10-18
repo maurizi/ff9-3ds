@@ -34,6 +34,7 @@ typedef struct {
     int noise;
 } PsxSpuVoiceOutput;
 void psx_spu_voice_output(unsigned voice, PsxSpuVoiceOutput *out);
+unsigned psx_spu_noise_hz(void);
 
 /* Diagnostics: the complete SPU state except its RAM, so a benchmark can replay a moment of the game
  * (host --spu-snapshot, make spu-snapshot-ds). Plain fixed-width fields: the same bytes on host and DS. */

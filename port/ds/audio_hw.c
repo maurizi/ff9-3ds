@@ -30,6 +30,8 @@ typedef struct {
 } Voice;
 
 static Voice voices[VOICES];
+/* Noise voices play on the PSG noise channels 14 and 15 (the DS has noise only there), the two loudest at once */
+static struct { int voice, sound_id; u8 volume, pan; u16 freq; } noise_slots[2] = {{-1, -1, 0, 0, 0}, {-1, -1, 0, 0, 0}};
 static s16 (*rings)[RING]; /* VOICES x RING, in PS1 RAM the port never uses (psx_spare_alloc) */
 static u32 channel_used; /* bit per DS channel */
 int port_hw_sound_stats[4];
@@ -81,20 +83,34 @@ void port_hw_sound_frame(void) {
         amps[v] = out->on && !out->noise ? (l > r ? l : r) + 1 : 0;
         candidates += amps[v] > 0;
     }
-    /* the 16th largest amplitude: voices below it give their channel up */
+    /* noise voices: the two loudest take channels 14 and 15 for this frame */
+    int noise_voice[2] = {-1, -1}, noise_amp[2] = {0, 0};
+    for (int v = 0; v < VOICES; ++v) {
+        if (!outs[v].on || !outs[v].noise) continue;
+        int l = outs[v].left < 0 ? -outs[v].left : outs[v].left, r = outs[v].right < 0 ? -outs[v].right : outs[v].right;
+        int a = (l > r ? l : r) + 1;
+        if (a > noise_amp[0]) { noise_amp[1] = noise_amp[0]; noise_voice[1] = noise_voice[0]; noise_amp[0] = a; noise_voice[0] = v; }
+        else if (a > noise_amp[1]) { noise_amp[1] = a; noise_voice[1] = v; }
+    }
+    int reserved = (noise_voice[0] >= 0) + (noise_voice[1] >= 0);
+    u32 reserved_mask = reserved ? (reserved == 2 ? 0xC000u : 0x4000u) : 0;
+    for (int v = 0; v < VOICES; ++v) /* a sample voice on a channel noise needs now gives it up */
+        if (voices[v].channel >= 0 && (reserved_mask >> voices[v].channel & 1)) { stop(&voices[v]); voices[v].lost = 1; }
+    const int slots = 16 - reserved;
+    /* the slots-th largest amplitude: voices below it give their channel up */
     int cut = 1;
-    if (candidates > 16) {
+    if (candidates > slots) {
         int sorted[VOICES], n = 0;
         for (int v = 0; v < VOICES; ++v) if (amps[v]) sorted[n++] = amps[v];
         for (int i = 1; i < n; ++i)
             for (int j = i; j > 0 && sorted[j - 1] < sorted[j]; --j) { int t = sorted[j]; sorted[j] = sorted[j - 1]; sorted[j - 1] = t; }
-        cut = sorted[15];
+        cut = sorted[slots - 1];
     }
     int sounding = 0, granted = 0;
     for (int v = 0; v < VOICES; ++v) {
         Voice *p = &voices[v];
         PsxSpuVoiceOutput *out = &outs[v];
-        int keep = amps[v] && amps[v] >= cut && granted < 16;
+        int keep = amps[v] && amps[v] >= cut && granted < slots;
         if (!keep) {
             if (amps[v]) port_hw_sound_stats[1]++;
             if (amps[v]) p->lost = 1; /* still sounding without a channel: its ring falls behind */
@@ -129,7 +145,7 @@ void port_hw_sound_frame(void) {
         if (p->sound_id < 0) {
             if (!p->write) continue;
             int ch = -1;
-            for (int c = 0; c < 16; ++c) if (!(channel_used & (1u << c))) { ch = c; break; }
+            for (int c = 0; c < 16; ++c) if (!((channel_used | reserved_mask) & (1u << c))) { ch = c; break; }
             if (ch < 0) continue;
             p->channel = ch;
             channel_used |= 1u << ch;
@@ -141,6 +157,31 @@ void port_hw_sound_frame(void) {
             if (vol != p->volume) { soundSetVolume(p->sound_id, (u8)vol); p->volume = (u8)vol; }
             if (pan != p->pan) { soundSetPan(p->sound_id, (u8)pan); p->pan = (u8)pan; }
             if (freq != p->freq) { soundSetFreq(p->sound_id, freq); p->freq = freq; }
+        }
+        ++sounding;
+    }
+    unsigned hz = psx_spu_noise_hz();
+    u16 noise_freq = hz > 65535 ? 65535 : hz < 1 ? 1 : (u16)hz;
+    for (int k = 0; k < 2; ++k) {
+        int v = noise_voice[k];
+        if (noise_slots[k].voice != v && noise_slots[k].sound_id >= 0) {
+            soundKill(noise_slots[k].sound_id);
+            noise_slots[k].sound_id = -1;
+        }
+        noise_slots[k].voice = v;
+        if (v < 0) continue;
+        const PsxSpuVoiceOutput *out = &outs[v];
+        int l = out->left < 0 ? -out->left : out->left, r = out->right < 0 ? -out->right : out->right;
+        int vol = (noise_amp[k] - 1) * 127 / 0x4000;
+        if (vol > 127) vol = 127;
+        u8 pan = (u8)(l + r ? 64 + 63 * (r - l) / (l + r) : 64);
+        if (noise_slots[k].sound_id < 0) {
+            noise_slots[k].sound_id = soundPlayNoiseChannel(14 + k, noise_freq, (u8)vol, pan);
+            noise_slots[k].volume = (u8)vol; noise_slots[k].pan = pan; noise_slots[k].freq = noise_freq;
+        } else {
+            if (vol != noise_slots[k].volume) { soundSetVolume(noise_slots[k].sound_id, (u8)vol); noise_slots[k].volume = (u8)vol; }
+            if (pan != noise_slots[k].pan) { soundSetPan(noise_slots[k].sound_id, pan); noise_slots[k].pan = pan; }
+            if (noise_freq != noise_slots[k].freq) { soundSetFreq(noise_slots[k].sound_id, noise_freq); noise_slots[k].freq = noise_freq; }
         }
         ++sounding;
     }
