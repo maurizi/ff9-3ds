@@ -185,16 +185,17 @@ stages of Ark's display work per frame (PROFILE=1 timers): texture plan 1.9 ms, 
 
 `build/validation/dssample/run.sh`: one ROM reading `sd:/ff9ds/scenarios/current.cfg`, each field copied there.
 PROFILE=1 (the category timers add about 7%). Mean over the 28 fields: 49.2 (first sweep, 2026-10-18) -> 39.9
-(second) -> 38.3 (third); the 12 battles of the same sweeps 43.5 -> 43.6 -> 40.2. No sweep faulted.
+(second) -> 38.3 (third) -> 35.4 (fourth); the 12 battles of the same sweeps 43.5 -> 43.6 -> 40.2 -> 38.7. No sweep
+faulted.
 
-| field | first | second | third | | field | first | second | third |
-|---|---:|---:|---:|---|---|---:|---:|---:|
-| 1102 | 128.9 | 50.0 | 49.4 | | 2162 | 62.7 | 46.2 | 45.2 |
-| 1508 | 100.3 | 54.2 | 50.1 | | 2055 | 68.8 | 46.2 | 45.1 |
-| 931 | 80.0 | 74.6 | 66.9 | | 1414 | 68.7 | 50.1 | 49.6 |
-| 1812 | 79.4 | 76.1 | 75.2 | | 162 | 47.4 | 33.4 | 33.5 |
-| 453 | 66.9 | 66.9 | 58.5 | | 306 | 62.9 | 39.0 | 38.9 |
-| 955 | 62.7 | 62.6 | 58.5 | | 2110 | 63.1 | 62.8 | 58.9 |
+| field | first | second | third | fourth | | field | first | second | third | fourth |
+|---|---:|---:|---:|---:|---|---|---:|---:|---:|---:|
+| 1102 | 128.9 | 50.0 | 49.4 | 44.6 | | 2162 | 62.7 | 46.2 | 45.2 | 41.9 |
+| 1508 | 100.3 | 54.2 | 50.1 | 46.4 | | 2055 | 68.8 | 46.2 | 45.1 | 39.8 |
+| 931 | 80.0 | 74.6 | 66.9 | 58.5 | | 1414 | 68.7 | 50.1 | 49.6 | 45.6 |
+| 1812 | 79.4 | 76.1 | 75.2 | 71.0 | | 162 | 47.4 | 33.4 | 33.5 | 31.8 |
+| 453 | 66.9 | 66.9 | 58.5 | 54.3 | | 306 | 62.9 | 39.0 | 38.9 | 32.5 |
+| 955 | 62.7 | 62.6 | 58.5 | 54.3 | | 2110 | 63.1 | 62.8 | 58.9 | 57.7 |
 
 Elapsed times step by whole VBlanks when a scene misses one (931 at 66.9 is four per scene), so a saving shows
 in full only when it crosses a step; `tools/ds_ab_fields.sh` compares busy time and categories of
@@ -209,7 +210,11 @@ screen-sized Gouraud triangles a scene in a faded-out field) skip the blend. Bet
 glyphs (about 260 a frame on field 931, each walking its rows: 5 ms) return at once; semi-transparent unshaded
 sprites have a row routine (mode 0 averages the three channels in one operation); windowed sprites draw runs of
 consecutive texels through the row routines; a triangle's slopes and its rows' edge crossings divide through one
-reciprocal per divisor. What remains in a heavy field
+reciprocal per divisor. Between the third and fourth: shaded palettes for small tinted sprites and polygons from a
+16-entry cache validated by per-band VRAM write counts; 8-bit semi-transparent rows blending all channels at once
+(modes 0 and 1; `blend()` itself for all four modes); the OT walk skipping cleared entries; drawing-state commands
+before mode setup; HWSOUND's voice stepping jumping between envelope changes, and with block decoding and
+`rect_rows` in ITCM. What remains in a heavy field
 (931, sampled): `row_direct8` 22% (the background's pixels, about 7 instructions each), untextured polygon rows
 11%, GP0 decoding 9%, the field's own code and GTE about 15%, profiling timers 7% (PROFILE builds only).
 Software drawing of a 320x224 background at 30 scenes a second is most of a 67 MHz frame by itself: fields need
