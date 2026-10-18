@@ -399,6 +399,18 @@ static SG_HOT __attribute__((noinline)) void poly_row_dither_semi(const Gp0Mode 
 }
 #endif
 
+#ifndef PORT_SOFTGPU_REFERENCE
+/* num / area for area > 0 and |num| < 2^31, with inv = 0xFFFFFFFF / area: the estimate is at most 2 low */
+static inline int div_by_area(int num, u32 area, u32 inv) {
+    u32 n = num < 0 ? 0u - (u32)num : (u32)num;
+    u32 q = (u32)(((unsigned long long)n * inv) >> 32);
+    u32 r = n - q * area;
+    if (r >= area) { ++q; r -= area; }
+    if (r >= area) ++q;
+    return num < 0 ? -(int)q : (int)q;
+}
+#endif
+
 static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
     /* The GPU seeds attributes at the leftmost input vertex. Preserve input
      * order for tied X before changing winding for edge coverage below. */
@@ -450,9 +462,17 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
      * Decoded attributes are bytes. After the extent rejection above, each
      * determinant is bounded by 255*1023, so scaling by 4096 fits signed 32
      * bits. Avoid a software 64-bit divide for every attribute slope. */
+#ifdef PORT_SOFTGPU_REFERENCE
+#define GRAD_DIV(num) ((num) / area)
+#else
+    /* every slope divides by the area: one reciprocal, then each quotient by multiplication (at most two
+     * corrections; identical to the division's, truncated toward zero) */
+    const u32 area_inv = 0xFFFFFFFFu / (u32)area;
+#define GRAD_DIV(num) div_by_area((num), (u32)area, area_inv)
+#endif
 #define GRAD(fa, fb, fc) \
-    (int)((unsigned)((((fa) * A0 + (fb) * A1 + (fc) * A2) * 4096) / area) * 16u), \
-    (int)((unsigned)((((fa) * B0 + (fb) * B1 + (fc) * B2) * 4096) / area) * 16u)
+    (int)((unsigned)GRAD_DIV(((fa) * A0 + (fb) * A1 + (fc) * A2) * 4096) * 16u), \
+    (int)((unsigned)GRAD_DIV(((fa) * B0 + (fb) * B1 + (fc) * B2) * 4096) * 16u)
     /* Flat primitives use the first vertex colour directly. Do not compute
      * or step RGB interpolants that cannot affect their pixels. */
 #ifdef PORT_SOFTGPU_REFERENCE
@@ -479,6 +499,7 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
         int t[2] = {GRAD(a->v, b->v, c->v)}; dvdx = t[0]; dvdy = t[1];
     }
 #undef GRAD
+#undef GRAD_DIV
     /* Evaluate from the same vertex using the quantized slopes. Computing
      * an independent barycentric value here loses the GPU's accumulated
      * rounding error when clipping or stepping from that vertex. */
