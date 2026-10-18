@@ -1518,6 +1518,8 @@ answers the call with the native function; other modules keep running in the eff
 - The three exports that are void in ovl_0b but whose `$v0` modules read are wrapped in the table itself
   (`port/game/effect_exports.c`), for the VM and native modules alike.
 - Ark (fx_0b2): frame-identical to the VM on the host (80 frames).
+- 293 native at decomp 4289c37 (every module whose C is complete): all 11 battle scenarios frame-identical to the
+  VM on the host (12 frames each over 3000; `make pc FXNATIVE=` builds the VM-only reference).
 
 ## Field sweep (2026-10-18)
 
