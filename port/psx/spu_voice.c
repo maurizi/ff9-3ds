@@ -302,7 +302,7 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
     }
 }
 
-void psx_spu_step_voice(PsxSpuVoice *voice, unsigned index, const uint8_t *ram, unsigned n, int fetch_off,
+SPU_HW_ONLY_HOT void psx_spu_step_voice(PsxSpuVoice *voice, unsigned index, const uint8_t *ram, unsigned n, int fetch_off,
                                 uint32_t *ended, void (*block)(unsigned voice, const int16_t *samples, void *user),
                                 void *user) {
     PsxSpuSource *src = &voice->source;

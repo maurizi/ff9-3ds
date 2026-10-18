@@ -17,7 +17,7 @@ SPU_HOT void psx_spu_source_set_loop(PsxSpuSource *source, uint16_t *loop_addres
     if (!voice_on || !source->first_block) source->ignore_loop_start = 1;
 }
 
-SPU_HOT void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
+SPU_HW_HOT void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
                           uint16_t *loop_address) {
     if (source->fetched) return;
     for (unsigned i = 0; i < 3; ++i)

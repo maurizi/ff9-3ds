@@ -2,7 +2,7 @@
 #include "psx_spu_adpcm.h"
 #include "spu_hot.h"
 
-SPU_HOT uint8_t psx_spu_decode_block(const uint8_t block[PSX_SPU_BLOCK_BYTES],
+SPU_HW_HOT uint8_t psx_spu_decode_block(const uint8_t block[PSX_SPU_BLOCK_BYTES],
                            PsxSpuAdpcmHistory *history,
                            int16_t output[PSX_SPU_BLOCK_SAMPLES]) {
     static const int8_t coefficients[5][2] = {
