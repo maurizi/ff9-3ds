@@ -102,6 +102,11 @@ static inline void rows_written(int y0, int y1) { /* rows y0..y1-1 */
     for (int y = y0 & ~7; y < y1; y += 8) ++band_writes[(y >> 3) & 63];
 }
 void psx_raster_rows_written(int y, int h) { rows_written(y, y + h); }
+/* mem.c's in the game; the rasterizer's tests link without it (one caller: the palette cache) */
+__attribute__((weak)) void *psx_spare_alloc(unsigned int size) {
+    static u32 fallback[32 * 256];
+    return size <= sizeof fallback ? fallback : NULL;
+}
 #else
 #define rows_written(y0, y1) ((void)0)
 #endif
@@ -136,9 +141,11 @@ static __attribute__((noinline)) void prepare_palette(const Gp0Mode *m, const Gp
     u32 *out = large_palette;
     if (small) {
         /* tinted sprites and polygons: background tiles reuse a few CLUT rows in one colour */
-        enum { SLOTS = 16 };
+        /* 32 KB, in PS1 RAM the port never uses (main's MIPS code range: psx_spare_alloc) */
+        enum { SLOTS = 32 };
         static struct { u32 writes, used; u16 x, y; u8 depth, r, g, b; } key[SLOTS];
-        static u32 cached[SLOTS][256], clock;
+        static u32 (*cached)[256], clock;
+        if (!cached) cached = psx_spare_alloc(SLOTS * 256 * sizeof(u32));
         const u32 writes = band_writes[(m->clut_y & 511) >> 3] + 1; /* 0: never built */
         int victim = 0;
         for (int k = 0; k < SLOTS; ++k) {
