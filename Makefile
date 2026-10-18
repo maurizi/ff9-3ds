@@ -57,7 +57,7 @@ PORT_CFLAGS   := -std=gnu17 -O2 -g -fno-strict-aliasing -Wall -Wextra -Wno-unuse
 # port/game/ includes the decomp's headers, whose inline helpers call functions declared only for other binaries
 GAME_CFLAGS   := -Wno-error=implicit-function-declaration -Wno-implicit-function-declaration
 
-.PHONY: all ds ds-r4 pc decomp-objs extract clean
+.PHONY: all ds ds-r4 pc decomp-objs extract clean FORCE
 .SECONDARY:
 
 all: ds
@@ -71,8 +71,13 @@ $(BUILD)/portified/%.c: $(DECOMP)/%.c tools/portify.py config/addr_plain.txt con
 # gen_link.py writes the data images, the PS1 data symbol addresses, the overlay namespace maps, the
 # resident-overlay trampolines (ARM and x86) and the overlay table, from the decomp's splat output (the user's
 # disc) and the ARM objects. Both targets share them.
+# The native effect module list: rewritten only when it changes, so gen_link reruns exactly then.
+$(GEN)/fxmods.list: FORCE
+	@mkdir -p $(GEN)
+	@echo '$(FXMODS)' | cmp -s - $@ || echo '$(FXMODS)' > $@
+FORCE:
 $(GEN)/stamp: $(addprefix $(BUILD)/ds/obj/,$(addsuffix .o,$(DECOMP_SRCS))) tools/gen_link.py tools/ff9sym.py \
-              $(wildcard config/xrefs.txt)
+              $(wildcard config/xrefs.txt) $(GEN)/fxmods.list
 	@mkdir -p $(GEN)
 	@$(PYTHON) tools/gen_link.py $(BUILD)/ds/obj
 	@touch $@
