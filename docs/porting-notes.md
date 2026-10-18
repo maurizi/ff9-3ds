@@ -1547,4 +1547,5 @@ that disc (sector 0, length 0 in the bundle), so no place on that disc starts th
 started on another disc. Rerun on a disc from each one's `bg_present_on_discs` (1085 distinct disc/encounter
 pairs), with all 279 matched effect modules native: 1068 pass, and the 17 others are battles that finished within
 the 2500 frames and returned to a field the fixture never set up (6 of them field 70 on disc 2). Every encounter
-enters and runs on the host without a fault.
+enters and runs on the host without a fault. Rerun with 293 native modules and the software renderer's new paths (same
+day, later): the same 1068 pass and the same 17 fixture returns.
