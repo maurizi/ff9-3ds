@@ -11,7 +11,7 @@
 #   HYBRID=1          DS: hybrid renderer in battle (GX polygons, software 2D; docs/design.md §5.0)
 #   HWSOUND=1         DS: SPU voices on the DS hardware channels instead of the exact mixer (design §7.0)
 #   PROFILE=1         DS: frame times and per-category timers for tools/ds_profile.py (the timers cost ~7%)
-#   PROFILE=2         DS: frame times only: the total an ordinary build takes
+#   PROFILE=2         DS: frame times and the VBlank wait only: busy time as an ordinary build takes it
 
 DECOMP   := decomp
 VERSION  := us
