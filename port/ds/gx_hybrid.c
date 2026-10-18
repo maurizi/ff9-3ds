@@ -324,7 +324,7 @@ static int plan_textures(Buffer *b) {
         }
         /* Additive polygons (modes 1, 3) use a 15-bit copy through their CLUT whose dark texels are transparent:
          * under alpha blending a black background would darken what an additive one leaves alone. */
-        int conv = (p->flags & P_SEMI) && (p->abr == 1 || p->abr == 3);
+        int conv = (p->flags & P_SEMI) && p->abr != 0; /* modes 1-3: brightness as alpha (conv_upload) */
         int x0, x1, y0, y1;
         if (conv) { /* effect-sized: the texels' own box, in 8-texel steps */
             u0 &= ~7; u1 |= 7;
@@ -620,7 +620,9 @@ static inline void fifo(u32 cmd, u32 param) { put(cmd); put(param); }
  * keep the hue and the shading relative to it. */
 static inline u32 rgb_for(const Prim *p, int i, int additive) {
     int r, g, b;
-    if (additive) {
+    if (additive && p->abr == 2) {
+        r = g = b = 0; /* subtraction: black over the destination at the source's brightness */
+    } else if (additive) {
         r = (p->flags & P_RAW) ? 31 : p->r[i] * 31 / additive;
         g = (p->flags & P_RAW) ? 31 : p->g[i] * 31 / additive;
         b = (p->flags & P_RAW) ? 31 : p->b[i] * 31 / additive;
@@ -669,23 +671,42 @@ static void plan_drops(Buffer *b) {
 }
 
 /* Translucent polygons with one ID don't blend over each other. Each gets its own, so overlapping layers add up,
- * except that one sharing an edge with a recent one takes that one's ID: the DS draws a shared edge's pixels for
- * both polygons, which would blend twice and leave a bright seam through a mesh (whose polygons the ordering table
- * interleaves with others). */
+ * except that one sharing an edge with a recent one, on the other side of that edge, takes that one's ID: the DS
+ * draws a shared edge's pixels for both polygons, which would blend twice and leave a bright seam through a mesh
+ * (whose polygons the ordering table interleaves with others). Polygons on the same side of their shared edge
+ * overlap (a closed mesh's back faces folding behind its front ones at the silhouette) and keep their own IDs, so
+ * both layers blend as on the PS1. */
 #define RECENT 16
 static const Prim *recent[RECENT];
 static u8 recent_id[RECENT];
 static int recent_at;
+
+static inline int edge_side(const Prim *p, int a, int b, int x, int y) {
+    long c = (long)(p->x[b] - p->x[a]) * (y - p->y[a]) - (long)(p->y[b] - p->y[a]) * (x - p->x[a]);
+    return c > 0 ? 1 : c < 0 ? -1 : 0;
+}
+
+/* p and q share an edge with p's other vertices on one side of it and q's on the other */
+static int neighbours(const Prim *p, const Prim *q) {
+    int pa = -1, pb = -1, qa = -1, qb = -1;
+    for (int i = 0; i < p->n; ++i)
+        for (int j = 0; j < q->n; ++j)
+            if (p->x[i] == q->x[j] && p->y[i] == q->y[j]) {
+                if (pa < 0) { pa = i; qa = j; }
+                else if (pb < 0 && i != pa) { pb = i; qb = j; }
+            }
+    if (pb < 0) return 0;
+    int ps = 0, qs = 0;
+    for (int i = 0; i < p->n; ++i) if (i != pa && i != pb) ps += edge_side(p, pa, pb, p->x[i], p->y[i]);
+    for (int j = 0; j < q->n; ++j) if (j != qa && j != qb) qs += edge_side(p, pa, pb, q->x[j], q->y[j]);
+    (void)qb;
+    return (ps > 0 && qs < 0) || (ps < 0 && qs > 0);
+}
+
 static int translucent_id(const Prim *p, int polys) {
     int id = 1 + (polys & 31);
-    for (int k = 0; k < RECENT; ++k) {
-        const Prim *q = recent[k];
-        if (!q) continue;
-        int shared = 0;
-        for (int i = 0; i < p->n; ++i)
-            for (int j = 0; j < q->n; ++j) shared += p->x[i] == q->x[j] && p->y[i] == q->y[j];
-        if (shared >= 2) { id = recent_id[k]; break; }
-    }
+    for (int k = 0; k < RECENT; ++k)
+        if (recent[k] && neighbours(p, recent[k])) { id = recent_id[k]; break; }
     recent[recent_at] = p; recent_id[recent_at] = (u8)id; recent_at = (recent_at + 1) % RECENT;
     return id;
 }
@@ -724,7 +745,7 @@ static void emit_scene(Buffer *b) {
                 if (want_palette != palette) { fifo(CMD_PLTTBASE, want_palette); palette = want_palette; }
             }
         }
-        int glow = !(p->flags & P_TEXTURED) && (p->flags & P_SEMI) && (p->abr == 1 || p->abr == 3);
+        int glow = !(p->flags & P_TEXTURED) && (p->flags & P_SEMI) && p->abr != 0;
         if (glow) {
             want_image = (u32)(RAMP_UNIT * TEX_UNIT / 8) | 2u << 20 | 0u << 23 | 6u << 26; /* 32x8 A5I3 */
             u32 want_palette = (u32)(ADD_SLOT * 512 + RAMP_PALETTE * 16) / 16;
@@ -743,7 +764,7 @@ static void emit_scene(Buffer *b) {
                 if (!(p->flags & P_GOURAUD)) break;
             }
             if (p->flags & P_RAW) m = 128;
-            alpha = m * 31 / (p->abr == 3 ? 512 : 128);
+            alpha = m * 31 * (p->abr == 2 ? 2 : 1) / (p->abr == 3 ? 512 : 128); /* mode 2: see the glow ramp */
             if (alpha > 31) alpha = 31;
             if (!alpha) continue; /* adds nothing (alpha 0 would be wireframe) */
             additive = m;
@@ -767,8 +788,10 @@ static void emit_scene(Buffer *b) {
                 int m = p->r[i] > p->g[i] ? (p->r[i] > p->b[i] ? p->r[i] : p->b[i]) : (p->g[i] > p->b[i] ? p->g[i] : p->b[i]);
                 int k = p->flags & P_GOURAUD ? i : 0;
                 if (k != i) m = p->r[k] > p->g[k] ? (p->r[k] > p->b[k] ? p->r[k] : p->b[k]) : (p->g[k] > p->b[k] ? p->g[k] : p->b[k]);
-                u32 colour = m ? (u32)(p->r[k] * 31 / m | (p->g[k] * 31 / m) << 5 | (p->b[k] * 31 / m) << 10) : 0;
-                int a = m * 31 / (p->abr == 3 ? 1020 : 255);
+                u32 colour = m && p->abr != 2 ? (u32)(p->r[k] * 31 / m | (p->g[k] * 31 / m) << 5 | (p->b[k] * 31 / m) << 10) : 0;
+                /* subtraction (dst - s, clamped) as dst x (1 - 2s): equal at mid grey, black where the PS1 is */
+                int a = m * 31 * (p->abr == 2 ? 2 : 1) / (p->abr == 3 ? 1020 : 255);
+                if (a > 31) a = 31;
                 fifo(CMD_COLOR, colour);
                 fifo(CMD_TEXCOORD, (u32)(u16)(a * 16 + 8) | (u32)(u16)(4 * 16) << 16);
             } else if (j == 0 || (p->flags & P_GOURAUD)) fifo(CMD_COLOR, rgb_for(p, i, additive));
