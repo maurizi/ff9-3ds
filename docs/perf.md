@@ -49,7 +49,7 @@ How far to trust a comparison (2026-10-18):
   main-RAM code need several fields agreeing; ITCM code doesn't move.
 * `ds_sample.py` (the interpreter's timing) overstates main-RAM Thumb functions against ITCM ARM ones: the GTE
   sampled at 23% of field 110 measured 3.6 of 28 ms. Use it to find candidates, the timers to decide.
-* `build/validation/sample_field/ab.sh "FIELDS" FILES` (fields) and `build/validation/sample_ark/capcmp.sh` (a
+* `tools/ds_ab_fields.sh "FIELDS" FILES` (fields) and `tools/ds_ab_battle.sh` (a
   battle at a capture frame) build HEAD's versions of FILES against the working tree's and compare busy time and
   the screenshot.
 
@@ -174,7 +174,8 @@ words reserved once per primitive; UI lists compared by words and swapped, not c
 software only when the drawing area is smaller than the view (the 3D engine clips there itself; the clipper also
 re-rounded texture coordinates, and the DS frame moved slightly closer to the host's exact one); RTPS/RTPT with
 sf = 1 in their own copy. Ark went 44.7 -> 40.9 with these, each step with an identical capture screenshot
-(`build/validation/sample_ark/capcmp.sh` builds HEAD's and the working tree's files at one capture frame). The last column adds: packed UI entries
+(`tools/ds_ab_battle.sh` builds HEAD's and the working tree's files at one capture frame).
+The last column adds: packed UI entries
 (84 bytes, were 212); translucent polygons skip recent ones without a common vertex-hash bit; texture size fields
 kept per region; additive vertex colours divided by reciprocal; command words through a local pointer. Measured
 stages of Ark's display work per frame (PROFILE=1 timers): texture plan 1.9 ms, uploads 1.3, command emission 4.1
@@ -196,7 +197,7 @@ PROFILE=1 (the category timers add about 7%). Mean over the 28 fields: 49.2 (fir
 | 955 | 62.7 | 62.6 | 58.5 | | 2110 | 63.1 | 62.8 | 58.9 |
 
 Elapsed times step by whole VBlanks when a scene misses one (931 at 66.9 is four per scene), so a saving shows
-in full only when it crosses a step; `build/validation/sample_field/ab.sh` compares busy time and categories of
+in full only when it crosses a step; `tools/ds_ab_fields.sh` compares busy time and categories of
 HEAD and the working tree instead.
 
 Field backgrounds draw 16x16 tiles with a CLUT row each; tinted ones (colour other than 128) were drawn per pixel
