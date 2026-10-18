@@ -663,8 +663,8 @@ static __attribute__((noinline)) void upload(void) {
 
 /* ---- command emission -------------------------------------------------------------------------------------- */
 
-enum { CMD_COLOR = 0x20, CMD_TEXCOORD = 0x22, CMD_VTX16 = 0x23, CMD_POLYATTR = 0x29, CMD_TEXIMAGE = 0x2A,
-       CMD_PLTTBASE = 0x2B, CMD_BEGIN = 0x40 };
+enum { CMD_COLOR = 0x20, CMD_TEXCOORD = 0x22, CMD_VTX16 = 0x23, CMD_VTXXY = 0x25, CMD_POLYATTR = 0x29,
+       CMD_TEXIMAGE = 0x2A, CMD_PLTTBASE = 0x2B, CMD_BEGIN = 0x40 };
 #define INITIAL_ATTR (3u << 6 | 31u << 16)
 
 /* The scene's commands (packed FIFO format, one command per header), fed to the geometry FIFO by DMA while the
@@ -693,6 +693,10 @@ static void flush_chunk(void) {
     } while (0)
 #define put(word) (*wp++ = (word))
 #define fifo(cmd, param) (put(cmd), put(param))
+/* Packed commands: a header word of up to four command IDs, then their parameters in order. */
+#define pack_begin() (pack_header = wp++, pack_ids = 0, pack_shift = 0)
+#define pack(cmd) (pack_ids |= (u32)(cmd) << pack_shift, pack_shift += 8)
+#define pack_end() (*pack_header = pack_ids)
 
 /* c * 31 / d for c, d <= 255, d > 0, by a reciprocal (ceil(2^24 / d); exact over that range) */
 static u32 recip24[256];
@@ -815,6 +819,8 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     memset(recent, 0, sizeof recent);
     u32 attr = INITIAL_ATTR, image = 0, palette = ~0u;
     u32 *wp = chunks[chunk] + chunk_words;
+    u32 *pack_header, pack_ids;
+    int pack_shift;
     reserve();
     fifo(CMD_POLYATTR, attr);
     fifo(CMD_TEXIMAGE, 0);
@@ -827,7 +833,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         reserve();
         if (polys >= MAX_POLYS || vertices + p->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
         int tu = 0, tv = 0, additive = 0;
-        u32 want_image = 0;
+        u32 want_image = 0, set_palette = ~0u; /* state to send with the primitive's BEGIN (~0: unchanged) */
         if (p->flags & P_TEXTURED) {
             Region *r = prim_group[k] == 0xFF ? NULL : groups[prim_group[k]].region;
             if (!r) { gxh_stats_texture_fail++; continue; }
@@ -839,21 +845,22 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                          (u32)(r->conv ? 6 : p->depth == 2 ? 7 : p->depth == 0 ? 3 : 4) << 26;
             if (r->conv) {
                 u32 want_palette = (u32)(ADD_SLOT * 512 + r->cpal * 16) / 16;
-                if (want_palette != palette) { fifo(CMD_PLTTBASE, want_palette); palette = want_palette; }
+                if (want_palette != palette) set_palette = want_palette;
                 additive = 1;
             } else if (p->depth < 2) {
                 want_image |= 1u << 29; /* PS1 0x0000 at index 0 is transparent (FF9's CLUTs) */
                 u32 want_palette = (u32)prim_palette[k] * 512 / 16;
-                if (want_palette != palette) { fifo(CMD_PLTTBASE, want_palette); palette = want_palette; }
+                if (want_palette != palette) set_palette = want_palette;
             }
         }
         int glow = !(p->flags & P_TEXTURED) && (p->flags & P_SEMI) && p->abr != 0;
         if (glow) {
             want_image = (u32)(RAMP_UNIT * TEX_UNIT / 8) | 2u << 20 | 0u << 23 | 6u << 26; /* 32x8 A5I3 */
             u32 want_palette = (u32)(ADD_SLOT * 512 + RAMP_PALETTE * 16) / 16;
-            if (want_palette != palette) { fifo(CMD_PLTTBASE, want_palette); palette = want_palette; }
+            if (want_palette != palette) set_palette = want_palette;
         }
-        if (want_image != image) { fifo(CMD_TEXIMAGE, want_image); image = want_image; }
+        u32 set_image = ~0u;
+        if (want_image != image) set_image = want_image;
         int alpha = 31, id = 0;
         if (glow) {
             id = translucent_id(p, polys);
@@ -880,11 +887,18 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             id = translucent_id(p, polys);
         }
         u32 want_attr = 3u << 6 | (u32)alpha << 16 | (u32)id << 24;
-        if (want_attr != attr) { fifo(CMD_POLYATTR, want_attr); attr = want_attr; }
+        /* the state that changed and BEGIN, in one packed group (a primitive skipped above sends nothing and leaves
+         * the state as it was) */
+        pack_begin();
+        if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); palette = set_palette; }
+        if (set_image != ~0u) { pack(CMD_TEXIMAGE); put(set_image); image = set_image; }
+        if (want_attr != attr) { pack(CMD_POLYATTR); put(want_attr); attr = want_attr; }
+        pack(CMD_BEGIN); put(p->n == 4 ? 1 : 0);
+        pack_end();
         static const int quad_order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
-        fifo(CMD_BEGIN, p->n == 4 ? 1 : 0);
         for (int j = 0; j < p->n; ++j) {
             int i = p->n == 4 ? quad_order[j] : j;
+            pack_begin(); /* the vertex's colour, texture coordinate and position */
             if (glow) {
                 /* hue at full brightness; the brightness (a quarter of it in mode 3) is the ramp's U */
                 int m = p->r[i] > p->g[i] ? (p->r[i] > p->b[i] ? p->r[i] : p->b[i]) : (p->g[i] > p->b[i] ? p->g[i] : p->b[i]);
@@ -894,17 +908,20 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 /* subtraction (dst - s, clamped) as dst x (1 - 2s): equal at mid grey, black where the PS1 is */
                 int a = m * 31 * (p->abr == 2 ? 2 : 1) / (p->abr == 3 ? 1020 : 255);
                 if (a > 31) a = 31;
-                fifo(CMD_COLOR, colour);
-                fifo(CMD_TEXCOORD, (u32)(u16)(a * 16 + 8) | (u32)(u16)(4 * 16) << 16);
-            } else if (j == 0 || (p->flags & P_GOURAUD)) fifo(CMD_COLOR, rgb_for(p, i, additive));
+                pack(CMD_COLOR); put(colour);
+                pack(CMD_TEXCOORD); put((u32)(u16)(a * 16 + 8) | (u32)(u16)(4 * 16) << 16);
+            } else if (j == 0 || (p->flags & P_GOURAUD)) { pack(CMD_COLOR); put(rgb_for(p, i, additive)); }
             if (p->flags & P_TEXTURED) {
                 int u = p->u[i] - tu, v = p->v[i] - tv;
                 if (p->flags & P_RECT) { u += i & 1; v += i >> 1; } /* vertices 1, 3 right; 2, 3 bottom */
-                fifo(CMD_TEXCOORD, (u32)(u16)(u * 16) | (u32)(u16)(v * 16) << 16);
+                pack(CMD_TEXCOORD); put((u32)(u16)(u * 16) | (u32)(u16)(v * 16) << 16);
             }
-            put(CMD_VTX16);
-            put((u32)(u16)p->x[i] | (u32)(u16)p->y[i] << 16);
-            put((u32)(u16)z);
+            if (j == 0) { /* the primitive's depth; the others keep it */
+                pack(CMD_VTX16); put((u32)(u16)p->x[i] | (u32)(u16)p->y[i] << 16); put((u32)(u16)z);
+            } else {
+                pack(CMD_VTXXY); put((u32)(u16)p->x[i] | (u32)(u16)p->y[i] << 16);
+            }
+            pack_end();
         }
         ++polys;
         vertices += p->n;
@@ -917,6 +934,9 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
 #undef reserve
 #undef put
 #undef fifo
+#undef pack_begin
+#undef pack
+#undef pack_end
 
 /* ---- backend ----------------------------------------------------------------------------------------------- */
 
