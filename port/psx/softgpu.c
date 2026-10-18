@@ -749,6 +749,27 @@ static SG_HOT __attribute__((noinline)) void row_direct8(const u16 *src, const u
     if (lead) { u16 c = cl[*src++ >> 8]; if (c) *dst = c | mask; ++dst; --width; }
     /* byte offsets into the CLUT, each one instruction (ldrh takes no scaled index) */
     const u8 *cb = (const u8 *)cl;
+    if (!mask && width >= 6) {
+        /* four texels a word load once src is word-aligned */
+        if ((unsigned long)src & 2) {
+            unsigned w = *src++;
+            u16 a = *(const u16 *)(cb + ((w << 1) & 0x1FE)), b = *(const u16 *)(cb + ((w >> 7) & 0x1FE));
+            if (a) dst[0] = a;
+            if (b) dst[1] = b;
+            dst += 2; width -= 2;
+        }
+        const u32 *s32 = (const u32 *)src;
+        for (; width >= 4; width -= 4, dst += 4) {
+            u32 w = *s32++;
+            u16 a = *(const u16 *)(cb + ((w << 1) & 0x1FE)), b = *(const u16 *)(cb + ((w >> 7) & 0x1FE));
+            u16 c = *(const u16 *)(cb + ((w >> 15) & 0x1FE)), d = *(const u16 *)(cb + ((w >> 23) & 0x1FE));
+            if (a) dst[0] = a;
+            if (b) dst[1] = b;
+            if (c) dst[2] = c;
+            if (d) dst[3] = d;
+        }
+        src = (const u16 *)s32;
+    }
     for (; width >= 2; width -= 2, dst += 2) {
         unsigned w = *src++;
         u16 a = *(const u16 *)(cb + ((w << 1) & 0x1FE)), b = *(const u16 *)(cb + ((w >> 7) & 0x1FE));
