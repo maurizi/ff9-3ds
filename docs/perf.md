@@ -39,6 +39,20 @@ Where the time goes inside the uninstrumented remainder:
 ARM9 PC through melonDS's GDB stub (interpreter mode). It reports a histogram by
 function, callers, and with `--detail` the sampled instructions.
 
+How far to trust a comparison (2026-10-18):
+
+* `PROFILE=1`'s timers cost about 7% and sit in the hot paths (one pair per GP0 packet, GTE command and
+  primitive), so a change that removes calls looks better under it than it is. `PROFILE=2` times only frames
+  and the VBlank wait: busy time is frame minus wait. Totals alone step by whole VBlanks.
+* Code layout moves main-RAM functions (`rect_rows`, the hybrid, the game) across cache lines: an unrelated
+  change to `gpu.c` moved field 306's rectangles by 0.8 ms with identical work. Differences under about 1 ms in
+  main-RAM code need several fields agreeing; ITCM code doesn't move.
+* `ds_sample.py` (the interpreter's timing) overstates main-RAM Thumb functions against ITCM ARM ones: the GTE
+  sampled at 23% of field 110 measured 3.6 of 28 ms. Use it to find candidates, the timers to decide.
+* `build/validation/sample_field/ab.sh "FIELDS" FILES` (fields) and `build/validation/sample_ark/capcmp.sh` (a
+  battle at a capture frame) build HEAD's versions of FILES against the working tree's and compare busy time and
+  the screenshot.
+
 ## Field 259 (Evil Forest), window ending at frame 609, ms per 60 Hz frame
 
 | | first measured (this session) | now |
