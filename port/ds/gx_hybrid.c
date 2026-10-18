@@ -940,9 +940,11 @@ static void reset_colours(void) {
     colours_full = 0;
 }
 
+/* (v + 5) / 11: the nearest cube level of a 5-bit channel (no divide per pixel) */
+static const u8 cube_step[32] = {0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3};
+
 static inline u8 cube_of(u16 c) {
-    int r = ((c & 31) + 5) / 11, g = (((c >> 5) & 31) + 5) / 11, b = (((c >> 10) & 31) + 5) / 11;
-    return (u8)(1 + (r | g << 2 | b << 4));
+    return (u8)(1 + (cube_step[c & 31] | cube_step[(c >> 5) & 31] << 2 | cube_step[(c >> 10) & 31] << 4));
 }
 
 /* A colour's palette index: a new entry while there is room, else the nearest entry (remembered, so each colour
