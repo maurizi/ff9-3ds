@@ -130,11 +130,23 @@ Code placement matters as much as instruction count in melonDS: the untextured a
 first ran from main RAM and were slower than the inlined generic `plot` in ITCM (34.1 vs 27.2 ms); in ITCM
 they took 16.4. ITCM is full (about 0x7a38 of 0x8000), so a new hot routine needs something colder moved out.
 
+## Redraw skipping (tried, not adopted)
+
+Branch `retain-experiment`: a backend over the software GPU that defers each drawing target's primitives for a
+VBlank, matches them with the previous list and redraws only the entries over changed 16x16 cells, clipped to
+them. It is exact (host frames identical to plain drawing on fields 259, 450, 1663, Ark and Ifrit), but on field
+259 (HWSOUND=1, window ending at 609) it cost 50.3 ms per frame against 35.4: rasterizing fell only from 13.6 to
+11.4 ms, because the skipped primitives are the cheap ones while the animated background and characters are
+redrawn anyway, and the bookkeeping (hashing, matching, texture-write checks) added about 17 ms. Its lists take
+about 400 KB, which the 4 MB DS can't spare. Even free, it would save about 2 ms of 35. Battle UI already has
+its own redraw skipping in the hybrid renderer.
+
 ## Next
 
 * SPU (about 17 ms per frame in every mode, more than a VBlank by itself): voices about 105 cycles per voice
-  sample including ADPCM decode; reverb 5.8 ms. The DSi's Teak DSP is idle and could take the whole mixer
-  (BlocksDS supports Teak binaries), which no ARM9 tuning approaches.
+  sample including ADPCM decode; reverb 5.8 ms. HWSOUND=1 plays the voices on the DS's own channels instead
+  (design §7.0), which brings the SPU to about 5.5 ms. The DSi's Teak DSP is not used: the target is the
+  original DS.
 * Battle: one scene per four VBlanks (66.7 ms PS1 budget) costs about 330 ms of DS time; polygon fill is
   most of it. The software path is about 5x short; the GX path (design §5) is the alternative.
 * Game logic (decomp code, Thumb, main RAM): about 16 ms of the field frame is
