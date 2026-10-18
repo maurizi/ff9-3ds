@@ -846,6 +846,21 @@ static inline __attribute__((always_inline)) int fast_indexed_row(
  * channels at once: (b + f) >> 1 per channel is ((b & ~1) + (f & ~1)) >> 1 plus the bit both have at 1. */
 static SG_HOT __attribute__((noinline)) void row_semi_direct(const u16 *src, const u16 *cl, u16 *dst, unsigned lead,
                                                              unsigned width, u16 mask, int depth, int abr) {
+    if (depth && !abr) { /* 8-bit, mode 0: two texels a halfword, the average in one operation */
+        const u8 *cb = (const u8 *)cl;
+        unsigned k = lead;
+        for (; width; --width, ++k, ++dst) {
+            unsigned w = src[k >> 1] >> ((k & 1) << 3);
+            u16 t = *(const u16 *)(cb + ((w << 1) & 0x1FE));
+            if (!t) continue;
+            if (t & 0x8000) {
+                u16 d = *dst;
+                t = (u16)((((d & 0x7BDE) + (t & 0x7BDE)) >> 1) + (d & t & 0x0421)) | 0x8000;
+            }
+            *dst = t | mask;
+        }
+        return;
+    }
     const unsigned per = depth ? 1 : 2, low = depth ? 1 : 3, bits = depth ? 3 : 2, entries = depth ? 255 : 15;
     for (unsigned k = lead; width; --width, ++k, ++dst) {
         u16 t = cl[(src[k >> per] >> ((k & low) << bits)) & entries];
