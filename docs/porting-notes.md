@@ -1537,3 +1537,10 @@ encounter's scene data names; borrowing another encounter's background makes `bt
 within the run and returned to a field the fixture never set up, and 6 returned to field 70 on disc 2 (the
 opening, whose FMV is on disc 1). Covering the 408 needs fixtures that start each encounter from a field that uses
 it (its encounter table and background), still to do.
+
+Correction (decomp R24, `tools/encounter_catalog.py`): those 408 are encounters whose background file isn't on
+that disc (sector 0, length 0 in the bundle), so no place on that disc starts them; all are world-map encounters
+started on another disc. Rerun on a disc from each one's `bg_present_on_discs` (1085 distinct disc/encounter
+pairs), with all 279 matched effect modules native: 1068 pass, and the 17 others are battles that finished within
+the 2500 frames and returned to a field the fixture never set up (6 of them field 70 on disc 2). Every encounter
+enters and runs on the host without a fault.
