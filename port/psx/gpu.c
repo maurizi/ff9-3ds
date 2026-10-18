@@ -525,7 +525,12 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     /* Explicit bounds disambiguate stack links whose low 24 bits alias arena RAM. */
     u32 head_window = (u32)p & 0xFF000000;
     unsigned int guard = 0;
+    /* ClearOTagR's empty entries each link to the word before: a run of them is stepped over by comparison
+     * (both branches below would go to p - 1 for these) */
+    const int ram_window = head_window == ((u32)psx_ram & 0xFF000000);
     while (((u32)p & 0xFFFFFF) != OT_END) {
+        if (ram_window && (unsigned char *)p > psx_ram && (unsigned char *)p < psx_ram + PSX_RAM_SIZE)
+            while ((unsigned char *)p > psx_ram && *p == (((u32)(p - 1)) & 0xFFFFFF)) --p;
         u32 addr = *p & 0xFFFFFF;
         if (((P_TAG *)p)->len) {
             draw_packet(p);
