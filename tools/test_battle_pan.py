@@ -20,7 +20,7 @@ probe = r'''
 #include <sys/mman.h>
 #include <stdio.h>
 static Unk800F78A4 context;
-Unk800F78A4 *D_800F78A4 = &context;
+Unk800F78A4 *g_btlfxEnv = &context;
 static MATRIX matrix;
 static SVECTOR point = {100, 0, 1000, 0};
 static int lookups;

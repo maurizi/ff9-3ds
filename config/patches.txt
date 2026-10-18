@@ -18,10 +18,10 @@ src/ovl_0b/ovl_0b.c | b->unkD80 = 4; | b->unkD80 = 4; port_scenario_battle_ready
 
 # CD-loaded battle-effect modules retain raw PSX pointers and MIPS code.
 src/ovl_0b/ovl_0b_2.c | fh = *(u8 **)dst; | fh = (u8 *)PSX_ADDR(*(u32 *)dst); | 1
-src/ovl_0b/ovl_0b_2.c | fn(d->unk38, D_800F78A4, D_800F78A4->unk10); | port_effect_call((u32)fn, d->unk38, (u32)D_800F78A4, D_800F78A4->unk10, 0, 0); | 1
+src/ovl_0b/ovl_0b_2.c | fn(d->unk38, g_btlfxEnv, g_btlfxEnv->unk10); | port_effect_call((u32)fn, d->unk38, (u32)g_btlfxEnv, g_btlfxEnv->unk10, 0, 0); | 1
 src/ovl_0b/ovl_0b_2.c | e->unk14(0, 0, 0, 0, &init) | port_effect_call((u32)e->unk14, 0, 0, 0, 0, (u32)&init) | 1
-src/ovl_0b/ovl_0b_2.c | e->unk14(1, e->unkC, D_800F78A4, e, args) | port_effect_call((u32)e->unk14, 1, (u32)e->unkC, (u32)D_800F78A4, (u32)e, (u32)args) | 1
-src/ovl_0b/ovl_0b_2.c | e->unk14(2, e->unkC, D_800F78A4, e, NULL) | port_effect_call((u32)e->unk14, 2, (u32)e->unkC, (u32)D_800F78A4, (u32)e, 0) | 1
+src/ovl_0b/ovl_0b_2.c | e->unk14(1, e->unkC, g_btlfxEnv, e, args) | port_effect_call((u32)e->unk14, 1, (u32)e->unkC, (u32)g_btlfxEnv, (u32)e, (u32)args) | 1
+src/ovl_0b/ovl_0b_2.c | e->unk14(2, e->unkC, g_btlfxEnv, e, NULL) | port_effect_call((u32)e->unk14, 2, (u32)e->unkC, (u32)g_btlfxEnv, (u32)e, 0) | 1
 # Effect descriptors are reused. Native pointers do not have KSEG0's sign bit;
 # only a remaining offset can be relocated, never a previously native pointer.
 src/ovl_0b/ovl_0b_2.c | el->unk1C != -1 && !(el->unk1C & 0x80000000) | (u32)el->unk1C < PSX_RAM_SIZE | 1
@@ -37,8 +37,8 @@ src/ovl_0b/ovl_0b_2.c | n = ((Unk800D1494 *)p)->unk2; | p = (u8 *)port_effect_da
 src/ovl_0b/ovl_0b_2.c | m->unk8(e, owner, &pos, func_800E0134(e, owner), frame, frames) | port_effect_call_words((u32)m->unk8, (u32[]){(u32)e, (u32)owner, (u32)&pos, (u32)func_800E0134(e, owner), frame, frames}, 6) | 1
 src/ovl_0b/ovl_0b_2.c | el->unk24(e, owner, &pos, vp, &scale, &alpha, &cnt, frame, frames); | port_effect_call_words((u32)el->unk24, (u32[]){(u32)e, (u32)owner, (u32)&pos, (u32)vp, (u32)&scale, (u32)&alpha, (u32)&cnt, frame, frames}, 9); | 1
 # Custom work-pool setup/update functions also reside in loaded MIPS modules.
-src/ovl_0b/ovl_0b_2.c | pool->unk4(1, d, D_800F78A4, pool->unk8, 0, pool, pool->unk8->unkC); | port_effect_call_words((u32)pool->unk4, (u32[]){1, (u32)d, (u32)D_800F78A4, (u32)pool->unk8, 0, (u32)pool, pool->unk8->unkC}, 7); | 1
-src/ovl_0b/ovl_0b_2.c | fn(2, p + 2, D_800F78A4, pool->unk8, p[1], pool, pool->unk8->unkC) | port_effect_call_words((u32)fn, (u32[]){2, (u32)(p + 2), (u32)D_800F78A4, (u32)pool->unk8, (u32)(s32)p[1], (u32)pool, pool->unk8->unkC}, 7) | 1
+src/ovl_0b/ovl_0b_2.c | pool->unk4(1, d, g_btlfxEnv, pool->unk8, 0, pool, pool->unk8->unkC); | port_effect_call_words((u32)pool->unk4, (u32[]){1, (u32)d, (u32)g_btlfxEnv, (u32)pool->unk8, 0, (u32)pool, pool->unk8->unkC}, 7); | 1
+src/ovl_0b/ovl_0b_2.c | fn(2, p + 2, g_btlfxEnv, pool->unk8, p[1], pool, pool->unk8->unkC) | port_effect_call_words((u32)fn, (u32[]){2, (u32)(p + 2), (u32)g_btlfxEnv, (u32)pool->unk8, (u32)(s32)p[1], (u32)pool, pool->unk8->unkC}, 7) | 1
 src/ovl_0b/ovl_0b_2.c | ((EffTailSpawn *)e->unk24)->unk3C(&off, &rot, frame, dur) | port_effect_call_words((u32)((EffTailSpawn *)e->unk24)->unk3C, (u32[]){(u32)&off, (u32)&rot, (u32)frame, (u32)dur}, 4) | 1
 # Framebuffer-warp grids invoke the raw callback supplied at export +0x248,
 # argument 13. Silver/Nova Dragon effects pass loaded MIPS code here.
@@ -170,7 +170,7 @@ src/ovl_0b/ovl_0b.c | && (!(arg0->unk68 & 1) || (s32)m->unkC != arg0->unkA4[9]) 
 # WIP draft uses a by-value struct to reproduce MIPS stack homes; native callers use four arguments.
 docs/wip/ovl_0b_800E4A3C.c | Pool6CEntry *func_800E4A3C(s32 arg0, s32 arg1, E4Arg arg2) { | Pool6CEntry *func_800E4A3C(s32 arg0, s32 arg1, s16 *arg2_a, s16 *arg2_b) { E4Arg arg2 = {arg2_a, arg2_b, NULL}; | 1
 # Battle help-text measurement explicitly passes the PS1 hidden structure-return pointer.
-src/ovl_0b/ovl_0b_2.c | func_8002AF70(&v.unk0, (s32)&D_801051F0); | port_measure_text_into(&v.unk0, &D_801051F0); | 1
+src/ovl_0b/ovl_0b_2.c | func_8002AF70(&v.unk0, (s32)&g_btlBanner); | port_measure_text_into(&v.unk0, &g_btlBanner); | 1
 # The main dispatcher still uses the old numeric label for overlay 65's renamed entry.
 src/main/main.c | func_801EF284(); | battleEnd_main(); | 1
 # Effect setup can submit a native local packet/OT buffer; preserve its exact bounds.
