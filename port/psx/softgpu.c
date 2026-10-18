@@ -1040,6 +1040,10 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (x1 > gp0_state.area_x1 + 1) x1 = gp0_state.area_x1 + 1;
     if (y1 > gp0_state.area_y1 + 1) y1 = gp0_state.area_y1 + 1;
 #ifndef PORT_SOFTGPU_REFERENCE
+    if (x1 <= x0 || y1 <= y0) { /* nothing to draw (text draws 0-wide glyphs for spaces) */
+        port_profile_draw_end(1,profile_start);
+        return;
+    }
     if (!m->textured && !m->semi && !gp0_state.check_mask && !target.pixels
         && x0 >= 0 && y0 >= 0 && x1 <= VRAM_W && y1 <= VRAM_H) {
         int r = v->r < 0 ? 0 : v->r > 255 ? 255 : v->r;
