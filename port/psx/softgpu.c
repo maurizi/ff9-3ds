@@ -272,10 +272,14 @@ static SG_HOT __attribute__((noinline)) void poly_row_textured(const Gp0Mode *m,
  * are zero, which is plot's (t5 * colour >> 7) clamped to 31; a raw texture is colour 128 (t5 itself). */
 static u16 dtab[4][4][3][32];
 static unsigned dtab_key = ~0u;
+static inline unsigned dither_key(int r, int g, int b, int dither) {
+    return (unsigned)r | (unsigned)g << 8 | (unsigned)b << 16 | (unsigned)!!dither << 24;
+}
+
 static void dither_tables(int r, int g, int b, int dither) {
     static const signed char dithered[16] = {-4,0,-3,1,2,-2,3,-1,-3,1,-4,0,3,-1,2,-2}, plain[16] = {0};
     const signed char *offsets = dither ? dithered : plain;
-    unsigned key = (unsigned)r | (unsigned)g << 8 | (unsigned)b << 16 | (unsigned)!!dither << 24;
+    unsigned key = dither_key(r, g, b, dither);
     if (key == dtab_key) return;
     dtab_key = key;
     const int colour[3] = {r, g, b};
@@ -502,17 +506,24 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
                               !target.pixels && !marks;
     const int modulate = !neutral;
     /* dither implies a modulated (non-raw) texture and no palette cache: see poly_row_dither_indexed */
-    const int dither_indexed = fast_textured && dither && m->depth < 2 && !gp0_state.twin_mask_x &&
+    int dither_indexed = fast_textured && dither && m->depth < 2 && !gp0_state.twin_mask_x &&
                                !gp0_state.twin_mask_y && m->clut_x + (m->depth ? 256 : 16) <= VRAM_W;
     const int flat_r = a->r < 0 ? 0 : a->r > 255 ? 255 : a->r;
     const int flat_g = a->g < 0 ? 0 : a->g > 255 ? 255 : a->g;
     const int flat_b = a->b < 0 ? 0 : a->b > 255 ? 255 : a->b;
     /* the same for semi-transparent polygons (any depth), and untextured polygons */
     const int plain_target = !gp0_state.check_mask && !target.pixels && !marks;
-    const int dither_semi = m->textured && !m->gouraud && m->semi && plain_target &&
+    int dither_semi = m->textured && !m->gouraud && m->semi && plain_target &&
                             !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
                             (m->depth == 2 || m->clut_x + (m->depth ? 256 : 16) <= VRAM_W);
     const int untextured = !m->textured && !gp0_state.check_mask && !target.pixels; /* marks: whole spans */
+    /* Rebuilding the tables (1536 entries) costs more than a small polygon's pixels: a small one in a colour
+     * other than the tables' takes the per-pixel paths instead (field characters: each polygon its own light). */
+    if (area < 128) {
+        if (dither_indexed && dither_key(flat_r, flat_g, flat_b, 1) != dtab_key) dither_indexed = 0;
+        if (dither_semi && dither_key(m->raw ? 128 : flat_r, m->raw ? 128 : flat_g, m->raw ? 128 : flat_b, dither) !=
+                               dtab_key) dither_semi = 0;
+    }
     if (dither_indexed) dither_tables(flat_r, flat_g, flat_b, 1);
     if (dither_semi) dither_tables(m->raw ? 128 : flat_r, m->raw ? 128 : flat_g, m->raw ? 128 : flat_b, dither);
 #endif
