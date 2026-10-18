@@ -199,6 +199,7 @@ static void record_clipped_triangle(Buffer *buf, const Gp0Mode *m, const Gp0Vtx 
 typedef struct {
     int used, depth, x, y, wh, h;      /* PS1 VRAM rectangle in halfwords */
     int tw, th;                         /* DS texture size in texels */
+    u32 size_bits;                      /* TEXIMAGE's size fields for tw, th */
     int unit, units;
     int dirty, wanted;
     int conv, clut_x, clut_y;           /* conv: additive-blend copy of 4/8-bit texels through this CLUT (A5I3) */
@@ -266,7 +267,8 @@ static Region *place_region(int depth, int conv, int cx, int cy, int x, int y, i
     if (unit < 0) return NULL;
     for (int i = 0; i < MAX_REGIONS; ++i)
         if (!regions[i].used) {
-            regions[i] = (Region){1, depth, x, y, wh, h, 1 << sw, 1 << sh, unit, units, 1, 1, conv, cx, cy, cpal};
+            regions[i] = (Region){1, depth, x, y, wh, h, 1 << sw, 1 << sh, (u32)(sw - 3) << 20 | (u32)(sh - 3) << 23,
+                                  unit, units, 1, 1, conv, cx, cy, cpal};
             return &regions[i];
         }
     memset(unit_used + unit, 0, units);
@@ -675,6 +677,13 @@ static inline void put(u32 word) {
 
 static inline void fifo(u32 cmd, u32 param) { put(cmd); put(param); }
 
+/* c * 31 / d for c, d <= 255, d > 0, by a reciprocal (ceil(2^24 / d); exact over that range) */
+static u32 recip24[256];
+static inline u32 div31(u32 c, u32 d) {
+    if (!recip24[1]) for (u32 k = 1; k < 256; ++k) recip24[k] = (u32)(((1ull << 24) + k - 1) / k);
+    return (u32)(((unsigned long long)(c * 31) * recip24[d]) >> 24);
+}
+
 /* additive: the polygon's brightest vertex channel, which went into its alpha (conv_upload); the vertex colours
  * keep the hue and the shading relative to it. */
 static inline u32 rgb_for(const Prim *p, int i, int additive) {
@@ -682,9 +691,9 @@ static inline u32 rgb_for(const Prim *p, int i, int additive) {
     if (additive && p->abr == 2) {
         r = g = b = 0; /* subtraction: black over the destination at the source's brightness */
     } else if (additive) {
-        r = (p->flags & P_RAW) ? 31 : p->r[i] * 31 / additive;
-        g = (p->flags & P_RAW) ? 31 : p->g[i] * 31 / additive;
-        b = (p->flags & P_RAW) ? 31 : p->b[i] * 31 / additive;
+        r = (p->flags & P_RAW) ? 31 : (int)div31(p->r[i], (u32)additive);
+        g = (p->flags & P_RAW) ? 31 : (int)div31(p->g[i], (u32)additive);
+        b = (p->flags & P_RAW) ? 31 : (int)div31(p->b[i], (u32)additive);
     } else if ((p->flags & P_SEMI) && p->abr == 2) {
         r = g = b = 0;
     } else if ((p->flags & (P_TEXTURED | P_RAW)) == (P_TEXTURED | P_RAW)) {
@@ -808,8 +817,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             int per = texels_per_halfword(p->depth);
             tu = (r->x - p->tx) * per;
             tv = r->y - p->ty;
-            want_image = (u32)(r->unit * TEX_UNIT / 8) | (u32)(log2_at_least(r->tw) - 3) << 20 |
-                         (u32)(log2_at_least(r->th) - 3) << 23 |
+            want_image = (u32)(r->unit * TEX_UNIT / 8) | r->size_bits |
                          (u32)(r->conv ? 6 : p->depth == 2 ? 7 : p->depth == 0 ? 3 : 4) << 26;
             if (r->conv) {
                 u32 want_palette = (u32)(ADD_SLOT * 512 + r->cpal * 16) / 16;
@@ -864,7 +872,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 int m = p->r[i] > p->g[i] ? (p->r[i] > p->b[i] ? p->r[i] : p->b[i]) : (p->g[i] > p->b[i] ? p->g[i] : p->b[i]);
                 int k = p->flags & P_GOURAUD ? i : 0;
                 if (k != i) m = p->r[k] > p->g[k] ? (p->r[k] > p->b[k] ? p->r[k] : p->b[k]) : (p->g[k] > p->b[k] ? p->g[k] : p->b[k]);
-                u32 colour = m && p->abr != 2 ? (u32)(p->r[k] * 31 / m | (p->g[k] * 31 / m) << 5 | (p->b[k] * 31 / m) << 10) : 0;
+                u32 colour = m && p->abr != 2 ? div31(p->r[k], (u32)m) | div31(p->g[k], (u32)m) << 5 | div31(p->b[k], (u32)m) << 10 : 0;
                 /* subtraction (dst - s, clamped) as dst x (1 - 2s): equal at mid grey, black where the PS1 is */
                 int a = m * 31 * (p->abr == 2 ? 2 : 1) / (p->abr == 3 ? 1020 : 255);
                 if (a > 31) a = 31;
