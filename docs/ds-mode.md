@@ -128,6 +128,19 @@ port buffer trimmed. Options, to be decided:
   throughput does not prove flashcart throughput. Movie video/audio buffers must
   be included before declaring a DS budget viable.
 
+## Overlay code ranges are dead (2026-10-17)
+
+Overwriting every overlay's MIPS code (the split config's `c` segments, about 850 KB over all overlays) right after
+it loads leaves field 259 (including its encounter), Ark, Ifrit, Kuja and Zidane's Trance frame-identical, once the
+36-byte data block at 0x800CF580 inside ovl_0b's code is kept (decomp-requests F33). So while an overlay is resident
+its code range is free PS1 RAM: about 140 KB for the field overlay and 310 KB for battle's. Slot-0 overlays differ in
+size, so the space is per mode. The hybrid's two primitive buffers (240 KB, battle only) now live in ovl_0b's code
+range (emptied when overlay sectors land on them), which leaves 240 KB of main's code range free for state every
+mode needs.
+
+The VRAM shadow has no such slack: the game fills nearly all of PS1 VRAM (1000 KB of 1024 non-zero in field 259,
+992 in Ark, 896 in Ifrit), and the CPU cannot read the DS texture banks while the 3D engine uses them.
+
 ## Implementation order and acceptance
 
 1. Remove inactive backend storage (done), then inventory resident code/data by
