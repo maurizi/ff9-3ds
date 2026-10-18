@@ -154,6 +154,15 @@ callbacks 57 -> 20 ms); undithered and raw semi-transparent textured rows take t
 composite: 16 -> 5.6 ms). Still large in every battle: `display_scale` (14-17 ms, which includes the scene's GX
 submission, texture uploads and the 2D layer) and the ordering-table walk.
 
+## The hybrid in fields (tried, not adopted)
+
+Field 259 with the hybrid renderer (sprites as GX quads where no 2D pixel lies under them in the scene): 38.2 ms
+per frame against 35.9 for software. Polygon and sprite drawing fell from about 14 ms to 2.4, but the remaining
+63 software sprites a frame put most of the screen on the 8-bit 2D layer, whose palette a field's colours overflow
+(nearest-colour searches: display work 11 ms). The background also showed seams between tiles and the GX
+scaler's point sampling. Fields need their own layout (design 5.0 to-do): the backgrounds as DS BG layers or
+textures composed once per camera position, not per-frame sprites.
+
 ## Redraw skipping (tried, not adopted)
 
 Branch `retain-experiment`: a backend over the software GPU that defers each drawing target's primitives for a
