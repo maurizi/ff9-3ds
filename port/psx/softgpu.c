@@ -843,6 +843,48 @@ static inline __attribute__((always_inline)) void sprite_rows(
 }
 #endif
 
+#ifndef PORT_SOFTGPU_REFERENCE
+/* A tinted sprite (colour other than 128) whose shaded palette isn't built: each texel's channels are scaled
+ * through three 32-entry tables, read live like plot() but without its per-pixel setup. */
+static __attribute__((noinline)) void tinted_rows(const Gp0Mode *m, const Gp0Vtx *v, int u0, int v0,
+                                                  int x0, int y0, int x1, int y1) {
+    u16 tr[32], tg[32], tb[32];
+    int r = v->r < 0 ? 0 : v->r > 255 ? 255 : v->r;
+    int g = v->g < 0 ? 0 : v->g > 255 ? 255 : v->g;
+    int b = v->b < 0 ? 0 : v->b > 255 ? 255 : v->b;
+    for (int i = 0; i < 32; ++i) {
+        int cr = i * r >> 7, cg = i * g >> 7, cb = i * b >> 7;
+        tr[i] = (u16)(cr > 31 ? 31 : cr);
+        tg[i] = (u16)((cg > 31 ? 31 : cg) << 5);
+        tb[i] = (u16)((cb > 31 ? 31 : cb) << 10);
+    }
+    const int effects = m->semi || gp0_state.check_mask;
+    unsigned keep_x = ~gp0_state.twin_mask_x, keep_y = ~gp0_state.twin_mask_y;
+    unsigned window_x = gp0_state.twin_off_x & gp0_state.twin_mask_x;
+    unsigned window_y = gp0_state.twin_off_y & gp0_state.twin_mask_y;
+    u16 mask = gp0_state.set_mask ? 0x8000 : 0;
+    const u16 *clut = psx_vram + (m->clut_y & 511) * 1024;
+    unsigned clut_x = m->clut_x;
+    for (int y = y0; y < y1; y++) {
+        unsigned tv = ((((unsigned)v0 + (unsigned)y) & keep_y) | window_y) & 255;
+        const u16 *row = psx_vram + (((m->ty + tv) & 511) * 1024);
+        u16 *dst = psx_vram + y * 1024 + x0;
+        unsigned cursor = (unsigned)u0 + (unsigned)x0;
+        for (int x = x0; x < x1; x++, cursor++, dst++) {
+            unsigned u = ((cursor & keep_x) | window_x) & 255;
+            u16 t;
+            if (m->depth == 0) t = clut[(clut_x + ((row[(m->tx + (u >> 2)) & 1023] >> ((u & 3) * 4)) & 15)) & 1023];
+            else if (m->depth == 1) t = clut[(clut_x + ((row[(m->tx + (u >> 1)) & 1023] >> ((u & 1) * 8)) & 255)) & 1023];
+            else t = row[(m->tx + u) & 1023];
+            if (!t) continue;
+            u16 c = tr[t & 31] | tg[(t >> 5) & 31] | tb[(t >> 10) & 31] | (t & 0x8000);
+            if (effects) sprite_pixel(m, dst, t, c, mask, 1);
+            else *dst = c | mask;
+        }
+    }
+}
+#endif
+
 static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (!psx_vram) {
         return;
@@ -887,6 +929,11 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
             if (direct) sprite_rows(m, u0, v0, x0, y0, x1, y1, 0, 1);
             else sprite_rows(m, u0, v0, x0, y0, x1, y1, 0, 0);
         }
+        port_profile_draw_end(1,profile_start);
+        return;
+    }
+    if (m->textured && !target.pixels && x0>=0 && y0>=0 && x1<=VRAM_W && y1<=VRAM_H) {
+        tinted_rows(m, v, u0, v0, x0, y0, x1, y1);
         port_profile_draw_end(1,profile_start);
         return;
     }
