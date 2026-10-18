@@ -38,7 +38,7 @@ s16 func_800AA140(Battle11C0 *, s32, Unk800AA08C *);
 s32 func_800A99C4(WorldMapObj *, u16);
 s32 func_800A9A04(WorldMapObj *, u16);
 s32 func_800B822C(s32, s16, s32, s32);
-void *func_800B8388(void **, s32);
+void *w_framePackGetPtr(void **, s32);
 u8 func_800BC528(s32);
 s32 w_readtxRequest(s16);
 #endif
