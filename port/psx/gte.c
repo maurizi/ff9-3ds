@@ -244,31 +244,65 @@ gte_u32 gte_cfc2(int reg) {
 
 /* RTPS/RTPT for one vertex; sf is a constant in each copy below, so the 64-bit shifts are fixed ones. */
 static inline __attribute__((always_inline)) void rtp_body(int v, int sf, int lm, int last) {
-    int shift = sf * 12;
+    /* the same steps as set_mac, set_ir, lim_sz, gte_divide, set_mac0, lim_sxy and set_ir0, with FLAG in a local
+     * (a register) and stored once */
+    const int shift = sf * 12;
+    u32 f = FLAG;
     i64 x = V_X(v), y = V_Y(v), z = V_Z(v);
     i64 m1 = ((i64)TRX * 4096) + mtx(0, 0, 0) * x + mtx(0, 0, 1) * y + mtx(0, 0, 2) * z;
     i64 m2 = ((i64)TRY * 4096) + mtx(0, 1, 0) * x + mtx(0, 1, 1) * y + mtx(0, 1, 2) * z;
     i64 m3 = ((i64)TRZ * 4096) + mtx(0, 2, 0) * x + mtx(0, 2, 1) * y + mtx(0, 2, 2) * z;
-    set_ir(1, set_mac(1, m1, shift), lm);
-    set_ir(2, set_mac(2, m2, shift), lm);
-    {
-        /* IR3 saturates on MAC3, but its flag follows the unshifted value >> 12 (psx-spx "RTPS/RTPT IR3"). */
-        i32 mac3 = set_mac(3, m3, shift);
-        u32 saved = FLAG;
-        set_ir(3, mac3, lm);
-        FLAG = saved;
-        i64 z12 = m3 >> 12;
-        if (z12 > 0x7FFF || z12 < -0x8000) FLAG |= 1u << 22;
-        push_sz(lim_sz(m3 >> 12));
+#define MAC_FLAG(n, m) do { \
+        if ((m) >= ((i64)1 << 43)) f |= 1u << (31 - (n)); \
+        else if ((m) < -((i64)1 << 43)) f |= 1u << (28 - (n)); \
+    } while (0)
+    MAC_FLAG(1, m1); MAC_FLAG(2, m2); MAC_FLAG(3, m3);
+#undef MAC_FLAG
+    i32 ir1 = (i32)(m1 >> shift), ir2 = (i32)(m2 >> shift), ir3 = (i32)(m3 >> shift);
+    g.d[25] = (u32)ir1; g.d[26] = (u32)ir2; g.d[27] = (u32)ir3;
+    const i32 lo = lm ? 0 : -0x8000;
+    if (ir1 > 0x7FFF) { ir1 = 0x7FFF; f |= 1u << 24; } else if (ir1 < lo) { ir1 = lo; f |= 1u << 24; }
+    if (ir2 > 0x7FFF) { ir2 = 0x7FFF; f |= 1u << 23; } else if (ir2 < lo) { ir2 = lo; f |= 1u << 23; }
+    /* IR3 saturates on MAC3, but its flag follows the unshifted value >> 12 (psx-spx "RTPS/RTPT IR3"). */
+    if (ir3 > 0x7FFF) ir3 = 0x7FFF; else if (ir3 < lo) ir3 = lo;
+    g.d[9] = (u32)ir1; g.d[10] = (u32)ir2; g.d[11] = (u32)ir3;
+    i64 z12 = m3 >> 12;
+    if (z12 > 0x7FFF || z12 < -0x8000) f |= 1u << 22;
+    u32 sz3;
+    if (z12 > 0xFFFF) { f |= 1u << 18; sz3 = 0xFFFF; } else if (z12 < 0) { f |= 1u << 18; sz3 = 0; } else sz3 = (u32)z12;
+    push_sz(sz3);
+    u32 div, h = H;
+    if (unr_table[0] == 0) init_unr();
+    if (h >= sz3 * 2) {
+        f |= 1u << 17;
+        div = 0x1FFFF;
+    } else {
+        int sh = __builtin_clz(sz3) - 16; /* sz3 > 0 here since h < sz3*2 */
+        u32 n = h << sh, d = sz3 << sh;
+        u32 u = unr_table[(d - 0x7FC0) >> 7] + 0x101;
+        d = (0x2000080 - d * u) >> 8;
+        d = (0x0000080 + d * u) >> 8;
+        uint64_t q = ((uint64_t)n * d + 0x8000) >> 16;
+        div = q > 0x1FFFF ? 0x1FFFF : (u32)q;
     }
-    u32 div = gte_divide(H, SZ(3));
-    i64 sx = set_mac0((i64)IR1 * div + OFX) >> 16;
-    i64 sy = set_mac0((i64)IR2 * div + OFY) >> 16;
-    push_sxy(lim_sxy(14, sx), lim_sxy(13, sy));
+#define MAC0_FLAG(m) do { if ((m) > 0x7FFFFFFFLL) f |= 1u << 16; else if ((m) < -0x80000000LL) f |= 1u << 15; } while (0)
+    i64 mx = (i64)(i16)ir1 * div + OFX, my = (i64)(i16)ir2 * div + OFY;
+    MAC0_FLAG(mx); MAC0_FLAG(my);
+    g.d[24] = (u32)(i32)my;
+    i64 sx = mx >> 16, sy = my >> 16;
+    if (sx > 0x3FF) { f |= 1u << 14; sx = 0x3FF; } else if (sx < -0x400) { f |= 1u << 14; sx = -0x400; }
+    if (sy > 0x3FF) { f |= 1u << 13; sy = 0x3FF; } else if (sy < -0x400) { f |= 1u << 13; sy = -0x400; }
+    push_sxy((i32)sx, (i32)sy);
     if (last) {
-        i64 m0 = set_mac0((i64)DQA * div + DQB);
-        set_ir0((i32)(m0 >> 12));
+        i64 m0 = (i64)DQA * div + DQB;
+        MAC0_FLAG(m0);
+        g.d[24] = (u32)(i32)m0;
+        i32 ir0 = (i32)(m0 >> 12);
+        if (ir0 > 0x1000) { ir0 = 0x1000; f |= 1u << 12; } else if (ir0 < 0) { ir0 = 0; f |= 1u << 12; }
+        g.d[8] = (u32)ir0;
     }
+#undef MAC0_FLAG
+    FLAG = f;
 }
 
 /* sf = 1 is what the game's projections use: that copy is the hot one */
