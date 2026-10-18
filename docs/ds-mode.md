@@ -64,7 +64,27 @@ do not infer free runtime RAM from the ROM file size.
   The remaining gap needs native code overlays (field/battle/world code is mutually exclusive: about 250 KB) and
   a smaller working set for the VRAM shadow or for `psx_ram` regions holding the resident overlay's MIPS code.
 
-## What already streams and what must change
+## The budget in one line (2026-10-17)
+
+The PS1's own state is 3.5 MB on its own: `psx_ram` 2 MB, the VRAM shadow 1 MB (`psx_vram`) and SPU RAM 512 KB
+(`psx_spu_ram`). On a 4 MB DS that leaves about 512 KB for the ARM9 code (744 KB now: 330 KB main and port, 450 KB
+overlays of which at most about 180 KB are needed at once), the port's buffers (bss besides `psx_ram`: about
+650 KB, the largest being the hybrid's UI list 108 KB, the HWSOUND voice rings 192 KB and the soft display's
+96 KB frame), libnds and the stacks. Holes in `psx_ram` that the port never uses (main's MIPS code, 335 KB, already
+holding port buffers; the resident overlays' MIPS code) are not contiguous enough for the 512 KB SPU RAM or any
+large part of the VRAM shadow.
+
+So exact emulation of the PS1's memories does not fit a plain 4 MB DS even with native code overlays and every
+port buffer trimmed. Options, to be decided:
+
+* DS and DS Lite with the Slot-2 Memory Expansion Pak (8 MB, slower 16-bit bus): the VRAM and SPU shadows move
+  there. The DSi has no Slot-2, so it would keep DSi mode (16 MB), which already works.
+* A plain 4 MB DS with a VRAM working set (framebuffers and recently used texture pages, the rest refetched from
+  the disc where the game loaded it from) and SPU RAM in DS VRAM banks a mode leaves free: exactness would depend
+  on the game not reading back what was evicted, which needs proving per scene.
+* DSi mode (16 MB) only, as now.
+
+
 
 * **Disc assets already stream.** The CD replacement reads sectors from disc
   files into the existing PSX arena. We are not retaining whole fields, discs or
