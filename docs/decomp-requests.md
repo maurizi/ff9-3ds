@@ -209,6 +209,18 @@ The field and battle model formats (vertices, bones, primitive lists), the model
 ovl_0a.c:5430/6144, the battle equivalent, ovl_0c), and the animation format. This enables converting models to
 DS display lists with hardware transform.
 
+### R23. Battle effect modules as C (2026-10-17)
+The CD-loaded effect modules (loaded at 0x801E7700, header pointer there, callbacks into the ovl_0b export table
+`g_btlfxModuleExports`) are the one body of game code the port still interprets: `port/game/effect_vm.c` runs their
+MIPS. With export calls cached and aligned memory accesses fixed, the interpreter still costs about 100 ARM9
+cycles per guest instruction: 8.6 ms of a 60 ms frame in Ark and 20 ms in Ifrit's summon (18K guest instructions
+and ~880 export calls per frame). Native code for them would remove nearly all of that.
+
+Asked: (a) the list of effect module files on the disc and their sizes; (b) whether the decomp can split and match
+them like the overlays (one binary per module, all linked at 0x801E7700), even as `src_equiv` C that only needs
+to behave the same. The port would then compile them like the overlays and load the native code with the module.
+If (b) is out of scope, the port can instead translate MIPS to ARM when a module loads, and (a) is enough.
+
 ---
 
 ## Open findings from the port (queued while the decomp session was offline)
