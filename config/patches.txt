@@ -97,9 +97,9 @@ src/main/main.c | D_8007F790->unk3C, | PSX_NZ(D_8007F790)->unk3C, | 1
 src/main/main.c | D_8007F790->unk40, | PSX_NZ(D_8007F790)->unk40, | 1
 src/main/main.c | D_8007F790->unk44, | PSX_NZ(D_8007F790)->unk44, | 1
 
-# field object tables: func_8001C7FC(8, id, 0x120000) can be NULL (the field has no type-8 table) and the code
+# field object tables: db_lookupRegistered(8, id, 0x120000) can be NULL (the field has no type-8 table) and the code
 # reads t->unk1 / t->unk4 regardless (ovl_0a func_800AAF5C and its two siblings)
-src/ovl_0a/ovl_0a.c | func_8001C7FC(8, arg0, 0x120000) | PSX_NZ(func_8001C7FC(8, arg0, 0x120000)) | 3
+src/ovl_0a/ovl_0a.c | db_lookupRegistered(8, arg0, 0x120000) | PSX_NZ(db_lookupRegistered(8, arg0, 0x120000)) | 3
 
 # $v0 still holds func_80062E3C's return value). Without it the field heap pointer D_80067948 becomes 0.
 
@@ -115,7 +115,7 @@ src/ovl_0a/ovl_0a.c | m->unk50->unk4[2]. | PSX_NZ(m->unk50)->unk4[2]. | 3
 src/main/main.c | m->unk50->unk0[b]. | PSX_NZ(m->unk50)->unk0[b]. | 7
 # Missing animation metadata still supplies its halfword at physical address 2
 # on PSX (800216F8); do not dereference the native NULL returned by the lookup.
-src/main/main.c | ((u16 *)func_8001C7FC( | ((u16 *)PSX_NZ(func_8001C7FC( | 1
+src/main/main.c | ((u16 *)db_lookupRegistered( | ((u16 *)PSX_NZ(db_lookupRegistered( | 1
 src/main/main.c | 0x30000, 0))[1] | 0x30000, 0)))[1] | 1
 # Angle/distance opcodes restore the PSX KSEG0 base even for an absent object.
 # 80052640..54 reads its position at physical +14/+1C without a NULL guard.

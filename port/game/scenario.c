@@ -117,7 +117,7 @@ static void prepare_return_field(GameData *d) {
     u8 mode=g_gameState->mode;
     g_gameState->mode=1;o14_func_800A741C();g_gameState->mode=mode;
     for(int i=0;i<2;i++) {
-        d->unk7EC[i]=d->unk7FC[i];d->unk7F4[i]=d->unk804[i];
+        d->returnSector[i]=d->sceneSector[i];d->returnSectors[i]=d->sceneSectors[i];
     }
     scenario.return_field_ready=1;
 }
@@ -163,26 +163,26 @@ static void prepare_battle_resources(GameData *d) {
     int found=-1;
     for(int i=0;i<dirs[5].unk4;++i) if(entries[i].unk0==scenario.battle) {found=i;break;}
     if(found<0) port_fatal("scenario: battle %d is absent on disc %d",scenario.battle,scenario.disc);
-    d->unk7FC[0]=entries[found].unk4;
-    d->unk804[0]=entries[found+1].unk4-entries[found].unk4;
-    int size=d->unk804[0]<<11;if(size>0x2800) size=0x2800;
+    d->sceneSector[0]=entries[found].unk4;
+    d->sceneSectors[0]=entries[found+1].unk4-entries[found].unk4;
+    int size=d->sceneSectors[0]<<11;if(size>0x2800) size=0x2800;
     if(size<=0) port_fatal("scenario: invalid encounter bundle extent");
     u8 *buffer=malloc((unsigned)size);
     if(!buffer) port_fatal("scenario: no memory for encounter metadata");
-    cd_readAsync(g_gameState->unk20+d->unk7FC[0],size,buffer,NULL);
+    cd_readAsync(g_gameState->unk20+d->sceneSector[0],size,buffer,NULL);
     while(cd_getState()) {}
-    FileTable *table=(FileTable *)func_8001C8B0((s32)buffer,4,0x140000,0);
+    FileTable *table=(FileTable *)db_lookup((s32)buffer,4,0x140000,0);
     if((u8 *)table<buffer || (u8 *)table+4>buffer+size ||
        (u8 *)(table->unk4+table->unk2)>buffer+size)
         port_fatal("scenario: encounter dependency table outside metadata");
     found=0;
     for(int i=0;i<table->unk2;++i) if((table->unk4[i].unk0&0xff0000)==0xc0000) {
         if(found++) port_fatal("scenario: multiple backgrounds require explicit selection");
-        d->unk7FC[1]=table->unk4[i].unk4;
-        d->unk804[1]=table->unk4[i].unk8;
+        d->sceneSector[1]=table->unk4[i].unk4;
+        d->sceneSectors[1]=table->unk4[i].unk8;
     }
     free(buffer);
-    if(!found || d->unk804[1]<=0) port_fatal("scenario: encounter background dependency missing");
+    if(!found || d->sceneSectors[1]<=0) port_fatal("scenario: encounter background dependency missing");
 }
 void port_scenario_bootstrap(void) {
     if(!scenario.enabled || scenario.consumed) return;
@@ -232,6 +232,6 @@ void port_scenario_bootstrap(void) {
     g_gameState->unkA=1; /* ordinary battle entry from a field */
     d->fieldId=(u16)scenario.field;
     if(scenario.kind==1) o14_func_800A741C();
-    else {prepare_return_field(d);prepare_battle_resources(d);d->unkE=(u16)scenario.battle;}
+    else {prepare_return_field(d);prepare_battle_resources(d);d->battleId=(u16)scenario.battle;}
     port_log("scenario entered without title/intro: mode %d, disc %d, id %d\n",scenario.kind,scenario.disc,scenario.kind==1?scenario.field:scenario.battle);
 }

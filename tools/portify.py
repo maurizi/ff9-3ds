@@ -104,6 +104,19 @@ def substitute(text, code, pattern, repl):
     return "".join(pieces)
 
 
+def fxmod_macros(src, text):
+    """A battle effect module's header may define GTE or stack macros in MIPS asm (decomp include/fxmod/): include
+    port_fxmod_gte.h right after it, whose definitions replace them, and keep the source's line numbers."""
+    if "src/fxmod/" not in src:
+        return text
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if re.match(r'\s*#include\s+"fxmod/[^"]+"', line):
+            lines[i] = f'{line}\n#include "port_fxmod_gte.h"\n#line {i + 2} "{src}"'
+            break
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src")
@@ -114,6 +127,7 @@ def main():
     text = open(args.src, encoding="utf-8").read()
     text = PAD.sub("/* port: rodata padding removed */", text)
     text = apply_patches(args.src, text)
+    text = fxmod_macros(args.src, text)
     text = narrow_params(text, strip_comments_keep_lines(text))
 
     code = strip_comments_keep_lines(text)
