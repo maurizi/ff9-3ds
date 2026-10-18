@@ -746,3 +746,13 @@ the wrong object in field 259 at frame 319 and never ran object 6's function 0x1
 (`config/patches.txt`). Assigning the target to a local first, e.g.
 `o = func_80038150(); func_800384D0(o, a, *g_evtCurObj->unk0++, 0);`, would say it in the source if it keeps the
 PS1 output identical. The port's `tools/arg_order.py` finds no other call with two arguments that read shared state.
+
+### F33 (2026-10-17). Data words inside ovl_0b's `.text` at 0x800CF580-0x800CF5A4
+The port wants to reuse the PS1 RAM that holds an overlay's MIPS code (never executed by the port). With every
+overlay's `c` segments overwritten after loading, field 259 (with its encounter), Ark, Ifrit, Kuja and Zidane's
+Trance render identically to unmodified runs, except for one block inside `ovl_0b_3`'s code: 0x800CF580-0x800CF5A4.
+It is data: `D_800CF580[5]` (declared in ovl_0c.h), the word `func_800CF588` that `btlbg_setBrightness` /
+`btlbg_getBrightness` store and read (the battle background's colour scale), and `D_800CF5A0` (the OT shift of
+`btlbg_setOtShift`). Asked: split it out of the text as data (like the `textbin` table at 0x28A80) and name it,
+so the code ranges in the split config are exactly the bytes nothing reads. A list of any other data kept in
+`.text` (in any overlay or main) would let the port reuse those ranges without its own exception list.
