@@ -211,7 +211,7 @@ glyphs (about 260 a frame on field 931, each walking its rows: 5 ms) return at o
 sprites have a row routine (mode 0 averages the three channels in one operation); windowed sprites draw runs of
 consecutive texels through the row routines; a triangle's slopes and its rows' edge crossings divide through one
 reciprocal per divisor. Between the third and fourth: shaded palettes for small tinted sprites and polygons from a
-16-entry cache validated by per-band VRAM write counts; 8-bit semi-transparent rows blending all channels at once
+32-entry cache (in main's unused MIPS code range) validated by per-band VRAM write counts; 8-bit semi-transparent rows blending all channels at once
 (modes 0 and 1; `blend()` itself for all four modes); the OT walk skipping cleared entries; drawing-state commands
 before mode setup; HWSOUND's voice stepping jumping between envelope changes, and with block decoding and
 `rect_rows` in ITCM. What remains in a heavy field
