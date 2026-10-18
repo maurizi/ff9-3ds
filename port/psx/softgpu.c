@@ -234,11 +234,16 @@ static inline int clip_span(int edge,int step,int width,int *left,int *right,u32
     int end=edge+step*(width-1);
     if(edge>=0 && end>=0) return 1;
     if(edge<0 && end<0) return 0;
+    /* a narrow row finds the crossing by stepping to it (at most width steps) rather than dividing */
     if(step>0) {
-        int first=div_edge((u32)(-edge+step-1),(u32)step,inv); /* -edge > 0 here */
+        int first;
+        if(width<=16) { first=0; for(int e=edge;e<0;e+=step) ++first; }
+        else first=div_edge((u32)(-edge+step-1),(u32)step,inv); /* -edge > 0 here */
         if(first>*left) *left=first;
     } else {
-        int last=div_edge((u32)edge,(u32)-step,inv)+1; /* edge >= 0 here */
+        int last;
+        if(width<=16) { last=0; for(int e=edge;e>=0;e+=step) ++last; }
+        else last=div_edge((u32)edge,(u32)-step,inv)+1; /* edge >= 0 here */
         if(last<*right) *right=last;
     }
     return *left<*right;
