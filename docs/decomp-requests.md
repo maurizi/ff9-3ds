@@ -221,6 +221,14 @@ them like the overlays (one binary per module, all linked at 0x801E7700), even a
 to behave the same. The port would then compile them like the overlays and load the native code with the module.
 If (b) is out of scope, the port can instead translate MIPS to ARM when a module loads, and (a) is enough.
 
+### R24. Which fields start which encounters, and with which background (2026-10-18)
+The port's direct-entry battle sweep (porting-notes "Battle sweep") enters every encounter in the encounter
+directory; 408 of 1493 can't be entered alone because their bundle has no background: the field or world map that
+starts the encounter supplies it (`btlbg_init` finds nothing otherwise). Asked: where a field's (and the world
+map's) encounter table and its battle background selection live (field data or event script opcodes), and their
+format, so `tools/scenario_catalog.py` can list (field, encounter, background) and the sweep can start each
+encounter from a field that really uses it.
+
 ---
 
 ## Open findings from the port (queued while the decomp session was offline)
