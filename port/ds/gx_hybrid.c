@@ -738,6 +738,7 @@ static void plan_drops(Buffer *b) {
 #define RECENT 16
 static const Prim *recent[RECENT];
 static u32 recent_xy[RECENT][4]; /* their vertices packed (x | y << 16), for the cheap shared-vertex test */
+static u32 recent_sig[RECENT];   /* a bit per vertex (a hash of its position): no common bit, no shared vertex */
 static u8 recent_id[RECENT];
 static int recent_at;
 
@@ -765,17 +766,20 @@ static int neighbours(const Prim *p, const Prim *q) {
 
 static int translucent_id(const Prim *p, int polys) {
     int id = 1 + (polys & 31);
-    u32 xy[4];
-    for (int i = 0; i < p->n; ++i) xy[i] = (u16)p->x[i] | (u32)(u16)p->y[i] << 16;
+    u32 xy[4], sig = 0;
+    for (int i = 0; i < p->n; ++i) {
+        xy[i] = (u16)p->x[i] | (u32)(u16)p->y[i] << 16;
+        sig |= 1u << ((xy[i] * 0x9E3779B1u) >> 27);
+    }
     for (int k = 0; k < RECENT; ++k) {
         const Prim *q = recent[k];
-        if (!q) continue;
+        if (!q || !(sig & recent_sig[k])) continue;
         int shared = 0; /* two vertices in common before the side test */
         for (int i = 0; i < p->n; ++i)
             for (int j = 0; j < q->n; ++j) shared += xy[i] == recent_xy[k][j];
         if (shared >= 2 && neighbours(p, q)) { id = recent_id[k]; break; }
     }
-    recent[recent_at] = p; recent_id[recent_at] = (u8)id;
+    recent[recent_at] = p; recent_id[recent_at] = (u8)id; recent_sig[recent_at] = sig;
     for (int i = 0; i < p->n; ++i) recent_xy[recent_at][i] = xy[i];
     recent_at = (recent_at + 1) % RECENT;
     return id;
