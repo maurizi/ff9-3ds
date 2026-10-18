@@ -216,8 +216,9 @@ OBJ bitmap blocks in E when the textures use A-D (battle), or BG bitmaps in C/D 
   UI uses under 200 colours, so it is exact; a full palette falls back to nearest colours and a rebuild). A 2D pixel exactly equal to the clear value shows
   the 3D layer instead; 2D drawn before a polygon still lands on top (no coverage plane yet). Blocks are rebuilt
   when their source cells were drawn and their pixels hash differently.
-- Sprites and tiles drawn into a scene buffer are quads of the 3D layer like polygons (their U and V are the last
-  texels; the right and bottom vertices sample one further), so they blend with it.
+- Semi-transparent sprites and tiles drawn into a scene buffer are quads of the 3D layer (their U and V are the last
+  texels; the right and bottom vertices sample one further), so they blend with it. Opaque ones stay exact on the
+  2D layer: as quads they would go under 2D pixels drawn before them (a window's background over its text).
 - Texture regions are stable (U and V in 64-texel steps), so a page keeps its place across scenes. Battles use
   about 420 KB of real texture data (seven or more full 8-bit pages), so they need all four banks A-D.
 - Semi-transparent polygons, modes 1-3 (B + F, B - F, B + F/4), use per-texel alpha. Textured ones use an A5I3

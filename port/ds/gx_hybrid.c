@@ -1053,9 +1053,11 @@ static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     Buffer *b = target();
     if (b && b == displayed() && ui_defer(UI_RECT, m, v, 1, w, h)) return;
     ui_flush();
-    /* A sprite or tile in the scene is a quad of the 3D layer like a polygon (so it blends with it), unless it
-     * uses a texture window or its texels wrap past the page edge, which 8-bit coordinates can't say. */
-    if (b && b != displayed() && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
+    /* A semi-transparent sprite or tile in the scene is a quad of the 3D layer like a polygon, so it blends with it
+     * (on the 2D layer it would cover the scene), unless it uses a texture window or its texels wrap past the page
+     * edge, which 8-bit coordinates can't say. Opaque ones stay exact on the 2D layer: as quads they would go under
+     * 2D pixels drawn before them (a window's background over its text). */
+    if (b && b != displayed() && m->semi && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
         (!m->textured || (v->u + w <= 256 && v->v + h <= 256))) {
         /* clipped to the drawing area: texels follow pixels one to one */
         Gp0Vtx c = *v;
