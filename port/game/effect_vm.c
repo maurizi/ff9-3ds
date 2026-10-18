@@ -20,10 +20,26 @@ static u8 *memory(u32 a) {
 u32 port_effect_data(u32 address) {
     return address ? (u32)(uintptr_t)memory(address) : 0;
 }
-static u32 read32(u32 a) { u32 v;__builtin_memcpy(&v,memory(a),4);return v; }
-static u32 read16(u32 a) { u16 v;__builtin_memcpy(&v,memory(a),2);return v; }
-static void write32(u32 a,u32 v) { __builtin_memcpy(memory(a),&v,4); }
-static void write16(u32 a,u32 v) { u16 h=(u16)v;__builtin_memcpy(memory(a),&h,2); }
+/* MIPS loads and stores are aligned (an unaligned one is an address error on the PS1), so they are single ARM
+ * accesses; the byte copy is only for the rare unaligned bridge read, which the ARM9 can't do in one access. */
+typedef u32 __attribute__((may_alias)) u32_alias;
+typedef u16 __attribute__((may_alias)) u16_alias;
+static u32 read32(u32 a) {
+    if(!(a&3)) return *(const u32_alias *)memory(a);
+    u32 v;__builtin_memcpy(&v,memory(a),4);return v;
+}
+static u32 read16(u32 a) {
+    if(!(a&1)) return *(const u16_alias *)memory(a);
+    u16 v;__builtin_memcpy(&v,memory(a),2);return v;
+}
+static void write32(u32 a,u32 v) {
+    if(!(a&3)) { *(u32_alias *)memory(a)=v; return; }
+    __builtin_memcpy(memory(a),&v,4);
+}
+static void write16(u32 a,u32 v) {
+    if(!(a&1)) { *(u16_alias *)memory(a)=(u16)v; return; }
+    u16 h=(u16)v;__builtin_memcpy(memory(a),&h,2);
+}
 static u32 native_call(u32 target,u32 *r) {
     if(!target) port_fatal("effect VM: null engine export");
     u32 a[16];for(unsigned i=0;i<4;i++) a[i]=r[4+i];

@@ -379,7 +379,7 @@ $(BUILD)/tests/battle_motion_probe: tests/battle/motion_probe.c tests/battle/pos
 
 $(BUILD)/tests/battle_quads_probe: tests/battle/quads_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_vm.c
 	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/quads_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_vm.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include -DPORT_GTE_IMPL tests/battle/quads_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_vm.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
 
 $(BUILD)/tests/battle_strips_probe: tests/battle/strips_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c
 	@mkdir -p $(dir $@)
@@ -391,7 +391,7 @@ test-battle-strips: $(BUILD)/tests/battle_strips_probe
 
 $(BUILD)/tests/effect_vm_probe: tests/battle/effect_vm_probe.c tests/battle/background_probe.c port/game/effect_vm.c port/game/battle_background.c
 	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/effect_vm_probe.c port/game/effect_vm.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include -DPORT_GTE_IMPL tests/battle/effect_vm_probe.c port/game/effect_vm.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
 
 .PHONY: test-effect-vm
 test-effect-vm: $(BUILD)/tests/effect_vm_probe
