@@ -165,22 +165,32 @@ sf = 1 in their own copy. Ark went 44.7 -> 40.9 with these, each step with an id
 ## Field sweep (HYBRID=1 HWSOUND=1, 28 fields from `fieldsweep`, window ending at frame 1377), ms per 60 Hz frame
 
 `build/validation/dssample/run.sh`: one ROM reading `sd:/ff9ds/scenarios/current.cfg`, each field copied there.
-Mean over the 28 fields 49.2 -> 39.9 (2026-10-18); the 12 battles of the same sweep are unchanged (43.6).
+PROFILE=1 (the category timers add about 7%). Mean over the 28 fields: 49.2 (first sweep, 2026-10-18) -> 39.9
+(second) -> 38.3 (third); the 12 battles of the same sweeps 43.5 -> 43.6 -> 40.2. No sweep faulted.
 
-| field | before | after | | field | before | after |
-|---|---:|---:|---|---|---:|---:|
-| 1102 | 128.9 | 50.0 | | 2162 | 62.7 | 46.2 |
-| 1508 | 100.3 | 54.2 | | 2055 | 68.8 | 46.2 |
-| 931 | 80.0 | 73.0 | | 1414 | 68.7 | 50.1 |
-| 1812 | 79.4 | 76.1 | | 162 | 47.4 | 33.4 |
-| 453 | 66.9 | 66.9 | | 306 | 62.9 | 38.9 |
+| field | first | second | third | | field | first | second | third |
+|---|---:|---:|---:|---|---|---:|---:|---:|
+| 1102 | 128.9 | 50.0 | 49.4 | | 2162 | 62.7 | 46.2 | 45.2 |
+| 1508 | 100.3 | 54.2 | 50.1 | | 2055 | 68.8 | 46.2 | 45.1 |
+| 931 | 80.0 | 74.6 | 66.9 | | 1414 | 68.7 | 50.1 | 49.6 |
+| 1812 | 79.4 | 76.1 | 75.2 | | 162 | 47.4 | 33.4 | 33.5 |
+| 453 | 66.9 | 66.9 | 58.5 | | 306 | 62.9 | 39.0 | 38.9 |
+| 955 | 62.7 | 62.6 | 58.5 | | 2110 | 63.1 | 62.8 | 58.9 |
+
+Elapsed times step by whole VBlanks when a scene misses one (931 at 66.9 is four per scene), so a saving shows
+in full only when it crosses a step; `build/validation/sample_field/ab.sh` compares busy time and categories of
+HEAD and the working tree instead.
 
 Field backgrounds draw 16x16 tiles with a CLUT row each; tinted ones (colour other than 128) were drawn per pixel
 by `plot()` because building a shaded palette for 256 pixels doesn't pay. They now scale each texel through three
 32-entry channel tables (`tinted_rows`, ITCM). A one-entry palette cache was tried first and made field 931 slower
 (its tiles change CLUT every few sprites). Opaque indexed sprites check overlap once per rectangle and loop the
 row routines (`rect_rows`); fade polygons at rest (adding or subtracting black, subtracting white: two
-screen-sized Gouraud triangles a scene in a faded-out field) skip the blend. What remains in a heavy field
+screen-sized Gouraud triangles a scene in a faded-out field) skip the blend. Between the second and third sweeps: 0-wide text
+glyphs (about 260 a frame on field 931, each walking its rows: 5 ms) return at once; semi-transparent unshaded
+sprites have a row routine (mode 0 averages the three channels in one operation); windowed sprites draw runs of
+consecutive texels through the row routines; a triangle's slopes and its rows' edge crossings divide through one
+reciprocal per divisor. What remains in a heavy field
 (931, sampled): `row_direct8` 22% (the background's pixels, about 7 instructions each), untextured polygon rows
 11%, GP0 decoding 9%, the field's own code and GTE about 15%, profiling timers 7% (PROFILE builds only).
 Software drawing of a 320x224 background at 30 scenes a second is most of a 67 MHz frame by itself: fields need
