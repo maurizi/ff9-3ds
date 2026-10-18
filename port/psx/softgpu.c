@@ -340,6 +340,17 @@ static SG_HOT __attribute__((noinline)) void poly_row_untextured(const Gp0Mode *
         for (int i = 0; i < 4; ++i)
             colours[(x + i) & 3] = dither ? dither_colour(cr, cg, cb, x + i, y)
                                           : (u16)((cr >> 3) | (cg >> 3) << 5 | (cb >> 3) << 10);
+        /* fade polygons at rest: adding or subtracting black keeps the colour (and replaces the mask bit);
+         * subtracting white leaves black, adding white leaves white */
+        if (abr > 0 && !(colours[0] | colours[1] | colours[2] | colours[3])) {
+            for (; width > 0; --width, ++dst) *dst = (*dst & 0x7FFF) | mask;
+            return;
+        }
+        if ((abr == 1 || abr == 2) && (colours[0] & colours[1] & colours[2] & colours[3]) == 0x7FFF) {
+            u16 c = (abr == 1 ? 0x7FFF : 0) | mask;
+            for (; width > 0; --width, ++dst) *dst = c;
+            return;
+        }
         switch (abr) {
         case -1: constant_row(dst, width, colours, mask, x, -1); break;
         case 0: constant_row(dst, width, colours, mask, x, 0); break;
