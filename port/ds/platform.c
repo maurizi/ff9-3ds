@@ -126,6 +126,9 @@ void plat_wait_frame(void) {
                 gxh_stats_blocks, gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced;
             status_row(20, "gx %d dr%d tx%d pl%d", gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail,
                        gxh_stats_palette_fail);
+            extern int gxh_stats_upload_bytes, gxh_stats_upload_regions, gxh_stats_upload_palettes;
+            status_row(18, "up %dK %d rg %d pal", gxh_stats_upload_bytes >> 10, gxh_stats_upload_regions,
+                       gxh_stats_upload_palettes);
             extern int gxh_stats_ui_drawn, gxh_stats_ui_skipped;
             status_row(21, "rg %d u%d np%d col %d ui %d/%d", gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced,
                        gxh_stats_blocks, gxh_stats_ui_drawn, gxh_stats_ui_skipped);

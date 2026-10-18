@@ -426,10 +426,16 @@ static int plan_textures(Buffer *b) {
  * remains of the destination, (1 - alpha), is exact for dim texels and fades only under bright ones. A gradient
  * of one hue normalises to one colour, so 8 per texture (A5I3, chosen across its CLUT) are enough; texels without
  * the semi-transparency bit are opaque, colour 0 transparent. */
+/* 31 / m in 16.16 rounded up (exact for c <= m), for the per-texel normalisation (the ARM9 divides in software) */
+static const u32 inv31[32] = {
+    0, 2031616, 1015808, 677206, 507904, 406324, 338603, 290231, 253952, 225736, 203162, 184693, 169302, 156279,
+    145116, 135442, 126976, 119507, 112868, 106928, 101581, 96744, 92347, 88332, 84651, 81265, 78140, 75246, 72558, 70056, 67721, 65536};
+
 static inline u16 normalised(u16 c, int *bright) {
     int cr = c & 31, cg = (c >> 5) & 31, cb = (c >> 10) & 31, m = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb);
     *bright = m;
-    return m ? (u16)(cr * 31 / m | (cg * 31 / m) << 5 | (cb * 31 / m) << 10) : 0;
+    u32 k = inv31[m];
+    return (u16)((cr * k) >> 16 | ((cg * k) >> 16) << 5 | ((cb * k) >> 16) << 10);
 }
 
 static inline int colour_distance(u16 a, u16 b) {
@@ -537,8 +543,11 @@ static void conv_upload(Region *r, u8 *dst, int row_bytes) {
 }
 
 /* Copy dirty regions and palettes from PS1 VRAM. Banks A-D, F and G must be mapped to the CPU (LCDC). */
+int gxh_stats_upload_bytes, gxh_stats_upload_regions, gxh_stats_upload_palettes; /* the last scene's */
+
 static void upload(void) {
     u8 *base = (u8 *)VRAM_A;
+    gxh_stats_upload_bytes = gxh_stats_upload_regions = gxh_stats_upload_palettes = 0;
     if (!ramp_written) {
         u16 *ramp = (u16 *)(base + RAMP_UNIT * TEX_UNIT);
         for (int row = 0; row < 8; ++row)
@@ -551,6 +560,8 @@ static void upload(void) {
         Region *r = &regions[i];
         if (!r->used || !r->dirty) continue;
         r->dirty = 0;
+        gxh_stats_upload_regions++;
+        gxh_stats_upload_bytes += r->h * r->wh * 2;
         int row_bytes = r->tw * (r->conv ? 8 : r->depth == 0 ? 4 : r->depth == 1 ? 8 : 16) / 8;
         u8 *dst = base + r->unit * TEX_UNIT;
         if (r->conv) { conv_upload(r, dst, row_bytes); continue; }
@@ -582,6 +593,7 @@ static void upload(void) {
         Palette *p = &palettes[i];
         if (!p->used || !p->dirty) continue;
         p->dirty = 0;
+        gxh_stats_upload_palettes++;
         const u16 *src = psx_vram + (p->y & 511) * 1024;
         for (int k = 0; k < p->count; ++k) pal[i * 256 + k] = src[(p->x + k) & 1023];
     }
