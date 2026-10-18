@@ -47,6 +47,25 @@ static inline u16 *px(int x, int y) {
     return &psx_vram[(y & (VRAM_H - 1)) * VRAM_W + (x & (VRAM_W - 1))];
 }
 
+#ifndef PORT_SOFTGPU_REFERENCE
+/* Mode 1 for two 15-bit colours (bit 15 clear): each channel's sum, 31 where it carries out */
+static inline u32 sat_add15(u32 a, u32 b) {
+    u32 sum = a + b, carry = (sum - ((a ^ b) & 0x0421)) & 0x8420;
+    return ((sum - carry) | (carry - (carry >> 5))) & 0x7FFF;
+}
+/* The four modes on all three channels at once (each checked against the per-channel version below for every
+ * pair of colours): the average without carries between channels; the clamped sum; the clamped difference as
+ * the complement of complement + front; a quarter of the front's channels added. */
+static inline u16 blend(u16 back, u16 front, int abr) {
+    u32 b = back & 0x7FFF, f = front & 0x7FFF;
+    switch (abr) {
+    case 0: return (u16)((((b & 0x7BDE) + (f & 0x7BDE)) >> 1) + (b & f & 0x0421));
+    case 1: return (u16)sat_add15(b, f);
+    case 2: return (u16)(sat_add15(b ^ 0x7FFF, f) ^ 0x7FFF);
+    default: return (u16)sat_add15(b, (f >> 2) & 0x1CE7);
+    }
+}
+#else
 static inline u16 blend(u16 back, u16 front, int abr) {
     int br = back & 31, bg = (back >> 5) & 31, bb = (back >> 10) & 31;
     int fr = front & 31, fg = (front >> 5) & 31, fb = (front >> 10) & 31;
@@ -62,6 +81,7 @@ static inline u16 blend(u16 back, u16 front, int abr) {
     b = b < 0 ? 0 : b > 31 ? 31 : b;
     return (u16)(r | g << 5 | b << 10);
 }
+#endif
 
 static u32 shaded_palette[256];
 static int palette_ready;
@@ -839,12 +859,6 @@ static inline __attribute__((always_inline)) int fast_indexed_row(
         else row_palette4(src, shaded_palette, dst, u & 3, width, mask);
     }
     return 1;
-}
-
-/* Mode 1 for two 15-bit colours (bit 15 clear): each channel's sum, 31 where it carries out */
-static inline u32 sat_add15(u32 a, u32 b) {
-    u32 sum = a + b, carry = (sum - ((a ^ b) & 0x0421)) & 0x8420;
-    return ((sum - carry) | (carry - (carry >> 5))) & 0x7FFF;
 }
 
 /* An unmodulated indexed sprite's row with semi-transparency (blend mode abr on texels with bit 15; no mask
