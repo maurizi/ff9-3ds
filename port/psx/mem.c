@@ -87,6 +87,10 @@ void psx_run_game(void) {
  * overlay resident. Called from libcd for every sector of a dir-0 code file. */
 /* gx_hybrid.c keeps buffers in an overlay's code range: told when overlay bytes land (no-op without it) */
 __attribute__((weak)) void gxh_ram_overwritten(unsigned int off, unsigned int len) { (void)off; (void)len; }
+/* effect_exports.c adjusts words of a just-relocated overlay sector (no-op without it) */
+__attribute__((weak)) void port_overlay_relocated(unsigned int id, unsigned int off, unsigned int len) {
+    (void)id; (void)off; (void)len;
+}
 
 void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len) {
     for (const PsxOverlay *o = psx_overlays; o->relocs != NULL; o++) {
@@ -106,6 +110,7 @@ void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len) {
             else if (kind == 1 && (*word >> 16) == 0x1F80) *word = (unsigned int)(psx_scratchpad + (*word & 0x3FF));
             else if (kind == 2) *word = r[1];
         }
+        port_overlay_relocated(id, off, len);
         return;
     }
 }

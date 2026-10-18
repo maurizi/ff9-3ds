@@ -27,10 +27,11 @@ BINS     := main $(addprefix ovl_,$(OVLS))
 #   src_equiv/<bin>/*.c        port-only equivalents of asm routines (weak)
 #   docs/wip/<bin>_<addr>.c    near-miss drafts of the last non-matching functions (weak, lowest priority)
 src_of    = $(patsubst $(DECOMP)/%.c,%,$(wildcard $(DECOMP)/src/$(1)/*.c) $(wildcard $(DECOMP)/src_equiv/$(1)/*.c))
-WIP_SRCS  := $(patsubst $(DECOMP)/%.c,%,$(wildcard $(DECOMP)/docs/wip/*_[0-9A-F]*.c))
-DECOMP_SRCS := $(foreach b,$(BINS),$(call src_of,$(b))) $(WIP_SRCS)
 wip_bin   = $(patsubst %_$(lastword $(subst _, ,$(1))),%,$(1))
 bin_of    = $(if $(filter docs/wip/%,$(1)),$(call wip_bin,$(notdir $(1))),$(word 2,$(subst /, ,$(1))))
+WIP_SRCS  := $(foreach f,$(patsubst $(DECOMP)/%.c,%,$(wildcard $(DECOMP)/docs/wip/*_[0-9A-F]*.c)),\
+                 $(if $(filter $(call wip_bin,$(notdir $(f))),$(BINS)),$(f)))
+DECOMP_SRCS := $(foreach b,$(BINS),$(call src_of,$(b))) $(WIP_SRCS)
 weak_src  = $(filter src_equiv/% docs/wip/%,$(1))
 header_of = $(if $(filter main,$(1)),ff9.h,$(1).h)
 

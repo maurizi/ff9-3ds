@@ -1,7 +1,9 @@
 /* Battle effect modules read $v0 after three exports that ovl_0b defines as void (decomp docs/effect-modules.md,
  * "Void exports whose result is read"): on the PS1 the register still holds what each one's tail call returned.
- * Native void functions leave nothing defined there, so the effect VM's bridge calls these instead. Each does what
- * the export does and returns that tail call's value. */
+ * Native void functions leave nothing defined there, so their entries in the export table modules call through
+ * (g_btlfxModuleExports, ovl_0b data) point at these instead, for the effect VM and native modules alike; ovl_0b
+ * calls the originals directly. Each does what the export does and returns that tail call's value. */
+#include <stdint.h>
 #include "psyq_port.h"
 
 /* The layouts used here, as decomp include/ovl_0b.h defines them (that header needs the decomp's asm glue). */
@@ -51,4 +53,17 @@ u32 port_effect_export_800DD0DC(s32 arg0) {
 /* export 0x310, Hi_GetMdlVertexPtr: its whole body is the tail call to func_800DF7A0 */
 u32 port_effect_export_Hi_GetMdlVertexPtr(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) {
     return o0b_func_800DF7A0(o0b_btlfx_getEffModel(arg0, D_800A825C)->unk0, arg1, arg2, arg3, arg4);
+}
+
+/* ovl_0b's sectors land and are relocated: point the three entries at the wrappers */
+#define EXPORTS_AT 0xF7510 /* g_btlfxModuleExports, psx_ram offset */
+void port_overlay_relocated(unsigned int id, unsigned int off, unsigned int len) {
+    static const struct { unsigned int entry; void *wrapper; } fix[] = {
+        {0x310, port_effect_export_Hi_GetMdlVertexPtr}, {0x318, port_effect_export_800DD0DC},
+        {0x338, port_effect_export_800E8F50}};
+    if (id != 0x0B) return;
+    for (unsigned int i = 0; i < sizeof fix / sizeof *fix; ++i) {
+        unsigned int at = EXPORTS_AT + fix[i].entry;
+        if (at >= off && at + 4 <= off + len) *(u32 *)(psx_ram + at) = (u32)(uintptr_t)fix[i].wrapper;
+    }
 }
