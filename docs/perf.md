@@ -132,19 +132,19 @@ they took 16.4. ITCM is full (about 0x7a38 of 0x8000), so a new hot routine need
 
 ## Hybrid battles (HYBRID=1 HWSOUND=1, window ending at frame 1761), ms per 60 Hz frame
 
-| battle | 2026-10-17 sweep 1 | after the changes below |
-|---|---:|---:|
-| Ark | 78.4 | 59.1 |
-| Garland | 42.2 | 42.3 |
-| Ifrit (first) | 112.6 | 68.6 |
-| Kuja | 39.2 | 37.2 |
-| Meltigemini | 50.2 | 49.1 |
-| Spare Change | 44.9 | 43.6 |
-| Sword Magic | 45.5 | 44.2 |
-| Taharka | 71.1 | 59.4 |
-| Valia Pira | 25.2 | 25.8 |
-| Vivi KO motion | 41.7 | 41.2 |
-| Zidane Trance | 103.3 | 58.9 |
+| battle | 2026-10-17 sweep 1 | after the changes below | 2026-10-18 native effect modules |
+|---|---:|---:|---:|
+| Ark | 78.4 | 59.1 | 51.3 |
+| Garland | 42.2 | 42.3 | 42.3 |
+| Ifrit (first) | 112.6 | 68.6 | 50.1 |
+| Kuja | 39.2 | 37.2 | 33.7 |
+| Meltigemini | 50.2 | 49.1 | 40.8 |
+| Spare Change | 44.9 | 43.6 | |
+| Sword Magic | 45.5 | 44.2 | |
+| Taharka | 71.1 | 59.4 | 49.5 |
+| Valia Pira | 25.2 | 25.8 | 25.9 |
+| Vivi KO motion | 41.7 | 41.2 | |
+| Zidane Trance | 103.3 | 58.9 | 48.8 |
 
 The scene is drawn every fourth VBlank, so the PS1 budget is 16.7 ms per frame here. The changes, each with an
 identical screenshot: untextured glows keep the fast row path with the mark plane (Trance: software polygons 49 ->
