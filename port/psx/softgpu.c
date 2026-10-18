@@ -709,9 +709,11 @@ static inline __attribute__((always_inline)) void sprite_pixel(
 static SG_HOT __attribute__((noinline)) void row_direct8(const u16 *src, const u16 *cl, u16 *dst, unsigned lead,
                                                          unsigned width, u16 mask) {
     if (lead) { u16 c = cl[*src++ >> 8]; if (c) *dst = c | mask; ++dst; --width; }
+    /* byte offsets into the CLUT, each one instruction (ldrh takes no scaled index) */
+    const u8 *cb = (const u8 *)cl;
     for (; width >= 2; width -= 2, dst += 2) {
-        u16 w = *src++;
-        u16 a = cl[w & 255], b = cl[w >> 8];
+        unsigned w = *src++;
+        u16 a = *(const u16 *)(cb + ((w << 1) & 0x1FE)), b = *(const u16 *)(cb + ((w >> 7) & 0x1FE));
         if (a) dst[0] = a | mask;
         if (b) dst[1] = b | mask;
     }
