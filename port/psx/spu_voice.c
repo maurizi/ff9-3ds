@@ -330,11 +330,40 @@ void psx_spu_step_voice(PsxSpuVoice *voice, unsigned index, const uint8_t *ram, 
         } else {
             /* one sample with the envelope step (as fast_span's per-sample path) */
             if (adsr->envelope.increment) spu_envelope_tick(&adsr->envelope, &adsr->level);
+            int advanced = 0;
             if (adsr->phase != PSX_SPU_ADSR_SUSTAIN &&
-                (adsr->envelope.decrease ? adsr->level <= adsr->target : adsr->level >= adsr->target))
+                (adsr->envelope.decrease ? adsr->level <= adsr->target : adsr->level >= adsr->target)) {
                 psx_spu_adsr_advance_phase(adsr);
+                advanced = 1;
+            }
             run = 1;
-            if (src->counter + pitch < (PSX_SPU_BLOCK_SAMPLES << 12)) { src->counter += pitch; ++s; continue; }
+            if (src->counter + pitch < (PSX_SPU_BLOCK_SAMPLES << 12)) {
+                src->counter += pitch;
+                ++s;
+                /* Until the envelope's next level change, a sample only adds to the envelope's and the source's
+                 * counters (the phase test sees the same level; it failed just now): skip to the sample before
+                 * that change, or before the source crosses into its next block. */
+                PsxSpuEnvelope *env = &adsr->envelope;
+                if (!advanced && env->increment && env->counter < 0x8000 && s < n) {
+                    uint32_t inc = env->increment;
+                    if (env->exponential && !env->decrease && adsr->level >= 0x6000) {
+                        if (env->rate >= 44) inc >>= 2;
+                        else if (env->rate >= 40) inc >>= 1;
+                    }
+                    if (inc && inc < 0x8000) {
+                        uint32_t change = (0x8000 - env->counter + inc - 1) / inc; /* the tick that changes it */
+                        uint32_t cross = pitch ? ((PSX_SPU_BLOCK_SAMPLES << 12) - src->counter + pitch - 1) / pitch
+                                               : 0xFFFFFFFFu;
+                        uint32_t skip = change - 1;
+                        if (skip > cross - 1) skip = cross - 1;
+                        if (skip > n - s) skip = n - s;
+                        env->counter += inc * skip;
+                        src->counter += pitch * skip;
+                        s += skip;
+                    }
+                }
+                continue;
+            }
         }
         /* the crossing sample: everything before it moved the counter, this one steps the block */
         src->counter += pitch * (run - 1);
