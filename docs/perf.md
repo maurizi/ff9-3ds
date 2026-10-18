@@ -132,19 +132,19 @@ they took 16.4. ITCM is full (about 0x7a38 of 0x8000), so a new hot routine need
 
 ## Hybrid battles (HYBRID=1 HWSOUND=1, window ending at frame 1761), ms per 60 Hz frame
 
-| battle | 2026-10-17 sweep 1 | after the changes below | 2026-10-18, 78 native modules | 279 native modules | later, PROFILE=2 |
-|---|---:|---:|---:|---:|---:|
-| Ark | 78.4 | 59.1 | 51.3 | 50.6 | 40.9 |
-| Garland | 42.2 | 42.3 | 42.3 | 42.3 | 33.9 |
-| Ifrit (first) | 112.6 | 68.6 | 50.1 | 48.3 | 42.2 |
-| Kuja | 39.2 | 37.2 | 33.7 | 33.3 | 27.6 |
-| Meltigemini | 50.2 | 49.1 | 40.8 | 40.3 | 33.6 |
-| Spare Change | 44.9 | 43.6 | | |  |
-| Sword Magic | 45.5 | 44.2 | | |  |
-| Taharka | 71.1 | 59.4 | 49.5 | 48.3 | 40.2 |
-| Valia Pira | 25.2 | 25.8 | 25.9 | 25.9 | 19.9 |
-| Vivi KO motion | 41.7 | 41.2 | | |  |
-| Zidane Trance | 103.3 | 58.9 | 48.8 | 45.7 | 38.6 |
+| battle | 2026-10-17 sweep 1 | after the changes below | 2026-10-18, 78 native modules | 279 native modules | later, PROFILE=2 | 293 modules, PROFILE=2 |
+|---|---:|---:|---:|---:|---:|---:|
+| Ark | 78.4 | 59.1 | 51.3 | 50.6 | 40.9 | 39.6 |
+| Garland | 42.2 | 42.3 | 42.3 | 42.3 | 33.9 | 32.7 |
+| Ifrit (first) | 112.6 | 68.6 | 50.1 | 48.3 | 42.2 | 40.3 |
+| Kuja | 39.2 | 37.2 | 33.7 | 33.3 | 27.6 | 26.6 |
+| Meltigemini | 50.2 | 49.1 | 40.8 | 40.3 | 33.6 | 32.3 |
+| Spare Change | 44.9 | 43.6 | | |  |  |
+| Sword Magic | 45.5 | 44.2 | | |  |  |
+| Taharka | 71.1 | 59.4 | 49.5 | 48.3 | 40.2 | 37.9 |
+| Valia Pira | 25.2 | 25.8 | 25.9 | 25.9 | 19.9 | 19.1 |
+| Vivi KO motion | 41.7 | 41.2 | | |  |  |
+| Zidane Trance | 103.3 | 58.9 | 48.8 | 45.7 | 38.6 | 37.0 |
 
 The scene is drawn every fourth VBlank, so the PS1 budget is 16.7 ms per frame here. The changes, each with an
 identical screenshot: untextured glows keep the fast row path with the mark plane (Trance: software polygons 49 ->
@@ -160,7 +160,11 @@ words reserved once per primitive; UI lists compared by words and swapped, not c
 software only when the drawing area is smaller than the view (the 3D engine clips there itself; the clipper also
 re-rounded texture coordinates, and the DS frame moved slightly closer to the host's exact one); RTPS/RTPT with
 sf = 1 in their own copy. Ark went 44.7 -> 40.9 with these, each step with an identical capture screenshot
-(`build/validation/sample_ark/capcmp.sh` builds HEAD's and the working tree's files at one capture frame).
+(`build/validation/sample_ark/capcmp.sh` builds HEAD's and the working tree's files at one capture frame). The last column adds: packed UI entries
+(84 bytes, were 212); translucent polygons skip recent ones without a common vertex-hash bit; texture size fields
+kept per region; additive vertex colours divided by reciprocal; command words through a local pointer. Measured
+stages of Ark's display work per frame (PROFILE=1 timers): texture plan 1.9 ms, uploads 1.3, command emission 4.1
+(CPU-bound: the DMA to the geometry FIFO never waits), the 2D layer 4.2.
 
 ## Field sweep (HYBRID=1 HWSOUND=1, 28 fields from `fieldsweep`, window ending at frame 1377), ms per 60 Hz frame
 
