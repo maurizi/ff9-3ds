@@ -533,7 +533,14 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
         int left=minx,right=maxx;
 #ifndef PORT_SOFTGPU_REFERENCE
         int first=0,last=maxx-minx,width=last;
-        if(!clip_span(w0+bias0,A0,width,&first,&last) ||
+        if(width<=16) {
+            /* narrow: scan the edge functions (a row's coverage is one run) instead of dividing */
+            int e0=w0+bias0,e1=w1+bias1,e2=w2+bias2,k=0;
+            while(k<width && (e0<0||e1<0||e2<0)) {e0+=A0;e1+=A1;e2+=A2;++k;}
+            first=k;
+            while(k<width && e0>=0 && e1>=0 && e2>=0) {e0+=A0;e1+=A1;e2+=A2;++k;}
+            last=k;
+        } else if(!clip_span(w0+bias0,A0,width,&first,&last) ||
            !clip_span(w1+bias1,A1,width,&first,&last) ||
            !clip_span(w2+bias2,A2,width,&first,&last)) last=first;
         left+=first;right=minx+last;
