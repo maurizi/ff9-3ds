@@ -55,8 +55,46 @@ static void set_clut(Gp0Mode *m, unsigned int uv) {
 }
 
 /* One GP0 command at w[0]; returns the words it used. */
+/* The drawing-state commands (E1-E6; others from E0 up do nothing): about half of all commands, so they're
+ * decided before a draw's mode is set up. */
+static unsigned int state_command(unsigned int w0) {
+    switch (w0 >> 24) {
+    case 0xE1:
+        gp0_state.texpage = w0 & 0xFFFFFF;
+        break;
+    case 0xE2:
+        gp0_state.twin_mask_x = (w0 & 31) * 8;
+        gp0_state.twin_mask_y = ((w0 >> 5) & 31) * 8;
+        gp0_state.twin_off_x = ((w0 >> 10) & 31) * 8;
+        gp0_state.twin_off_y = ((w0 >> 15) & 31) * 8;
+        break;
+    case 0xE3:
+        gp0_state.area_x0 = w0 & 0x3FF;
+        gp0_state.area_y0 = (w0 >> 10) & 0x1FF;
+        area_hits_valid = 0;
+        break;
+    case 0xE4:
+        gp0_state.area_x1 = w0 & 0x3FF;
+        gp0_state.area_y1 = (w0 >> 10) & 0x1FF;
+        area_hits_valid = 0;
+        break;
+    case 0xE5:
+        gp0_state.ofs_x = sext11((int)(w0 & 0x7FF));
+        gp0_state.ofs_y = sext11((int)((w0 >> 11) & 0x7FF));
+        break;
+    case 0xE6:
+        gp0_state.set_mask = w0 & 1;
+        gp0_state.check_mask = (w0 >> 1) & 1;
+        break;
+    default:
+        break;
+    }
+    return 1;
+}
+
 static unsigned int command(const unsigned int *w, unsigned int avail) {
     unsigned int cmd = w[0] >> 24;
+    if (cmd >= 0xE0) return state_command(w[0]);
     if ((cmd >= 0x20 && cmd < 0x80) || cmd == 2) {
         psx_display_drawing();
         psx_vram_generation++;
@@ -208,33 +246,6 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
         return need;
     }
     switch (cmd) {
-    case 0xE1:
-        gp0_state.texpage = w[0] & 0xFFFFFF;
-        break;
-    case 0xE2:
-        gp0_state.twin_mask_x = (w[0] & 31) * 8;
-        gp0_state.twin_mask_y = ((w[0] >> 5) & 31) * 8;
-        gp0_state.twin_off_x = ((w[0] >> 10) & 31) * 8;
-        gp0_state.twin_off_y = ((w[0] >> 15) & 31) * 8;
-        break;
-    case 0xE3:
-        gp0_state.area_x0 = w[0] & 0x3FF;
-        gp0_state.area_y0 = (w[0] >> 10) & 0x1FF;
-        area_hits_valid = 0;
-        break;
-    case 0xE4:
-        gp0_state.area_x1 = w[0] & 0x3FF;
-        gp0_state.area_y1 = (w[0] >> 10) & 0x1FF;
-        area_hits_valid = 0;
-        break;
-    case 0xE5:
-        gp0_state.ofs_x = sext11((int)(w[0] & 0x7FF));
-        gp0_state.ofs_y = sext11((int)((w[0] >> 11) & 0x7FF));
-        break;
-    case 0xE6:
-        gp0_state.set_mask = w[0] & 1;
-        gp0_state.check_mask = (w[0] >> 1) & 1;
-        break;
     case 0x02:
         if (avail >= 3 && gp0_backend && gp0_backend->fill) {
             gp0_backend->fill(w[1] & 0x3F0, (w[1] >> 16) & 0x1FF, ((w[2] & 0x3FF) + 15) & ~15, (w[2] >> 16) & 0x1FF,
