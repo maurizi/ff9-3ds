@@ -154,6 +154,30 @@ callbacks 57 -> 20 ms); undithered and raw semi-transparent textured rows take t
 composite: 16 -> 5.6 ms). Still large in every battle: `display_scale` (14-17 ms, which includes the scene's GX
 submission, texture uploads and the 2D layer) and the ordering-table walk.
 
+## Field sweep (HYBRID=1 HWSOUND=1, 28 fields from `fieldsweep`, window ending at frame 1377), ms per 60 Hz frame
+
+`build/validation/dssample/run.sh`: one ROM reading `sd:/ff9ds/scenarios/current.cfg`, each field copied there.
+Mean over the 28 fields 49.2 -> 39.9 (2026-10-18); the 12 battles of the same sweep are unchanged (43.6).
+
+| field | before | after | | field | before | after |
+|---|---:|---:|---|---|---:|---:|
+| 1102 | 128.9 | 50.0 | | 2162 | 62.7 | 46.2 |
+| 1508 | 100.3 | 54.2 | | 2055 | 68.8 | 46.2 |
+| 931 | 80.0 | 73.0 | | 1414 | 68.7 | 50.1 |
+| 1812 | 79.4 | 76.1 | | 162 | 47.4 | 33.4 |
+| 453 | 66.9 | 66.9 | | 306 | 62.9 | 38.9 |
+
+Field backgrounds draw 16x16 tiles with a CLUT row each; tinted ones (colour other than 128) were drawn per pixel
+by `plot()` because building a shaded palette for 256 pixels doesn't pay. They now scale each texel through three
+32-entry channel tables (`tinted_rows`, ITCM). A one-entry palette cache was tried first and made field 931 slower
+(its tiles change CLUT every few sprites). Opaque indexed sprites check overlap once per rectangle and loop the
+row routines (`rect_rows`); fade polygons at rest (adding or subtracting black, subtracting white: two
+screen-sized Gouraud triangles a scene in a faded-out field) skip the blend. What remains in a heavy field
+(931, sampled): `row_direct8` 22% (the background's pixels, about 7 instructions each), untextured polygon rows
+11%, GP0 decoding 9%, the field's own code and GTE about 15%, profiling timers 7% (PROFILE builds only).
+Software drawing of a 320x224 background at 30 scenes a second is most of a 67 MHz frame by itself: fields need
+the background off the CPU (below).
+
 ## The hybrid in fields (tried, not adopted)
 
 Field 259 with the hybrid renderer (sprites as GX quads where no 2D pixel lies under them in the scene): 38.2 ms
