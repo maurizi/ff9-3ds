@@ -777,13 +777,23 @@ static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         if (n == 4) { t[0] = v[1]; t[1] = v[2]; t[2] = v[3]; record_clipped_triangle(b, m, t); }
         return;
     }
-    int x0 = v[0].x, x1 = x0, y0 = v[0].y, y1 = y0;
-    for (int i = 1; i < n; ++i) {
-        if (v[i].x < x0) x0 = v[i].x;
-        if (v[i].x > x1) x1 = v[i].x;
-        if (v[i].y < y0) y0 = v[i].y;
-        if (v[i].y > y1) y1 = v[i].y;
+    /* the 2D layer changes under the triangles the GPU draws: it skips those spanning 1024+ x or 512+ y */
+    int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
+    for (int t = 0; t + 3 <= n; ++t) {
+        int tx0 = v[t].x, tx1 = tx0, ty0 = v[t].y, ty1 = ty0;
+        for (int i = t + 1; i < t + 3; ++i) {
+            if (v[i].x < tx0) tx0 = v[i].x;
+            if (v[i].x > tx1) tx1 = v[i].x;
+            if (v[i].y < ty0) ty0 = v[i].y;
+            if (v[i].y > ty1) ty1 = v[i].y;
+        }
+        if (tx1 - tx0 >= 1024 || ty1 - ty0 >= 512) continue;
+        if (tx0 < x0) x0 = tx0;
+        if (ty0 < y0) y0 = ty0;
+        if (tx1 > x1) x1 = tx1;
+        if (ty1 > y1) y1 = ty1;
     }
+    if (x1 < x0) return;
     if (glow && b) psx_softgpu_set_marks(marks, MARK_ADD);
     psx_softgpu.poly(m, v, n);
     psx_softgpu_set_marks(NULL, 0);

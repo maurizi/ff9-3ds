@@ -28,10 +28,18 @@ static struct {
 } target;
 
 /* psx_softgpu_set_marks: while set, every pixel a primitive writes sets its bit in this 1024x512 bit plane (VRAM
- * coordinates, 64 KB), and drawing takes the generic per-pixel path. The hybrid renderer marks its software-drawn
+ * coordinates, 64 KB). Untextured polygons mark whole spans; other primitives take the generic per-pixel path. The hybrid renderer marks its software-drawn
  * additive glows this way (gx_hybrid.c). */
 static u8 *marks;
 void psx_softgpu_set_marks(u8 *plane, unsigned bit) { (void)bit; marks = plane; }
+
+/* marks for pixels [x0, x1) of row y (x1 <= VRAM_W) */
+static void mark_span(int y, int x0, int x1) {
+    unsigned i = (unsigned)(y & (VRAM_H - 1)) * VRAM_W + (unsigned)x0, end = i + (unsigned)(x1 - x0);
+    for (; i < end && (i & 7); ++i) marks[i >> 3] |= (u8)(1u << (i & 7));
+    for (; i + 8 <= end; i += 8) marks[i >> 3] = 0xff;
+    for (; i < end; ++i) marks[i >> 3] |= (u8)(1u << (i & 7));
+}
 
 static inline u16 *px(int x, int y) {
     return &psx_vram[(y & (VRAM_H - 1)) * VRAM_W + (x & (VRAM_W - 1))];
@@ -500,7 +508,7 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     const int dither_semi = m->textured && !m->gouraud && m->semi && dither && plain_target &&
                             !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
                             (m->depth == 2 || m->clut_x + (m->depth ? 256 : 16) <= VRAM_W);
-    const int untextured = !m->textured && plain_target;
+    const int untextured = !m->textured && !gp0_state.check_mask && !target.pixels; /* marks: whole spans */
     if (dither_indexed || dither_semi) dither_tables(flat_r, flat_g, flat_b);
 #endif
     for (int y = miny; y < maxy; y++) {
@@ -543,6 +551,7 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
                 else
                     poly_row_untextured(m, psx_vram + (y & 511) * 1024 + left, right - left, a->r << 16, a->g << 16,
                                         a->b << 16, 0, 0, 0, dither, gp0_state.set_mask ? 0x8000 : 0, left, y);
+                if (marks) mark_span(y, left, right);
             }
         } else if (fast_textured && right <= VRAM_W) { /* rows past x 1023 wrap per pixel: general path */
             if (right > left)
