@@ -40,6 +40,10 @@ static void write16(u32 a,u32 v) {
     if(!(a&1)) { *(u16_alias *)memory(a)=(u16)v; return; }
     u16 h=(u16)v;__builtin_memcpy(memory(a),&h,2);
 }
+/* effect_exports.c (only their addresses are taken here) */
+__attribute__((weak)) u32 port_effect_export_Hi_GetMdlVertexPtr(void);
+__attribute__((weak)) u32 port_effect_export_800DD0DC(void);
+__attribute__((weak)) u32 port_effect_export_800E8F50(void);
 static u32 native_call(u32 target,u32 *r) {
     if(!target) port_fatal("effect VM: null engine export");
     u32 a[16];for(unsigned i=0;i<4;i++) a[i]=r[4+i];
@@ -157,6 +161,10 @@ static u32 native_call(u32 target,u32 *r) {
             if(index<216) { cache[slot].target=target;cache[slot].index=(u16)index; }
         }
         u16 mask=index<216 ? pointer_mask[index] : 0;
+        /* exports void in ovl_0b whose $v0 modules read: their tail call's value (effect_exports.c) */
+        if(index==0x310/4) target=(u32)(uintptr_t)port_effect_export_Hi_GetMdlVertexPtr;
+        else if(index==0x318/4) target=(u32)(uintptr_t)port_effect_export_800DD0DC;
+        else if(index==0x338/4) target=(u32)(uintptr_t)port_effect_export_800E8F50;
         for(unsigned i=0;mask && i<16;i++) if(a[i] && (mask&(1u<<i))) a[i]=(u32)(uintptr_t)memory(a[i]);
     }
     return ((NativeExport)(uintptr_t)target)(a[0],a[1],a[2],a[3],a[4],a[5],a[6],a[7],
