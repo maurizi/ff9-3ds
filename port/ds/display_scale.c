@@ -77,7 +77,9 @@ void ds_scale_display_text_pair(uint16_t *dst, const uint16_t *vram,
         for(;ox<out_w;++ox) out[ox]=src[(base_x+ox*5/4)&1023]|0x8000;
     }
     if (!count && !previous_count) return;
-    memset(text_mask,0,sizeof text_mask);
+    /* only the rows and 32-pixel groups this area covers (the hybrid scales 32x32 blocks) */
+    const int groups=(out_w+31)>>5;
+    for(int oy=0;oy<out_h;++oy) for(int group=0;group<groups;++group) text_mask[oy][group]=0;
     for(unsigned i=0;i<count+previous_count;++i) {
         const DsTextRect *rect=i<count ? rects+i : previous+i-count;
         int rx=(rect->x-x)&1023, ry=(rect->y-y)&511;
@@ -109,7 +111,7 @@ void ds_scale_display_text_pair(uint16_t *dst, const uint16_t *vram,
         int next_y=sy+1<height ? sy+1 : height-1;
         const uint16_t *a=vram+((y+sy)&511)*1024;
         const uint16_t *b=vram+((y+next_y)&511)*1024;
-        for(int group=0;group<8;++group) {
+        for(int group=0;group<groups;++group) {
             uint32_t mask=text_mask[oy][group];
             while(mask) {
                 unsigned bit=__builtin_ctz(mask);
