@@ -15,6 +15,12 @@
 #else
 #define SG_HOT
 #endif
+/* HWSOUND builds leave the exact mixer out of ITCM: some main-RAM raster code fits there too */
+#if defined(PORT_RASTER_ITCM) && defined(PORT_HW_SOUND)
+#define SG_HW_HOT __attribute__((section(".itcm"), long_call))
+#else
+#define SG_HW_HOT
+#endif
 
 #define VRAM_W 1024
 #define VRAM_H 512
@@ -996,7 +1002,7 @@ static __attribute__((noinline)) int window_rows(const Gp0Mode *m, int u0, int v
     return 1;
 }
 
-static __attribute__((noinline)) int rect_rows(const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int direct) {
+static SG_HW_HOT __attribute__((noinline)) int rect_rows(const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int direct) {
     if (x1 <= x0 || y1 <= y0) return 0;
     if (gp0_state.check_mask || (m->semi && !direct)) return 0; /* semi-transparent: unmodulated ones only */
     if (gp0_state.twin_mask_x || gp0_state.twin_mask_y) return window_rows(m, u0, v0, x0, y0, x1, y1, direct);
