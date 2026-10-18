@@ -33,6 +33,7 @@ static struct {
 static u8 *marks;
 void psx_softgpu_set_marks(u8 *plane, unsigned bit) { (void)bit; marks = plane; }
 
+#ifndef PORT_SOFTGPU_REFERENCE
 /* marks for pixels [x0, x1) of row y (x1 <= VRAM_W) */
 static void mark_span(int y, int x0, int x1) {
     unsigned i = (unsigned)(y & (VRAM_H - 1)) * VRAM_W + (unsigned)x0, end = i + (unsigned)(x1 - x0);
@@ -40,6 +41,7 @@ static void mark_span(int y, int x0, int x1) {
     for (; i + 8 <= end; i += 8) marks[i >> 3] = 0xff;
     for (; i < end; ++i) marks[i >> 3] |= (u8)(1u << (i & 7));
 }
+#endif
 
 static inline u16 *px(int x, int y) {
     return &psx_vram[(y & (VRAM_H - 1)) * VRAM_W + (x & (VRAM_W - 1))];
@@ -266,12 +268,14 @@ static SG_HOT __attribute__((noinline)) void poly_row_textured(const Gp0Mode *m,
 /* The common battle polygon row: indexed texels, no texture window, unwrapped CLUT, dithered flat modulation.
  * dither_colour's arithmetic as a table per 4x4 dither position and channel, rebuilt when the polygon colour
  * changes (rarely: a few hundred times per thousand battle frames): dtab[y & 3][x & 3][ch][t5] is
- * clamp((t5 * colour >> 4) + offset, 0, 255) >> 3, shifted into the channel's place. */
+ * clamp((t5 * colour >> 4) + offset, 0, 255) >> 3, shifted into the channel's place. Without dithering the offsets
+ * are zero, which is plot's (t5 * colour >> 7) clamped to 31; a raw texture is colour 128 (t5 itself). */
 static u16 dtab[4][4][3][32];
 static unsigned dtab_key = ~0u;
-static void dither_tables(int r, int g, int b) {
-    static const signed char offsets[16] = {-4,0,-3,1,2,-2,3,-1,-3,1,-4,0,3,-1,2,-2};
-    unsigned key = (unsigned)r | (unsigned)g << 8 | (unsigned)b << 16;
+static void dither_tables(int r, int g, int b, int dither) {
+    static const signed char dithered[16] = {-4,0,-3,1,2,-2,3,-1,-3,1,-4,0,3,-1,2,-2}, plain[16] = {0};
+    const signed char *offsets = dither ? dithered : plain;
+    unsigned key = (unsigned)r | (unsigned)g << 8 | (unsigned)b << 16 | (unsigned)!!dither << 24;
     if (key == dtab_key) return;
     dtab_key = key;
     const int colour[3] = {r, g, b};
@@ -505,11 +509,12 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     const int flat_b = a->b < 0 ? 0 : a->b > 255 ? 255 : a->b;
     /* the same for semi-transparent polygons (any depth), and untextured polygons */
     const int plain_target = !gp0_state.check_mask && !target.pixels && !marks;
-    const int dither_semi = m->textured && !m->gouraud && m->semi && dither && plain_target &&
+    const int dither_semi = m->textured && !m->gouraud && m->semi && plain_target &&
                             !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
                             (m->depth == 2 || m->clut_x + (m->depth ? 256 : 16) <= VRAM_W);
     const int untextured = !m->textured && !gp0_state.check_mask && !target.pixels; /* marks: whole spans */
-    if (dither_indexed || dither_semi) dither_tables(flat_r, flat_g, flat_b);
+    if (dither_indexed) dither_tables(flat_r, flat_g, flat_b, 1);
+    if (dither_semi) dither_tables(m->raw ? 128 : flat_r, m->raw ? 128 : flat_g, m->raw ? 128 : flat_b, dither);
 #endif
     for (int y = miny; y < maxy; y++) {
         int w0 = w0row, w1 = w1row, w2 = w2row;
