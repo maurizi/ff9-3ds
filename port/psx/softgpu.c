@@ -841,26 +841,35 @@ static inline __attribute__((always_inline)) int fast_indexed_row(
     return 1;
 }
 
+/* Mode 1 for two 15-bit colours (bit 15 clear): each channel's sum, 31 where it carries out */
+static inline u32 sat_add15(u32 a, u32 b) {
+    u32 sum = a + b, carry = (sum - ((a ^ b) & 0x0421)) & 0x8420;
+    return ((sum - carry) | (carry - (carry >> 5))) & 0x7FFF;
+}
+
 /* An unmodulated indexed sprite's row with semi-transparency (blend mode abr on texels with bit 15; no mask
  * test): 4-bit (depth 0) or 8-bit texels from src, colours from the CLUT cl. Mode 0, the average, takes all three
  * channels at once: (b + f) >> 1 per channel is ((b & ~1) + (f & ~1)) >> 1 plus the bit both have at 1. */
 static SG_HOT __attribute__((noinline)) void row_semi_direct(const u16 *src, const u16 *cl, u16 *dst, unsigned lead,
                                                              unsigned width, u16 mask, int depth, int abr) {
-    if (depth && !abr) { /* 8-bit, mode 0: two texels a halfword, the average in one operation */
-        const u8 *cb = (const u8 *)cl;
-        unsigned k = lead;
-        for (; width; --width, ++k, ++dst) {
-            unsigned w = src[k >> 1] >> ((k & 1) << 3);
-            u16 t = *(const u16 *)(cb + ((w << 1) & 0x1FE));
-            if (!t) continue;
-            if (t & 0x8000) {
-                u16 d = *dst;
-                t = (u16)((((d & 0x7BDE) + (t & 0x7BDE)) >> 1) + (d & t & 0x0421)) | 0x8000;
-            }
-            *dst = t | mask;
+    /* 8-bit, modes 0 and 1: two texels a halfword, all three channels blended in one operation (the average as
+     * above; the saturating sum through the carries out of each channel, checked against the per-channel sum for
+     * every pair of colours) */
+#define SEMI8_LOOP(BLEND) \
+        for (unsigned k = lead; width; --width, ++k, ++dst) { \
+            unsigned w = src[k >> 1] >> ((k & 1) << 3); \
+            u16 t = *(const u16 *)(cb + ((w << 1) & 0x1FE)); \
+            if (!t) continue; \
+            if (t & 0x8000) { u32 d = *dst & 0x7FFF, f = t & 0x7FFF; t = (u16)(BLEND) | 0x8000; } \
+            *dst = t | mask; \
         }
+    if (depth && abr <= 1) {
+        const u8 *cb = (const u8 *)cl;
+        if (!abr) SEMI8_LOOP((((d & 0x7BDE) + (f & 0x7BDE)) >> 1) + (d & f & 0x0421))
+        else SEMI8_LOOP(sat_add15(d, f))
         return;
     }
+#undef SEMI8_LOOP
     const unsigned per = depth ? 1 : 2, low = depth ? 1 : 3, bits = depth ? 3 : 2, entries = depth ? 255 : 15;
     for (unsigned k = lead; width; --width, ++k, ++dst) {
         u16 t = cl[(src[k >> per] >> ((k & low) << bits)) & entries];
