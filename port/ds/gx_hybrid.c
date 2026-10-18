@@ -906,13 +906,25 @@ static void soft_touch(int x0, int y0, int x1, int y1) {
  * what a removed one left. A list with semi-transparent or mask-tested primitives is drawn whole. Any other VRAM
  * operation flushes first, so order against uploads, moves, fills, readbacks and scene drawing is kept. */
 enum { UI_POLY, UI_LINE, UI_RECT };
+/* A deferred primitive, packed (compared and kept every VBlank): its mode, vertices, and the drawing state the
+ * software rasterizer reads (area, mask bits, texture page, texture window in 8-texel units). */
+enum { UI_TEXTURED = 1, UI_RAW = 2, UI_SEMI = 4, UI_GOURAUD = 8, UI_SET_MASK = 16, UI_CHECK_MASK = 32 };
+typedef struct { s16 x, y; u8 r, g, b, u, v, pad[3]; } UiVtx;
 typedef struct {
-    u8 kind, n;
+    u8 kind, n, flags, abr;
+    u8 depth, twin[3];                  /* twin: mask x, mask y, offset x (offset y below) / 8 */
     s16 w, h;
-    Gp0Mode m;
-    Gp0Vtx v[4];
-    Gp0State state;
+    u16 tx, ty, clut_x, clut_y;
+    s16 area[4];                        /* x0, y0, x1, y1 inclusive */
+    u32 texpage;
+    u8 twin_off_y, pad[3];
+    UiVtx v[4];
 } UiPrim;
+
+static void ui_mode(const UiPrim *p, Gp0Mode *m) {
+    *m = (Gp0Mode){p->flags & UI_TEXTURED ? 1 : 0, p->flags & UI_RAW ? 1 : 0, p->flags & UI_SEMI ? 1 : 0,
+                   p->flags & UI_GOURAUD ? 1 : 0, p->abr, p->depth, p->tx, p->ty, p->clut_x, p->clut_y};
+}
 #define UI_MAX 256   /* the battle UI draws about 110 a VBlank */
 static UiPrim ui_lists[2][UI_MAX];
 static UiPrim *ui_list[2] = {ui_lists[0], ui_lists[1]}; /* [0] the previous VBlank's, [1] this one's (swapped) */
@@ -934,10 +946,10 @@ static void ui_bounds(const UiPrim *p, int *x0, int *y0, int *x1, int *y1) {
         }
     }
     /* drawing offset already applied; the drawing area clips */
-    if (*x0 < p->state.area_x0) *x0 = p->state.area_x0;
-    if (*y0 < p->state.area_y0) *y0 = p->state.area_y0;
-    if (*x1 > p->state.area_x1) *x1 = p->state.area_x1;
-    if (*y1 > p->state.area_y1) *y1 = p->state.area_y1;
+    if (*x0 < p->area[0]) *x0 = p->area[0];
+    if (*y0 < p->area[1]) *y0 = p->area[1];
+    if (*x1 > p->area[2]) *x1 = p->area[2];
+    if (*y1 > p->area[3]) *y1 = p->area[3];
 }
 
 static void ui_dirty_rect(int x0, int y0, int x1, int y1) {
@@ -960,15 +972,15 @@ static void ui_note_write(int x, int y, int w, int h) {
 }
 
 static int ui_source_written(const UiPrim *p) {
-    if (!p->m.textured) return 0;
+    if (!(p->flags & UI_TEXTURED)) return 0;
     if (ui_written_all) return 1;
-    int per = texels_per_halfword(p->m.depth > 2 ? 2 : p->m.depth);
-    int px0 = p->m.tx, px1 = p->m.tx + 256 / per - 1, py0 = p->m.ty, py1 = p->m.ty + 255;
+    int per = texels_per_halfword(p->depth > 2 ? 2 : p->depth);
+    int px0 = p->tx, px1 = p->tx + 256 / per - 1, py0 = p->ty, py1 = p->ty + 255;
     for (int i = 0; i < ui_written_count; ++i) {
         const s16 *r = ui_written[i];
         if (px0 <= r[2] && r[0] <= px1 && py0 <= r[3] && r[1] <= py1) return 1;
-        if (p->m.depth < 2 && r[1] <= p->m.clut_y && p->m.clut_y <= r[3] && r[0] <= p->m.clut_x + 255 &&
-            p->m.clut_x <= r[2]) return 1;
+        if (p->depth < 2 && r[1] <= p->clut_y && p->clut_y <= r[3] && r[0] <= p->clut_x + 255 &&
+            p->clut_x <= r[2]) return 1;
     }
     return 0;
 }
@@ -978,7 +990,12 @@ static void soft_touch(int x0, int y0, int x1, int y1);
 /* Draw p, within clip (x0, y0, x1, y1 inclusive) when given: its drawing area narrowed to it. */
 static void ui_draw(const UiPrim *p, const s16 *clip) {
     Gp0State saved = gp0_state;
-    gp0_state = p->state;
+    gp0_state.area_x0 = p->area[0]; gp0_state.area_y0 = p->area[1];
+    gp0_state.area_x1 = p->area[2]; gp0_state.area_y1 = p->area[3];
+    gp0_state.texpage = p->texpage;
+    gp0_state.twin_mask_x = p->twin[0] * 8u; gp0_state.twin_mask_y = p->twin[1] * 8u;
+    gp0_state.twin_off_x = p->twin[2] * 8u; gp0_state.twin_off_y = p->twin_off_y * 8u;
+    gp0_state.set_mask = !!(p->flags & UI_SET_MASK); gp0_state.check_mask = !!(p->flags & UI_CHECK_MASK);
     if (clip) {
         if (gp0_state.area_x0 < clip[0]) gp0_state.area_x0 = clip[0];
         if (gp0_state.area_y0 < clip[1]) gp0_state.area_y0 = clip[1];
@@ -986,9 +1003,14 @@ static void ui_draw(const UiPrim *p, const s16 *clip) {
         if (gp0_state.area_y1 > clip[3]) gp0_state.area_y1 = clip[3];
         if (gp0_state.area_x1 < gp0_state.area_x0 || gp0_state.area_y1 < gp0_state.area_y0) { gp0_state = saved; return; }
     }
-    if (p->kind == UI_RECT) psx_softgpu.rect(&p->m, p->v, p->w, p->h);
-    else if (p->kind == UI_LINE) psx_softgpu.line(&p->m, &p->v[0], &p->v[1]);
-    else psx_softgpu.poly(&p->m, p->v, p->n);
+    Gp0Mode m;
+    Gp0Vtx v[4];
+    ui_mode(p, &m);
+    for (int i = 0; i < p->n; ++i)
+        v[i] = (Gp0Vtx){p->v[i].x, p->v[i].y, p->v[i].r, p->v[i].g, p->v[i].b, p->v[i].u, p->v[i].v};
+    if (p->kind == UI_RECT) psx_softgpu.rect(&m, v, p->w, p->h);
+    else if (p->kind == UI_LINE) psx_softgpu.line(&m, &v[0], &v[1]);
+    else psx_softgpu.poly(&m, v, p->n);
     int x0, y0, x1, y1;
     ui_bounds(p, &x0, &y0, &x1, &y1);
     if (x1 >= x0 && y1 >= y0) soft_touch(x0, y0, x1, y1);
@@ -1012,7 +1034,7 @@ static void ui_flush(void) {
     int n = ui_count[1], m = ui_count[0];
     int whole = ui_overflow;
     for (int i = 0; i < n && !whole; ++i)
-        if (cur[i].m.semi || cur[i].state.check_mask) whole = 1;
+        if (cur[i].flags & (UI_SEMI | UI_CHECK_MASK)) whole = 1;
     if (!whole) {
         for (int i = 0; i < n || i < m; ++i) {
             int x0, y0, x1, y1;
@@ -1058,11 +1080,20 @@ static int ui_defer(Buffer *b, int kind, const Gp0Mode *m, const Gp0Vtx *v, int 
     }
     if (ui_count[1] == UI_MAX) { ui_overflow = 1; ui_flush(); return 0; }
     UiPrim *p = &ui_list[1][ui_count[1]++];
-    memset(p, 0, sizeof *p); /* padding compares equal */
+    memset(p, 0, sizeof *p); /* padding and unused vertices compare equal */
     p->kind = (u8)kind; p->n = (u8)n; p->w = (s16)w; p->h = (s16)h;
-    p->m = *m;
-    for (int i = 0; i < n; ++i) p->v[i] = v[i];
-    p->state = gp0_state;
+    p->flags = (u8)((m->textured ? UI_TEXTURED : 0) | (m->raw ? UI_RAW : 0) | (m->semi ? UI_SEMI : 0) |
+                    (m->gouraud ? UI_GOURAUD : 0) | (gp0_state.set_mask ? UI_SET_MASK : 0) |
+                    (gp0_state.check_mask ? UI_CHECK_MASK : 0));
+    p->abr = (u8)m->abr; p->depth = (u8)m->depth;
+    p->tx = (u16)m->tx; p->ty = (u16)m->ty; p->clut_x = (u16)m->clut_x; p->clut_y = (u16)m->clut_y;
+    for (int i = 0; i < n; ++i)
+        p->v[i] = (UiVtx){(s16)v[i].x, (s16)v[i].y, (u8)v[i].r, (u8)v[i].g, (u8)v[i].b, (u8)v[i].u, (u8)v[i].v, {0}};
+    p->area[0] = (s16)gp0_state.area_x0; p->area[1] = (s16)gp0_state.area_y0;
+    p->area[2] = (s16)gp0_state.area_x1; p->area[3] = (s16)gp0_state.area_y1;
+    p->texpage = gp0_state.texpage;
+    p->twin[0] = (u8)(gp0_state.twin_mask_x / 8); p->twin[1] = (u8)(gp0_state.twin_mask_y / 8);
+    p->twin[2] = (u8)(gp0_state.twin_off_x / 8); p->twin_off_y = (u8)(gp0_state.twin_off_y / 8);
     return 1;
 }
 
