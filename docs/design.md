@@ -216,18 +216,31 @@ OBJ bitmap blocks in E when the textures use A-D (battle), or BG bitmaps in C/D 
   UI uses under 200 colours, so it is exact; a full palette falls back to nearest colours and a rebuild). A 2D pixel exactly equal to the clear value shows
   the 3D layer instead; 2D drawn before a polygon still lands on top (no coverage plane yet). Blocks are rebuilt
   when their source cells were drawn and their pixels hash differently.
-- Ark (frame 1633 window): 59.1 ms per virtual frame against 82.2 for software, 1722 polygons submitted, 112
-  dropped at the vertex limit (a multi-pass scene is still to do), no texture failures.
-- Texture regions are stable (whole page height, U in 64-texel steps), so a page keeps its place across scenes.
-- Additive textured polygons (modes 1 and 3) use an A5I3 copy: each texel's alpha is its brightest channel and
-  its colour is divided by it, so the 3D engine's src + dst(1 - a) equals the PS1's src + dst wherever the source
-  is dim and only bright texels hide what is behind them. Eight colours per texture (farthest-point over its CLUT,
-  or over a sample of a 15-bit page's texels) sit in a reserved palette slot. The vertex brightness, and mode 3's
-  quarter, go to the polygon alpha; the vertex colours keep only the hue. Untextured additive glows are drawn in
-  software into the 2D layer. A translucent polygon sharing an edge with one of the last 16 takes its ID, so a
-  mesh's seams aren't blended twice while separate overlapping layers still add.
-- To do: field layout (BG bitmaps, coverage-based under/over), scenes over budget, semi-transparent 2D over 3D,
-  readbacks of GX-drawn buffers, texture budget at battle entrances (Ark's last plan leaves two groups unplaced).
+- Sprites and tiles drawn into a scene buffer are quads of the 3D layer like polygons (their U and V are the last
+  texels; the right and bottom vertices sample one further), so they blend with it.
+- Texture regions are stable (U and V in 64-texel steps), so a page keeps its place across scenes. Battles use
+  about 420 KB of real texture data (seven or more full 8-bit pages), so they need all four banks A-D.
+- Semi-transparent polygons, modes 1-3 (B + F, B - F, B + F/4), use per-texel alpha. Textured ones use an A5I3
+  copy: each texel's alpha is its brightest channel and its colour is divided by it, so the 3D engine's
+  src + dst(1 - a) equals the PS1's src + dst wherever the source is dim, and only bright texels hide what is behind
+  them. Eight colours per texture (farthest-point over its CLUT, or over a sample of a 15-bit page's texels) sit in
+  a reserved palette slot; texels without the semi-transparency bit are opaque. Untextured ones (glows) sample a
+  fixed 32x8 ramp whose alpha rises along U, each vertex's U being its brightness: the per-pixel alpha the DS lacks
+  per vertex. The vertex brightness, and mode 3's quarter, go to the polygon alpha; the vertex colours keep the hue.
+  Mode 2 is drawn black at twice the source brightness: dst(1 - 2s) equals the PS1's clamped dst - s at mid grey
+  and is black where it is. Mode 0 is polygon alpha 16 (exact except for texels without the bit).
+- A translucent polygon sharing an edge with one of the last 16 from the other side of it takes that one's ID, so a
+  mesh's seams aren't blended twice; separate overlapping layers, and a closed mesh's back faces, still blend.
+- A scene over the hardware budget (Ark and Taharka run 4-6% over the 6144 vertices) drops small primitives from
+  the start of the drawing order, the far scene; size alone would take the nearest character, whose model is many
+  tiny triangles drawn last. Strips don't help: consecutive primitives almost never share an edge with identical
+  attributes, and their depth values (the drawing sequence) differ anyway.
+- The UI's redraw skipping draws each entry over the dirty area clipped to it (drawn whole, an unchanged window
+  background covered a skipped glyph outside it).
+- Known differences: the brightest additive layers saturate less than the PS1's sums; mode 2 darkens evenly where
+  the PS1 shifts hue; semi-transparent UI (the selected row's bar) blends with the buffer's clear colour, not the 3D
+  layer, since the DS blends whole layers and no OBJ VRAM is left for a semi-transparent sprite layer.
+- To do: field layout (BG bitmaps, coverage-based under/over), readbacks of GX-drawn buffers.
 
 ### 5.1 Earlier baseline: translate the whole OT (M2, superseded by 5.0)
 At `DrawOTag`, walk the ordering table in PS1 order: last slot first, and within a slot the most recently added
