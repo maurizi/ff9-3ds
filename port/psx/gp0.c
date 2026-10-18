@@ -166,6 +166,7 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
                 psx_gp0_font_probe[9]=gp0_state.area_y1;
             }
             gp0_backend->rect(&m, &v, wd, ht);
+            if (!m.textured || m.ty != 256 || (m.tx != 896 && m.tx != 960)) return need; /* no font page */
             /* Battle names (F2DC0) and HP/MP strings (F2ED0/F3A8C)
              * are cached sprites, so their original glyphs are not emitted
              * every frame. Preserve coverage for these documented atlas
@@ -236,10 +237,14 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
 
 void gp0_run(const unsigned int *w, unsigned int len) {
     unsigned int profile_start=port_profile_begin();
+#ifdef PORT_CANARY
     port_canary("before GP0 commands");
+#endif
     for (unsigned int i = 0; i < len;) {
         i += command(w + i, len - i);
     }
+#ifdef PORT_CANARY
     port_canary("GP0 commands");
+#endif
     port_profile_end(PORT_PROFILE_GPU,profile_start);
 }
