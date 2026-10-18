@@ -219,9 +219,15 @@ OBJ bitmap blocks in E when the textures use A-D (battle), or BG bitmaps in C/D 
 - Ark (frame 1633 window): 59.1 ms per virtual frame against 82.2 for software, 1722 polygons submitted, 112
   dropped at the vertex limit (a multi-pass scene is still to do), no texture failures.
 - Texture regions are stable (whole page height, U in 64-texel steps), so a page keeps its place across scenes.
+- Additive textured polygons (modes 1 and 3) use an A5I3 copy: each texel's alpha is its brightest channel and
+  its colour is divided by it, so the 3D engine's src + dst(1 - a) equals the PS1's src + dst wherever the source
+  is dim and only bright texels hide what is behind them. Eight colours per texture (farthest-point over its CLUT,
+  or over a sample of a 15-bit page's texels) sit in a reserved palette slot. The vertex brightness, and mode 3's
+  quarter, go to the polygon alpha; the vertex colours keep only the hue. Untextured additive glows are drawn in
+  software into the 2D layer. A translucent polygon sharing an edge with one of the last 16 takes its ID, so a
+  mesh's seams aren't blended twice while separate overlapping layers still add.
 - To do: field layout (BG bitmaps, coverage-based under/over), scenes over budget, semi-transparent 2D over 3D,
-  readbacks of GX-drawn buffers, mode 1-3 blending (additive sparkles show as dark discs: a texture's black
-  background darkens under alpha blending instead of adding nothing), texture budget at battle entrances.
+  readbacks of GX-drawn buffers, texture budget at battle entrances (Ark's last plan leaves two groups unplaced).
 
 ### 5.1 Earlier baseline: translate the whole OT (M2, superseded by 5.0)
 At `DrawOTag`, walk the ordering table in PS1 order: last slot first, and within a slot the most recently added
@@ -250,11 +256,9 @@ The PS1 has four semi-transparency modes. The DS 3D engine only alpha-blends.
 | PS1 mode | use | DS |
 |---|---|---|
 | 0: B/2 + F/2 | windows, shadows | polygon alpha 16/31, exact |
-| 1: B + F | glows, magic, light shafts | **2-pass**: frame N renders opaque + alpha geometry and captures it; frame N+1 renders the additive polygons on black and composites them over the captured BG with 2D blending (EVA=EVB=16, saturating = additive). That gives 30 fps on a 60 Hz panel, used only in scenes that actually use mode 1 (mostly battle effects) |
+| 1: B + F | glows, magic, light shafts | per-texel alpha from brightness (5.0, implemented): exact for dim texels. Not yet: a 2-pass composite (opaque + alpha geometry captured, then additive polygons on black blended with EVA=EVB=16) for the bright ones |
 | 2: B − F | darkening effects | approximated as alpha-blended black at the source luminance (F2) |
-| 3: B + F/4 | subtle glow | 2-pass additive with source colour ÷ 4 |
-
-Fallback when the 2-pass path is off: mode 1 → alpha 50% with doubled vertex colour.
+| 3: B + F/4 | subtle glow | as mode 1 with a quarter of the polygon alpha |
 
 ### 5.3 Native paths (M6, only where profiling says so)
 1. **Field backgrounds** (`o0a func_800BE158` adds a layer's 16×16 tiles to the OT). A field layer can be

@@ -130,6 +130,30 @@ Code placement matters as much as instruction count in melonDS: the untextured a
 first ran from main RAM and were slower than the inlined generic `plot` in ITCM (34.1 vs 27.2 ms); in ITCM
 they took 16.4. ITCM is full (about 0x7a38 of 0x8000), so a new hot routine needs something colder moved out.
 
+## Hybrid battles (HYBRID=1 HWSOUND=1, window ending at frame 1761), ms per 60 Hz frame
+
+| battle | 2026-10-17 sweep 1 | after the changes below |
+|---|---:|---:|
+| Ark | 78.4 | 59.1 |
+| Garland | 42.2 | 42.3 |
+| Ifrit (first) | 112.6 | 68.6 |
+| Kuja | 39.2 | 37.2 |
+| Meltigemini | 50.2 | 49.1 |
+| Spare Change | 44.9 | 43.6 |
+| Sword Magic | 45.5 | 44.2 |
+| Taharka | 71.1 | 59.4 |
+| Valia Pira | 25.2 | 25.8 |
+| Vivi KO motion | 41.7 | 41.2 |
+| Zidane Trance | 103.3 | 58.9 |
+
+The scene is drawn every fourth VBlank, so the PS1 budget is 16.7 ms per frame here. The changes, each with an
+identical screenshot: untextured glows keep the fast row path with the mark plane (Trance: software polygons 49 ->
+10 ms); the effect VM's aligned loads and stores are single accesses (they were byte-wise library `memcpy`) and
+each export's table index is cached instead of searched (Ifrit's modules make ~880 export calls a frame: effect
+callbacks 57 -> 20 ms); undithered and raw semi-transparent textured rows take the table path (Ifrit's fire
+composite: 16 -> 5.6 ms). Still large in every battle: `display_scale` (14-17 ms, which includes the scene's GX
+submission, texture uploads and the 2D layer) and the ordering-table walk.
+
 ## Redraw skipping (tried, not adopted)
 
 Branch `retain-experiment`: a backend over the software GPU that defers each drawing target's primitives for a
