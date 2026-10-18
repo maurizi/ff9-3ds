@@ -25,6 +25,7 @@ def main():
     p.add_argument('--timeout', type=float, default=60)
     p.add_argument('--out', type=Path, default=Path('build/validation/scenarios'))
     p.add_argument('--press', action='append', default=[])
+    p.add_argument('--render', action='store_true', help='rasterise too (the host skips drawing without it)')
     p.add_argument('--require-field-loaded', action='store_true',
                    help='also require the requested field to finish fld_load (field fixtures only)')
     args = p.parse_args()
@@ -39,6 +40,8 @@ def main():
             command += ['--data', str(args.data)]
         for press in args.press:
             command += ['--press', press]
+        if args.render:
+            command += ['--render']
         started = time.monotonic()
         with log.open('wb') as output:
             try:

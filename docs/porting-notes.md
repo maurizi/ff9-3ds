@@ -1518,3 +1518,12 @@ answers the call with the native function; other modules keep running in the eff
 - The three exports that are void in ovl_0b but whose `$v0` modules read are wrapped in the table itself
   (`port/game/effect_exports.c`), for the VM and native modules alike.
 - Ark (fx_0b2): frame-identical to the VM on the host (80 frames).
+
+## Field sweep (2026-10-18)
+
+Every field ID on all four discs (`tools/scenario_catalog.py --fields`: 222 + 322 + 372 + 215 = 1131) entered
+directly on the host with the software renderer on (`tools/scenario_smoke.py --render --require-field-loaded`,
+1500 frames, eight shards in parallel containers): 1129 pass (field loaded, frame limit reached, no fatal). The two
+failures are fixture limits, not port faults: disc 4 field 2502 redirects to field 2500, which needs story state;
+disc 2 field 70 is the opening scene, whose FMV001 exists only on disc 1. Entry alone exercises each field's load,
+setup scripts and first 25 seconds; events reached later in play still need their own fixtures.
