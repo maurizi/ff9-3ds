@@ -85,12 +85,16 @@ void psx_run_game(void) {
  * overlay `id`'s file bytes at its slot. Overwrite them with the relocated image where the two overlap
  * (rodata/data: pointers fixed up for the port; code bytes stay raw and are never executed), and mark the
  * overlay resident. Called from libcd for every sector of a dir-0 code file. */
+/* gx_hybrid.c keeps buffers in an overlay's code range: told when overlay bytes land (no-op without it) */
+__attribute__((weak)) void gxh_ram_overwritten(unsigned int off, unsigned int len) { (void)off; (void)len; }
+
 void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len) {
     for (const PsxOverlay *o = psx_overlays; o->relocs != NULL; o++) {
         if (o->id != id) {
             continue;
         }
         psx_ovl_resident[o->slot] = (unsigned char)id;
+        gxh_ram_overwritten(off, len);
         /* The disc bytes are in place; convert the pointer words in [off, off + len). A word that no longer holds a
          * PS1 address (a sector read again after its conversion) is left alone. */
         for (const unsigned int *r = o->relocs; *r != 0xFFFFFFFFu; r += (*r >> 29) == 2 ? 2 : 1) {

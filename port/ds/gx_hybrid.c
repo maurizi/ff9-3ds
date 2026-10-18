@@ -27,6 +27,7 @@
 #include "profile.h"
 #include "gx_hybrid.h"
 #include "psx_runtime.h"
+#include "psx_mem.h"
 
 extern unsigned short *psx_vram;
 
@@ -1103,10 +1104,26 @@ static u32 block_hash[6][8];
 static int layer_bg = -1;
 static void reset_colours(void);     /* the 2D layer: an 8-bit bitmap BG in bank E with a palette built as colours appear */
 
+/* The two scenes' primitives live in the battle overlay's MIPS code range in PS1 RAM, which the port never runs and
+ * nothing reads while ovl_0b is resident (docs/ds-mode.md): buffer 0 in its first code segments, buffer 1 after the
+ * embedded table. Only while ovl_0b is resident; a sector loaded over them empties them (gxh_ram_overwritten). */
+#define BATTLE_OVERLAY 0x0B
+#define PRIMS_AT_0 0x15A0   /* ovl_0b file offsets: code 0x159C-0x28580 */
+#define PRIMS_AT_1 0x28C20  /* code 0x28C0C-0x4E1E8 */
+_Static_assert(PRIMS_AT_0 + MAX_PRIMS * sizeof(Prim) <= 0x28580, "buffer 0 overruns ovl_0b's code");
+_Static_assert(PRIMS_AT_1 + MAX_PRIMS * sizeof(Prim) <= 0x4E1E8, "buffer 1 overruns ovl_0b's code");
+static const unsigned int prims_at[2] = {PRIMS_AT_0, PRIMS_AT_1};
+
+void gxh_ram_overwritten(unsigned int off, unsigned int len) {
+    for (int i = 0; i < 2; ++i) {
+        unsigned int at = (0xA7000 + prims_at[i]), end = at + MAX_PRIMS * sizeof(Prim);
+        if (off < end && at < off + len) { buffers[i].count = 0; buffers[i].submitted = 0; }
+    }
+}
+
 void gxh_init(void) {
-    /* in PS1 RAM the port never uses (main's MIPS code range), see psx_spare_alloc */
-    for (int i = 0; i < 2; ++i) buffers[i].prims = psx_spare_alloc(MAX_PRIMS * sizeof(Prim));
-    marks = psx_spare_alloc(1024 * 512 / 8);
+    for (int i = 0; i < 2; ++i) buffers[i].prims = (Prim *)(psx_ram + 0xA7000 + prims_at[i]);
+    marks = psx_spare_alloc(1024 * 512 / 8); /* in main's MIPS code range, see psx_spare_alloc */
     memset(marks, 0, 1024 * 512 / 8);
 }
 
@@ -1114,6 +1131,7 @@ int gxh_active(void) { return active; }
 
 void gxh_enable(int on) {
     if (on == active) return;
+    if (on && psx_ovl_resident[0] != BATTLE_OVERLAY) return; /* its primitives need ovl_0b's code range */
     active = on;
     if (on) {
         memset(block_shown, 0, sizeof block_shown);
