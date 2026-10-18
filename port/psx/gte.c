@@ -242,7 +242,8 @@ gte_u32 gte_cfc2(int reg) {
 
 /* ---- commands ------------------------------------------------------------------------------------------- */
 
-GTE_HOT static void rtp(int v, int sf, int lm, int last) {
+/* RTPS/RTPT for one vertex; sf is a constant in each copy below, so the 64-bit shifts are fixed ones. */
+static inline __attribute__((always_inline)) void rtp_body(int v, int sf, int lm, int last) {
     int shift = sf * 12;
     i64 x = V_X(v), y = V_Y(v), z = V_Z(v);
     i64 m1 = ((i64)TRX * 4096) + mtx(0, 0, 0) * x + mtx(0, 0, 1) * y + mtx(0, 0, 2) * z;
@@ -268,6 +269,14 @@ GTE_HOT static void rtp(int v, int sf, int lm, int last) {
         i64 m0 = set_mac0((i64)DQA * div + DQB);
         set_ir0((i32)(m0 >> 12));
     }
+}
+
+/* sf = 1 is what the game's projections use: that copy is the hot one */
+GTE_HOT static void rtp_sf1(int v, int lm, int last) { rtp_body(v, 1, lm, last); }
+static void rtp_sf0(int v, int lm, int last) { rtp_body(v, 0, lm, last); }
+static inline __attribute__((always_inline)) void rtp(int v, int sf, int lm, int last) {
+    if (sf) rtp_sf1(v, lm, last);
+    else rtp_sf0(v, lm, last);
 }
 
 /* [MAC1..3] = (T << 12 + M * V) >> shift, IR = MAC (MVMVA and the lighting steps) */
