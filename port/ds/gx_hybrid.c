@@ -181,7 +181,8 @@ typedef struct {
     int tw, th;                         /* DS texture size in texels */
     int unit, units;
     int dirty, wanted;
-    int conv, clut_x, clut_y;           /* conv: additive-blend copy, 4/8-bit texels through this CLUT as 15-bit */
+    int conv, clut_x, clut_y;           /* conv: additive-blend copy of 4/8-bit texels through this CLUT (A5I3) */
+    int cpal;                           /* conv: its 8-colour palette in ADD_SLOT */
 } Region;
 
 static Region regions[MAX_REGIONS];
@@ -215,7 +216,7 @@ static void free_region(Region *r) {
 static Region *region_containing(int depth, int conv, int cx, int cy, int x, int y, int wh, int h) {
     for (int i = 0; i < MAX_REGIONS; ++i) {
         Region *r = &regions[i];
-        if (r->used && r->depth == depth && r->conv == conv && (!conv || (r->clut_x == cx && r->clut_y == cy)) &&
+        if (r->used && r->depth == depth && r->conv == conv && (!conv || depth == 2 || (r->clut_x == cx && r->clut_y == cy)) &&
             x >= r->x && y >= r->y && x + wh <= r->x + r->wh && y + h <= r->y + r->h)
             return r;
     }
@@ -227,21 +228,30 @@ static Region *place_region(int depth, int conv, int cx, int cy, int x, int y, i
     if (sw < 3) sw = 3;
     if (sh < 3) sh = 3;
     if (sw > 10 || sh > 10) return NULL;
-    int bytes = ((1 << sw) << sh) * (conv ? 16 : depth == 0 ? 4 : depth == 1 ? 8 : 16) / 8;
+    int cpal = 0;
+    if (conv) { /* a free 8-colour palette */
+        u32 taken = 0;
+        for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used && regions[i].conv) taken |= 1u << regions[i].cpal;
+        while (cpal < 32 && (taken >> cpal & 1)) ++cpal;
+        if (cpal == 32) return NULL;
+    }
+    int bytes = ((1 << sw) << sh) * (conv ? 8 : depth == 0 ? 4 : depth == 1 ? 8 : 16) / 8;
     int units = 1 << log2_at_least((bytes + TEX_UNIT - 1) / TEX_UNIT);
     int unit = allocate_units(units);
     if (unit < 0) return NULL;
     for (int i = 0; i < MAX_REGIONS; ++i)
         if (!regions[i].used) {
-            regions[i] = (Region){1, depth, x, y, wh, h, 1 << sw, 1 << sh, unit, units, 1, 1, conv, cx, cy};
+            regions[i] = (Region){1, depth, x, y, wh, h, 1 << sw, 1 << sh, unit, units, 1, 1, conv, cx, cy, cpal};
             return &regions[i];
         }
     memset(unit_used + unit, 0, units);
     return NULL;
 }
 
-/* Texture palettes: 64 slots of 256 colours in F-G (32 KB). */
-#define PAL_SLOTS 64
+/* Texture palettes: 64 slots of 256 colours in F-G (32 KB). The last holds the additive copies' 32 palettes of 8
+ * colours (A5I3); the others take CLUTs. */
+#define PAL_SLOTS 63
+#define ADD_SLOT 63
 typedef struct { int used, x, y, count, dirty, wanted; } Palette;
 static Palette palettes[PAL_SLOTS];
 
@@ -272,7 +282,7 @@ static void regions_touch(int x, int y, int w, int h) {
     for (int i = 0; i < MAX_REGIONS; ++i) {
         Region *r = &regions[i];
         if (r->used && x < r->x + r->wh && r->x < x + w && y < r->y + r->h && r->y < y + h) r->dirty = 1;
-        if (r->used && r->conv && y <= r->clut_y && r->clut_y < y + h && x < r->clut_x + (r->depth ? 256 : 16) &&
+        if (r->used && r->conv && r->depth < 2 && y <= r->clut_y && r->clut_y < y + h && x < r->clut_x + (r->depth ? 256 : 16) &&
             r->clut_x < x + w) r->dirty = 1;
     }
     for (int i = 0; i < PAL_SLOTS; ++i) {
@@ -308,7 +318,7 @@ static int plan_textures(Buffer *b) {
         }
         /* Additive polygons (modes 1, 3) use a 15-bit copy through their CLUT whose dark texels are transparent:
          * under alpha blending a black background would darken what an additive one leaves alone. */
-        int conv = (p->flags & P_SEMI) && (p->abr == 1 || p->abr == 3) && p->depth < 2;
+        int conv = (p->flags & P_SEMI) && (p->abr == 1 || p->abr == 3);
         int x0, x1, y0, y1;
         if (conv) { /* effect-sized: the texels' own box, in 8-texel steps */
             u0 &= ~7; u1 |= 7;
@@ -321,7 +331,7 @@ static int plan_textures(Buffer *b) {
         }
         /* consecutive primitives nearly always share a page and CLUT: try the last match first */
 #define SAME_GROUP(q) ((q).depth == p->depth && (q).tx == p->tx && (q).ty == p->ty && (q).conv == conv && \
-                       (!conv || ((q).cx == p->clut_x && (q).cy == p->clut_y)))
+                       (!conv || p->depth == 2 || ((q).cx == p->clut_x && (q).cy == p->clut_y)))
         int g = last_group;
         if (g >= group_count || !SAME_GROUP(groups[g]))
             for (g = 0; g < group_count; ++g)
@@ -405,6 +415,121 @@ static int plan_textures(Buffer *b) {
     return 1;
 }
 
+/* An additive-blend copy (PS1 modes 1 and 3: destination + source). The DS only alpha-blends, so each texel's
+ * alpha is its brightest channel and its colour is normalised by it: source x alpha is the PS1 texel, and what
+ * remains of the destination, (1 - alpha), is exact for dim texels and fades only under bright ones. A gradient
+ * of one hue normalises to one colour, so 8 per texture (A5I3, chosen across its CLUT) are enough; texels without
+ * the semi-transparency bit are opaque, colour 0 transparent. */
+static inline u16 normalised(u16 c, int *bright) {
+    int cr = c & 31, cg = (c >> 5) & 31, cb = (c >> 10) & 31, m = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb);
+    *bright = m;
+    return m ? (u16)(cr * 31 / m | (cg * 31 / m) << 5 | (cb * 31 / m) << 10) : 0;
+}
+
+static inline int colour_distance(u16 a, u16 b) {
+    int dr = (a & 31) - (b & 31), dg = ((a >> 5) & 31) - ((b >> 5) & 31), db = ((a >> 10) & 31) - ((b >> 10) & 31);
+    return dr * dr + dg * dg + db * db;
+}
+
+/* the A5I3 alpha of a texel: transparent 0x0000, opaque without the semi-transparency bit, else its brightness */
+static inline u8 texel_alpha(u16 c, int bright) { return !c ? 0 : (u8)(c & 0x8000 ? bright : 31); }
+
+static void conv_upload(Region *r, u8 *dst, int row_bytes) {
+    /* the colours to choose from: the CLUT's, or (15-bit) a sample of the texels */
+    enum { CHOICES = 256 };
+    static u16 norm[CHOICES];
+    static u8 alpha[CHOICES];
+    int count = 0;
+    const u16 *clut = psx_vram + (r->clut_y & 511) * 1024;
+    if (r->depth < 2) {
+        count = r->depth ? 256 : 16;
+        for (int i = 0; i < count; ++i) {
+            u16 c = clut[(r->clut_x + i) & 1023];
+            int m;
+            norm[i] = normalised(c, &m);
+            alpha[i] = texel_alpha(c, m);
+        }
+    } else {
+        int step_y = r->h / 16 > 0 ? r->h / 16 : 1, step_x = r->wh / 16 > 0 ? r->wh / 16 : 1;
+        for (int y = 0; y < r->h && count < CHOICES; y += step_y)
+            for (int x = 0; x < r->wh && count < CHOICES; x += step_x) {
+                u16 c = psx_vram[((r->y + y) & 511) * 1024 + ((r->x + x) & 1023)];
+                int m;
+                norm[count] = normalised(c, &m);
+                alpha[count++] = texel_alpha(c, m);
+            }
+    }
+    /* representatives: the brightest entry's colour, then repeatedly the colour farthest from those chosen */
+    u16 reps[8];
+    int nreps = 0;
+    for (;;) {
+        int best = -1, best_d = 0;
+        for (int i = 0; i < count; ++i) {
+            if (!(alpha[i])) continue;
+            int d = 1 << 30;
+            for (int k = 0; k < nreps; ++k) {
+                int e = colour_distance(norm[i], reps[k]);
+                if (e < d) d = e;
+            }
+            if (!nreps) d = alpha[i]; /* first: the brightest */
+            if (d > best_d) { best_d = d; best = i; }
+        }
+        if (best < 0) break;
+        reps[nreps++] = norm[best];
+        if (nreps == 8) break;
+    }
+    if (!nreps) reps[nreps++] = 0x7FFF;
+    u16 *pal = (u16 *)VRAM_F + ADD_SLOT * 256 + r->cpal * 8;
+    for (int k = 0; k < 8; ++k) pal[k] = k < nreps ? reps[k] : 0;
+    if (r->depth < 2) {
+        static u8 code[256]; /* A5I3 texel per CLUT index */
+        for (int i = 0; i < count; ++i) {
+            int best = 0, best_d = 1 << 30;
+            for (int k = 0; k < nreps; ++k) {
+                int e = colour_distance(norm[i], reps[k]);
+                if (e < best_d) { best_d = e; best = k; }
+            }
+            code[i] = (u8)(alpha[i] << 3 | best);
+        }
+        const int per = texels_per_halfword(r->depth), bits = 16 / per, mask = (1 << bits) - 1;
+        for (int row = 0; row < r->h; ++row) {
+            const u16 *src = psx_vram + ((r->y + row) & 511) * 1024;
+            u16 *out = (u16 *)(dst + row * row_bytes); /* texel pairs: VRAM ignores byte writes */
+            for (int k = 0; k < r->wh; ++k) {
+                u16 word = src[(r->x + k) & 1023];
+                for (int t = 0; t < per; t += 2)
+                    out[(k * per + t) / 2] = code[(word >> (t * bits)) & mask] | code[(word >> ((t + 1) * bits)) & mask] << 8;
+            }
+        }
+        return;
+    }
+    /* 15-bit: each normalised colour's representative, found once per 12-bit key */
+    static u8 nearest[4096];
+    memset(nearest, 0xFF, sizeof nearest);
+    for (int row = 0; row < r->h; ++row) {
+        const u16 *src = psx_vram + ((r->y + row) & 511) * 1024;
+        u16 *out = (u16 *)(dst + row * row_bytes);
+        u8 pair[2];
+        for (int k = 0; k < r->wh; ++k) {
+            u16 c = src[(r->x + k) & 1023];
+            int m;
+            u16 n = normalised(c, &m);
+            unsigned key = (n >> 1 & 15) | (n >> 6 & 15) << 4 | (n >> 11 & 15) << 8;
+            if (nearest[key] == 0xFF) {
+                int best = 0, best_d = 1 << 30;
+                for (int q = 0; q < nreps; ++q) {
+                    int e = colour_distance(n, reps[q]);
+                    if (e < best_d) { best_d = e; best = q; }
+                }
+                nearest[key] = (u8)best;
+            }
+            pair[k & 1] = (u8)(texel_alpha(c, m) << 3 | nearest[key]);
+            if (k & 1) out[k / 2] = pair[0] | pair[1] << 8;
+        }
+        if (r->wh & 1) out[r->wh / 2] = pair[0];
+    }
+}
+
 /* Copy dirty regions and palettes from PS1 VRAM. Banks A-D, F and G must be mapped to the CPU (LCDC). */
 static void upload(void) {
     u8 *base = (u8 *)VRAM_A;
@@ -412,25 +537,9 @@ static void upload(void) {
         Region *r = &regions[i];
         if (!r->used || !r->dirty) continue;
         r->dirty = 0;
-        int row_bytes = r->tw * (r->conv ? 16 : r->depth == 0 ? 4 : r->depth == 1 ? 8 : 16) / 8;
+        int row_bytes = r->tw * (r->conv ? 8 : r->depth == 0 ? 4 : r->depth == 1 ? 8 : 16) / 8;
         u8 *dst = base + r->unit * TEX_UNIT;
-        if (r->conv) {
-            const u16 *clut = psx_vram + (r->clut_y & 511) * 1024;
-            const int per = texels_per_halfword(r->depth), bits = 16 / per, mask = (1 << bits) - 1;
-            for (int row = 0; row < r->h; ++row) {
-                const u16 *src = psx_vram + ((r->y + row) & 511) * 1024;
-                u16 *out = (u16 *)(dst + row * row_bytes);
-                for (int k = 0; k < r->wh; ++k) {
-                    u16 word = src[(r->x + k) & 1023];
-                    for (int t = 0; t < per; ++t) {
-                        u16 c = clut[(r->clut_x + ((word >> (t * bits)) & mask)) & 1023];
-                        int lum = (c & 31) + ((c >> 5) & 31) + ((c >> 10) & 31);
-                        out[k * per + t] = lum > 6 ? c | 0x8000 : 0; /* near-black adds ~nothing: transparent */
-                    }
-                }
-            }
-            continue;
-        }
+        if (r->conv) { conv_upload(r, dst, row_bytes); continue; }
         for (int row = 0; row < r->h; ++row) {
             const u16 *src = psx_vram + ((r->y + row) & 511) * 1024;
             u16 *out = (u16 *)(dst + row * row_bytes);
@@ -484,9 +593,15 @@ static inline void put(u32 word) {
 
 static inline void fifo(u32 cmd, u32 param) { put(cmd); put(param); }
 
-static inline u32 rgb_for(const Prim *p, int i) {
+/* additive: the polygon's brightest vertex channel, which went into its alpha (conv_upload); the vertex colours
+ * keep the hue and the shading relative to it. */
+static inline u32 rgb_for(const Prim *p, int i, int additive) {
     int r, g, b;
-    if ((p->flags & P_SEMI) && p->abr == 2) {
+    if (additive) {
+        r = (p->flags & P_RAW) ? 31 : p->r[i] * 31 / additive;
+        g = (p->flags & P_RAW) ? 31 : p->g[i] * 31 / additive;
+        b = (p->flags & P_RAW) ? 31 : p->b[i] * 31 / additive;
+    } else if ((p->flags & P_SEMI) && p->abr == 2) {
         r = g = b = 0;
     } else if ((p->flags & (P_TEXTURED | P_RAW)) == (P_TEXTURED | P_RAW)) {
         r = g = b = 31;
@@ -533,7 +648,30 @@ static int area_cut(Buffer *b) {
     return cut;
 }
 
+/* Translucent polygons with one ID don't blend over each other. Each gets its own, so overlapping layers add up,
+ * except that one sharing an edge with a recent one takes that one's ID: the DS draws a shared edge's pixels for
+ * both polygons, which would blend twice and leave a bright seam through a mesh (whose polygons the ordering table
+ * interleaves with others). */
+#define RECENT 16
+static const Prim *recent[RECENT];
+static u8 recent_id[RECENT];
+static int recent_at;
+static int translucent_id(const Prim *p, int polys) {
+    int id = 1 + (polys & 31);
+    for (int k = 0; k < RECENT; ++k) {
+        const Prim *q = recent[k];
+        if (!q) continue;
+        int shared = 0;
+        for (int i = 0; i < p->n; ++i)
+            for (int j = 0; j < q->n; ++j) shared += p->x[i] == q->x[j] && p->y[i] == q->y[j];
+        if (shared >= 2) { id = recent_id[k]; break; }
+    }
+    recent[recent_at] = p; recent_id[recent_at] = (u8)id; recent_at = (recent_at + 1) % RECENT;
+    return id;
+}
+
 static void emit_scene(Buffer *b) {
+    memset(recent, 0, sizeof recent);
     u32 attr = INITIAL_ATTR, image = 0, palette = ~0u;
     fifo(CMD_POLYATTR, attr);
     fifo(CMD_TEXIMAGE, 0);
@@ -544,7 +682,7 @@ static void emit_scene(Buffer *b) {
         ++z;
         if (cut && prim_area2(p) < cut) { gxh_stats_dropped++; continue; }
         if (polys >= MAX_POLYS || vertices + p->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
-        int tu = 0, tv = 0;
+        int tu = 0, tv = 0, additive = 0;
         u32 want_image = 0;
         if (p->flags & P_TEXTURED) {
             Region *r = prim_group[k] == 0xFF ? NULL : groups[prim_group[k]].region;
@@ -555,8 +693,12 @@ static void emit_scene(Buffer *b) {
             tv = r->y - p->ty;
             want_image = (u32)(r->unit * TEX_UNIT / 8) | (u32)(log2_at_least(r->tw) - 3) << 20 |
                          (u32)(log2_at_least(r->th) - 3) << 23 |
-                         (u32)(r->conv || p->depth == 2 ? 7 : p->depth == 0 ? 3 : 4) << 26;
-            if (p->depth < 2 && !r->conv) {
+                         (u32)(r->conv ? 6 : p->depth == 2 ? 7 : p->depth == 0 ? 3 : 4) << 26;
+            if (r->conv) {
+                u32 want_palette = (u32)(ADD_SLOT * 512 + r->cpal * 16) / 16;
+                if (want_palette != palette) { fifo(CMD_PLTTBASE, want_palette); palette = want_palette; }
+                additive = 1;
+            } else if (p->depth < 2) {
                 want_image |= 1u << 29; /* PS1 0x0000 at index 0 is transparent (FF9's CLUTs) */
                 u32 want_palette = (u32)prim_palette[k] * 512 / 16;
                 if (want_palette != palette) { fifo(CMD_PLTTBASE, want_palette); palette = want_palette; }
@@ -564,13 +706,27 @@ static void emit_scene(Buffer *b) {
         }
         if (want_image != image) { fifo(CMD_TEXIMAGE, want_image); image = want_image; }
         int alpha = 31, id = 0;
-        if (p->flags & P_SEMI) {
+        if (additive) {
+            /* the source's brightness (PS1 128 = x1; mode 3 adds a quarter), at most opaque */
+            int m = 0;
+            for (int j = 0; j < p->n; ++j) {
+                int v = p->r[j] > p->g[j] ? (p->r[j] > p->b[j] ? p->r[j] : p->b[j]) : (p->g[j] > p->b[j] ? p->g[j] : p->b[j]);
+                if (v > m) m = v;
+                if (!(p->flags & P_GOURAUD)) break;
+            }
+            if (p->flags & P_RAW) m = 128;
+            alpha = m * 31 / (p->abr == 3 ? 512 : 128);
+            if (alpha > 31) alpha = 31;
+            if (!alpha) continue; /* adds nothing (alpha 0 would be wireframe) */
+            additive = m;
+            id = translucent_id(p, polys);
+        } else if (p->flags & P_SEMI) {
             alpha = p->abr == 3 ? 8 : p->abr == 1 ? 24 : 16; /* additive: a brighter blend than 50% */
             if (p->abr == 2) {
                 alpha = (p->r[0] + p->g[0] + p->b[0]) * 31 / (3 * 255); /* darkening as black at source luminance */
                 if (!alpha) continue; /* alpha 0 would be wireframe */
             }
-            id = 1 + (polys & 31); /* translucent polygons with one ID don't blend over each other */
+            id = translucent_id(p, polys);
         }
         u32 want_attr = 3u << 6 | (u32)alpha << 16 | (u32)id << 24;
         if (want_attr != attr) { fifo(CMD_POLYATTR, want_attr); attr = want_attr; }
@@ -578,7 +734,7 @@ static void emit_scene(Buffer *b) {
         fifo(CMD_BEGIN, p->n == 4 ? 1 : 0);
         for (int j = 0; j < p->n; ++j) {
             int i = p->n == 4 ? quad_order[j] : j;
-            if (j == 0 || (p->flags & P_GOURAUD)) fifo(CMD_COLOR, rgb_for(p, i));
+            if (j == 0 || (p->flags & P_GOURAUD)) fifo(CMD_COLOR, rgb_for(p, i, additive));
             if (p->flags & P_TEXTURED)
                 fifo(CMD_TEXCOORD, (u32)(u16)((p->u[i] - tu) * 16) | (u32)(u16)((p->v[i] - tv) * 16) << 16);
             put(CMD_VTX16);
