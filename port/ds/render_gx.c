@@ -1013,6 +1013,7 @@ static void sync_shadow_region(int x, int y, int w, int h) {
     if (y1 > 512) y1 = 512;
     if (x1 <= x0 || y1 <= y0) return;
     psx_vram_touch(x0, y0, x1 - x0, y1 - y0);
+    { extern void psx_raster_rows_written(int y, int h); psx_raster_rows_written(y0, y1 - y0); }
     for (int row = y0; row < y1; row++) for (int col = x0; col < x1; col++) {
         int at = (row - oy) * SHADOW_W + col - ox;
         if (sprite_known[at]) psx_vram[row * 1024 + col] = sprite_shadow[at];

@@ -51,6 +51,8 @@ static inline u16 *vram_at(int x, int y) {
 /* DS renderer: VRAM area written, so textures made from it get rebuilt (render_gx.c) */
 __attribute__((weak)) void psx_vram_touch(int x, int y, int w, int h) {
 }
+/* softgpu.c: rows y..y+h-1 written (its cached palettes check their CLUT rows); weak for tests without it */
+__attribute__((weak)) void psx_raster_rows_written(int y, int h) { (void)y; (void)h; }
 
 /* Hardware backends materialise rendered pixels before CPU/GPU readback. */
 __attribute__((weak)) void psx_vram_read(int x, int y, int w, int h) {
@@ -71,6 +73,7 @@ static void vram_fill(int x, int y, int w, int h, u16 c) {
     }
     psx_vram_filled(x, y, w, h, c);
     psx_vram_generation++;
+    psx_raster_rows_written(y, h);
     psx_display_written(x, y, w, h);
     psx_vram_touch(x, y, w, h);
     /* Row segments up to the VRAM edge (wrapping as vram_at does), with paired 32-bit stores. */
@@ -108,6 +111,7 @@ static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
         psx_vram_read(dx, dy, w, h);
     psx_vram_touch(dx, dy, w, h);
     psx_vram_generation++;
+    psx_raster_rows_written(dy, h);
     psx_display_written(dx, dy, w, h);
     /* Snapshot each source row. Non-wrapping overlaps match the published
      * ps1-tests reference; cross-boundary overlap behavior remains unverified. */
@@ -139,6 +143,7 @@ int LoadImage(RECT *r, u32 *p) {
     if (check_mask) psx_vram_read(r->x,r->y,r->w,r->h);
     psx_vram_touch(r->x, r->y, r->w, r->h);
     psx_vram_generation++;
+    psx_raster_rows_written(r->y, r->h);
     psx_display_written(r->x, r->y, r->w, r->h);
     const u16 *src = (const u16 *)p;
     for (int j = 0; j < r->h; j++) {

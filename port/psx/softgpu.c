@@ -83,16 +83,35 @@ static inline u16 blend(u16 back, u16 front, int abr) {
 }
 #endif
 
-static u32 shaded_palette[256];
+static u32 large_palette[256];
+static const u32 *shaded_palette = large_palette; /* the palette prepare_palette made ready */
+
+#ifndef PORT_SOFTGPU_REFERENCE
+/* VRAM writes per 8-row band (draws here, and fills, copies and uploads through psx_raster_rows_written): a
+ * cached shaded palette stays valid while its CLUT row's band is unwritten. */
+static u32 band_writes[512 / 8];
+static inline void rows_written(int y0, int y1) { /* rows y0..y1-1 */
+    if (y1 <= y0) return;
+    if (y1 - y0 >= 512) { for (int i = 0; i < 64; ++i) ++band_writes[i]; return; }
+    for (int y = y0 & ~7; y < y1; y += 8) ++band_writes[(y >> 3) & 63];
+}
+void psx_raster_rows_written(int y, int h) { rows_written(y, y + h); }
+#else
+#define rows_written(y0, y1) ((void)0)
+#endif
 static int palette_ready;
 
-static void prepare_palette(const Gp0Mode *m, const Gp0Vtx *v,
+static __attribute__((noinline)) void prepare_palette(const Gp0Mode *m, const Gp0Vtx *v,
                             int x0, int y0, int x1, int y1) {
     palette_ready = 0;
 #ifndef PORT_SOFTGPU_REFERENCE
     if (!m->textured || m->gouraud || m->depth > 1) return;
     int count = m->depth == 0 ? 16 : 256;
-    if ((x1-x0)*(y1-y0) < count*4) return;
+    /* A small primitive's own palette pays only when tinted (colour other than 128: the alternative is shading
+     * every texel) and then mostly from the cache below; untinted ones read the CLUT directly. */
+    const int tinted = !m->raw && !(v->r == 128 && v->g == 128 && v->b == 128);
+    const int small = (x1-x0)*(y1-y0) < count*4;
+    if (small && !tinted) return;
     /* Palette reads must remain live when drawing can modify the CLUT.
      * Shadow polygons write a separate destination and cannot do so. */
     if (!target.pixels) {
@@ -108,6 +127,29 @@ static void prepare_palette(const Gp0Mode *m, const Gp0Vtx *v,
     int r = v->r < 0 ? 0 : v->r > 255 ? 255 : v->r;
     int g = v->g < 0 ? 0 : v->g > 255 ? 255 : v->g;
     int b = v->b < 0 ? 0 : v->b > 255 ? 255 : v->b;
+    u32 *out = large_palette;
+    if (small) {
+        /* tinted sprites and polygons: background tiles reuse a few CLUT rows in one colour */
+        enum { SLOTS = 16 };
+        static struct { u32 writes, used; u16 x, y; u8 depth, r, g, b; } key[SLOTS];
+        static u32 cached[SLOTS][256], clock;
+        const u32 writes = band_writes[(m->clut_y & 511) >> 3] + 1; /* 0: never built */
+        int victim = 0;
+        for (int k = 0; k < SLOTS; ++k) {
+            if (key[k].writes == writes && key[k].x == m->clut_x && key[k].y == m->clut_y &&
+                key[k].depth == m->depth && key[k].r == r && key[k].g == g && key[k].b == b) {
+                key[k].used = ++clock;
+                shaded_palette = cached[k];
+                palette_ready = 1;
+                return;
+            }
+            if (key[k].used < key[victim].used) victim = k;
+        }
+        key[victim].writes = writes; key[victim].used = ++clock;
+        key[victim].x = (u16)m->clut_x; key[victim].y = (u16)m->clut_y; key[victim].depth = (u8)m->depth;
+        key[victim].r = (u8)r; key[victim].g = (u8)g; key[victim].b = (u8)b;
+        out = cached[victim];
+    }
     for (int i=0; i<count; ++i) {
         u16 t = *px(m->clut_x+i, m->clut_y);
         int tr = (t & 31)*r >> 7, tg = ((t >> 5)&31)*g >> 7, tb = ((t >> 10)&31)*b >> 7;
@@ -116,8 +158,9 @@ static void prepare_palette(const Gp0Mode *m, const Gp0Vtx *v,
         if (m->raw) c = t;
         /* Keep the original texel for transparency and STP, even when colour
          * modulation turns an opaque texel into black. */
-        shaded_palette[i] = t | ((u32)c << 16);
+        out[i] = t | ((u32)c << 16);
     }
+    shaded_palette = out;
     palette_ready = 1;
 #endif
 }
@@ -479,6 +522,9 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     if (minx >= maxx || miny >= maxy) {
         return;
     }
+#ifndef PORT_SOFTGPU_REFERENCE
+    if (!target.pixels) rows_written(miny, maxy);
+#endif
     int dither=(gp0_state.texpage&0x200) && (m->textured?!m->raw:m->gouraud);
     if(dither) palette_ready=0;
     else prepare_palette(m, a, minx, miny, maxx, maxy);
@@ -736,6 +782,7 @@ static void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
         return;
     }
     unsigned int profile_start=port_profile_begin();
+    if (!target.pixels) rows_written(a->y < b->y ? a->y : b->y, (a->y > b->y ? a->y : b->y) + 1);
     for (int i = 0; i <= n; i++) {
         int x = n ? a->x + dx * i / n : a->x, y = n ? a->y + dy * i / n : a->y;
         if (x < gp0_state.area_x0 || x > gp0_state.area_x1 || y < gp0_state.area_y0 || y > gp0_state.area_y1) {
@@ -1039,12 +1086,13 @@ static inline __attribute__((always_inline)) void sprite_rows(
 #endif
 
 #ifndef PORT_SOFTGPU_REFERENCE
-/* A tinted indexed sprite (colour other than 128) whose shaded palette isn't built: each texel's channels are scaled
+/* A tinted indexed sprite (colour other than 128) without a shaded palette (its CLUT lies under it; otherwise
+ * prepare_palette builds or reuses one): each texel's channels are scaled
  * through three 32-entry tables, read live like plot() but without its per-pixel setup. */
 static __attribute__((noinline)) void tinted_pixel(const Gp0Mode *m, u16 *dst, u16 t, u16 c, u16 mask) {
     sprite_pixel(m, dst, t, c, mask, 1);
 }
-static SG_HOT __attribute__((noinline)) void tinted_rows(const Gp0Mode *m, const Gp0Vtx *v, int u0, int v0,
+static __attribute__((noinline)) void tinted_rows(const Gp0Mode *m, const Gp0Vtx *v, int u0, int v0,
                                                   int x0, int y0, int x1, int y1) {
     u16 tr[32], tg[32], tb[32];
     int r = v->r < 0 ? 0 : v->r > 255 ? 255 : v->r;
@@ -1108,6 +1156,7 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         port_profile_draw_end(1,profile_start);
         return;
     }
+    if (!target.pixels) rows_written(y0, y1);
     if (!m->textured && !m->semi && !gp0_state.check_mask && !target.pixels
         && x0 >= 0 && y0 >= 0 && x1 <= VRAM_W && y1 <= VRAM_H) {
         int r = v->r < 0 ? 0 : v->r > 255 ? 255 : v->r;

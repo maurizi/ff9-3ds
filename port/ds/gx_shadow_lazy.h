@@ -191,6 +191,7 @@ static void shadow_sync_context(ShadowContext *c, int x, int y, int w, int h) {
     shadow_sync_owner = c;
     psx_vram_touch(x0, y0, x1 - x0, y1 - y0);
     shadow_sync_owner = saved_owner;
+    { extern void psx_raster_rows_written(int y, int h); psx_raster_rows_written(y0, y1 - y0); }
     for (int py = y0; py < y1; py++) for (int px = x0; px < x1; px++) {
         int at = (py - c->target[1]) * SHADOW_W + px - c->target[0];
         if (c->known[at]) psx_vram[py * 1024 + px] = c->pixels[at];
