@@ -1528,7 +1528,9 @@ directly on the host with the software renderer on (`tools/scenario_smoke.py --r
 1500 frames, eight shards in parallel containers): 1129 pass (field loaded, frame limit reached, no fatal). The two
 failures are fixture limits, not port faults: disc 4 field 2502 redirects to field 2500, which needs story state;
 disc 2 field 70 is the opening scene, whose FMV001 exists only on disc 1. Entry alone exercises each field's load,
-setup scripts and first 25 seconds; events reached later in play still need their own fixtures.
+setup scripts and first 25 seconds; events reached later in play still need their own fixtures. Rerun after the
+software renderer's new sprite, triangle and blend paths (same day, later): the same 1129 pass and the same two
+fixture failures; the 28 fields of the DS sample sweep are also frame-identical to the reference rasterizer.
 
 ## Battle sweep (2026-10-18)
 
