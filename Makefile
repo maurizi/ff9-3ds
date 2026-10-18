@@ -22,7 +22,7 @@ PYTHON   := python3
 OVLS     := $(shell awk '/^[0-9a-f]/ {print $$1}' $(DECOMP)/config/overlays.$(VERSION).txt)
 # Battle effect modules (FF9.IMG dir 13) built natively; the rest run in the effect VM (port/game/effect_vm.c).
 # Only complete C (no INCLUDE_ASM) with an extracted image is used (tools/ff9sym.py native_fxmods).
-FXNATIVE ?= fx_0b2
+FXNATIVE ?= $(notdir $(wildcard $(DECOMP)/src/fxmod/fx_*))
 export FXNATIVE
 FXMODS   := $(foreach m,$(FXNATIVE),$(if $(and $(wildcard $(DECOMP)/src/fxmod/$(m)/*.c),$(wildcard $(DECOMP)/disks/us/fxmod/$(m).bin)),\
               $(if $(shell grep -l INCLUDE_ASM $(DECOMP)/src/fxmod/$(m)/*.c),,$(m))))
