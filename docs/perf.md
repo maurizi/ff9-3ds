@@ -196,6 +196,13 @@ reciprocal per divisor. What remains in a heavy field
 Software drawing of a 320x224 background at 30 scenes a second is most of a 67 MHz frame by itself: fields need
 the background off the CPU (below).
 
+Moving a field's background to the 3D engine as quads (with the characters, leaving only text and windows on a 2D
+layer) would not cost scaling fidelity: the software display already samples the scene nearest-neighbour and
+filters only text. The limit is the engine's budget: fields draw 600-2,300 primitives a scene (host count over
+the OT walks: 306 600, 1102 710, 110 860, 2162 1,230, 453 1,250, 1508 1,580, 2110 1,640, 1812 2,170, 931 2,280),
+and 6,144 vertices hold 1,536 quads, so the heavy fields would have to merge tiles (adjacent on screen and in the
+texture page, with one CLUT) or render in two captured passes, which needs a free VRAM bank.
+
 ## The hybrid in fields (tried, not adopted)
 
 Field 259 with the hybrid renderer (sprites as GX quads where no 2D pixel lies under them in the scene): 38.2 ms
