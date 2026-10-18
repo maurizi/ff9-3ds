@@ -100,13 +100,15 @@ static void start_scene(Buffer *b) {
                ((b->x + b->w <= 1024 ? b->w : 1024 - b->x) + 7) / 8); /* buffers start on 8-pixel columns */
 }
 
-/* The buffer the current drawing area belongs to (NULL: offscreen), starting its scene if it was shown. */
-static Buffer *target(void) {
+/* The buffer the current drawing area belongs to (NULL: offscreen), starting its scene if it was shown; *shown is
+ * the displayed buffer. */
+static Buffer *target(Buffer **shown) {
     int x, y, w, h;
     psx_gpu_draw_area(&x, &y, &w, &h);
     note_buffer(x, y, w, h);
+    *shown = displayed();
     Buffer *b = buffer_at(gp0_state.area_x0, gp0_state.area_y0);
-    if (b && b->shown && b != displayed()) start_scene(b);
+    if (b && b->shown && b != *shown) start_scene(b);
     return b;
 }
 
@@ -306,7 +308,7 @@ static int group_count;
 static u8 prim_group[MAX_PRIMS];
 static u8 prim_palette[MAX_PRIMS];
 
-static int plan_textures(Buffer *b) {
+static __attribute__((noinline)) int plan_textures(Buffer *b) {
     int last_group = 0, last_palette = 0;
     group_count = 0;
     for (int i = 0; i < MAX_REGIONS; ++i) regions[i].wanted = 0;
@@ -447,7 +449,7 @@ static inline int colour_distance(u16 a, u16 b) {
 /* the A5I3 alpha of a texel: transparent 0x0000, opaque without the semi-transparency bit, else its brightness */
 static inline u8 texel_alpha(u16 c, int bright) { return !c ? 0 : (u8)(c & 0x8000 ? bright : 31); }
 
-static void conv_upload(Region *r, u8 *dst, int row_bytes) {
+static __attribute__((noinline)) void conv_upload(Region *r, u8 *dst, int row_bytes) {
     /* the colours to choose from: the CLUT's, or (15-bit) a sample of the texels */
     enum { CHOICES = 256 };
     static u16 norm[CHOICES];
@@ -568,7 +570,7 @@ static void conv_upload(Region *r, u8 *dst, int row_bytes) {
 /* Copy dirty regions and palettes from PS1 VRAM. Banks A-D, F and G must be mapped to the CPU (LCDC). */
 int gxh_stats_upload_bytes, gxh_stats_upload_regions, gxh_stats_upload_palettes; /* the last scene's */
 
-static void upload(void) {
+static __attribute__((noinline)) void upload(void) {
     u8 *base = (u8 *)VRAM_A;
     gxh_stats_upload_bytes = gxh_stats_upload_regions = gxh_stats_upload_palettes = 0;
     if (!ramp_written) {
@@ -644,9 +646,15 @@ static void flush_chunk(void) {
     chunk_words = 0;
 }
 
+/* Room for one primitive's words (at most 3 state commands, a begin and 4 vertices of colour, texcoord and
+ * position: 36), made before each, so put() needn't check. */
+#define PRIM_WORDS 40
+static inline void reserve(void) {
+    if (chunk_words > CHUNK_WORDS - PRIM_WORDS) flush_chunk();
+}
+
 static inline void put(u32 word) {
     chunks[chunk][chunk_words++] = word;
-    if (chunk_words == CHUNK_WORDS) flush_chunk();
 }
 
 static inline void fifo(u32 cmd, u32 param) { put(cmd); put(param); }
@@ -757,9 +765,10 @@ static int translucent_id(const Prim *p, int polys) {
     return id;
 }
 
-static void emit_scene(Buffer *b) {
+static __attribute__((noinline)) void emit_scene(Buffer *b) {
     memset(recent, 0, sizeof recent);
     u32 attr = INITIAL_ATTR, image = 0, palette = ~0u;
+    reserve();
     fifo(CMD_POLYATTR, attr);
     fifo(CMD_TEXIMAGE, 0);
     int polys = 0, vertices = 0, z = 0;
@@ -768,6 +777,7 @@ static void emit_scene(Buffer *b) {
         Prim *p = &b->prims[k];
         ++z;
         if (prim_drop[k]) { gxh_stats_dropped++; continue; }
+        reserve();
         if (polys >= MAX_POLYS || vertices + p->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
         int tu = 0, tv = 0, additive = 0;
         u32 want_image = 0;
@@ -853,6 +863,7 @@ static void emit_scene(Buffer *b) {
         ++polys;
         vertices += p->n;
     }
+    reserve();
     fifo(0x50, GL_TRANS_MANUALSORT); /* SWAP_BUFFERS: shown from the next VBlank */
     gxh_stats_polys = polys;
 }
@@ -1012,9 +1023,8 @@ static void ui_flush(void) {
 }
 
 /* Defer a primitive drawn into the displayed buffer. Returns 0 when it has to be drawn now. */
-static int ui_defer(int kind, const Gp0Mode *m, const Gp0Vtx *v, int n, int w, int h) {
-    Buffer *b = displayed();
-    if (!b || buffer_at(gp0_state.area_x0, gp0_state.area_y0) != b) return 0;
+/* b: the displayed buffer, which the drawing area is in */
+static int ui_defer(Buffer *b, int kind, const Gp0Mode *m, const Gp0Vtx *v, int n, int w, int h) {
     if (ui_buffer != b) {
         /* another buffer is shown: its previous list is stale, and everything it holds may differ */
         ui_flush();
@@ -1032,13 +1042,13 @@ static int ui_defer(int kind, const Gp0Mode *m, const Gp0Vtx *v, int n, int w, i
 }
 
 static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
-    Buffer *b = target();
-    if (b && b == displayed() && ui_defer(UI_POLY, m, v, n, 0, 0)) return;
+    Buffer *shown, *b = target(&shown);
+    if (b && b == shown && ui_defer(b, UI_POLY, m, v, n, 0, 0)) return;
     ui_flush();
     /* Untextured additive glows (Gouraud, black at the edges) go to the 3D layer through the alpha ramp; outside a
      * scene (offscreen) they are drawn in software, marked, over the clear value. */
     int glow = m->semi && !m->textured && (m->abr == 1 || m->abr == 3);
-    if (b && b != displayed()) {
+    if (b && b != shown) {
         if (!triangle_area(v, v + 1, v + 2) && (n == 3 || !triangle_area(v + 1, v + 2, v + 3))) return;
         int clipped = 0;
         for (int i = 0; i < n; ++i)
@@ -1074,9 +1084,9 @@ static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
 }
 
 static void hybrid_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b2) {
-    Buffer *b = target();
+    Buffer *shown, *b = target(&shown);
     Gp0Vtx pair[2] = {*a, *b2};
-    if (b && b == displayed() && ui_defer(UI_LINE, m, pair, 2, 0, 0)) return;
+    if (b && b == shown && ui_defer(b, UI_LINE, m, pair, 2, 0, 0)) return;
     ui_flush();
     psx_softgpu.line(m, a, b2);
     soft_touch(a->x < b2->x ? a->x : b2->x, a->y < b2->y ? a->y : b2->y,
@@ -1084,14 +1094,14 @@ static void hybrid_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b2) {
 }
 
 static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
-    Buffer *b = target();
-    if (b && b == displayed() && ui_defer(UI_RECT, m, v, 1, w, h)) return;
+    Buffer *shown, *b = target(&shown);
+    if (b && b == shown && ui_defer(b, UI_RECT, m, v, 1, w, h)) return;
     ui_flush();
     /* A semi-transparent sprite or tile in the scene is a quad of the 3D layer like a polygon, so it blends with it
      * (on the 2D layer it would cover the scene), unless it uses a texture window or its texels wrap past the page
      * edge, which 8-bit coordinates can't say. Opaque ones stay exact on the 2D layer: as quads they would go under
      * 2D pixels drawn before them (a window's background over its text). */
-    if (b && b != displayed() && m->semi && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
+    if (b && b != shown && m->semi && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
         (!m->textured || (v->u + w <= 256 && v->v + h <= 256))) {
         /* clipped to the drawing area: texels follow pixels one to one */
         Gp0Vtx c = *v;
@@ -1202,7 +1212,7 @@ void gxh_enable(int on) {
 }
 
 /* Send a buffer's scene to the 3D engine; it is shown from the next frame on. */
-static void submit(Buffer *b, int display_h) {
+static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     unsigned int profile = port_profile_begin();
     while (dmaBusy(0)) {} /* the previous scene's list */
     plan_textures(b);
@@ -1301,6 +1311,9 @@ static void dirty_cells(int x0, int y0, int x1, int y1) {
         for (int x = x0 >> 3; x <= x1 >> 3; ++x) cell_dirty[y & 63][x & 127] = 1;
 }
 
+/* FNV-1a's prime, read at run time: as a constant the compiler multiplies by shifts and adds (9 instructions) */
+static volatile const u32 fnv_prime = 16777619u;
+
 void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, int w, int h)) {
     ui_flush();
     Buffer *b = buffer_at(d->x, d->y);
@@ -1339,16 +1352,16 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
                         if (cell_dirty[y & 63][x & 127]) { dirty = 1; break; }
                 if (!dirty) { shown += block_shown[row][col]; continue; }
             }
-            u32 any = 0, hash = 2166136261u;
+            u32 any = 0, hash = 2166136261u, prime = fnv_prime;
             int hx0 = sx0 & ~1, hx1 = (sx0 + sw + 1) & ~1; /* whole words: a wider span only rebuilds more often */
             for (int y = sy0; y < sy0 + sh; ++y) {
                 const u16 *vrow = psx_vram + (y & 511) * 1024;
                 if (hx1 > 1024) {
-                    for (int k = hx0; k < hx1; ++k) { u32 c = vrow[k & 1023]; any |= c ^ clear; hash = (hash ^ c) * 16777619u; }
+                    for (int k = hx0; k < hx1; ++k) { u32 c = vrow[k & 1023]; any |= c ^ clear; hash = (hash ^ c) * prime; }
                     continue;
                 }
                 const u32 *words = (const u32 *)(vrow + hx0);
-                for (int k = 0; k < (hx1 - hx0) / 2; ++k) { u32 c = words[k]; any |= c ^ clear2; hash = (hash ^ c) * 16777619u; }
+                for (int k = 0; k < (hx1 - hx0) / 2; ++k) { u32 c = words[k]; any |= c ^ clear2; hash = (hash ^ c) * prime; }
             }
             if (!rebuild && hash == block_hash[row][col] && block_shown[row][col] == !!any) {
                 shown += block_shown[row][col];
