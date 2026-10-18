@@ -1059,10 +1059,14 @@ static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     int glow = m->semi && !m->textured && (m->abr == 1 || m->abr == 3);
     if (b && b != shown) {
         if (!triangle_area(v, v + 1, v + 2) && (n == 3 || !triangle_area(v + 1, v + 2, v + 3))) return;
+        /* A drawing area covering the whole buffer clips where the 3D engine's view volume does (the scene's
+         * 320 x display-height window from the buffer's corner, submit), so only a smaller one needs clipping. */
         int clipped = 0;
-        for (int i = 0; i < n; ++i)
-            if (v[i].x < gp0_state.area_x0 || v[i].x > gp0_state.area_x1 + 1 ||
-                v[i].y < gp0_state.area_y0 || v[i].y > gp0_state.area_y1 + 1) clipped = 1;
+        if (gp0_state.area_x0 > b->x || gp0_state.area_y0 > b->y || gp0_state.area_x1 + 1 < b->x + 320 ||
+            gp0_state.area_y1 + 1 < b->y + b->h)
+            for (int i = 0; i < n; ++i)
+                if (v[i].x < gp0_state.area_x0 || v[i].x > gp0_state.area_x1 + 1 ||
+                    v[i].y < gp0_state.area_y0 || v[i].y > gp0_state.area_y1 + 1) clipped = 1;
         if (!clipped) { record(b, m, v, n); return; }
         Gp0Vtx t[3] = {v[0], v[1], v[2]};
         record_clipped_triangle(b, m, t);
