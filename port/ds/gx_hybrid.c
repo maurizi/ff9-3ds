@@ -1414,6 +1414,8 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
     if (rebuild) { reset_colours(); last_rebuild = presents; }
     last_shown = b; last_x = d->x; last_y = d->y; last_w = w; last_h = h;
     static u16 block[BLOCK * 256] __attribute__((aligned(4)));   /* a scaled block, stride 256 */
+    u32 memo_colour = 0x10000; /* none yet (colours are 15-bit plus STP): the palette may have been reset above */
+    u8 memo_index = 0;
     u16 *bitmap = (u16 *)BG_BMP_RAM(0);
     int shown = 0;
     for (int by = 0, row = 0; by < out_h; by += BLOCK, ++row)
@@ -1457,9 +1459,12 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
                 for (int ox = 0; ox < bw; ox += 2) {
                     int a = col[ox], b2 = col[ox + 1 < bw ? ox + 1 : ox];
                     u8 ma = (mrow[a >> 3] >> (a & 7)) & 1, mb = (mrow[b2 >> 3] >> (b2 & 7)) & 1;
-                    u16 i0 = shows(vrow[a], clear, ma) ? ma ? cube_of(frow[ox]) : colour_of(frow[ox]) : 0;
+                    /* the UI's colours come in runs: the last one's index saves the 32 KB map's cache misses */
+#define INDEX_OF(c) ((u16)(c) == memo_colour ? memo_index : (memo_colour = (u16)(c), memo_index = colour_of(memo_colour)))
+                    u16 i0 = shows(vrow[a], clear, ma) ? ma ? cube_of(frow[ox]) : INDEX_OF(frow[ox]) : 0;
                     u16 i1 = ox + 1 < bw && shows(vrow[b2], clear, mb)
-                                 ? mb ? cube_of(frow[ox + 1]) : colour_of(frow[ox + 1]) : 0;
+                                 ? mb ? cube_of(frow[ox + 1]) : INDEX_OF(frow[ox + 1]) : 0;
+#undef INDEX_OF
                     out[ox / 2] = i0 | i1 << 8; /* halfword stores: VRAM ignores byte writes */
                 }
             }
