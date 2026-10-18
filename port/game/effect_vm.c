@@ -165,8 +165,11 @@ static u32 native_call(u32 target,u32 *r) {
 #ifdef PORT_PROFILE
 #define port_effect_call_words effect_call_words_impl
 #endif
+/* effect_native.c: a module compiled natively answers calls into its code (weak: the probes run without it) */
+__attribute__((weak)) u32 port_fxmod_native(u32 target) { (void)target; return 0; }
 u32 port_effect_call_words(u32 target,const u32 *arguments,u32 count) {
     if(count>16) port_fatal("effect VM: too many callback arguments");
+    if(guest_code(target)) { u32 native=port_fxmod_native(target); if(native) target=native; }
     if(!guest_code(target)) {
         if(!target) port_fatal("effect VM: null effect callback");
         u32 a[16]={0};for(unsigned i=0;i<count;i++) a[i]=arguments[i];

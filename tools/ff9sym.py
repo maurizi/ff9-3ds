@@ -33,7 +33,8 @@ class Binary:
         self.rodata, self.text, self.data = rodata, text, data  # file offsets
         self.bytes = path.read_bytes()
         self.end = len(self.bytes)
-        self.ns = "" if name == "main" else "o" + name[4:] + "_"  # overlay namespace prefix: ovl_0b -> o0b_
+        # namespace prefix: ovl_0b -> o0b_, effect module fx_0b2 -> x0b2_
+        self.ns = "" if name == "main" else ("x" + name[3:] + "_") if name.startswith("fx_") else "o" + name[4:] + "_"
 
     def vram_of(self, off):
         return self.vram + off - self.header
@@ -45,6 +46,24 @@ class Binary:
         return self.vram_of(self.text), self.vram_of(self.data)
 
 
+def native_fxmods():
+    """Battle effect modules the port builds natively: those named in $FXNATIVE (the Makefile passes its list)
+    whose C is complete (no INCLUDE_ASM) and whose image was extracted. {name: (vram, text, data)} (file offsets)."""
+    import os
+    wanted = set(os.environ.get("FXNATIVE", "").split())
+    out = {}
+    for line in (DECOMP / f"config/fxmods.{VERSION}.txt").read_text().splitlines():
+        f = line.split("#")[0].split()
+        if len(f) < 5 or f[0] not in wanted:
+            continue
+        srcs = list((DECOMP / "src/fxmod" / f[0]).glob("*.c"))
+        if not srcs or any("INCLUDE_ASM" in p.read_text(errors="replace") for p in srcs):
+            continue
+        if (DECOMP / f"disks/us/fxmod/{f[0]}.bin").exists():
+            out[f[0]] = (int(f[1], 16), int(f[2], 16), int(f[3], 16))
+    return out
+
+
 def binaries():
     out = {"main": Binary("main", MAIN_FILE, MAIN_VRAM, MAIN_HEADER, MAIN_TEXT, MAIN_DATA, header=MAIN_HEADER)}
     for line in (DECOMP / f"config/overlays.{VERSION}.txt").read_text().splitlines():
@@ -52,13 +71,18 @@ def binaries():
         if len(f) >= 4:
             name = f"ovl_{f[0]}"
             out[name] = Binary(name, DECOMP / f"disks/us/ovl/{f[0]}.bin", int(f[1], 16), 0, int(f[2], 16), int(f[3], 16))
+    for name, (vram, text, data) in native_fxmods().items():
+        out[name] = Binary(name, DECOMP / f"disks/us/fxmod/{name}.bin", vram, 0, text, data)
     return out
 
 
 def symbol_files(binary):
     """The decomp's symbol files that describe `binary`, hand-written first."""
     cfg = DECOMP / "config"
-    if binary == "main":
+    if binary.startswith("fx_"):
+        names = [f"fxmod/{binary}.syms.txt", f"fxmod/undefined_funcs_auto.{binary}.txt",
+                 f"fxmod/undefined_syms_auto.{binary}.txt"]
+    elif binary == "main":
         names = [f"symbols.{VERSION}.txt", f"symbols.psyq.{VERSION}.txt",
                  f"undefined_funcs_auto.{VERSION}.txt", f"undefined_syms_auto.{VERSION}.txt"]
     else:
@@ -96,6 +120,16 @@ def functions():
         if addr is None:
             addr = named.get("main", {}).get(name)  # PsyQ names live in main's files
         out.setdefault(b, {})[name] = addr
+    # Effect modules aren't in the function index: their symbol file's functions and the func_XXXXXXXX their C defines
+    for b in native_fxmods():
+        fs = out.setdefault(b, {})
+        for f in symbol_files(b):
+            for n, (a, is_func) in read_symbols(f).items():
+                if is_func:
+                    fs.setdefault(n, a)
+        for src in (DECOMP / "src/fxmod" / b).glob("*.c"):
+            for m in re.finditer(r"^\w[\w \*]*\b(func_([0-9A-F]{8}))\s*\(", src.read_text(errors="replace"), re.M):
+                fs.setdefault(m.group(1), int(m.group(2), 16))
     return out
 
 

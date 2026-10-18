@@ -20,20 +20,27 @@ PYTHON   := python3
 
 # The decomp's binaries: main + the FF9.IMG dir-0 code overlays.
 OVLS     := $(shell awk '/^[0-9a-f]/ {print $$1}' $(DECOMP)/config/overlays.$(VERSION).txt)
-BINS     := main $(addprefix ovl_,$(OVLS))
+# Battle effect modules (FF9.IMG dir 13) built natively; the rest run in the effect VM (port/game/effect_vm.c).
+# Only complete C (no INCLUDE_ASM) with an extracted image is used (tools/ff9sym.py native_fxmods).
+FXNATIVE ?= fx_0b2
+export FXNATIVE
+FXMODS   := $(foreach m,$(FXNATIVE),$(if $(and $(wildcard $(DECOMP)/src/fxmod/$(m)/*.c),$(wildcard $(DECOMP)/disks/us/fxmod/$(m).bin)),\
+              $(if $(shell grep -l INCLUDE_ASM $(DECOMP)/src/fxmod/$(m)/*.c),,$(m))))
+BINS     := main $(addprefix ovl_,$(OVLS)) $(FXMODS)
 
 # Decomp C, as paths relative to decomp/ without .c, in priority order (the link keeps the first definition):
 #   src/<bin>/*.c              matched C
 #   src_equiv/<bin>/*.c        port-only equivalents of asm routines (weak)
 #   docs/wip/<bin>_<addr>.c    near-miss drafts of the last non-matching functions (weak, lowest priority)
-src_of    = $(patsubst $(DECOMP)/%.c,%,$(wildcard $(DECOMP)/src/$(1)/*.c) $(wildcard $(DECOMP)/src_equiv/$(1)/*.c))
+src_of    = $(patsubst $(DECOMP)/%.c,%,$(wildcard $(DECOMP)/src/$(1)/*.c) $(wildcard $(DECOMP)/src/fxmod/$(1)/*.c) \
+                                        $(wildcard $(DECOMP)/src_equiv/$(1)/*.c))
 wip_bin   = $(patsubst %_$(lastword $(subst _, ,$(1))),%,$(1))
-bin_of    = $(if $(filter docs/wip/%,$(1)),$(call wip_bin,$(notdir $(1))),$(word 2,$(subst /, ,$(1))))
+bin_of    = $(if $(filter docs/wip/%,$(1)),$(call wip_bin,$(notdir $(1))),$(if $(filter src/fxmod/%,$(1)),$(word 3,$(subst /, ,$(1))),$(word 2,$(subst /, ,$(1)))))
 WIP_SRCS  := $(foreach f,$(patsubst $(DECOMP)/%.c,%,$(wildcard $(DECOMP)/docs/wip/*_[0-9A-F]*.c)),\
                  $(if $(filter $(call wip_bin,$(notdir $(f))),$(BINS)),$(f)))
 DECOMP_SRCS := $(foreach b,$(BINS),$(call src_of,$(b))) $(WIP_SRCS)
 weak_src  = $(filter src_equiv/% docs/wip/%,$(1))
-header_of = $(if $(filter main,$(1)),ff9.h,$(1).h)
+header_of = $(if $(filter main,$(1)),ff9.h,$(if $(filter fx_%,$(1)),btlfx_mod.h,$(1).h))
 
 PORT_HDRS := $(wildcard port/include/*.h)
 # window_tween.c reimplemented func_80063118 before the decomp matched it; only its PSX comparison test uses it now.

@@ -36,6 +36,14 @@
 
 #include PORT_HEADER
 #include "port_hw.h"
+#ifdef BTLFX_EXPORTS
+/* Battle effect modules (btlfx_mod.h) reach ovl_0b through env->unk10, which always holds g_btlfxModuleExports.
+ * Some ops read it before checking whether they were given an env at all (mode 0 calls pass NULL): harmless on
+ * the PS1 (a low-RAM read), a fault natively. Modules built for the port take the table's address directly. */
+#include "psx_mem.h"
+#undef BTLFX_EXPORTS
+#define BTLFX_EXPORTS(env) ((void)(env), (BtlfxExports *)PSX_ADDR(0x800F7510))
+#endif
 #include "psx_runtime.h"
 #include "effect_vm.h"
 void port_measure_text_into(void *out, const void *text);

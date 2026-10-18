@@ -1501,3 +1501,20 @@ host process now exits zero after 65000 frames and returns to field mode
 The debugger trace retains attack commands and the victory flag; its trailing
 post-exit backtrace error is not a game failure. This is host reward-path
 coverage; native DS and original PSX victory motion comparison remains due.
+
+## Native battle effect modules (2026-10-18)
+
+The decomp splits the 380 battle effect modules (FF9.IMG dir 13, loaded at 0x801E7700; decomp
+`docs/effect-modules.md`) and matches them to C module by module. Modules listed in the Makefile's `FXNATIVE`
+whose C is complete (no `INCLUDE_ASM`) and whose image was extracted (`make extract-fxmod` in the decomp, giving
+`disks/us/fxmod/`) are built into the port like an overlay: `tools/ff9sym.py` lists them as binaries (namespace
+`xNNN_`), `tools/gen_link.py` writes their relocations and the `psx_fxmods` table (code range, FNV-1a of the code
+bytes, functions by PS1 address). At run time `port/game/effect_native.c` notices the slot changed on the next
+call into it, identifies the image by that hash, relocates it (its header's ops become native addresses) and
+answers the call with the native function; other modules keep running in the effect VM.
+
+- Module ops are called with a NULL env in mode 0, and some read `env->unk10` (the export table) before looking:
+  a low-RAM read on the PS1. The prelude redefines `BTLFX_EXPORTS(env)` to the table's fixed address.
+- The three exports that are void in ovl_0b but whose `$v0` modules read are wrapped in the table itself
+  (`port/game/effect_exports.c`), for the VM and native modules alike.
+- Ark (fx_0b2): frame-identical to the VM on the host (80 frames).
