@@ -146,12 +146,18 @@ static u32 native_call(u32 target,u32 *r) {
     };
     u32 ctx=read32((u32)PSX_ADDR(0x800f78a4));
     if(ctx) {
+        /* The export's pointer mask, from its index in the table. Modules call exports hundreds of times a frame;
+         * a direct-mapped cache of the index (checked against the table on every hit, one read) replaces the
+         * 216-entry search. */
+        static struct { u32 target; u16 index; } cache[256]; /* exports found (other targets search each time) */
         u32 table=read32(ctx+16);
-        for(unsigned index=0;index<216;index++) if(read32(table+index*4)==target) {
-            u16 mask=pointer_mask[index];
-            for(unsigned i=0;i<16;i++) if(a[i] && (mask&(1u<<i))) a[i]=(u32)(uintptr_t)memory(a[i]);
-            break;
+        unsigned slot=(target>>2^target>>10)&255,index=cache[slot].index;
+        if(cache[slot].target!=target || read32(table+index*4)!=target) {
+            for(index=0;index<216 && read32(table+index*4)!=target;index++) {}
+            if(index<216) { cache[slot].target=target;cache[slot].index=(u16)index; }
         }
+        u16 mask=index<216 ? pointer_mask[index] : 0;
+        for(unsigned i=0;mask && i<16;i++) if(a[i] && (mask&(1u<<i))) a[i]=(u32)(uintptr_t)memory(a[i]);
     }
     return ((NativeExport)(uintptr_t)target)(a[0],a[1],a[2],a[3],a[4],a[5],a[6],a[7],
                                             a[8],a[9],a[10],a[11],a[12],a[13],a[14],a[15]);
