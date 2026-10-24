@@ -62,7 +62,7 @@ src/ovl_0b/ovl_0b_2.c | if (arg0 & 0x90000000) { | if ((u32)arg0 >= PSX_RAM_SIZE
 # Full-screen TIM display follows OT[8]'s 24-bit link on the CPU (MIPS
 # 0x800B4DC4 / 0x800B4E40). Restore its native arena address before addPrim.
 # The raw link points into ITCM on DS and caused the post-briefing data abort.
-docs/wip/ovl_0a_800B4A5C.c | (u32 *)g_gameState->unk1C->unk10[g_gameState->unk1C->unk8][8] | PSX_OT_PTR(g_gameState->unk1C->unk10[g_gameState->unk1C->unk8][8]) | 2
+src/ovl_0a/ovl_0a.c | (u32 *)g_gameState->unk1C->unk10[g_gameState->unk1C->unk8][8] | PSX_OT_PTR(g_gameState->unk1C->unk10[g_gameState->unk1C->unk8][8]) | 2
 
 # Script values are 26 bits; on the PS1 a RAM pointer popped back (0x00xxxxxx, the RAM mirror) works as is. DS
 # pointers (0x02xxxxxx) set bit 25, which the 26-bit sign extension turns into 0xFExxxxxx: mask it back.
@@ -129,7 +129,7 @@ src/ovl_0a/ovl_0a.c | func_800B31B8((FieldEvtCtx *)func_8001E350(arg0), arg1, ar
 
 # Field movement collision query can return NULL. The PS1 still reads byte 0x0F (assembly 0x800478D8)
 # before checking the pointer at 0x800478FC. Preserve that low-RAM read without faulting on ARM/PC.
-docs/wip/main_800475D8.c | ((o->unkF >> 4) ^ 1) & 1 | ((PSX_NZ(o)->unkF >> 4) ^ 1) & 1 | 1
+src/main/main.c | ((o->unkF >> 4) ^ 1) & 1 | ((PSX_NZ(o)->unkF >> 4) ^ 1) & 1 | 1
 
 # Cached mode overlays can arrive through StoreImage or a RAM copy, bypassing CD_getsector's relocation.
 # Patch only the restored prefix; trailing disc sectors still use psx_overlay_patch in the CD layer.
@@ -167,8 +167,10 @@ src/ovl_0b/ovl_0b.c | u == cmd->unk4 && (u32)(cmd->cmdNo - 0x37) >= 7 | u == PSX
 # the low-RAM value and stored NULL; do not skip the motion transition.
 src/ovl_0b/ovl_0b.c | && (!(u->unk68 & 1) || (s32)m->unkC != u->unkA4[9]) && u != g_gameState->unk1C->unk8E4.battle->curCmd->unk4 | && (!(u->unk68 & 1) || (s32)m->unkC != u->unkA4[9]) && u != PSX_NZ(g_gameState->unk1C->unk8E4.battle->curCmd)->unk4 | 2
 src/ovl_0b/ovl_0b.c | && (!(arg0->unk68 & 1) || (s32)m->unkC != arg0->unkA4[9]) && arg0 != g_gameState->unk1C->unk8E4.battle->curCmd->unk4 | && (!(arg0->unk68 & 1) || (s32)m->unkC != arg0->unkA4[9]) && arg0 != PSX_NZ(g_gameState->unk1C->unk8E4.battle->curCmd)->unk4 | 1
-# WIP draft uses a by-value struct to reproduce MIPS stack homes; native callers use four arguments.
-docs/wip/ovl_0b_800E4A3C.c | Pool6CEntry *func_800E4A3C(s32 arg0, s32 arg1, E4Arg arg2) { | Pool6CEntry *func_800E4A3C(s32 arg0, s32 arg1, s16 *arg2_a, s16 *arg2_b) { E4Arg arg2 = {arg2_a, arg2_b, NULL}; | 1
+# The definition takes a 12-byte struct by value to reproduce the MIPS stack homes (ovl_0b.h); its callers pass two
+# pointers. Natively the struct's third word lies past the callers' arguments, in the caller's frame, and the
+# definition stores to it: define it as the callers see it, with the struct a local.
+src/ovl_0b/ovl_0b_2.c | Pool6CEntry *func_800E4A3C_def(s32 arg0, s32 arg1, Unk800E4A3CArgs arg2) { | Pool6CEntry *func_800E4A3C(s32 arg0, s32 arg1, s16 *arg2_a, s16 *arg2_b) { Unk800E4A3CArgs arg2 = {arg2_a, arg2_b, NULL}; | 1
 # Battle help-text measurement explicitly passes the PS1 hidden structure-return pointer.
 src/ovl_0b/ovl_0b_2.c | func_8002AF70(&v.unk0, (s32)&g_btlBanner); | port_measure_text_into(&v.unk0, &g_btlBanner); | 1
 # Effect setup can submit a native local packet/OT buffer; preserve its exact bounds.

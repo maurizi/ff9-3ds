@@ -26,6 +26,18 @@ PLAIN_FILE = Path(__file__).resolve().parent.parent / "config" / "addr_plain.txt
 PATCH_FILE = Path(__file__).resolve().parent.parent / "config" / "patches.txt"
 
 
+def check_patch_paths():
+    """Every patch's file must exist: one for a file the decomp moved or removed would never apply, silently."""
+    decomp = PATCH_FILE.parent.parent / "decomp"
+    missing = set()
+    for line in PATCH_FILE.read_text(encoding="utf-8").splitlines():
+        body = line.split("   #")[0].strip()
+        if body and not body.startswith("#") and not (decomp / body.split(" | ")[0].strip()).exists():
+            missing.add(body.split(" | ")[0].strip())
+    if missing:
+        sys.exit("config/patches.txt names files the decomp doesn't have (moved? matched?): " + ", ".join(sorted(missing)))
+
+
 def apply_patches(src, text):
     """config/patches.txt: exact-text replacements with an expected count (a stale patch fails the build)."""
     rel = src.removeprefix("decomp/")
@@ -126,6 +138,7 @@ def main():
 
     text = open(args.src, encoding="utf-8").read()
     text = PAD.sub("/* port: rodata padding removed */", text)
+    check_patch_paths()
     text = apply_patches(args.src, text)
     text = fxmod_macros(args.src, text)
     text = narrow_params(text, strip_comments_keep_lines(text))
