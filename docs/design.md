@@ -469,6 +469,11 @@ host census, 2500 frames of random walking with `--render`).
 44.8 -> 39.7, 2162 42.1 -> 36.5, 1508 47.3 -> 42.3), and looking the same apart from the 3D engine's sampling at
 the 0.8 scale and the additive approximation. 931 and 1812 are over the 3D engine's limits at that frame (2300 and
 2200 primitives): software there, as fast. Before block runs and the larger buffers, 8 of the 28 were software.
+Tried for scenes over the limits: split frames, the back part (the primitives before the last ones that fit, or a
+full buffer's older half) drawn in software into bank A and the rest in 3D over it. They look right (931 at frame
+600, 1812) but aren't faster: 931 58.9 -> 58.5 ms, 1812 71.0 -> 79.4 (the back's software drawing, recording every
+primitive and scaling both layers cost what the 3D part saves). Those scenes stay software; drawing all of them in
+3D needs two 3D passes (display capture of the back half, shown behind the front half).
 Tried first: a software background layer for the sprites before the first
 polygon, to keep their textures out of the 3D engine; re-rendering it each frame (the game writes VRAM every frame,
 and which sprites move there changes as characters move) cost more than it saved.
