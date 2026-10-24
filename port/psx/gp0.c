@@ -5,6 +5,8 @@
 #include "psx_display.h"
 #include "psx_runtime.h"
 
+extern unsigned int psx_gpu_scene_prims; /* gpu.c */
+
 Gp0State gp0_state = {0, 0, 1023, 511, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 const Gp0Backend *gp0_backend;
 /* psx_display.h; weak here and in gpu.c, since unit tests link either file alone */
@@ -142,6 +144,7 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
             }
         }
         if (gp0_backend && gp0_backend->poly) {
+            ++psx_gpu_scene_prims;
             gp0_backend->poly(&m, v, nv);
         }
         return need;
@@ -168,6 +171,7 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
             }
             Gp0Vtx next = vtx(w[k++], col);
             if (gp0_backend && gp0_backend->line) {
+                ++psx_gpu_scene_prims;
                 gp0_backend->line(&m, &prev, &next);
             }
             prev = next;
@@ -215,6 +219,7 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
                 psx_gp0_font_probe[8]=gp0_state.area_x1;
                 psx_gp0_font_probe[9]=gp0_state.area_y1;
             }
+            ++psx_gpu_scene_prims;
             gp0_backend->rect(&m, &v, wd, ht);
             if (!m.textured || m.ty != 256 || (m.tx != 896 && m.tx != 960)) return need; /* no font page */
             /* Battle names (F2DC0) and HP/MP strings (F2ED0/F3A8C)

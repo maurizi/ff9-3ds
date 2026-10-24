@@ -308,7 +308,14 @@ DRAWENV *PutDrawEnv(DRAWENV *env) {
     return env;
 }
 
+/* primitives drawn since the display last moved, and the most a scene had (sizing the DS's hybrid scene buffers) */
+unsigned int psx_gpu_scene_prims, psx_gpu_scene_prims_max;
+
 DISPENV *PutDispEnv(DISPENV *env) {
+    if (env->disp.x != disp_env.disp.x || env->disp.y != disp_env.disp.y) {
+        if (psx_gpu_scene_prims > psx_gpu_scene_prims_max) psx_gpu_scene_prims_max = psx_gpu_scene_prims;
+        psx_gpu_scene_prims = 0;
+    }
     __builtin_memcpy(&disp_env, env, sizeof disp_env);
     return env;
 }
