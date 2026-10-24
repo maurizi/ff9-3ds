@@ -1,6 +1,7 @@
 /* Scripted pad input for automated runs: "BUTTON@FRAME[+FRAMES]" entries (PC: --press; DS: PORT_AUTOPRESS at build
  * time). The platforms add these presses to the real pad state. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "input_script.h"
@@ -14,18 +15,25 @@ static const struct {
     {"TRIANGLE", 0x1000}, {"CIRCLE", 0x2000}, {"CROSS", 0x4000}, {"SQUARE", 0x8000},
 };
 
-#define MAX_PRESSES 4096
-static struct {
+/* grown as presses are added: ordinary builds have none and spend no memory on them */
+static struct Press {
     unsigned int bit;
     long from, to;
-} presses[MAX_PRESSES];
-static int n_presses;
+} *presses;
+static int n_presses, max_presses;
 
 int input_script_add(const char *arg) {
     char name[16];
     long at = 0, dur = 6;
-    if (sscanf(arg, "%15[A-Z0-9]@%ld+%ld", name, &at, &dur) < 2 || n_presses == MAX_PRESSES) {
+    if (sscanf(arg, "%15[A-Z0-9]@%ld+%ld", name, &at, &dur) < 2) {
         return 0;
+    }
+    if (n_presses == max_presses) {
+        int grown = max_presses ? 2 * max_presses : 64;
+        struct Press *p = realloc(presses, grown * sizeof *presses);
+        if (!p) return 0;
+        presses = p;
+        max_presses = grown;
     }
     for (unsigned int i = 0; i < sizeof buttons / sizeof buttons[0]; i++) {
         if (!strcmp(name, buttons[i].name)) {

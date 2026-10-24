@@ -197,8 +197,21 @@ ds_FXOVL := 1
 $(BUILD)/ds/ff9ds_arm9.ld: $(BLOCKSDS)/sys/crts/ds_arm9.ld $(GEN)/stamp
 	@mkdir -p $(dir $@)
 	@$(PYTHON) -c "import sys; s = open(sys.argv[1]).read(); m = '    /* Space reserved for the thread local storage'; assert s.count(m) == 1; open(sys.argv[3], 'w').write(s.replace(m, open(sys.argv[2]).read() + m))" $< $(GEN)/psx_ovl_areas.ld $@
-$(BUILD)/ds/ff9ds.specs: $(SPECS) $(BUILD)/ds/ff9ds_arm9.ld
-	@sed 's|%:getenv(BLOCKSDS /sys/crts/ds_arm9.ld)|$(BUILD)/ds/ff9ds_arm9.ld|' $< > $@
+# DSMODE=1: the original DS's memory map (BlocksDS's DS specs) instead of the DSi's, with main RAM up to the 4 KB
+# system area at its top: the ARM7 only stages its 33 KB image at 0x02380000 before copying it to its own RAM.
+ifeq ($(DSMODE),1)
+GAME_SPECS_BASE := $(BLOCKSDS)/sys/crts/ds_arm9.specs
+GAME_MEM := $(BUILD)/ds/ff9ds_ds.mem
+else
+GAME_SPECS_BASE := $(SPECS)
+GAME_MEM :=
+endif
+$(BUILD)/ds/ff9ds_ds.mem:
+	@mkdir -p $(dir $@)
+	@printf 'MEMORY {\n\tewram\t: ORIGIN = 0x02000000, LENGTH = 4M - 4K\n\tdtcm\t: ORIGIN = 0x02ff4000, LENGTH = 16K\n\titcm\t: ORIGIN = 0x01000000, LENGTH = 32K\n}\n' > $@
+$(BUILD)/ds/ff9ds.specs: $(GAME_SPECS_BASE) $(BUILD)/ds/ff9ds_arm9.ld $(GAME_MEM) $(BUILD)/ds/runtime-config
+	@sed -e 's|%:getenv(BLOCKSDS /sys/crts/ds_arm9.ld)|$(BUILD)/ds/ff9ds_arm9.ld|' \
+		$(if $(GAME_MEM),-e 's|%:getenv(BLOCKSDS /sys/crts/ds_arm9.mem)|$(GAME_MEM)|') $< > $@
 $(BUILD)/ds/stubs.c $(BUILD)/ds/ff9ds.elf: $(BUILD)/ds/ff9ds.specs
 $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH),ds,arm,\
 	-specs=$(BUILD)/ds/ff9ds.specs -L$(BLOCKSDS)/libs/libnds/lib -L$(BLOCKSDS)/libs/maxmod/lib -Wl$(,)--gc-sections,-lmm9 -lnds9 -lc))
@@ -207,7 +220,7 @@ $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH)
 .PHONY: FORCE_DS_CONFIG
 $(BUILD)/ds/runtime-config: FORCE_DS_CONFIG
 	@mkdir -p $(dir $@)
-	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(AUDIO)' '$(AUDIOHASH)' '$(AUDIOCAPTURE)' '$(SPUARM)' '$(SPUITCM)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' '$(GXLAZY)' '$(CAPTURE_READBACK)' '$(CANARY)' '$(HYBRID)' '$(HWSOUND)' > $@.tmp
+	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(AUDIO)' '$(AUDIOHASH)' '$(AUDIOCAPTURE)' '$(SPUARM)' '$(SPUITCM)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' '$(GXLAZY)' '$(CAPTURE_READBACK)' '$(CANARY)' '$(HYBRID)' '$(HWSOUND)' '$(DSMODE)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(ds_PORTOBJS): $(BUILD)/ds/runtime-config

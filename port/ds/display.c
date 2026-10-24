@@ -167,15 +167,6 @@ void display_present(void) {
     }
     shown_generation = psx_display_generation;
     unsigned int profile_scale=port_profile_begin();
-    /* Scale into cached main RAM, then DMA to the VRAM back buffer: the ARM9's own stores to VRAM cross the
-     * slow external bus and cost most of the scaling time. */
-    static u16 frame[256*192] __attribute__((aligned(32)));
-    static int frame_w, frame_h;
-    u16 *dst = frame;
-    if (w != frame_w || h != frame_h) {
-        memset(frame, 0, sizeof frame);
-        frame_w=w; frame_h=h;
-    }
     psx_display_font_presented=text_count;
 #ifdef PORT_GX_HYBRID
     if (gxh_active()) {
@@ -186,18 +177,31 @@ void display_present(void) {
         return;
     }
 #endif
-    if (d->rgb24)
-        ds_scale_display_rgb24(dst, psx_vram, d->x, d->y, w, h);
-    else
-        ds_scale_display_text_pair(dst, psx_vram, d->x, d->y, w, h,
-                                  text_rects, text_count, previous_rects, previous_count);
-    DC_FlushRange(frame, sizeof frame);
-    port_profile_end(PORT_PROFILE_SCALE,profile_scale);
     /* The back buffer is scanned out until a queued swap happens: wait for it before overwriting. */
     unsigned int profile_wait=port_profile_wait_begin();
     while (queued_buffer >= 0) swiWaitForVBlank();
     port_profile_wait_end(profile_wait);
-    dmaCopyWords(2, frame, BG_BMP_RAM_MAIN(back_buffer*8), sizeof frame);
+    /* Scale into cached main RAM 16 output rows at a time, each DMA'd to the VRAM back buffer: the ARM9's own
+     * stores to VRAM cross the slow external bus and cost most of the scaling time, and a whole frame's buffer
+     * would cost 96 KB. A band's 16 rows come from 20 source rows; one more lets the text filter at its last row
+     * read the next band's first, as a whole-frame pass does. */
+    enum { BAND = 16 };
+    static u16 band[256 * BAND] __attribute__((aligned(32)));
+    u16 *bitmap = (u16 *)BG_BMP_RAM_MAIN(back_buffer*8);
+    const int out_h = h * 4 / 5;
+    for (int oy = 0; oy < out_h; oy += BAND) {
+        const int rows = out_h - oy < BAND ? out_h - oy : BAND, sy = oy * 5 / 4;
+        const int src_h = h - sy < BAND * 5 / 4 + 1 ? h - sy : BAND * 5 / 4 + 1;
+        if (d->rgb24)
+            ds_scale_display_rgb24(band, psx_vram, d->x, d->y + sy, w, src_h);
+        else
+            ds_scale_display_text_pair(band, psx_vram, d->x, d->y + sy, w, src_h,
+                                      text_rects, text_count, previous_rects, previous_count);
+        DC_FlushRange(band, rows * 256 * sizeof *band);
+        dmaCopyWords(2, band, bitmap + oy * 256, rows * 256 * sizeof *band);
+    }
+    if (out_h < 192) dmaFillWords(0, bitmap + out_h * 256, (192 - out_h) * 256 * sizeof *bitmap);
+    port_profile_end(PORT_PROFILE_SCALE,profile_scale);
     queued_scroll = -(192-h*4/5)/2;
     queued_buffer = back_buffer;
     back_buffer^=1;

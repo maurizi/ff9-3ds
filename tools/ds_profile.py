@@ -67,6 +67,8 @@ def main():
     p.add_argument('--timeout', type=float, default=900)
     p.add_argument('--sd-folder', type=Path, help='DSi SD folder to sync (e.g. one holding ff9ds/raw/FF9 CD3.img)')
     p.add_argument('--sd-image', type=Path, help='SD image for --sd-folder; a new path makes melonDS size it to fit')
+    p.add_argument('--ds-mode', action='store_true', help='run as an original DS (4 MB, 67 MHz): the --sd-folder is '
+                   'given through DLDI (the game sees fat:/), --sd-image is the DLDI image')
     p.add_argument('--screenshot', type=Path, help='new PNG under build/: the emulator window at the capture frame '
                    '(the only view of GX output, which is not in RAM)')
     a = p.parse_args()
@@ -80,7 +82,19 @@ def main():
         p.error('ELF has no frames counter')
     backup = out.with_suffix('.melonDS.toml')
     shutil.copy(CONFIG, backup)
-    if a.sd_folder:
+    if a.ds_mode:
+        import re
+        text = CONFIG.read_text()
+        text = re.sub(r'^ConsoleType = .*$', 'ConsoleType = 0', text, flags=re.M)
+        start = text.index('[DLDI]\n')
+        end = text.find('\n[', start + 1)
+        block = '[DLDI]\nEnable = true\nFolderSync = true\nReadOnly = false\n'
+        if a.sd_folder:
+            block += f'FolderPath = "{a.sd_folder.resolve()}"\n'
+        if a.sd_image:
+            block += f'ImagePath = "{a.sd_image.resolve()}"\nImageSize = 0\n'
+        CONFIG.write_text(text[:start] + block + text[end:])
+    elif a.sd_folder:
         import re
         text = CONFIG.read_text()
         start = text.index('[DSi.SD]\n')
@@ -123,6 +137,9 @@ def main():
         with open(f'/proc/{pid}/mem', 'rb', buffering=0) as memory:
             while frame < a.frame:
                 if time.monotonic() > deadline:
+                    win = window(a.display)
+                    if a.screenshot and win:  # what stopped it (a fatal error shows on the bottom screen)
+                        subprocess.run(['import', '-window', win, str(a.screenshot.resolve())], env=env)
                     sys.exit(f'timed out at frame {frame}')
                 time.sleep(0.25)
                 for base in bases:
