@@ -3,49 +3,29 @@
 #ifndef PORT_DECLS_GEN_H
 #define PORT_DECLS_GEN_H
 
-#ifdef PORT_BIN_main
-u8 func_8002F864(void);
-u32 func_8004E8D4(void);
-u32 func_8004E8EC(void);
-#endif
-
 #ifdef PORT_BIN_ovl_0a
-s32 func_800A879C(FieldMapObj *, u16);
-s32 func_800A97D4(FieldScene *, u16);
-s32 func_800A9814(FieldScene *, u16);
+s32 bgi_setAnimRate(u32, s16);
+s32 *fld_addPreloadExclude(s32);
+s32 *fld_addPreloadRequest(s32);
 s32 fld_depFindBattle(u16, s32 *, s32 *);
 s32 fld_depFindField(u16, s32 *, s32 *);
-u8 *func_800AFCBC(u8 *);
-FieldTrig *func_800B2100(FieldEvtCtx *, u16, s16);
-s32 func_800B2218(FieldEvtCtx *, u16, s16);
-Unk800B3294 *func_800B3294(Unk800B3254 *, u16);
-s32 *func_800B3CAC(s32);
-s32 *func_800B3DE4(s32);
-void func_800B61A4(Unk800C95C8 *, u8);
-u32 func_800BA0F0(u32, s32, s32, s32);
-BgSprt *func_800BFCE8(void);
-s32 func_800C17F0(s32, s16);
-s32 func_800C7800(s16, u16 *);
-s32 func_800C7BC4(u32, s16);
+s32 fld_findAreaItem(FieldMapObj *, u16);
+s32 fld_findEventScript(FieldScene *, u16);
+Unk800B3294 *fld_findLightColor(Unk800B3254 *, u16);
+s32 fld_loadVibration(FieldScene *, u16);
+s32 fldbg_setAnimSpeed(s32, s16);
+u32 fldmdl_addRgbClamped(u32, s32, s32, s32);
+void fldmdl_projectMesh(ModelObj *, u8);
 #endif
 
 #ifdef PORT_BIN_ovl_0b
-Unk800CC278 *btl_popupText(s32, u8, s16, s8);
 s16 btl_loadBackgroundStep(Battle11C0 *, s32, Unk800AA08C *);
+BtlPopup *btl_popupText(s32, u8, s16, s8);
 #endif
 
 #ifdef PORT_BIN_ovl_0c
-s32 func_800A99C4(WorldMapObj *, u16);
-s32 func_800A9A04(WorldMapObj *, u16);
-s32 func_800B822C(s32, s16, s32, s32);
-void *w_framePackGetPtr(void **, s32);
-u8 func_800BC528(s32);
-s32 w_readtxRequest(s16);
-#endif
-
-#ifdef PORT_BIN_ovl_15
-u8 func_800AB1B8(void);
-u8 func_800ACF48(void);
+s32 wm_findAreaData(WorldMapObj *, u16);
+s32 wm_findMapScript(WorldMapObj *, u16);
 #endif
 
 #endif

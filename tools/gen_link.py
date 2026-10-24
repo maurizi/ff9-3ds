@@ -131,6 +131,23 @@ def main():
             return False
         return any(vram in starts.get(x, {}) for x in bins if x != src)
 
+    aliases = {}  # placeholder -> {target symbol}: link-time aliases (below)
+    # The decomp's own aliases for main's calls into overlays (config/xrefs.us.txt: `name = 0xADDR; /* ovl_xx ... */`),
+    # which its PS1 link script defines: names no binary defines, resolved to the function at that address
+    decomp_xrefs = {}
+    xref_file = ff9sym.DECOMP / f"config/xrefs.{ff9sym.VERSION}.txt"
+    if xref_file.exists():
+        for m in re.finditer(r"^(\w+)\s*=\s*0x([0-9A-Fa-f]+);\s*(?:/\*\s*(ovl_\w+))?", xref_file.read_text(), re.M):
+            decomp_xrefs[m.group(1)] = (int(m.group(2), 16), m.group(3))
+    # Data names two binaries define at different addresses (the opening's and the ending's g_movieState): each
+    # binary's references are qualified like its functions, and each gets its own PROVIDE (psx_syms.ld).
+    data_of = {b: ff9sym.data_symbols_of(b) for b in bins}
+    data_owners = {}
+    for b, names in data_of.items():
+        for n, a in names.items():
+            data_owners.setdefault(n, {})[b] = a
+    shared_data = {n: owners for n, owners in data_owners.items() if len(set(owners.values())) > 1}
+
     # --- redefine maps --------------------------------------------------------------------------------------
     for b in bins:
         mapping = {}
@@ -138,11 +155,21 @@ def main():
             for name in defined[b] | set(funcs.get(b, {})):
                 mapping[name] = qualified(b, name)
         for name in undefined(objs[b]):
+            if name in shared_data and b in shared_data[name] and b != "main":
+                mapping[name] = qualified(b, name)
+                continue
             if name in mapping or name.startswith("__"):
                 continue
             if name in defined[b] or name in funcs.get(b, {}):
                 continue
             target = owner_of_name(b, name) if any(name in funcs.get(x, {}) or name in defined[x] for x in bins) else None
+            if target is None and name in decomp_xrefs:
+                vram, ovl = decomp_xrefs[name]
+                owner = ovl if ovl in bins and vram in starts.get(ovl, {}) else owner_of_addr(b, vram)
+                if owner and owner != TRAMP and owner != b and vram in starts.get(owner, {}):
+                    mapping[name] = qualified(owner, starts[owner][vram])
+                    report.append(f"decomp alias: {b} {name} -> {owner} {starts[owner][vram]}")
+                    continue
             if target is None and (m := ff9sym.ADDR_NAME.match(name)) and \
                     (name.startswith("func_") or (name.startswith("D_") and d_is_function(b, int(m.group(1), 16)))):
                 # a placeholder name for a function another binary has since named, or a function the C calls
@@ -159,6 +186,17 @@ def main():
                 mapping[name] = f"xt_{name}"
             elif target and target not in ("main", b):
                 mapping[name] = qualified(target, name)
+        # a placeholder resolved by address whose target the binary also references by name: objcopy can't rename
+        # two symbols to one, so the placeholder becomes a link-time alias (psx_syms.ld) instead
+        targets = {}
+        for k, v in mapping.items():
+            targets.setdefault(v, []).append(k)
+        for v, ks in targets.items():
+            if len(ks) > 1:
+                for k in ks:
+                    if ff9sym.ADDR_NAME.match(k):
+                        aliases.setdefault(k, set()).add(v)
+                        del mapping[k]
         (GEN / f"redefine_{b}.txt").write_text("".join(f"{k} {v}\n" for k, v in sorted(mapping.items())))
 
     # --- data images ----------------------------------------------------------------------------------------
@@ -309,6 +347,10 @@ def main():
             continue  # a code label splat emitted as data (BIOS call stubs): never place code in psx_ram
         addrs = syms[name]
         if len(addrs) > 1:
+            if name in shared_data:
+                for ob, a in sorted(shared_data[name].items()):
+                    lines.append(f"PROVIDE({bins[ob].ns + name} = psx_ram + 0x{a & 0x1FFFFF:X});")
+                continue
             report.append(f"conflict: data symbol {name} has addresses {', '.join(f'0x{a:08X}' for a in sorted(addrs))}")
             continue
         a = next(iter(addrs))
@@ -325,6 +367,10 @@ def main():
     dups = sorted(defined_in_src & defined_in_equiv)
     for name in dups:
         report.append(f"duplicate: {name} is in both src/ and src_equiv/ (the matched src/ one is used)")
+    for name, vs in sorted(aliases.items()):
+        if len(vs) > 1:
+            sys.exit(f"gen_link.py: {name} resolves to {sorted(vs)} in different binaries")
+        lines.append(f"PROVIDE({name} = {next(iter(vs))});")
     (GEN / "psx_syms.ld").write_text("\n".join(lines) + "\n")
 
     # --- trampolines for references whose target depends on the resident overlay ---------------------------

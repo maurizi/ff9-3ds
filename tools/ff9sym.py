@@ -135,6 +135,21 @@ def functions():
     return out
 
 
+def data_symbols_of(binary):
+    """{name: addr} of the non-function symbols one binary's symbol files and splat data labels define."""
+    funcs = {n for fs in functions().values() for n in fs}
+    out = {}
+    for f in symbol_files(binary):
+        for n, (a, is_func) in read_symbols(f).items():
+            if (not is_func or n.startswith("g_")) and n not in funcs:
+                out[n] = a
+    asm = DECOMP / f"asm/{VERSION}/{binary}"
+    for s in asm.rglob("*.s"):
+        for m in re.finditer(r"^dlabel (\w+)\n\s*/\* [0-9A-F]+ ([0-9A-F]{8}) ", s.read_text(errors="replace"), re.M):
+            out.setdefault(m.group(1), int(m.group(2), 16))
+    return out
+
+
 def data_symbols(bins):
     """{name: {addr, ...}} for every non-function symbol any binary knows: symbol files and splat's data labels.
     More than one address for a name is a conflict the caller reports."""
