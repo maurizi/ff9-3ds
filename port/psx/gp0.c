@@ -32,7 +32,8 @@ static inline int sext11(int v) {
 }
 
 static Gp0Vtx vtx(unsigned int xy, unsigned int col) {
-    Gp0Vtx v = {0};
+    Gp0Vtx v;
+    v.u = v.v = 0;
     v.x = sext11((int)(xy & 0x7FF)) + gp0_state.ofs_x;
     v.y = sext11((int)((xy >> 16) & 0x7FF)) + gp0_state.ofs_y;
     v.r = col & 0xFF;
@@ -111,7 +112,9 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
             if (area_hits) psx_display_generation++;
         }
     }
-    Gp0Mode m = {0};
+    Gp0Mode m; /* every field set (an initialiser compiles to a memset call, one per command) */
+    m.textured = m.raw = m.semi = m.gouraud = 0;
+    m.clut_x = m.clut_y = 0;
     apply_texpage(&m, gp0_state.texpage);
 
     if (cmd >= 0x20 && cmd < 0x40) { /* polygon */

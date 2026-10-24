@@ -23,6 +23,22 @@ static void sample(void) {
     else port_pc_header[6]++;
 }
 
+/* memset's callers of 16 bytes or more (linked with --wrap=memset): caller, calls, bytes */
+#define MEMSET_CALLERS 256
+volatile u32 port_pc_memset[MEMSET_CALLERS][3];
+void *__real_memset(void *p, int c, size_t n);
+void *__wrap_memset(void *p, int c, size_t n) {
+    if (n >= 16) {
+        u32 caller = (u32)__builtin_return_address(0);
+        for (u32 i = (caller >> 1) * 2654435761u >> 24, tries = 0; tries < 8; ++tries, i = (i + 1) & 255)
+            if (port_pc_memset[i][0] == caller || !port_pc_memset[i][0]) {
+                port_pc_memset[i][0] = caller; port_pc_memset[i][1]++; port_pc_memset[i][2] += n;
+                break;
+            }
+    }
+    return __real_memset(p, c, n);
+}
+
 void port_pc_sampler_init(void) {
     timerStart(1, ClockDivider_64, TIMER_FREQ_64(8000), sample);
 }

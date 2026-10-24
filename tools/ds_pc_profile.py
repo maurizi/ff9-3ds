@@ -32,7 +32,7 @@ for line in subprocess.check_output(['objdump', '-t', str(a.elf)], text=True).sp
     if not m:
         continue
     addr, flags, section, size, name = int(m[1], 16), m[2], m[3], int(m[4], 16), m[5]
-    if name in ('port_pc_header', 'port_pc_main', 'port_pc_itcm'):
+    if name in ('port_pc_header', 'port_pc_main', 'port_pc_itcm', 'port_pc_memset'):
         symbols[name] = addr
     if 'F' not in flags:
         continue
@@ -58,23 +58,44 @@ _, main_lo, main_n, itcm_lo, itcm_n, total, outside, _ = head
 counts = collections.Counter()
 
 
+# a function without a size (assembly) runs to the next symbol
+funcs = [(s, size or ((funcs[i + 1][0] - s) if i + 1 < len(funcs) else 64), name) for i, (s, size, name) in enumerate(funcs)]
+
+
 def attribute(base, n, table):
+    """each bucket's samples split over the functions it overlaps, by bytes"""
     words = struct.unpack('<%dH' % n, ram(symbols[table], 2 * n))
     for i, c in enumerate(words):
         if not c:
             continue
-        mid = base + i * 64 + 32
-        k = bisect.bisect_right(starts, mid) - 1
-        name = '?%08X' % (base + i * 64)
-        if k >= 0:
+        lo, hi = base + i * 64, base + i * 64 + 64
+        k = max(bisect.bisect_right(starts, lo) - 1, 0)
+        parts = []
+        while k < len(funcs) and funcs[k][0] < hi:
             s, size, fname = funcs[k]
-            if mid < s + max(size, 64):
-                name = fname
-        counts[name] += c
+            overlap = min(hi, s + size) - max(lo, s)
+            if overlap > 0:
+                parts.append((overlap, fname))
+            k += 1
+        if not parts:
+            counts['?%08X' % lo] += c
+            continue
+        total_overlap = sum(o for o, _ in parts)
+        for o, fname in parts:
+            counts[fname] += c * o / total_overlap
 
 
 attribute(main_lo, main_n, 'port_pc_main')
 attribute(itcm_lo, itcm_n, 'port_pc_itcm')
 print(f'{total} samples ({total / 8000:.1f} s), {outside} outside main RAM and ITCM (BIOS waits for VBlank and the like)')
 for name, c in counts.most_common(a.top):
-    print(f'{100 * c / total:6.2f}%  {c:7d}  {name}')
+    print(f'{100 * c / total:6.2f}%  {c:9.0f}  {name}')
+
+if 'port_pc_memset' in symbols:
+    rows = struct.unpack('<768I', ram(symbols['port_pc_memset'], 3072))
+    callers = [(rows[i * 3 + 2], rows[i * 3 + 1], rows[i * 3]) for i in range(256) if rows[i * 3]]
+    if callers:
+        print('memset callers (16 bytes or more): bytes, calls, caller')
+    for nbytes, calls, caller in sorted(callers, key=lambda r: -r[1])[:16]:
+        k = bisect.bisect_right(starts, caller & ~1) - 1
+        print(f'{nbytes:12d} {calls:8d}  {funcs[k][2] if k >= 0 else "?"}+0x{(caller & ~1) - funcs[k][0]:x}')
