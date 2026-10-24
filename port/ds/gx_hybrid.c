@@ -29,6 +29,7 @@
 #include "psx_runtime.h"
 #include "psx_mem.h"
 #include "ovl0b_layout.h"
+#include "ovl0a_layout.h"
 
 extern unsigned short *psx_vram;
 
@@ -62,6 +63,21 @@ typedef struct {
 } Buffer;
 
 static Buffer buffers[2];
+
+/* Where the scene buffers and the GX chunks live: the resident mode overlay's MIPS code range, which the port never
+ * runs. Battle: ovl_0b (ovl0b_layout.h). Field (FIELDGX=1): ovl_0a (ovl0a_layout.h), where the scene also holds the
+ * background sprites, so they keep their depth order with the characters. */
+typedef struct { int overlay, field; unsigned int at, prims_at[2], max_prims; } Place;
+static const Place places[] = {
+    {0x0B, 0, OVL0B_AT, {OVL0B_PRIMS_AT_0, OVL0B_PRIMS_AT_1}, MAX_PRIMS},
+#ifdef PORT_FIELD_GX
+    {0x0A, 1, OVL0A_AT, {OVL0A_PRIMS_AT_0, OVL0A_PRIMS_AT_1}, OVL0A_FIELD_PRIMS},
+#endif
+};
+static const Place *place = &places[0];
+/* a field scene starts from this in PS1 VRAM: only what software draws (text, UI) differs, for the 2D layer */
+#define FIELD_KEY 0x7C1F
+static void dirty_cells(int x0, int y0, int x1, int y1);
 /* 1024x512: MARK_ADD where a software-drawn additive glow wrote since its buffer's scene started */
 static u8 *marks;
 #define MARK_ADD 1
@@ -100,6 +116,16 @@ static void start_scene(Buffer *b) {
     b->shown = 0;
     b->count = 0;
     b->submitted = 0;
+    if (place->field) {
+        /* nothing clears a field's buffer (its background covers it): the scene's PS1 VRAM starts as the key */
+        int w = b->x + b->w <= 1024 ? b->w : 1024 - b->x;
+        for (int row = 0; row < b->h; ++row) {
+            u32 *p = (u32 *)(psx_vram + ((b->y + row) & 511) * 1024 + b->x);
+            for (int k = 0; k < w / 2; ++k) p[k] = FIELD_KEY | (u32)FIELD_KEY << 16;
+        }
+        b->clear = FIELD_KEY;
+        dirty_cells(b->x, b->y, b->x + w - 1, b->y + b->h - 1);
+    }
     for (int row = 0; row < b->h; ++row)
         memset(marks + (((b->y + row) & 511) * 1024 + b->x) / 8, 0,
                ((b->x + b->w <= 1024 ? b->w : 1024 - b->x) + 7) / 8); /* buffers start on 8-pixel columns */
@@ -134,7 +160,7 @@ static int triangle_area(const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
 }
 
 static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) {
-    if (b->count >= MAX_PRIMS) { gxh_stats_dropped++; return; }
+    if ((unsigned int)b->count >= place->max_prims) { gxh_stats_dropped++; return; }
     Prim *p = &b->prims[b->count++];
     p->n = (u8)n;
     p->flags = (u8)((m->textured ? P_TEXTURED : 0) | (m->raw ? P_RAW : 0) | (m->semi ? P_SEMI : 0) |
@@ -670,8 +696,8 @@ enum { CMD_COLOR = 0x20, CMD_TEXCOORD = 0x22, CMD_VTX16 = 0x23, CMD_VTXXY = 0x25
 
 /* The scene's commands (packed FIFO format, one command per header), fed to the geometry FIFO by DMA while the
  * CPU goes on. Worst case per polygon: 4 state commands and 4 vertices of colour, texcoord and position. */
-#define CHUNK_WORDS 4096   /* two 16 KB halves: one fills while the other goes to the FIFO */
-static u32 (*chunks)[CHUNK_WORDS]; /* two, in ovl_0b's code range (ovl0b_layout.h) */
+#define CHUNK_WORDS 2048   /* two 8 KB halves: one fills while the other goes to the FIFO */
+static u32 (*chunks)[CHUNK_WORDS]; /* two, in VRAM bank I (16 KB, LCDC: the CPU writes, DMA reads; nothing else uses it) */
 static int chunk, chunk_words;
 
 static void flush_chunk(void) {
@@ -1207,6 +1233,24 @@ static void hybrid_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b2) {
                a->x > b2->x ? a->x : b2->x, a->y > b2->y ? a->y : b2->y);
 }
 
+/* A field's background is rows of sprites side by side with continuous texels: one continuing the scene's last
+ * primitive (same mode, page, CLUT and colour, same rows, starting where it ends, texels following on) widens it, so
+ * a row is one quad for the 3D engine's 2048 (a field scene can draw 2800 sprites and polygons). */
+static int extend_rect(Buffer *b, const Gp0Mode *m, const Gp0Vtx *c, int w, int h) {
+    if (!b->count) return 0;
+    Prim *p = &b->prims[b->count - 1];
+    u8 flags = (u8)((m->textured ? P_TEXTURED : 0) | (m->raw ? P_RAW : 0) | (m->semi ? P_SEMI : 0) | P_RECT);
+    int x = c->x - b->x, y = c->y - b->y;
+    if (p->flags != flags || p->abr != m->abr || p->x[1] != x || p->y[0] != y || p->y[2] != y + h) return 0;
+    if (p->r[0] != (u8)c->r || p->g[0] != (u8)c->g || p->b[0] != (u8)c->b) return 0;
+    if (m->textured && (p->depth != (m->depth > 2 ? 2 : m->depth) || p->tx != m->tx || p->ty != m->ty ||
+                        p->clut_x != m->clut_x || p->clut_y != m->clut_y || p->u[1] + 1 != c->u ||
+                        p->v[0] != c->v || p->v[2] != c->v + h - 1)) return 0;
+    p->x[1] = p->x[3] = (s16)(x + w);
+    p->u[1] = p->u[3] = (u8)(c->u + w - 1);
+    return 1;
+}
+
 static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     Buffer *shown, *b = target(&shown);
     if (b && b == shown && ui_defer(b, UI_RECT, m, v, 1, w, h)) return;
@@ -1215,7 +1259,10 @@ static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
      * (on the 2D layer it would cover the scene), unless it uses a texture window or its texels wrap past the page
      * edge, which 8-bit coordinates can't say. Opaque ones stay exact on the 2D layer: as quads they would go under
      * 2D pixels drawn before them (a window's background over its text). */
-    if (b && b != shown && m->semi && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
+    /* In a field the opaque ones are the background: quads too, in the scene's order, but for the UI pages' sprites
+     * (text, window parts: drawn last, over everything), which stay exact on the 2D layer. */
+    int ui_page = m->textured && m->ty == 256 && (m->tx == 896 || m->tx == 960);
+    if (b && b != shown && (m->semi || (place->field && !ui_page)) && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
         (!m->textured || (v->u + w <= 256 && v->v + h <= 256))) {
         /* clipped to the drawing area: texels follow pixels one to one */
         Gp0Vtx c = *v;
@@ -1225,6 +1272,7 @@ static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         if (c.x + w > gp0_state.area_x1 + 1) w = gp0_state.area_x1 + 1 - c.x;
         if (c.y + h > gp0_state.area_y1 + 1) h = gp0_state.area_y1 + 1 - c.y;
         if (w <= 0 || h <= 0) return;
+        if (place->field && extend_rect(b, m, &c, w, h)) return;
         Gp0Vtx q[4] = {c, c, c, c};
         q[1].x += w; q[1].u += w - 1;
         q[2].y += h; q[2].v += h - 1;
@@ -1264,24 +1312,27 @@ static void reset_colours(void);     /* the 2D layer: an 8-bit bitmap BG in bank
 /* The two scenes' primitives live in the battle overlay's MIPS code range in PS1 RAM, which the port never runs and
  * nothing reads while ovl_0b is resident (docs/ds-mode.md): buffer 0 in its first code segments, buffer 1 after the
  * embedded table. Only while ovl_0b is resident; a sector loaded over them empties them (gxh_ram_overwritten). */
-#define BATTLE_OVERLAY 0x0B
 _Static_assert(OVL0B_PRIMS_AT_0 + MAX_PRIMS * sizeof(Prim) <= OVL0B_FX_AREA_AT, "buffer 0 overruns the module area");
+_Static_assert(OVL0A_PRIMS_AT_0 + OVL0A_FIELD_PRIMS * sizeof(Prim) <= OVL0A_PRIMS_AT_1, "field buffer 0 overruns buffer 1");
+_Static_assert(OVL0A_PRIMS_AT_1 + OVL0A_FIELD_PRIMS * sizeof(Prim) <= OVL0A_CODE_END, "field buffer 1 overruns ovl_0a's code");
 _Static_assert(OVL0B_PRIMS_AT_1 + MAX_PRIMS * sizeof(Prim) <= OVL0B_CHUNKS_AT, "buffer 1 overruns the chunks");
-_Static_assert(OVL0B_CHUNKS_AT + 2 * CHUNK_WORDS * 4 <= OVL0B_CODE_END, "the chunks overrun ovl_0b's code");
-static const unsigned int prims_at[2] = {OVL0B_PRIMS_AT_0, OVL0B_PRIMS_AT_1};
 
 void gxh_ram_overwritten(unsigned int off, unsigned int len) {
     for (int i = 0; i < 2; ++i) {
-        unsigned int at = (OVL0B_AT + prims_at[i]), end = at + MAX_PRIMS * sizeof(Prim);
+        unsigned int at = place->at + place->prims_at[i], end = at + place->max_prims * sizeof(Prim);
         if (off < end && at < off + len) { buffers[i].count = 0; buffers[i].submitted = 0; }
     }
-    unsigned int at = OVL0B_AT + OVL0B_CHUNKS_AT;
-    if (off < at + 2 * CHUNK_WORDS * 4 && at < off + len) while (dmaBusy(0)) {} /* a list still on its way out */
+}
+
+static void use_place(const Place *p) {
+    place = p;
+    for (int i = 0; i < 2; ++i) buffers[i].prims = (Prim *)(psx_ram + p->at + p->prims_at[i]);
 }
 
 void gxh_init(void) {
-    for (int i = 0; i < 2; ++i) buffers[i].prims = (Prim *)(psx_ram + OVL0B_AT + prims_at[i]);
-    chunks = (u32 (*)[CHUNK_WORDS])(psx_ram + OVL0B_AT + OVL0B_CHUNKS_AT);
+    use_place(&places[0]);
+    vramSetBankI(VRAM_I_LCD);
+    chunks = (u32 (*)[CHUNK_WORDS])VRAM_I;
     marks = psx_spare_alloc(1024 * 512 / 8); /* in main's MIPS code range, see psx_spare_alloc */
     for (int i = 0; i < 2; ++i) ui_list[i] = psx_spare_alloc(UI_MAX * sizeof(UiPrim));
     memset(marks, 0, 1024 * 512 / 8);
@@ -1291,7 +1342,11 @@ int gxh_active(void) { return active; }
 
 void gxh_enable(int on) {
     if (on == active) return;
-    if (on && psx_ovl_resident[0] != BATTLE_OVERLAY) return; /* its primitives need ovl_0b's code range */
+    const Place *p = NULL; /* its primitives need the resident mode overlay's code range */
+    for (unsigned int i = 0; i < sizeof places / sizeof places[0]; ++i)
+        if (psx_ovl_resident[0] == places[i].overlay) p = &places[i];
+    if (on && !p) return;
+    if (on) use_place(p);
     active = on;
     if (on) {
         memset(block_shown, 0, sizeof block_shown);

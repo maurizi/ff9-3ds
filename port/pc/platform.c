@@ -219,7 +219,8 @@ void plat_wait_frame(void) {
         fprintf(stderr, "PS1 RAM at frame %ld: %s\n", frames, ram_dump_path);
     }
     if (frame_limit >= 0 && frames >= frame_limit) {
-        fprintf(stderr, "frame limit %ld reached\n", frame_limit);
+        extern unsigned int psx_gpu_scene_prims_max;
+        fprintf(stderr, "frame limit %ld reached (most primitives in a scene: %u)\n", frame_limit, psx_gpu_scene_prims_max);
         exit(0);
     }
 }
