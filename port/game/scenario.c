@@ -13,7 +13,7 @@ void o14_func_800A741C(void);
 void port_scenario_set_enemy_hp(const int *values);
 s32 chr_resetToLevel(s32,s32,u8);
 static struct {
-    int enabled,consumed,kind,disc,field,battle,world,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil;
+    int enabled,consumed,kind,disc,field,battle,world,world_explicit,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil;
     unsigned seed;
     int party[4],hp[4],enemy_hp[4],trance[4],preset[4],equip[4][5];
     s16 events[0x800],items[256]; /* -1: unset */
@@ -50,7 +50,7 @@ void port_scenario_load(const char *path) {
         } else if(!__builtin_strcmp(s,"disc")) scenario.disc=number(eq,1,4);
         else if(!__builtin_strcmp(s,"field")) {scenario.field=number(eq,0,32767);scenario.field_explicit=1;}
         else if(!__builtin_strcmp(s,"battle")) scenario.battle=number(eq,0,65535);
-        else if(!__builtin_strcmp(s,"world")) scenario.world=number(eq,0,65535);
+        else if(!__builtin_strcmp(s,"world")) {scenario.world=number(eq,0,65535);scenario.world_explicit=1;}
         else if(!__builtin_strcmp(s,"level")) scenario.level=number(eq,1,99);
         else if(!__builtin_strcmp(s,"story")) scenario.story=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"gil")) scenario.gil=number(eq,0,9999999);
@@ -106,6 +106,19 @@ void port_scenario_battle_ready(void) {
         port_scenario_set_enemy_hp(scenario.enemy_hp);
         return;
     }
+}
+/* A battle the world map starts (kind=battle with world=): it returns there, as the world map's own exit sets up
+ * (ovl_0c: its file's sectors as the return sectors, unkA 3; ovl_0b btl_initReturnInfo keeps the world id). */
+static void prepare_return_world(GameData *d) {
+    u8 mode=g_gameState->mode;
+    d->unk7DC=(u16)scenario.world;
+    g_gameState->mode=3;o14_func_800A741C();g_gameState->mode=mode;
+    if(d->sceneSectors[1]<=0) port_fatal("scenario: world map %d absent on disc %d",scenario.world,scenario.disc);
+    for(int i=0;i<2;i++) {
+        d->returnSector[i]=d->sceneSector[i];d->returnSectors[i]=d->sceneSectors[i];
+    }
+    g_gameState->unkA=3;
+    scenario.return_field_ready=1;
 }
 static void prepare_return_field(GameData *d) {
     typedef struct {u16 field,area;u32 sector;} FieldEntry;
@@ -241,7 +254,10 @@ void port_scenario_bootstrap(void) {
     d->fieldId=(u16)scenario.field;
     if(scenario.kind==1) o14_func_800A741C();
     else if(scenario.kind==3) {d->unk7DC=(u16)scenario.world;o14_func_800A741C();} /* as a save made on the world map */
-    else {prepare_return_field(d);prepare_battle_resources(d);d->battleId=(u16)scenario.battle;}
+    else {
+        if(scenario.world_explicit) prepare_return_world(d); else prepare_return_field(d);
+        prepare_battle_resources(d);d->battleId=(u16)scenario.battle;
+    }
     port_log("scenario entered without title/intro: mode %d, disc %d, id %d\n",scenario.kind,scenario.disc,
              scenario.kind==1?scenario.field:scenario.kind==2?scenario.battle:scenario.world);
 }

@@ -1583,3 +1583,11 @@ directory lacks.
 (`decomp/tools/encounter_catalog.py`, R24): the 1085 encounters whose background is on their disc, the 397 a field
 starts returning to that field. 1065/1085 at 12000 frames: 18 disc-2 encounters still read sector 0xFFFFFFFF, and
 Yan (world map only, so returning to the stand-in field) still meets the guarded division.
+
+The other 688 are world-map encounters: a fixture with `world=` now returns there, as the world map's own exit sets
+up (its file's sectors as the return sectors, `unkA` 3, which ovl_0b's `btl_initReturnInfo` keeps and ovl_65 obeys).
+The fixtures name world 9000 when the encounter's world list has it (the others' scripts can send the party to
+fields on other discs), and disc 4's use a late story counter (ovl_65 then loads the late world data 0x2716, the only
+one disc 4 has). The stand-in fields' failures (movies and music from other discs, Yan's guarded division) are gone,
+and world map 9001 showed a read through a NULL block node (`nd->unk8->unk21`, low RAM on the PS1): a counted
+`PSX_NZ` patch. **1085/1085 at 12000 frames.**

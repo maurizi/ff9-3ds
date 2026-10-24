@@ -190,3 +190,6 @@ src/main/main.c | func_800384D0(func_80038150(), a, *g_evtCurObj->unk0++, 0); | 
 # NULL and the PS1 reads its sector from kernel RAM at 4. Slot 0 is then unused on that disc.
 src/ovl_0c/ovl_0c.c | file_find(0xC, 0x3F3)->unk4 | PSX_NZ(file_find(0xC, 0x3F3))->unk4 | 1
 src/ovl_0c/ovl_0c.c | file_find(0xC, 0x3F6)->unk4 | PSX_NZ(file_find(0xC, 0x3F6))->unk4 | 1
+# World map 9001 (and battles returning there): a block node with no unk8 reads its +0x21 through NULL, low RAM on the
+# PS1 (the BIOS image's byte here).
+src/ovl_0c/ovl_0c.c | u8 s = nd->unk8->unk21; | u8 s = PSX_NZ(nd->unk8)->unk21; | 1
