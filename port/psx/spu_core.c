@@ -250,6 +250,13 @@ void psx_spu_set_hw(const PsxSpuSink *sink) { hw_sink = sink; }
 
 /* The noise generator's step rate in Hz (SPUCNT bits 8-13, as psx_spu_noise_tick advances it), for HWSOUND's
  * DS noise channels. */
+void psx_spu_reverb_state(PsxSpuReverbState *out) {
+    out->left = (int16_t)psx_spu_regs[0x184 / 2];
+    out->right = (int16_t)psx_spu_regs[0x186 / 2];
+    out->area = 0x80000u - ((unsigned)psx_spu_regs[0x1a2 / 2] << 3);
+    out->on = (psx_spu_regs[0x1aa / 2] & 0x80) && flags(0x198) && (out->left || out->right);
+}
+
 unsigned psx_spu_noise_hz(void) {
     static const unsigned fraction[4] = {0, 84, 140, 180}; /* x/210 extra per sample, as the tick */
     unsigned clock = (psx_spu_regs[0x1aa / 2] >> 8) & 63;

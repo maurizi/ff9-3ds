@@ -65,6 +65,51 @@ void port_hw_sound_init(void) {
     psx_spu_set_hw(&sink);
 }
 
+/* Reverb, approximated (the DS has none): capture unit 0 records the left mix into a ring that channel 1 plays back
+ * a delay later, and unit 1 the right mix through channel 3. The played-back mix is captured again, so each echo
+ * repeats quieter, a decaying tail. Its level follows the reverb output volume and its delay the reverb work area's
+ * size (rooms short, halls long); per-voice sends and the reverb's filters aren't modelled. */
+#define ECHO_HZ 11025
+#define ECHO_MAX 3072  /* samples per side: 0.28 s */
+static struct { int on, ids[2]; u8 volume; unsigned words; s16 *ring; } echo = {0, {-1, -1}, 0, 0, NULL};
+
+static void echo_stop(void) {
+    for (int k = 0; k < 2; ++k) {
+        soundCaptureStop(k);
+        if (echo.ids[k] >= 0) soundKill(echo.ids[k]);
+        echo.ids[k] = -1;
+    }
+    echo.on = 0;
+}
+
+static void echo_frame(const PsxSpuReverbState *r) {
+    if (!r->on) { if (echo.on) echo_stop(); return; }
+    if (!echo.ring) echo.ring = psx_spare_alloc(2 * ECHO_MAX * sizeof(s16));
+    /* the work area holds about area / 4 stereo samples at 22.05 kHz */
+    unsigned samples = (unsigned)((unsigned long long)r->area * ECHO_HZ / (4 * 22050));
+    if (samples > ECHO_MAX) samples = ECHO_MAX;
+    if (samples < 512) samples = 512;
+    unsigned words = samples / 2;
+    int level = (r->left < 0 ? -r->left : r->left) > (r->right < 0 ? -r->right : r->right)
+                    ? (r->left < 0 ? -r->left : r->left) : (r->right < 0 ? -r->right : r->right);
+    u8 volume = (u8)(level * 96 >> 15); /* at most 3/4: the tail must decay */
+    if (!echo.on || words != echo.words) {
+        echo_stop();
+        memset(echo.ring, 0, 2 * ECHO_MAX * sizeof(s16));
+        DC_FlushRange(echo.ring, 2 * ECHO_MAX * sizeof(s16));
+        for (int k = 0; k < 2; ++k) {
+            s16 *ring = echo.ring + k * ECHO_MAX;
+            echo.ids[k] = soundPlaySampleChannel(1 + 2 * k, ring, SoundFormat_16Bit, words * 4, ECHO_HZ, volume,
+                                                 k ? 127 : 0, true, 0);
+            soundCaptureStart(ring, (u16)words, k, false, true, true, SoundCaptureFormat_16Bit);
+        }
+        echo.on = 1; echo.words = words; echo.volume = volume;
+    } else if (volume != echo.volume) {
+        for (int k = 0; k < 2; ++k) if (echo.ids[k] >= 0) soundSetVolume(echo.ids[k], volume);
+        echo.volume = volume;
+    }
+}
+
 static void stop(Voice *p) {
     if (p->sound_id >= 0) soundKill(p->sound_id);
     if (p->channel >= 0) channel_used &= ~(1u << p->channel);
@@ -94,6 +139,10 @@ void port_hw_sound_frame(void) {
     }
     int reserved = (noise_voice[0] >= 0) + (noise_voice[1] >= 0);
     u32 reserved_mask = reserved ? (reserved == 2 ? 0xC000u : 0x4000u) : 0;
+    /* reverb: channels 1 and 3 play the captured mix back (echo_frame) */
+    PsxSpuReverbState reverb;
+    psx_spu_reverb_state(&reverb);
+    if (reverb.on) { reserved += 2; reserved_mask |= 0x000Au; }
     for (int v = 0; v < VOICES; ++v) /* a sample voice on a channel noise needs now gives it up */
         if (voices[v].channel >= 0 && (reserved_mask >> voices[v].channel & 1)) { stop(&voices[v]); voices[v].lost = 1; }
     const int slots = 16 - reserved;
@@ -185,6 +234,7 @@ void port_hw_sound_frame(void) {
         }
         ++sounding;
     }
+    echo_frame(&reverb);
     port_hw_sound_stats[2] = sounding;
 }
 #endif

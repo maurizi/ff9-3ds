@@ -35,6 +35,11 @@ typedef struct {
 } PsxSpuVoiceOutput;
 void psx_spu_voice_output(unsigned voice, PsxSpuVoiceOutput *out);
 unsigned psx_spu_noise_hz(void);
+/* Reverb as the game set it, for the hardware path's echo: on when enabled (SPUCNT bit 7), some voice sends to it
+ * (EON) and the output volume isn't silent; the output volumes (vLOUT, vROUT, signed) and the work area's size in
+ * bytes (from mBASE to the end of SPU RAM, which sets how long the effect lasts). */
+typedef struct { int on, left, right; unsigned area; } PsxSpuReverbState;
+void psx_spu_reverb_state(PsxSpuReverbState *out);
 
 /* Diagnostics: the complete SPU state except its RAM, so a benchmark can replay a moment of the game
  * (host --spu-snapshot, make spu-snapshot-ds). Plain fixed-width fields: the same bytes on host and DS. */

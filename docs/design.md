@@ -343,7 +343,11 @@ The port targets the original DS, so the DS's 16 hardware channels do the mixing
 - Each frame, a voice's ADSR level, its volumes and the main volume set the channel's volume and pan, and its
   pitch sets the frequency. Envelopes thus move in 60 Hz steps.
 - At most 16 voices sound at once: the loudest get channels. Pitch modulation is per frame. Noise voices use the
-  PSG noise channels (14, 15). Reverb is approximated later through the capture units.
+  PSG noise channels (14, 15). Reverb is an echo through the capture units (decided 2026-10-24): while the game has
+  reverb on with some voice sending to it, capture unit 0 records the left mix into a ring that channel 1 plays back
+  a delay later (unit 1, the right mix, channel 3), so each echo returns quieter; the level follows the reverb output
+  volume (at most 3/4) and the delay the reverb work area's size, up to 0.28 s at 11 kHz. Per-voice sends and the
+  reverb's filters aren't modelled, and voices then share 12-14 channels.
 - The exact mixer stays as the host reference and the DSi diagnostic build (`HWSOUND=0`).
 
 This gives up bit-exact PS1 audio: no Gaussian interpolation (the DS resamples by nearest sample), envelope
