@@ -2103,7 +2103,8 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
     u8 memo_index = 0;
     u16 *bitmap = (u16 *)BG_BMP_RAM(0);
     int shown = 0;
-    int field_scene = place->field && b && !b->soft && b->x == d->x && b->y == d->y; /* (touched is kept for it) */
+    /* the shown buffer's untouched cells (a battle's reset only with the game's covering fill) */
+    int field_scene = b && !b->soft && b->x == d->x && b->y == d->y;
     for (int by = 0, row = 0; by < out_h; by += BLOCK, ++row)
         for (int bx = 0, col = 0; bx < out_w; bx += BLOCK, ++col) {
             int sx0 = d->x + bx * 5 / 4, sy0 = d->y + by * 5 / 4;
