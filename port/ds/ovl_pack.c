@@ -13,6 +13,9 @@
 #define OVL_PACK_MAGIC 0x3150564Fu    /* "OVP1" */
 extern const u32 psx_fx_build_id __attribute__((weak)); /* the Makefile's (fxid.s), new each link */
 
+/* gx_hybrid.c: its scene buffers there are gone */
+__attribute__((weak)) void gxh_native_overwritten(uintptr_t at, unsigned int len) { (void)at; (void)len; }
+
 static FILE *pack;
 static u32 (*entries)[4], count;      /* (id, address, size, offset) */
 static int loaded[256];               /* by overlay id: its code is in place (another one of its slot clears it) */
@@ -45,8 +48,17 @@ void port_ovl_native_load(unsigned int id) {
         for (u32 k = 0; k < count; ++k)
             if (entries[k][1] == address) loaded[entries[k][0] & 255] = 0;
         loaded[id & 255] = 1;
+        gxh_native_overwritten(address, size);
         return;
     }
+}
+
+/* where overlay id's native code goes, and its size (0: not in the pack) */
+int port_ovl_native_extent(unsigned int id, uintptr_t *at, unsigned int *size) {
+    open_pack();
+    for (u32 i = 0; i < count; ++i)
+        if (entries[i][0] == id) { *at = entries[i][1]; *size = entries[i][2]; return 1; }
+    return 0;
 }
 
 /* The overlays linked in their own MIPS code range in psx_ram (gen_link.py: those of slots 1 and 2): disc bytes just

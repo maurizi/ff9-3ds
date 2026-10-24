@@ -77,6 +77,7 @@ static Buffer buffers[2];
  * runs. Battle: ovl_0b (ovl0b_layout.h). Field (FIELDGX=1): ovl_0a (ovl0a_layout.h), where the scene also holds the
  * background sprites, so they keep their depth order with the characters. */
 typedef struct { int overlay, field; unsigned int at, prims_at[2], max_prims; } Place;
+static int prims_max;     /* the buffers' capacity (use_place) */
 static const Place places[] = {
     {0x0B, 0, OVL0B_AT, {OVL0B_PRIMS_AT_0, OVL0B_PRIMS_AT_1}, MAX_PRIMS},
 #ifdef PORT_FIELD_GX
@@ -181,7 +182,7 @@ static int triangle_area(const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
 }
 
 static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) {
-    if ((unsigned int)b->count >= place->max_prims) { gxh_stats_dropped++; return; }
+    if (b->count >= prims_max) { gxh_stats_dropped++; return; }
     Prim *p = &b->prims[b->count++];
     p->n = (u8)n;
     p->flags = (u8)((m->textured ? P_TEXTURED : 0) | (m->raw ? P_RAW : 0) | (m->semi ? P_SEMI : 0) |
@@ -306,7 +307,7 @@ static u8 unit_used[TEX_UNITS];
 /* Untextured additive glows sample a fixed ramp whose alpha rises along U (A5I3, 32x8, white): each vertex's U is
  * its brightness, so the interpolated coordinate is a per-pixel alpha (the DS has none per vertex). */
 #define RAMP_UNIT (TEX_UNITS - 1)
-#define RAMP_PALETTE 31   /* its palette among ADD_SLOT's 8-colour palettes */
+#define RAMP_PALETTE 63   /* its palette among the additive copies' 8-colour palettes (ADD_SLOT) */
 static int ramp_written;
 
 static inline int texels_per_halfword(int depth) { return depth == 0 ? 4 : depth == 1 ? 2 : 1; }
@@ -329,8 +330,29 @@ static int allocate_units(int units) {
     return -1;
 }
 
+/* The additive copies' palettes (ADD_SLOT): users per palette; one made from a 4- or 8-bit CLUT serves every copy
+ * through that CLUT (a 15-bit copy's is its own: the texels' colours) */
+static u16 cpal_users[64];
+static struct { u16 x, y; u8 depth; } cpal_clut[64];
+
+static int cpal_take(int depth, int cx, int cy) {
+    int free = -1;
+    for (int i = 0; i < RAMP_PALETTE; ++i) {
+        if (!cpal_users[i]) { if (free < 0) free = i; continue; }
+        if (depth < 2 && cpal_clut[i].depth == depth && cpal_clut[i].x == cx && cpal_clut[i].y == cy) {
+            cpal_users[i]++;
+            return i;
+        }
+    }
+    if (free < 0) return -1;
+    cpal_users[free] = 1;
+    cpal_clut[free].x = (u16)cx; cpal_clut[free].y = (u16)cy; cpal_clut[free].depth = (u8)depth;
+    return free;
+}
+
 static void free_region(Region *r) {
     memset(unit_used + r->unit, 0, r->units);
+    if (r->conv) cpal_users[r->cpal]--;
     r->used = 0;
 }
 
@@ -349,31 +371,27 @@ static Region *place_region(int depth, int conv, int cx, int cy, int x, int y, i
     if (sw < 3) sw = 3;
     if (sh < 3) sh = 3;
     if (sw > 10 || sh > 10) return NULL;
-    int cpal = 0;
-    if (conv) { /* a free 8-colour palette */
-        u32 taken = 0;
-        for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used && regions[i].conv) taken |= 1u << regions[i].cpal;
-        while (cpal < RAMP_PALETTE && (taken >> cpal & 1)) ++cpal;
-        if (cpal == RAMP_PALETTE) return NULL;
-    }
     int bytes = ((1 << sw) << sh) * (conv ? 8 : depth == 0 ? 4 : depth == 1 ? 8 : 16) / 8;
     int units = 1 << log2_at_least((bytes + TEX_UNIT - 1) / TEX_UNIT);
+    int i = 0;
+    while (i < MAX_REGIONS && regions[i].used) ++i;
+    if (i == MAX_REGIONS) return NULL;
+    int cpal = conv ? cpal_take(depth, cx, cy) : 0; /* an 8-colour palette */
+    if (cpal < 0) return NULL;
     int unit = allocate_units(units);
-    if (unit < 0) return NULL;
-    for (int i = 0; i < MAX_REGIONS; ++i)
-        if (!regions[i].used) {
-            regions[i] = (Region){1, depth, x, y, wh, h, 1 << sw, 1 << sh, (u32)(sw - 3) << 20 | (u32)(sh - 3) << 23,
-                                  unit, units, 1, 1, conv, cx, cy, cpal};
-            return &regions[i];
-        }
-    memset(unit_used + unit, 0, units);
-    return NULL;
+    if (unit < 0) {
+        if (conv) cpal_users[cpal]--;
+        return NULL;
+    }
+    regions[i] = (Region){1, depth, x, y, wh, h, 1 << sw, 1 << sh, (u32)(sw - 3) << 20 | (u32)(sh - 3) << 23,
+                          unit, units, 1, 1, conv, cx, cy, cpal};
+    return &regions[i];
 }
 
-/* Texture palettes: 64 slots of 256 colours in F-G (32 KB). The last holds the additive copies' 32 palettes of 8
+/* Texture palettes: 64 slots of 256 colours in F-G (32 KB). The last two hold the additive copies' 64 palettes of 8
  * colours (A5I3); the others take CLUTs. */
-#define PAL_SLOTS 63
-#define ADD_SLOT 63
+#define PAL_SLOTS 62
+#define ADD_SLOT 62
 typedef struct { int used, x, y, count, dirty, wanted; } Palette;
 static Palette palettes[PAL_SLOTS];
 
@@ -412,7 +430,9 @@ void psx_vram_touch(int x, int y, int w, int h) {
     regions_touch(x, y, w, h);
 }
 
+static void runs_touch(int x, int y, int w, int h);
 static void regions_touch(int x, int y, int w, int h) {
+    runs_touch(x, y, w, h);
     for (int i = 0; i < MAX_REGIONS; ++i) {
         Region *r = &regions[i];
         if (r->used && x < r->x + r->wh && r->x < x + w && y < r->y + r->h && r->y < y + h) r->dirty = 1;
@@ -422,6 +442,184 @@ static void regions_touch(int x, int y, int w, int h) {
     for (int i = 0; i < PAL_SLOTS; ++i) {
         Palette *p = &palettes[i];
         if (p->used && y <= p->y && p->y < y + h && x < p->x + p->count && p->x < x + w) p->dirty = 1;
+    }
+}
+
+/* Field background sprites: 16x16-texel blocks of their pages, copied in runs (consecutive blocks of a page row of
+ * blocks that the scene samples) into rows of 256 x 16 texels. A sprite's texels are consecutive blocks of one page
+ * row, all sampled by it, so a row of sprites merged into one quad (extend_rect) is in one run. Holding only the
+ * blocks a scene uses fits the fields whose pages don't fit as regions (a 64-texel-stepped bounding box each, per
+ * CLUT for the additive copies). Polygons, and sprites across a block row, keep regions. */
+#define RUN_ROWS 256
+#define MAX_RUNS 512
+#define MAX_NEEDS 384
+#define RUN_NONE 0xFFFF
+#define RUN_GROUP 0xFE    /* prim_group: the primitive's texels are in a run */
+#define RUN_SIZE_BITS (5u << 20 | 1u << 23) /* TEXIMAGE: 256 x 16 */
+/* a page row of blocks: page x / 64 (4 bits), page y / 256 (1), depth (2), additive copy (1), block row (4), and for
+ * an additive copy its CLUT: x / 16 (6), y (9) */
+#define STRIP_KEY(depth, conv, tx, ty, cx, cy, bv) \
+    ((u32)(tx) >> 6 | (u32)(ty) >> 8 << 4 | (u32)(depth) << 5 | (u32)(conv) << 7 | (u32)(bv) << 8 | \
+     (conv ? (u32)(cx) >> 4 << 12 | (u32)(cy) << 18 : 0))
+#define KEY_TX(k) (((k) & 15) << 6)
+#define KEY_TY(k) (((k) >> 4 & 1) << 8)
+#define KEY_DEPTH(k) ((k) >> 5 & 3)
+#define KEY_CONV(k) ((k) >> 7 & 1)
+#define KEY_BV(k) ((k) >> 8 & 15)
+#define KEY_CX(k) (((k) >> 12 & 63) << 4)
+#define KEY_CY(k) ((k) >> 18 & 511)
+enum { RUN_USED = 1, RUN_DIRTY = 2, RUN_WANTED = 4 };
+typedef struct { u8 unit, fmt_units; u16 slots; } Row;  /* fmt << 4 | units (0: free); slots: a bit per block in use */
+typedef struct { u32 key; u8 bu, n, slot, flags, cpal, row; u16 next; } Run; /* blocks bu.., at slot.. of row */
+typedef struct { u32 key; u16 mask, next; } Need;        /* the blocks of a page row a scene samples */
+static Row *rows;         /* these three in psx_spare_alloc's range (field only) */
+static Run *runs;
+static Need *needs;
+static u16 run_hash[256], need_hash[256];
+static int need_count, run_cursor;
+static int field_runs;    /* this field's pages overflowed as regions: its sprites go to runs (until the mode ends) */
+
+static inline int run_format(u32 key) { return KEY_CONV(key) ? 3 : (int)KEY_DEPTH(key); } /* 3: A5I3 */
+static inline unsigned key_hash(u32 key) { return (key ^ key >> 8 ^ key >> 16 ^ key >> 24) & 255; }
+
+static void runs_reset(void) {
+    if (!runs) return;
+    memset(rows, 0, RUN_ROWS * sizeof *rows);
+    memset(runs, 0, MAX_RUNS * sizeof *runs);
+    memset(run_hash, 0xFF, sizeof run_hash);
+}
+
+static void free_run(int i) {
+    Run *r = &runs[i];
+    Row *w = &rows[r->row];
+    w->slots &= (u16)~(((1u << r->n) - 1) << r->slot);
+    if (!w->slots) { memset(unit_used + w->unit, 0, w->fmt_units & 15); w->fmt_units = 0; }
+    if (KEY_CONV(r->key)) cpal_users[r->cpal]--;
+    u16 *link = &run_hash[key_hash(r->key)];
+    while (*link != i) link = &runs[*link].next;
+    *link = r->next;
+    r->flags = 0;
+}
+
+/* the cached run holding blocks bu..bu_last of a page row, or NULL */
+static Run *run_holding(u32 key, int bu, int bu_last) {
+    for (u16 i = run_hash[key_hash(key)]; i != RUN_NONE; i = runs[i].next) {
+        Run *r = &runs[i];
+        if (r->key == key && r->bu <= bu && bu_last < r->bu + r->n) return r;
+    }
+    return NULL;
+}
+
+/* this scene samples blocks bu..bu_last of a page row (0: the table is full) */
+static int need_blocks(u32 key, int bu, int bu_last) {
+    unsigned h = key_hash(key);
+    u16 i = need_hash[h];
+    while (i != RUN_NONE && needs[i].key != key) i = needs[i].next;
+    if (i == RUN_NONE) {
+        if (need_count == MAX_NEEDS) return 0;
+        i = (u16)need_count++;
+        needs[i] = (Need){key, 0, need_hash[h]};
+        need_hash[h] = i;
+    }
+    needs[i].mask |= (u16)(((2u << (bu_last - bu)) - 1) << bu);
+    return 1;
+}
+
+static Run *place_run(u32 key, int bu, int n) {
+    int fmt = run_format(key), units = fmt == 0 ? 1 : fmt == 2 ? 4 : 2, row = -1, slot = 0;
+    u16 span = (u16)((1u << n) - 1);
+    for (int w = 0; w < RUN_ROWS && row < 0; ++w) {
+        if (rows[w].fmt_units != (fmt << 4 | units)) continue;
+        for (int s = 0; s + n <= 16; ++s)
+            if (!(rows[w].slots >> s & span)) { row = w; slot = s; break; }
+    }
+    int fresh = row < 0;
+    if (fresh) {
+        for (row = 0; row < RUN_ROWS && rows[row].fmt_units; ++row) {}
+        if (row == RUN_ROWS) return NULL;
+        int unit = allocate_units(units);
+        if (unit < 0) return NULL;
+        rows[row] = (Row){(u8)unit, (u8)(fmt << 4 | units), 0};
+    }
+    int conv = KEY_CONV(key), cpal = conv ? cpal_take(KEY_DEPTH(key), KEY_CX(key), KEY_CY(key)) : 0;
+    int i = run_cursor, tries = MAX_RUNS;
+    while (runs[i].flags && --tries) i = (i + 1) % MAX_RUNS;
+    if (cpal < 0 || runs[i].flags) {
+        if (cpal >= 0 && conv) cpal_users[cpal]--;
+        if (fresh) { memset(unit_used + rows[row].unit, 0, units); rows[row].fmt_units = 0; }
+        return NULL;
+    }
+    run_cursor = (i + 1) % MAX_RUNS;
+    rows[row].slots |= (u16)(span << slot);
+    unsigned h = key_hash(key);
+    runs[i] = (Run){key, (u8)bu, (u8)n, (u8)slot, RUN_USED | RUN_DIRTY, (u8)cpal, (u8)row, run_hash[h]};
+    run_hash[h] = (u16)i;
+    return &runs[i];
+}
+
+/* Mark the cached runs holding the scene's blocks wanted; with place_missing, put the others in rows. Returns the
+ * runs missing (not placed). */
+static int plan_runs(int place_missing) {
+    int missing = 0;
+    for (int k = 0; k < need_count; ++k) {
+        const Need *q = &needs[k];
+        for (int bu = 0; bu < 16;) {
+            if (!(q->mask >> bu & 1)) { ++bu; continue; }
+            int n = 1;
+            while (bu + n < 16 && (q->mask >> (bu + n) & 1)) ++n;
+            Run *r = run_holding(q->key, bu, bu + n - 1);
+            if (!r && place_missing) r = place_run(q->key, bu, n);
+            if (r) r->flags |= RUN_WANTED;
+            else missing++;
+            bu += n;
+        }
+    }
+    return missing;
+}
+
+static void runs_touch(int x, int y, int w, int h) {
+    if (!runs) return;
+    for (int i = 0; i < MAX_RUNS; ++i) {
+        Run *r = &runs[i];
+        if (!r->flags) continue;
+        u32 key = r->key;
+        int per = texels_per_halfword(KEY_DEPTH(key)), rx = KEY_TX(key) + r->bu * 16 / per, ry = KEY_TY(key) + KEY_BV(key) * 16;
+        if (x < rx + r->n * 16 / per && rx < x + w && y < ry + 16 && ry < y + h) r->flags |= RUN_DIRTY;
+        if (KEY_CONV(key)) {
+            int cx = KEY_CX(key), cy = KEY_CY(key);
+            if (y <= cy && cy < y + h && x < cx + (KEY_DEPTH(key) ? 256 : 16) && cx < x + w) r->flags |= RUN_DIRTY;
+        }
+    }
+}
+
+/* Copy a run's blocks from PS1 VRAM to its row (banks LCDC) */
+static int conv_choose(int depth, int x, int y, int wh, int h, int clut_x, int clut_y, int cpal, u16 *reps, u8 *code);
+static int run_code_cpal = -1; /* the palette upload_run's codes are for (-1 at each upload) */
+static void upload_run(const Run *r, u8 *base) {
+    u32 key = r->key;
+    int depth = KEY_DEPTH(key), conv = KEY_CONV(key), per = texels_per_halfword(depth), fmt = run_format(key);
+    int row_bytes = fmt == 0 ? 128 : fmt == 2 ? 512 : 256;
+    int x = KEY_TX(key) + r->bu * 16 / per, wh = r->n * 16 / per, y = KEY_TY(key) + KEY_BV(key) * 16;
+    u8 *dst = base + rows[r->row].unit * TEX_UNIT + r->slot * (fmt == 0 ? 8 : fmt == 2 ? 32 : 16);
+    static u8 code[256];
+    static u16 pair4[256];
+    if (conv && run_code_cpal != r->cpal) { /* the CLUT's codes, kept for the next run through the palette */
+        u16 reps[8];
+        conv_choose(depth, 0, 0, 0, 0, KEY_CX(key), KEY_CY(key), r->cpal, reps, code);
+        if (!depth) for (int b = 0; b < 256; ++b) pair4[b] = code[b & 15] | code[b >> 4] << 8;
+        run_code_cpal = r->cpal;
+    }
+    for (int line = 0; line < 16; ++line) {
+        const u16 *src = psx_vram + ((y + line) & 511) * 1024;
+        u16 *out = (u16 *)(dst + line * row_bytes);
+        if (conv) {
+            if (depth) for (int k = 0; k < wh; ++k) { u16 c = src[(x + k) & 1023]; out[k] = code[c & 255] | code[c >> 8] << 8; }
+            else for (int k = 0; k < wh; ++k) { u16 c = src[(x + k) & 1023]; out[2 * k] = pair4[c & 255]; out[2 * k + 1] = pair4[c >> 8]; }
+        } else if (depth == 2) {
+            for (int k = 0; k < wh; ++k) { u16 c = src[(x + k) & 1023]; out[k] = c ? c | 0x8000 : 0; }
+        } else {
+            for (int k = 0; k < wh; ++k) out[k] = src[(x + k) & 1023];
+        }
     }
 }
 
@@ -447,6 +645,12 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
     group_count = 0;
     for (int i = 0; i < MAX_REGIONS; ++i) regions[i].wanted = 0;
     for (int i = 0; i < PAL_SLOTS; ++i) palettes[i].wanted = 0;
+    int use_runs = runs && place->field && field_runs;
+    need_count = 0;
+    if (use_runs) {
+        memset(need_hash, 0xFF, sizeof need_hash);
+        for (int i = 0; i < MAX_RUNS; ++i) runs[i].flags &= (u8)~RUN_WANTED;
+    }
     for (int k = 0; k < b->count; ++k) {
         Prim *p = &b->prims[k];
         prim_group[k] = 0xFF;
@@ -462,6 +666,11 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
         /* Additive polygons (modes 1, 3) use a 15-bit copy through their CLUT whose dark texels are transparent:
          * under alpha blending a black background would darken what an additive one leaves alone. */
         int conv = (p->flags & P_SEMI) && p->abr != 0; /* modes 1-3: brightness as alpha (conv_upload) */
+        if (use_runs && (p->flags & P_RECT) && !(conv && p->depth == 2) && v0 >> 4 == v1 >> 4 &&
+            need_blocks(STRIP_KEY(p->depth, conv, p->tx, p->ty, p->clut_x, p->clut_y, v0 >> 4), u0 >> 4, u1 >> 4)) {
+            prim_group[k] = RUN_GROUP;
+            goto palette;
+        }
         int x0, x1, y0, y1;
         if (conv) { /* effect-sized: the texels' own box, in 8-texel steps */
             u0 &= ~7; u1 |= 7;
@@ -500,7 +709,7 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
             if (y1 > q->y1) q->y1 = y1;
         }
         prim_group[k] = (u8)g;
-        /* palette */
+    palette:
         prim_palette[k] = 0xFF;
         if (p->depth < 2) {
             int count = p->depth ? 256 : 16, s = last_palette, empty = -1;
@@ -541,8 +750,10 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
         if (q->region) q->region->wanted = 1;
         else missing = 1;
     }
-    if (!missing) return 1;
+    if (need_count && plan_runs(0)) missing = 1;
+    if (!missing) { gxh_stats_unplaced = 0; return 1; }
     for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used && !regions[i].wanted) free_region(&regions[i]);
+    if (use_runs) for (int i = 0; i < MAX_RUNS; ++i) if (runs[i].flags && !(runs[i].flags & RUN_WANTED)) free_run(i);
     for (int attempt = 0; attempt < 2; ++attempt) {
         int failed = 0;
         static u8 tried[MAX_GROUPS];
@@ -563,13 +774,21 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
             if (q->region) q->region->wanted = 1;
             else failed = 1;
         }
-        if (!failed || attempt) {
-            gxh_stats_unplaced = 0;
+        int runs_left = need_count ? plan_runs(1) : 0; /* after the regions: rows fill the gaps they leave */
+        if (!failed && !runs_left) { gxh_stats_unplaced = 0; break; }
+        if (attempt) {
+            gxh_stats_unplaced = runs_left;
             for (int g = 0; g < group_count; ++g) gxh_stats_unplaced += !groups[g].region;
+            if (runs && place->field && !field_runs) { /* again with sprites in runs (cheaper while pages fit) */
+                field_runs = 1;
+                for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) free_region(&regions[i]);
+                return plan_textures(b);
+            }
             break;
         }
         for (int g = 0; g < group_count; ++g) groups[g].region = NULL;
         for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) free_region(&regions[i]);
+        if (use_runs) for (int i = 0; i < MAX_RUNS; ++i) if (runs[i].flags) free_run(i);
     }
     return 1;
 }
@@ -599,26 +818,29 @@ static inline int colour_distance(u16 a, u16 b) {
 /* the A5I3 alpha of a texel: transparent 0x0000, opaque without the semi-transparency bit, else its brightness */
 static inline u8 texel_alpha(u16 c, int bright) { return !c ? 0 : (u8)(c & 0x8000 ? bright : 31); }
 
-static __attribute__((noinline)) void conv_upload(Region *r, u8 *dst, int row_bytes) {
+/* Choose an additive copy's 8 colours (from its 4- or 8-bit CLUT, or a sample of its 15-bit texels at x, y, wh, h)
+ * and write them as palette cpal; code: each CLUT index's A5I3 texel (4- and 8-bit). Returns the colours chosen. */
+static __attribute__((noinline)) int conv_choose(int depth, int x, int y, int wh, int h, int clut_x, int clut_y, int cpal,
+                                                 u16 *reps, u8 *code) {
     /* the colours to choose from: the CLUT's, or (15-bit) a sample of the texels */
     enum { CHOICES = 256 };
     static u16 norm[CHOICES];
     static u8 alpha[CHOICES];
     int count = 0;
-    const u16 *clut = psx_vram + (r->clut_y & 511) * 1024;
-    if (r->depth < 2) {
-        count = r->depth ? 256 : 16;
+    const u16 *clut = psx_vram + (clut_y & 511) * 1024;
+    if (depth < 2) {
+        count = depth ? 256 : 16;
         for (int i = 0; i < count; ++i) {
-            u16 c = clut[(r->clut_x + i) & 1023];
+            u16 c = clut[(clut_x + i) & 1023];
             int m;
             norm[i] = normalised(c, &m);
             alpha[i] = texel_alpha(c, m);
         }
     } else {
-        int step_y = r->h / 16 > 0 ? r->h / 16 : 1, step_x = r->wh / 16 > 0 ? r->wh / 16 : 1;
-        for (int y = 0; y < r->h && count < CHOICES; y += step_y)
-            for (int x = 0; x < r->wh && count < CHOICES; x += step_x) {
-                u16 c = psx_vram[((r->y + y) & 511) * 1024 + ((r->x + x) & 1023)];
+        int step_y = h / 16 > 0 ? h / 16 : 1, step_x = wh / 16 > 0 ? wh / 16 : 1;
+        for (int j = 0; j < h && count < CHOICES; j += step_y)
+            for (int i = 0; i < wh && count < CHOICES; i += step_x) {
+                u16 c = psx_vram[((y + j) & 511) * 1024 + ((x + i) & 1023)];
                 int m;
                 norm[count] = normalised(c, &m);
                 alpha[count++] = texel_alpha(c, m);
@@ -643,7 +865,6 @@ static __attribute__((noinline)) void conv_upload(Region *r, u8 *dst, int row_by
         cand[ncand] = n; cand_alpha[ncand] = alpha[i]; cand_d[ncand] = 1 << 30; ++ncand;
     }
     for (int k = 0; k < ncand; ++k) seen[cand[k] >> 5] = 0;
-    u16 reps[8];
     int nreps = 0;
     while (nreps < 8) {
         int best = -1, best_d = 0;
@@ -659,10 +880,9 @@ static __attribute__((noinline)) void conv_upload(Region *r, u8 *dst, int row_by
         }
     }
     if (!nreps) reps[nreps++] = 0x7FFF;
-    u16 *pal = (u16 *)VRAM_F + ADD_SLOT * 256 + r->cpal * 8;
+    u16 *pal = (u16 *)VRAM_F + ADD_SLOT * 256 + cpal * 8;
     for (int k = 0; k < 8; ++k) pal[k] = k < nreps ? reps[k] : 0;
-    if (r->depth < 2) {
-        static u8 code[256]; /* A5I3 texel per CLUT index */
+    if (depth < 2)
         for (int i = 0; i < count; ++i) {
             int best = 0, best_d = 1 << 30;
             for (int k = 0; k < nreps; ++k) {
@@ -671,6 +891,14 @@ static __attribute__((noinline)) void conv_upload(Region *r, u8 *dst, int row_by
             }
             code[i] = (u8)(alpha[i] << 3 | best);
         }
+    return nreps;
+}
+
+static __attribute__((noinline)) void conv_upload(Region *r, u8 *dst, int row_bytes) {
+    u16 reps[8];
+    static u8 code[256]; /* A5I3 texel per CLUT index */
+    int nreps = conv_choose(r->depth, r->x, r->y, r->wh, r->h, r->clut_x, r->clut_y, r->cpal, reps, code);
+    if (r->depth < 2) {
         /* texel pairs (VRAM ignores byte writes): 4-bit, one source byte is a pair, through a 256-entry table */
         static u16 pair4[256];
         if (!r->depth)
@@ -763,6 +991,16 @@ static __attribute__((noinline)) void upload(void) {
             }
         }
     }
+    run_code_cpal = -1;
+    if (runs)
+        for (int i = 0; i < MAX_RUNS; ++i) {
+            Run *r = &runs[i];
+            if (!(r->flags & RUN_DIRTY)) continue;
+            r->flags &= (u8)~RUN_DIRTY;
+            gxh_stats_upload_regions++;
+            gxh_stats_upload_bytes += r->n * 16 * 16 * 2 / texels_per_halfword(KEY_DEPTH(r->key));
+            upload_run(r, base);
+        }
     u16 *pal = (u16 *)VRAM_F;
     for (int i = 0; i < PAL_SLOTS; ++i) {
         Palette *p = &palettes[i];
@@ -949,16 +1187,27 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         int tu = 0, tv = 0, additive = 0;
         u32 want_image = 0, set_palette = ~0u; /* state to send with the primitive's BEGIN (~0: unchanged) */
         if (p->flags & P_TEXTURED) {
-            Region *r = prim_group[k] == 0xFF ? NULL : groups[prim_group[k]].region;
-            if (!r) { gxh_stats_texture_fail++; continue; }
-            if (p->depth < 2 && !r->conv && prim_palette[k] == 0xFF) { gxh_stats_palette_fail++; continue; }
-            int per = texels_per_halfword(p->depth);
-            tu = (r->x - p->tx) * per;
-            tv = r->y - p->ty;
-            want_image = (u32)(r->unit * TEX_UNIT / 8) | r->size_bits |
-                         (u32)(r->conv ? 6 : p->depth == 2 ? 7 : p->depth == 0 ? 3 : 4) << 26;
-            if (r->conv) {
-                u32 want_palette = (u32)(ADD_SLOT * 512 + r->cpal * 16) / 16;
+            int conv, cpal, unit;
+            u32 size_bits;
+            if (prim_group[k] == RUN_GROUP) { /* a sprite: u[0], v[0] are its first texels */
+                int c = (p->flags & P_SEMI) && p->abr != 0;
+                const Run *r = run_holding(STRIP_KEY(p->depth, c, p->tx, p->ty, p->clut_x, p->clut_y, p->v[0] >> 4),
+                                           p->u[0] >> 4, p->u[1] >> 4);
+                if (!r) { gxh_stats_texture_fail++; continue; }
+                conv = c; cpal = r->cpal; unit = rows[r->row].unit; size_bits = RUN_SIZE_BITS;
+                tu = (r->bu - r->slot) * 16;
+                tv = (p->v[0] >> 4) * 16;
+            } else {
+                const Region *r = prim_group[k] == 0xFF ? NULL : groups[prim_group[k]].region;
+                if (!r) { gxh_stats_texture_fail++; continue; }
+                conv = r->conv; cpal = r->cpal; unit = r->unit; size_bits = r->size_bits;
+                tu = (r->x - p->tx) * texels_per_halfword(p->depth);
+                tv = r->y - p->ty;
+            }
+            if (p->depth < 2 && !conv && prim_palette[k] == 0xFF) { gxh_stats_palette_fail++; continue; }
+            want_image = (u32)(unit * TEX_UNIT / 8) | size_bits | (u32)(conv ? 6 : p->depth == 2 ? 7 : p->depth == 0 ? 3 : 4) << 26;
+            if (conv) {
+                u32 want_palette = (u32)(ADD_SLOT * 512 + cpal * 16) / 16;
                 if (want_palette != palette) set_palette = want_palette;
                 additive = 1;
             } else if (p->depth < 2) {
@@ -1284,7 +1533,7 @@ static int field_unexact(const Buffer *b, const Gp0Mode *m) {
      * which the replay applies (twins) */
     int twin = gp0_state.twin_mask_x || gp0_state.twin_mask_y;
     int why = (twin && (!ui_page_of(m) || b->twin_count == 32) ? 2 : 0) |
-              (gp0_state.set_mask || gp0_state.check_mask ? 4 : 0) | ((unsigned int)b->count >= place->max_prims ? 8 : 0);
+              (gp0_state.set_mask || gp0_state.check_mask ? 4 : 0) | (b->count >= prims_max ? 8 : 0);
     gxh_stats_soft |= why;
     return why;
 }
@@ -1468,16 +1717,36 @@ _Static_assert(OVL0A_PRIMS_AT_0 + OVL0A_FIELD_PRIMS * sizeof(Prim) <= OVL0A_PRIM
 _Static_assert(OVL0A_PRIMS_AT_1 + OVL0A_FIELD_PRIMS * sizeof(Prim) <= OVL0A_CODE_END, "field buffer 1 overruns ovl_0a's code");
 _Static_assert(OVL0B_PRIMS_AT_1 + MAX_PRIMS * sizeof(Prim) <= OVL0B_CHUNKS_AT, "buffer 1 overruns the chunks");
 
-void gxh_ram_overwritten(unsigned int off, unsigned int len) {
+static void buffers_overwritten(uintptr_t at, unsigned int len) {
     for (int i = 0; i < 2; ++i) {
-        unsigned int at = place->at + place->prims_at[i], end = at + place->max_prims * sizeof(Prim);
-        if (off < end && at < off + len) { buffers[i].count = 0; buffers[i].submitted = 0; }
+        uintptr_t lo = (uintptr_t)buffers[i].prims, hi = lo + prims_max * sizeof(Prim);
+        if (at < hi && lo < at + len) { buffers[i].count = 0; buffers[i].submitted = 0; }
     }
 }
+void gxh_ram_overwritten(unsigned int off, unsigned int len) { buffers_overwritten((uintptr_t)psx_ram + off, len); }
+/* ovl_pack.c: native code was read over [at, at + len) */
+void gxh_native_overwritten(uintptr_t at, unsigned int len) { buffers_overwritten(at, len); }
 
+/* A field's second buffer: in slot 0's native code area after the field overlay's ARM code (the slot is sized for
+ * battle's), the first then taking more of ovl_0a's MIPS range; or both in that range (OVL0A_FIELD_PRIMS each). */
+extern char __psxovl_slot0_end[];
+int port_ovl_native_extent(unsigned int id, uintptr_t *at, unsigned int *size);
 static void use_place(const Place *p) {
     place = p;
     for (int i = 0; i < 2; ++i) buffers[i].prims = (Prim *)(psx_ram + p->at + p->prims_at[i]);
+    prims_max = (int)p->max_prims;
+    uintptr_t at;
+    unsigned int size;
+    if (p->field && port_ovl_native_extent(p->overlay, &at, &size)) {
+        uintptr_t tail = (at + size + 31) & ~(uintptr_t)31;
+        int fit = ((uintptr_t)__psxovl_slot0_end - tail) / sizeof(Prim), first = (OVL0A_CODE_END - p->prims_at[0]) / sizeof(Prim);
+        if (fit > first) fit = first;
+        if (fit > MAX_PRIMS) fit = MAX_PRIMS;
+        if (fit > prims_max) {
+            buffers[1].prims = (Prim *)tail;
+            prims_max = fit;
+        }
+    }
 }
 
 void gxh_init(void) {
@@ -1532,6 +1801,14 @@ void gxh_enable(int on) {
         glLoadIdentity();
         bgSetPriority(0, 1);
         memset(regions, 0, sizeof regions);
+        memset(cpal_users, 0, sizeof cpal_users);
+        if (place->field && !runs) {
+            rows = psx_spare_alloc(RUN_ROWS * sizeof *rows);
+            runs = psx_spare_alloc(MAX_RUNS * sizeof *runs);
+            needs = psx_spare_alloc(MAX_NEEDS * sizeof *needs);
+        }
+        runs_reset();
+        field_runs = 0;
         memset(unit_used, 0, sizeof unit_used);
         unit_used[RAMP_UNIT] = 1;
         ramp_written = 0;
@@ -1573,8 +1850,11 @@ static void bank_a_as_bg(int bg) {
     if (bg) {
         for (int i = 0; i < MAX_REGIONS; ++i)
             if (regions[i].used && regions[i].unit < 64) free_region(&regions[i]);
+        if (runs)
+            for (int i = 0; i < MAX_RUNS; ++i) if (runs[i].flags && rows[runs[i].row].unit < 64) free_run(i);
         for (int u = 0; u < 64; ++u) unit_used[u] = 1; /* not textures until a 3D frame */
         vramSetBankA(VRAM_A_MAIN_BG_0x06020000);
+        dmaFillWords(0, BG_BMP_RAM(8), 256 * 192 * 2); /* the letterbox rows scale_back leaves: not old texels */
         bgShow(back_bg);
     } else {
         bgHide(back_bg);
@@ -1586,14 +1866,23 @@ static void bank_a_as_bg(int bg) {
 static void field_frame(Buffer *b, int display_h) {
     if (!b->soft && !soft_hold) {
         if (bank_a_bg) bank_a_as_bg(0);
-        for (int k = 0; k < b->count; ++k) prim_layer[k] = b->prims[k].flags & P_UI ? L_UI : L_3D;
-        plan_textures(b);
-        if (!gxh_stats_unplaced) {
-            replay(b, 0, b->count, L_UI);
-            dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
-            return;
+        int polys = 0, vertices = 0;
+        for (int k = 0; k < b->count; ++k) {
+            prim_layer[k] = b->prims[k].flags & P_UI ? L_UI : L_3D;
+            if (prim_layer[k] == L_3D) { polys++; vertices += b->prims[k].n; }
         }
-        gxh_stats_soft |= 128;
+        /* the 3D engine's polygon and vertex RAM (2048, 6144 a frame): a scene past them stays exact in software */
+        if (polys > MAX_POLYS || vertices > MAX_VERTICES) {
+            gxh_stats_soft |= 8;
+        } else {
+            plan_textures(b);
+            if (!gxh_stats_unplaced) {
+                replay(b, 0, b->count, L_UI);
+                dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
+                return;
+            }
+            gxh_stats_soft |= 128;
+        }
         soft_hold = 60;
     }
     if (!b->soft) { key_fill(b); go_software(b); }
@@ -1614,6 +1903,7 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     else { memset(prim_layer, L_3D, b->count); plan_textures(b); }
     gxh_stats_regions = gxh_stats_units = 0;
     for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) { gxh_stats_regions++; gxh_stats_units += regions[i].units; }
+    if (runs) for (int i = 0; i < RUN_ROWS; ++i) gxh_stats_units += rows[i].fmt_units & 15;
     if (gxh_stats_units > gxh_stats_units_peak) gxh_stats_units_peak = gxh_stats_units;
     u32 saved = 0;
     if (place->field && bank_a_bg) { vramSetBankB(VRAM_B_LCD); vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); }

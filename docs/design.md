@@ -442,24 +442,33 @@ Licence: port code GPL (D4); tools CC0 like the decomp's.
 
 ## Field 3D option (FIELDGX=1, 2026-10-24)
 
-`FIELDGX=1` runs the hybrid renderer in fields. Its scene buffers live in ovl_0a's dead MIPS code range
-(`ovl0a_layout.h`, 1450 primitives each), and the GX command chunks in VRAM bank I (in battle too). A field frame is
-3D or software:
+`FIELDGX=1` runs the hybrid renderer in fields. Its scene buffers hold 1880 primitives each: the first in ovl_0a's
+dead MIPS code range (`ovl0a_layout.h`), the second in native slot 0 after the field overlay's ARM code (the slot is
+sized for battle's; about 1680 in DS mode, where battle is built `-Os`). The GX command chunks are in VRAM bank I (in
+battle too). A field frame is 3D or software:
 - 3D: every primitive drawn into the back buffer is a 3D quad or polygon in scene order (rows of background sprites
   merged into one quad), with all four texture banks. The UI pages' primitives (text, window parts, texture windows
   included) are replayed in software on the 2D layer above.
-- software: when its textures don't fit, or the scene can't be drawn by the 3D engine (a texture window off the UI
-  pages, mask bits, too many primitives, a readback of the frame), the scene is replayed and drawn by the software
-  renderer, scaled into bank A (a 16-bit BG behind a transparent 3D layer). For the next 60 frames the GPU goes
-  straight to the software renderer (the hybrid's per-primitive bookkeeping costs 2 us a primitive). Those frames are
-  pixel-identical to the software path.
+- software: when its textures don't fit, or the scene can't be drawn by the 3D engine (more than its 2048 polygons
+  or 6144 vertices, which is 1536 separate quads; a texture window off the UI pages; mask bits; a readback of the
+  frame), the scene is replayed and drawn by the software renderer, scaled into bank A (a 16-bit BG behind a
+  transparent 3D layer). For the next 60 frames the GPU goes straight to the software renderer (the hybrid's
+  per-primitive bookkeeping costs 2 us a primitive). Those frames are pixel-identical to the software path.
+Textures: a region per page (its 64-texel-stepped bounding box, per CLUT for additive copies). A field whose regions
+don't fit switches its sprites to **block runs** until the mode ends: 16x16-texel blocks, copied as runs of a page
+row's consecutive blocks the scene samples into 256x16 rows, so only what is drawn is held (field 931: 576 KB of
+regions, 334 KB of runs and polygon regions). A sprite's texels are consecutive blocks of one row, so a merged row
+of sprites stays one quad. Fields that fit keep regions: runs cost a texture switch per sprite, 2-3%.
 Subtractive and additive blends drawn by the 3D engine are approximated as in battle (a subtractive shadow over a
-character, the commonest case, is in nearly every scene). Scenes hold up to 2774 primitives (median 1012, 90%
-1681, 10 of 563 fields over the 3D engine's 2048: host census, 2500 frames of random walking with `--render`).
+character, the commonest case, is in nearly every scene; additive mist over a dark tile can show as a lighter
+square). Scenes hold up to 2774 primitives (median 1012, 90% 1681, 10 of 563 fields over the 3D engine's 2048:
+host census, 2500 frames of random walking with `--render`).
 
-28 DS sample fields at frame 1500 (DSi, PROFILE=1), software path -> FIELDGX: 20 in 3D, faster by up to 35% (453
-54.3 -> 35.5 ms, 306 31.8 -> 21.2, 2055 39.8 -> 26.1, 162 31.8 -> 22.9, 1606 27.5 -> 20.5, 1706 45.0 -> 37.6), and
-looking the same apart from the 3D engine's sampling at the 0.8 scale; 8 in software (textures too large), identical
-and as fast (at most 2 ms slower). Tried first: a software background layer for the sprites before the first
+28 DS sample fields at frame 1500 (DSi, PROFILE=1), software path -> FIELDGX: 26 in 3D, faster by up to 37% (1102
+43.4 -> 27.5 ms, 453 54.3 -> 35.5, 306 31.8 -> 21.2, 2055 39.8 -> 26.1, 2110 57.7 -> 45.8, 955 54.3 -> 44.6, 1414
+44.8 -> 39.7, 2162 42.1 -> 36.5, 1508 47.3 -> 42.3), and looking the same apart from the 3D engine's sampling at
+the 0.8 scale and the additive approximation. 931 and 1812 are over the 3D engine's limits at that frame (2300 and
+2200 primitives): software there, as fast. Before block runs and the larger buffers, 8 of the 28 were software.
+Tried first: a software background layer for the sprites before the first
 polygon, to keep their textures out of the 3D engine; re-rendering it each frame (the game writes VRAM every frame,
 and which sprites move there changes as characters move) cost more than it saved.
