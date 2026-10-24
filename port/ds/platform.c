@@ -250,6 +250,9 @@ int main(void) {
     } while (!(keysDown() & KEY_START));
 #endif
     port_profile_init();
+#ifdef PORT_PC_SAMPLER
+    { void port_pc_sampler_init(void); port_pc_sampler_init(); }
+#endif
 #ifdef PORT_AUDIO
     printf("SPU PCM: %s\n", port_audio_init() ? "44100 Hz stereo" : "initialization failed");
 #endif
