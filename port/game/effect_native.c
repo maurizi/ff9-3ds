@@ -43,6 +43,12 @@ static u32 seen[4]; /* the words that tell the slot changed: header pointer and 
 
 static u32 at(u32 vram) { return *(const u32 *)PSX_ADDR(vram); }
 
+/* port/ds/fx_pack.c: the loaded module's code was overwritten; identify the slot's module again on the next call */
+void port_fxmod_forget(void) {
+    current_funcs = NULL;
+    seen[0] = ~at(SLOT);
+}
+
 static int matches(const PsxFxmod *m) {
     u32 h = 0x811C9DC5u;
     for (const u8 *p = (const u8 *)PSX_ADDR(m->text_lo), *end = (const u8 *)PSX_ADDR(m->text_hi); p < end; ++p)

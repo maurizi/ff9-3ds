@@ -143,7 +143,7 @@ $$($(1)_DIR)/stubs.o: $$($(1)_DIR)/stubs.c
 
 # With $(1)_FXOVL: the main executable keeps what the modules use (fx_extern.ld) and gets a new build id each
 # link (fxid.s), which the module pack carries so a stale pack is refused.
-$$($(1)_DIR)/fx_extern.ld: $$($(1)_FXOBJS) tools/fx_extern.py
+$$($(1)_DIR)/fx_extern.ld: $$($(1)_FXOBJS) tools/fx_extern.py port/include/ovl0b_layout.h
 	@$(PYTHON) tools/fx_extern.py $$(subst gcc,nm,$(2)) $$@ $$($(1)_FXOBJS)
 
 $$($(1)_DIR)/ff9ds.elf: $$($(1)_LINK) $$($(1)_DIR)/stubs.o $$(if $$($(1)_FXOVL),$$($(1)_DIR)/fx_extern.ld)
@@ -406,7 +406,7 @@ fx_objs_of = $(addprefix $(BUILD)/ds/nsobj/,$(addsuffix .o,$(call fx_srcs_of,$(1
 .SECONDEXPANSION:
 $(BUILD)/ds/fx/%.elf: $$(call fx_objs_of,%) $(BUILD)/ds/ff9ds.elf port/ds/fxmod.ld
 	@mkdir -p $(dir $@)
-	@set -e; area=$$(arm-none-eabi-nm -S $(BUILD)/ds/ff9ds.elf | awk '$$4 == "psx_fx_area" {print "0x" $$1, "0x" $$2}'); \
+	@set -e; area=$$(arm-none-eabi-nm $(BUILD)/ds/ff9ds.elf | awk '$$3 == "psx_fx_area" {a = "0x" $$1} $$3 == "psx_fx_area_size" {s = "0x" $$1} END {print a, s}'); \
 	arm-none-eabi-gcc $(DS_ARCH) -nostdlib -nostartfiles -o $@ $(call fx_objs_of,$*) $(GEN)/psx_syms.ld \
 		-Wl,--just-symbols=$(BUILD)/ds/ff9ds.elf -Wl,--defsym=FX_BASE=$$(echo $$area | cut -d' ' -f1) \
 		-Wl,--defsym=FX_SIZE=$$(echo $$area | cut -d' ' -f2) -T port/ds/fxmod.ld -Wl,--gc-sections

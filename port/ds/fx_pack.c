@@ -10,8 +10,12 @@
 
 #define FX_HEAD_MAGIC 0x314D5846u     /* "FXM1": a module's first word (gen_link.py fxhead_<module>.s) */
 #define FX_PACK_MAGIC 0x31505846u     /* "FXP1" */
-/* the largest module (fx_0b2's 36 KB) and room to grow; each module's link asserts it fits */
-u8 psx_fx_area[40 * 1024] __attribute__((aligned(32)));
+/* in ovl_0b's dead MIPS code range while battle is resident (ovl0b_layout.h; the link defines it, fx_extern.py);
+ * each module's link asserts it fits. Weak for the executable's first (scan) link. */
+extern u8 psx_fx_area[] __attribute__((weak));
+extern const u8 psx_fx_area_size[] __attribute__((weak)); /* its address is the size */
+#define AREA_SIZE ((u32)(uintptr_t)psx_fx_area_size)
+extern unsigned char psx_ram[];
 extern const u32 psx_fx_build_id __attribute__((weak)); /* the Makefile's (fxid.s), new each link; weak for its scan */
 
 static FILE *pack;
@@ -41,6 +45,17 @@ static int open_pack(void) {
     return 1;
 }
 
+void port_fxmod_forget(void); /* effect_native.c */
+
+/* port/psx/mem.c: PS1 RAM [off, off + len) was overwritten (an overlay landing): a module there is gone */
+void port_fx_area_overwritten(unsigned int off, unsigned int len) {
+    u32 at = (u32)(psx_fx_area - psx_ram);
+    if (loaded >= 0 && off < at + AREA_SIZE && at < off + len) {
+        loaded = -1;
+        port_fxmod_forget();
+    }
+}
+
 /* Module `index` in psx_fx_area (read unless it is already there), or NULL. Its header: magic, the zero-filled
  * range, then what effect_native.c uses. */
 const void *port_fx_pack_load(unsigned int index) {
@@ -49,15 +64,15 @@ const void *port_fx_pack_load(unsigned int index) {
     if ((int)index == loaded) return h;
     loaded = -1;
     u32 offset = pack_index[index][0], size = pack_index[index][1];
-    if (size > sizeof psx_fx_area || fseek(pack, (long)offset, SEEK_SET) != 0 ||
+    if (size > AREA_SIZE || fseek(pack, (long)offset, SEEK_SET) != 0 ||
         fread(psx_fx_area, 1, size, pack) != size || h[0] != FX_HEAD_MAGIC || h[2] < h[1] ||
-        h[1] < (u32)(uintptr_t)psx_fx_area || h[2] > (u32)(uintptr_t)(psx_fx_area + sizeof psx_fx_area)) {
+        h[1] < (u32)(uintptr_t)psx_fx_area || h[2] > (u32)(uintptr_t)(psx_fx_area + AREA_SIZE)) {
         port_log("effect modules: module %u unreadable\n", index);
         return NULL;
     }
     memset((void *)(uintptr_t)h[1], 0, h[2] - h[1]);
     /* new code: out of the data cache, then a fresh instruction cache */
-    DC_FlushRange(psx_fx_area, sizeof psx_fx_area);
+    DC_FlushRange(psx_fx_area, AREA_SIZE);
     IC_InvalidateAll();
     loaded = (int)index;
     return h;

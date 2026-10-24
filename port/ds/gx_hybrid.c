@@ -28,6 +28,7 @@
 #include "gx_hybrid.h"
 #include "psx_runtime.h"
 #include "psx_mem.h"
+#include "ovl0b_layout.h"
 
 extern unsigned short *psx_vram;
 
@@ -670,7 +671,7 @@ enum { CMD_COLOR = 0x20, CMD_TEXCOORD = 0x22, CMD_VTX16 = 0x23, CMD_VTXXY = 0x25
 /* The scene's commands (packed FIFO format, one command per header), fed to the geometry FIFO by DMA while the
  * CPU goes on. Worst case per polygon: 4 state commands and 4 vertices of colour, texcoord and position. */
 #define CHUNK_WORDS 4096   /* two 16 KB halves: one fills while the other goes to the FIFO */
-static u32 chunks[2][CHUNK_WORDS] __attribute__((aligned(32)));
+static u32 (*chunks)[CHUNK_WORDS]; /* two, in ovl_0b's code range (ovl0b_layout.h) */
 static int chunk, chunk_words;
 
 static void flush_chunk(void) {
@@ -1265,21 +1266,23 @@ static void reset_colours(void);     /* the 2D layer: an 8-bit bitmap BG in bank
  * nothing reads while ovl_0b is resident (docs/ds-mode.md): buffer 0 in its first code segments, buffer 1 after the
  * embedded table. Only while ovl_0b is resident; a sector loaded over them empties them (gxh_ram_overwritten). */
 #define BATTLE_OVERLAY 0x0B
-#define PRIMS_AT_0 0x15A0   /* ovl_0b file offsets: code 0x159C-0x28580 */
-#define PRIMS_AT_1 0x28C20  /* code 0x28C0C-0x4E1E8 */
-_Static_assert(PRIMS_AT_0 + MAX_PRIMS * sizeof(Prim) <= 0x28580, "buffer 0 overruns ovl_0b's code");
-_Static_assert(PRIMS_AT_1 + MAX_PRIMS * sizeof(Prim) <= 0x4E1E8, "buffer 1 overruns ovl_0b's code");
-static const unsigned int prims_at[2] = {PRIMS_AT_0, PRIMS_AT_1};
+_Static_assert(OVL0B_PRIMS_AT_0 + MAX_PRIMS * sizeof(Prim) <= OVL0B_FX_AREA_AT, "buffer 0 overruns the module area");
+_Static_assert(OVL0B_PRIMS_AT_1 + MAX_PRIMS * sizeof(Prim) <= OVL0B_CHUNKS_AT, "buffer 1 overruns the chunks");
+_Static_assert(OVL0B_CHUNKS_AT + 2 * CHUNK_WORDS * 4 <= OVL0B_CODE_END, "the chunks overrun ovl_0b's code");
+static const unsigned int prims_at[2] = {OVL0B_PRIMS_AT_0, OVL0B_PRIMS_AT_1};
 
 void gxh_ram_overwritten(unsigned int off, unsigned int len) {
     for (int i = 0; i < 2; ++i) {
-        unsigned int at = (0xA7000 + prims_at[i]), end = at + MAX_PRIMS * sizeof(Prim);
+        unsigned int at = (OVL0B_AT + prims_at[i]), end = at + MAX_PRIMS * sizeof(Prim);
         if (off < end && at < off + len) { buffers[i].count = 0; buffers[i].submitted = 0; }
     }
+    unsigned int at = OVL0B_AT + OVL0B_CHUNKS_AT;
+    if (off < at + 2 * CHUNK_WORDS * 4 && at < off + len) while (dmaBusy(0)) {} /* a list still on its way out */
 }
 
 void gxh_init(void) {
-    for (int i = 0; i < 2; ++i) buffers[i].prims = (Prim *)(psx_ram + 0xA7000 + prims_at[i]);
+    for (int i = 0; i < 2; ++i) buffers[i].prims = (Prim *)(psx_ram + OVL0B_AT + prims_at[i]);
+    chunks = (u32 (*)[CHUNK_WORDS])(psx_ram + OVL0B_AT + OVL0B_CHUNKS_AT);
     marks = psx_spare_alloc(1024 * 512 / 8); /* in main's MIPS code range, see psx_spare_alloc */
     memset(marks, 0, 1024 * 512 / 8);
 }
