@@ -222,6 +222,23 @@ them like the overlays (one binary per module, all linked at 0x801E7700), even a
 to behave the same. The port would then compile them like the overlays and load the native code with the module.
 If (b) is out of scope, the port can instead translate MIPS to ARM when a module loads, and (a) is enough.
 
+### R25. The last code without C or a port equivalent (2026-10-24)
+With every effect module native, the port interprets no MIPS. What its link still stubs (calling one stops with
+its name; `build/ds/stubs.txt`):
+
+- **ovl_0c, 11 routines with neither C nor a port version**: `func_800B3FEC`, `800B4270`, `800B4720`, `800B4BDC`,
+  `800B4FD4`, `800B53FC`, `800B5880`, `800B5CD0`, `800B5FD0`, `800B6338`, `800B6598` (`func_800B3FEC` is called
+  from ovl_0c.c:5308 with the ordering table: the world map's terrain/sea drawing?). The world map can't run without
+  them. **Highest priority.**
+- **Two cross-binary calls from main with no resolved target**: `func_800A80A4` (main.c:42) and `func_800B73F8`
+  (main.c:12155, from the event-script handler). Which overlay defines each, and is it already in C there?
+- **main, 26 routines** (`func_8001455C` … `func_800164CC`, `func_8001BE14` … `func_8001C0FC`, `_padIntPad`,
+  `_padIsVsync`): PsyQ library internals, which the port replaces wholesale. Please confirm none is called from
+  game code.
+- Lower priority, to retire port-written equivalents: C for the rest of the asm in ovl_0b (46: the port's
+  `battle_*.c` reimplement them, checked against the MIPS), ovl_0a (6, `src_equiv`), the `src_equiv/` routines in
+  main/ovl_0a/ovl_0c, and ovl_64 (the debug FMV player, 21; unused by the game?).
+
 ### R24. Which fields start which encounters, and with which background (2026-10-18)
 The port's direct-entry battle sweep (porting-notes "Battle sweep") enters every encounter in the encounter
 directory; 408 of 1493 can't be entered alone because their bundle has no background: the field or world map that
