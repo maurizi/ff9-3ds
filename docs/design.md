@@ -469,6 +469,44 @@ host census, 2500 frames of random walking with `--render`).
 44.8 -> 39.7, 2162 42.1 -> 36.5, 1508 47.3 -> 42.3), and looking the same apart from the 3D engine's sampling at
 the 0.8 scale and the additive approximation. 931 and 1812 are over the 3D engine's limits at that frame (2300 and
 2200 primitives): software there, as fast. Before block runs and the larger buffers, 8 of the 28 were software.
+Frame times without timers (PROFILE=2, ms; 16.7 is 60 fps, the PS1 field is 30 fps, 33.3 ms), after the profiling
+pass of 2026-10-24 (PROFILE=3 sampling profiler: no memset per GP0 command, the 2D layer skipping cells nothing drew
+in, GP0 vertices decoded in place, GX commands written in main RAM, gp0.c and gx_hybrid.c as ARM):
+
+| field | software | FIELDGX |
+|---|---|---|
+| d1_f0158 | 16.7151 | 16.7151 |
+| d1_f0110 | 22.9548 | 18.0186 |
+| d1_f0615 | 17.5836 | 16.7151 |
+| d1_f0453 | 50.1074 | 26.1172 |
+| d1_f0306 | 29.1453 | 16.7055 |
+| d1_f0205 | 22.3423 | 17.7571 |
+| d1_f0162 | 29.0435 | 16.7151 |
+| d2_f0931 | 53.9236 | 43.3793 |
+| d2_f1425 | 20.3372 | 17.9038 |
+| d2_f1203 | 20.3511 | 16.7151 |
+| d2_f1414 | 37.8383 | 29.2742 |
+| d2_f1102 | 40.3863 | 21.4316 |
+| d2_f0955 | 47.3384 | 34.2149 |
+| d2_f1057 | 27.5401 | 24.1081 |
+| d3_f2714 | 19.4641 | 17.2131 |
+| d3_f1551 | 16.8544 | 16.7151 |
+| d3_f1811 | 16.7151 | 16.7151 |
+| d3_f1508 | 37.6124 | 31.6175 |
+| d3_f1812 | 58.503 | 61.2536 |
+| d3_f1606 | 24.3836 | 16.7151 |
+| d3_f2055 | 35.6496 | 20.3223 |
+| d4_f1706 | 38.5336 | 27.9818 |
+| d4_f2934 | 19.133 | 16.7151 |
+| d4_f1953 | 16.7148 | 16.7151 |
+| d4_f1911 | 24.1168 | 18.5251 |
+| d4_f0351 | 28.8219 | 26.5027 |
+| d4_f2110 | 47.6403 | 33.8488 |
+| d4_f2162 | 36.1143 | 27.2725 |
+
+24 of 28 at or under the PS1's 33 ms. 931 and 1812 are over the 3D engine's limits for many scenes (1812 is 2.5 ms
+slower than the software path: its software frames go through bank A, `scale_back`); 955 and 2110 are within 1 ms.
+
 Tried for scenes over the limits: split frames, the back part (the primitives before the last ones that fit, or a
 full buffer's older half) drawn in software into bank A and the rest in 3D over it. They look right (931 at frame
 600, 1812) but aren't faster: 931 58.9 -> 58.5 ms, 1812 71.0 -> 79.4 (the back's software drawing, recording every
