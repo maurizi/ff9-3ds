@@ -440,21 +440,26 @@ build/  ff9ds/     generated; never committed
 
 Licence: port code GPL (D4); tools CC0 like the decomp's.
 
-## Field 3D prototype (branch field-gx, 2026-10-24)
+## Field 3D option (FIELDGX=1, 2026-10-24)
 
-`FIELDGX=1` runs the hybrid renderer in fields: its scene buffers in ovl_0a's dead MIPS code range
-(`ovl0a_layout.h`, 1450 primitives each), the GX command chunks in VRAM bank I (all modes), every primitive drawn into
-the back buffer a 3D quad in scene order (opaque sprites too, rows of background sprites merged into one quad), the UI
-pages' sprites (text, windows) on the exact 2D layer. Scenes hold up to 2774 primitives (median 1012, 90% 1681, 10 of
-563 fields over the 3D engine's 2048: host census, 2500 frames of random walking with `--render`).
+`FIELDGX=1` runs the hybrid renderer in fields. Its scene buffers live in ovl_0a's dead MIPS code range
+(`ovl0a_layout.h`, 1450 primitives each), and the GX command chunks in VRAM bank I (in battle too). A field frame is
+3D or software:
+- 3D: every primitive drawn into the back buffer is a 3D quad or polygon in scene order (rows of background sprites
+  merged into one quad), with all four texture banks. The UI pages' primitives (text, window parts, texture windows
+  included) are replayed in software on the 2D layer above.
+- software: when its textures don't fit, or the scene can't be drawn by the 3D engine (a texture window off the UI
+  pages, mask bits, too many primitives, a readback of the frame), the scene is replayed and drawn by the software
+  renderer, scaled into bank A (a 16-bit BG behind a transparent 3D layer). For the next 60 frames the GPU goes
+  straight to the software renderer (the hybrid's per-primitive bookkeeping costs 2 us a primitive). Those frames are
+  pixel-identical to the software path.
+Subtractive and additive blends drawn by the 3D engine are approximated as in battle (a subtractive shadow over a
+character, the commonest case, is in nearly every scene). Scenes hold up to 2774 primitives (median 1012, 90%
+1681, 10 of 563 fields over the 3D engine's 2048: host census, 2500 frames of random walking with `--render`).
 
-28 DS sample fields at frame 1500 (DSi, PROFILE=1), software path -> 3D: 24 as fast or faster (306 31.8 -> 20.7 ms,
-2055 39.8 -> 25.8, 1812 71.0 -> 54.8, 453 54.3 -> 35.5), two slower (931 62.7 -> 75.3, 1102 43.4 -> 54.8). Not ready:
-- texture overflow: a field's background spans more texture pages than the 512 KB of texture VRAM, so the planner
-  re-places and re-uploads everything every frame (the slow fields) and what doesn't fit is missing (holes, black
-  blocks, missing characters in 1812 and 2110);
-- a fade to black (931) doesn't show: the PS1 subtracts, the 3D engine can't.
-Next: layers. Sprites drawn before the scene's first polygon are the background, after its last the foreground: both
-software-rendered and cached across frames (block hashes, as the 2D layer), behind and in front of the 3D engine;
-only sprites between polygons become quads, which keeps textures small. Fades through master brightness where the
-whole screen is covered by one subtractive or additive rectangle.
+28 DS sample fields at frame 1500 (DSi, PROFILE=1), software path -> FIELDGX: 20 in 3D, faster by up to 35% (453
+54.3 -> 35.5 ms, 306 31.8 -> 21.2, 2055 39.8 -> 26.1, 162 31.8 -> 22.9, 1606 27.5 -> 20.5, 1706 45.0 -> 37.6), and
+looking the same apart from the 3D engine's sampling at the 0.8 scale; 8 in software (textures too large), identical
+and as fast (at most 2 ms slower). Tried first: a software background layer for the sprites before the first
+polygon, to keep their textures out of the 3D engine; re-rendering it each frame (the game writes VRAM every frame,
+and which sprites move there changes as characters move) cost more than it saved.
