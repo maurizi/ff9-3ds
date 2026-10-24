@@ -141,6 +141,23 @@ mode needs.
 The VRAM shadow has no such slack: the game fills nearly all of PS1 VRAM (1000 KB of 1024 non-zero in field 259,
 992 in Ark, 896 in Ifrit), and the CPU cannot read the DS texture banks while the 3D engine uses them.
 
+## Effect modules load from SD (2026-10-24)
+
+With 379 of 380 battle effect modules native, their code was 655 KB of the executable (`.text` 1.41 MB). The DS
+build now links each module on its own at `psx_fx_area` (40 KB in bss; the largest module is 36 KB) against the
+main executable's symbols (`--just-symbols`; `tools/fx_extern.py` keeps what they use through the main link's
+`--gc-sections` and refuses one module using another's symbols), and packs them into `fxmods.bin`
+(`tools/pack_fxmods.py`). `port/ds/fx_pack.c` reads the module the slot holds when `effect_native.c` identifies
+it, as the PS1 reads it from the disc, then flushes the data cache and invalidates the instruction cache. The pack
+carries the main executable's build id (new each link) and `psx_fx_area`'s address; without a matching pack the
+modules run in the effect VM, which is exact. The host build keeps them linked in.
+
+Result: `.text` 1,410,568 -> 732,640 bytes, `.rodata` 115 KB -> 88 KB, `.bss` 2.45 MB -> 2.39 MB (the 40 KB area
+included). The total is about 4.7 MB against 4 MB. Battles (capture at 1761, PROFILE=2): screenshots identical,
+and slightly faster (Ark 39.1 -> 38.9 ms per frame, Ifrit 39.7 -> 39.3, Trance 36.3 -> 36.1; Trance without the
+pack, in the VM: 38.0). `fxmods.bin` goes in `ff9ds/` next to `raw/` (the build copies it into the test SD
+folders); like the disc images, it is derived from game data and never committed.
+
 ## Implementation order and acceptance
 
 1. Remove inactive backend storage (done), then inventory resident code/data by

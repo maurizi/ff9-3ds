@@ -41,6 +41,9 @@ bin_of    = $(if $(filter docs/wip/%,$(1)),$(call wip_bin,$(notdir $(1))),$(if $
 WIP_SRCS  := $(foreach f,$(patsubst $(DECOMP)/%.c,%,$(wildcard $(DECOMP)/docs/wip/*_[0-9A-F]*.c)),\
                  $(if $(filter $(call wip_bin,$(notdir $(f))),$(BINS)),$(f)))
 DECOMP_SRCS := $(foreach b,$(BINS),$(call src_of,$(b))) $(WIP_SRCS)
+# the effect modules' sources, all and per module (the DS links each module on its own: fx_objs_of below)
+FX_SRCS   := $(foreach f,$(DECOMP_SRCS),$(if $(filter fx_%,$(call bin_of,$(f))),$(f)))
+fx_srcs_of = $(foreach f,$(FX_SRCS),$(if $(filter $(1),$(call bin_of,$(f))),$(f)))
 weak_src  = $(filter src_equiv/% docs/wip/%,$(1))
 header_of = $(if $(filter main,$(1)),ff9.h,$(if $(filter fx_%,$(1)),btlfx_mod.h,$(1).h))
 
@@ -95,6 +98,10 @@ $(1)_NSOBJS   := $$(patsubst $$($(1)_DIR)/obj/%,$$($(1)_DIR)/nsobj/%,$$($(1)_DOB
 $(1)_GENOBJS  := $$(addprefix $$($(1)_DIR)/gen/,$$(addsuffix .o,$$(addprefix img_,$(BINS)) tramp_$(6)))
 $(1)_PORTOBJS := $$(patsubst port/%.c,$$($(1)_DIR)/port/%.o,$(PSX_SRCS) $$(wildcard port/$(5)/*.c))
 $(1)_LINK     := $$($(1)_NSOBJS) $$($(1)_GENOBJS) $$($(1)_PORTOBJS)
+# With $(1)_FXOVL the effect modules' code stays out of the executable (loaded from SD: effect_native.c)
+$(1)_FXOBJS   := $$(if $$($(1)_FXOVL),$$(addprefix $$($(1)_DIR)/nsobj/,$$(addsuffix .o,$(FX_SRCS))) \
+                   $$(addprefix $$($(1)_DIR)/gen/img_,$$(addsuffix .o,$(FXMODS))))
+$(1)_MAINLINK := $$(filter-out $$($(1)_FXOBJS),$$($(1)_LINK))
 
 $$($(1)_DIR)/obj/%.o: $(BUILD)/portified/%.c $(PORT_HDRS)
 	@mkdir -p $$(dir $$@)
@@ -133,10 +140,16 @@ $$($(1)_DIR)/stubs.c: $$($(1)_LINK) tools/gen_stubs.py
 $$($(1)_DIR)/stubs.o: $$($(1)_DIR)/stubs.c
 	@$(2) $(4) $(PORT_CFLAGS) $$(PORT_EXTRA_$(1)) -w -c $$< -o $$@
 
-$$($(1)_DIR)/ff9ds.elf: $$($(1)_LINK) $$($(1)_DIR)/stubs.o
+# With $(1)_FXOVL: the main executable keeps what the modules use (fx_extern.ld) and gets a new build id each
+# link (fxid.s), which the module pack carries so a stale pack is refused.
+$$($(1)_DIR)/fx_extern.ld: $$($(1)_FXOBJS) tools/fx_extern.py
+	@$(PYTHON) tools/fx_extern.py $$(subst gcc,nm,$(2)) $$@ $$($(1)_FXOBJS)
+
+$$($(1)_DIR)/ff9ds.elf: $$($(1)_LINK) $$($(1)_DIR)/stubs.o $$(if $$($(1)_FXOVL),$$($(1)_DIR)/fx_extern.ld)
 	@echo "LD   $$@"
-	@$(2) $(4) -o $$@ $$($(1)_LINK) $$($(1)_DIR)/stubs.o $(GEN)/psx_syms.ld $(7) -Wl,-Map,$$($(1)_DIR)/ff9ds.map \
-		-Wl,--start-group $(8) -Wl,--end-group
+	$$(if $$($(1)_FXOVL),@$(PYTHON) tools/fx_extern.py --build-id $$($(1)_DIR)/fxid.s && $(2) $(4) -c $$($(1)_DIR)/fxid.s -o $$($(1)_DIR)/fxid.o)
+	@$(2) $(4) -o $$@ $$($(1)_MAINLINK) $$($(1)_DIR)/stubs.o $$(if $$($(1)_FXOVL),$$($(1)_DIR)/fxid.o $$($(1)_DIR)/fx_extern.ld) \
+		$(GEN)/psx_syms.ld $(7) -Wl,-Map,$$($(1)_DIR)/ff9ds.map -Wl,--start-group $(8) -Wl,--end-group
 endef
 
 # DS: BlocksDS, DSi-mode memory map, Thumb.
@@ -176,6 +189,7 @@ PORT_EXTRA_ds := $(if $(filter 1,$(SPUITCM)),-DPORT_SPU_ITCM) $(if $(filter 1,$(
                  $(if $(CAPTURE_FRAME),-DPORT_CAPTURE_FRAME=$(CAPTURE_FRAME)) \
                  $(if $(filter 1,$(CAPTURE_READBACK)),-DPORT_CAPTURE_READBACK) \
                  $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') $(if $(filter 1,$(SOFTDISPLAY) $(HYBRID)),-DPORT_SOFT_DISPLAY) $(if $(filter 1,$(HYBRID)),-DPORT_GX_HYBRID) $(if $(filter 0,$(GXMERGE)),-DPORT_GX_NO_MERGE) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) $(if $(filter 1,$(GXEXPERIMENTAL)),-DPORT_GX_EXPERIMENTAL) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXLAZY)),-DPORT_GX_LAZY) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD) $(if $(filter 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD_LOW) $(if $(filter 1 2,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 2,$(PROFILE)),-DPORT_PROFILE_FRAME_ONLY) $(if $(filter 1,$(CANARY)),-DPORT_CANARY)
+ds_FXOVL := 1
 $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH),ds,arm,\
 	-specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib -L$(BLOCKSDS)/libs/maxmod/lib -Wl$(,)--gc-sections,-lmm9 -lnds9 -lc))
 
@@ -359,7 +373,24 @@ $(BUILD)/tests/gx_backend.o: port/ds/render_gx.c tests/gx/nds.h $(BUILD)/ds/runt
 ARM7ELF  := $(BLOCKSDS)/sys/arm7/main_core/arm7_maxmod.elf
 NDSTOOL  := $(BLOCKSDS)/tools/ndstool/ndstool
 
-ds: $(BUILD)/ff9ds.nds
+ds: $(BUILD)/ff9ds.nds $(BUILD)/fxmods.bin
+
+# Effect modules on the DS: each is linked on its own at psx_fx_area against the main executable's symbols, and
+# the pack (fxmods.bin, derived from game data: never commit it) goes next to the disc images in ff9ds/; the
+# build copies it into the test SD folders (build/sdroot*/ff9ds/) that exist.
+fx_objs_of = $(addprefix $(BUILD)/ds/nsobj/,$(addsuffix .o,$(call fx_srcs_of,$(1)))) \
+             $(BUILD)/ds/gen/img_$(1).o $(BUILD)/ds/gen/fxhead_$(1).o
+.SECONDEXPANSION:
+$(BUILD)/ds/fx/%.elf: $$(call fx_objs_of,%) $(BUILD)/ds/ff9ds.elf port/ds/fxmod.ld
+	@mkdir -p $(dir $@)
+	@set -e; area=$$(arm-none-eabi-nm -S $(BUILD)/ds/ff9ds.elf | awk '$$4 == "psx_fx_area" {print "0x" $$1, "0x" $$2}'); \
+	arm-none-eabi-gcc $(DS_ARCH) -nostdlib -nostartfiles -o $@ $(call fx_objs_of,$*) $(GEN)/psx_syms.ld \
+		-Wl,--just-symbols=$(BUILD)/ds/ff9ds.elf -Wl,--defsym=FX_BASE=$$(echo $$area | cut -d' ' -f1) \
+		-Wl,--defsym=FX_SIZE=$$(echo $$area | cut -d' ' -f2) -T port/ds/fxmod.ld -Wl,--gc-sections
+$(BUILD)/fxmods.bin: $(addprefix $(BUILD)/ds/fx/,$(addsuffix .elf,$(sort $(FXMODS)))) tools/pack_fxmods.py
+	@echo "PACK $@"
+	@$(PYTHON) tools/pack_fxmods.py $(BUILD)/ds/fxid.s $(BUILD)/ds/ff9ds.elf $@ $(addprefix $(BUILD)/ds/fx/,$(addsuffix .elf,$(sort $(FXMODS))))
+	@for d in $(BUILD)/sdroot*/ff9ds; do [ -d $$d ] && cp $@ $$d/fxmods.bin; done; true
 pc: $(BUILD)/pc/ff9ds
 
 # The ROM patched with the R4 DLDI driver, for DeSmuME's emulated R4 flashcart (--slot1=r4 --slot1-fat-dir=DIR),
