@@ -84,10 +84,11 @@ static const Place places[] = {
 #endif
 };
 static const Place *place = &places[0];
-static unsigned int texture_writes;  /* field: bumped by every LoadImage, MoveImage and fill (psx_vram_touch) */
 /* a field scene starts from this in PS1 VRAM: only what software draws (text, UI) differs, for the 2D layer */
 #define FIELD_KEY 0x7C1F
 static void dirty_cells(int x0, int y0, int x1, int y1);
+static int soft_hold;     /* field: scenes to draw in software before trying 3D again (field_frame) */
+static int direct_soft;   /* field: the GPU goes straight to the software renderer (present_direct) */
 /* 1024x512: MARK_ADD where a software-drawn additive glow wrote since its buffer's scene started */
 static u8 *marks;
 #define MARK_ADD 1
@@ -138,7 +139,9 @@ static void start_scene(Buffer *b) {
     b->soft = 0;
     b->polys = 0;
     b->twin_count = 0;
-    if (place->field) {
+    if (place->field && soft_hold) {
+        b->soft = 1; /* textures didn't fit lately: drawn straight in software, nothing recorded (field_frame) */
+    } else if (place->field) {
         /* nothing clears a field's buffer (its background covers it): the scene's PS1 VRAM starts as the key */
         key_fill(b);
         b->clear = FIELD_KEY;
@@ -235,6 +238,7 @@ static void replay(Buffer *b, int from, int to, int layer /* -1: all */) {
  * polygon past the drawing area, too many primitives) turns the scene into software: what it recorded is drawn
  * now, the rest as it comes; it is shown like the software renderer's frames. */
 static void go_software(Buffer *b) {
+    if (place->field) soft_hold = 60; /* the next scenes will likely need it too: drawn in software from the start */
     replay(b, 0, b->count, -1);
     b->count = 0;
     b->soft = 1;
@@ -401,7 +405,6 @@ void psx_vram_read(int x, int y, int w, int h) {
 /* gpu.c: LoadImage, MoveImage, fills are about to write this rectangle. */
 void psx_vram_touch(int x, int y, int w, int h) {
     if (!active) return;
-    ++texture_writes;
     ui_flush();
     ui_note_write(x, y, w, h);
     ui_dirty_rect(x, y, x + w - 1, y + h - 1);
@@ -435,7 +438,7 @@ static u8 group_hash[256], palette_hash[256];
 
 /* Which layer each primitive goes to: the 3D engine (all of a battle's), or in a field the software background layer
  * or the 2D layer (field_layers). */
-enum { L_3D, L_BACK, L_UI };
+enum { L_3D, L_UI };
 static u8 prim_layer[MAX_PRIMS];
 static inline int in_scene(const Prim *p, int k) { (void)p; return prim_layer[k] == L_3D; }
 
@@ -1445,11 +1448,9 @@ static u8 block_shown[6][8];   /* the 2D layer has pixels in this 32x32 output b
 static Buffer *last_shown;
 static u32 block_hash[6][8];
 static int layer_bg = -1;
-/* Field: the background layer, a 16-bit bitmap BG behind the 3D layer in bank A (the 3D layer clears to transparent):
- * the sprites a scene draws before its first polygon, drawn in software and scaled like the software display; or the
- * whole frame of a scene that went software. Redrawn only when those sprites or textures changed (back_hash). */
+/* Field: a software frame's bitmap BG (BG3, 16-bit, bank A when bank_a_bg) behind the transparent 3D layer */
 static int back_bg = -1;
-static u32 back_hash;
+static int bank_a_bg;     /* field: bank A is the software frame's bitmap, not textures */
 /* a scaled block, stride 256 (psx_spare_alloc): the 2D layer's and the background layer's */
 static u16 *scaled_block(void) {
     static u16 *block;
@@ -1503,14 +1504,10 @@ void gxh_enable(int on) {
         memset(block_hash, 0, sizeof block_hash);
         last_shown = NULL;
         videoSetMode(MODE_5_3D);
-        if (place->field) {
-            vramSetBankA(VRAM_A_MAIN_BG_0x06020000);
-            vramSetBankB(VRAM_B_TEXTURE_SLOT1);
-            vramSetBankC(VRAM_C_TEXTURE_SLOT2);
-            vramSetBankD(VRAM_D_TEXTURE_SLOT3);
-        } else {
-            vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_TEXTURE, VRAM_C_TEXTURE, VRAM_D_TEXTURE);
-        }
+        vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_TEXTURE, VRAM_C_TEXTURE, VRAM_D_TEXTURE);
+        bank_a_bg = 0;
+        soft_hold = 0;
+        direct_soft = 0;
         vramSetBankE(VRAM_E_MAIN_BG);
         vramSetBankF(VRAM_F_TEX_PALETTE_SLOT0);
         vramSetBankG(VRAM_G_TEX_PALETTE_SLOT1);
@@ -1522,9 +1519,7 @@ void gxh_enable(int on) {
         if (place->field) {
             back_bg = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 8, 0);
             bgSetPriority(back_bg, 3);
-            bgShow(back_bg);
-            memset((void *)BG_BMP_RAM(8), 0, 256 * 256 * 2);
-            back_hash = 0;
+            bgHide(back_bg);
         } else if (back_bg >= 0) {
             bgHide(back_bg);
         }
@@ -1539,7 +1534,6 @@ void gxh_enable(int on) {
         memset(regions, 0, sizeof regions);
         memset(unit_used, 0, sizeof unit_used);
         unit_used[RAMP_UNIT] = 1;
-        if (place->field) memset(unit_used, 1, 64); /* bank A is the background layer: textures in B-D */
         ramp_written = 0;
         memset(palettes, 0, sizeof palettes);
         for (int i = 0; i < 2; ++i) { buffers[i].valid = 0; buffers[i].count = 0; }
@@ -1560,112 +1554,74 @@ static void scale_back(Buffer *b, int display_h) {
     for (int oy = 0; oy < out_h; oy += BLOCK) {
         int rows = out_h - oy < BLOCK ? out_h - oy : BLOCK, sy = b->y + oy * 5 / 4;
         scale_fn(band, b->x, sy, 320, rows * 5 / 4);
-        for (int r = 0; r < rows; ++r) {
-            u32 *dst = (u32 *)(bitmap + (top + oy + r) * 256), *src = (u32 *)(band + r * 256);
-            for (int k = 0; k < 128; ++k) dst[k] = src[k] | 0x80008000u; /* word stores: VRAM ignores byte writes */
-        }
+        /* opaque (bit 15) in cached RAM, then DMA: the ARM9's own stores to VRAM are slow */
+        u32 *words = (u32 *)band;
+        for (int k = 0; k < rows * 128; ++k) words[k] |= 0x80008000u;
+        DC_FlushRange(band, rows * 512);
+        dmaCopyWords(3, band, bitmap + (top + oy) * 256, rows * 512);
     }
 }
 
-/* Field: each primitive's layer, then the background and 2D layers. A sprite no earlier 3D primitive overlaps (16x16
- * cells; all of them before the scene's first polygon) is the software background layer's: order between them makes
- * no difference. Polygons and the other sprites are the 3D engine's, but for the UI pages' sprites (the 2D layer). A
- * subtractive blend the 3D engine would have to draw turns the scene software. The scene's PS1 VRAM holds the key
- * colour: the background's sprites are drawn there, scaled into bank A and covered with the key again (only when they
- * or the textures changed), then the UI pages' sprites, for the 2D layer. */
-static int field_layered; /* the scene being sent uses the background layer (else the 3D layer is opaque) */
-static void field_layers(Buffer *b, int display_h, int layered) {
-    field_layered = layered || b->soft;
-    if (!layered && !b->soft) {
-        /* first try: everything but the UI is the 3D engine's */
+/* Field frames: 3D, or software. A 3D frame is everything but the UI pages' primitives (the 2D layer, replayed in
+ * software over the key colour), with all four texture banks. When a scene went software (go_software), or its
+ * textures don't fit, the frame is the software renderer's: the whole scene in PS1 VRAM, scaled into bank A as a 16-bit
+ * bitmap BG (the 3D layer transparent, the 2D layer hidden); bank A's textures are given up until a 3D frame takes it
+ * back. After textures didn't fit, the next scenes stay software for a while (a field's textures stay as big). */
+static void bank_a_as_bg(int bg) {
+    if (bg == bank_a_bg) return;
+    bank_a_bg = bg;
+    if (bg) {
+        for (int i = 0; i < MAX_REGIONS; ++i)
+            if (regions[i].used && regions[i].unit < 64) free_region(&regions[i]);
+        for (int u = 0; u < 64; ++u) unit_used[u] = 1; /* not textures until a 3D frame */
+        vramSetBankA(VRAM_A_MAIN_BG_0x06020000);
+        bgShow(back_bg);
+    } else {
+        bgHide(back_bg);
+        vramSetBankA(VRAM_A_TEXTURE_SLOT0);
+        for (int u = 0; u < 64; ++u) unit_used[u] = 0;
+    }
+}
+
+static void field_frame(Buffer *b, int display_h) {
+    if (!b->soft && !soft_hold) {
+        if (bank_a_bg) bank_a_as_bg(0);
         for (int k = 0; k < b->count; ++k) prim_layer[k] = b->prims[k].flags & P_UI ? L_UI : L_3D;
-        replay(b, 0, b->count, L_UI);
-        dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
-        return;
-    }
-    if (!b->soft) {
-        static u64 covered[32]; /* bit per 8x8 cell (40 a row) the 3D layer has drawn so far */
-        memset(covered, 0, sizeof covered);
-        for (int k = 0; k < b->count; ++k) {
-            const Prim *p = &b->prims[k];
-            if (p->flags & P_UI) { prim_layer[k] = L_UI; continue; }
-            int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
-            for (int i = 1; i < p->n; ++i) {
-                if (p->x[i] < x0) x0 = p->x[i];
-                if (p->x[i] > x1) x1 = p->x[i];
-                if (p->y[i] < y0) y0 = p->y[i];
-                if (p->y[i] > y1) y1 = p->y[i];
-            }
-            int c0 = x0 < 0 ? 0 : x0 >> 3, c1 = x1 >= 320 ? 39 : x1 >> 3, r0 = y0 < 0 ? 0 : y0 >> 3, r1 = y1 >= 256 ? 31 : y1 >> 3;
-            u64 cols = c1 >= c0 ? ((2ull << c1) - (1ull << c0)) : 0;
-            int free = 1;
-            for (int r = r0; r <= r1 && free; ++r) if (covered[r] & cols) free = 0;
-            int subtractive = (p->flags & P_SEMI) && p->abr == 2;
-            /* sprites, and subtractive polygons (shadows), which the 3D engine can't draw */
-            if (((p->flags & P_RECT) || subtractive) && free) { prim_layer[k] = L_BACK; continue; }
-            /* a subtractive one over 3D content (a shadow drawn after the character it touches): approximated by the
-             * 3D engine, as in battle (black at the source's brightness) */
-            if (subtractive) gxh_stats_soft |= 1;
-            prim_layer[k] = L_3D;
-            for (int r = r0; r <= r1; ++r) covered[r] |= cols;
+        plan_textures(b);
+        if (!gxh_stats_unplaced) {
+            replay(b, 0, b->count, L_UI);
+            dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
+            return;
         }
+        gxh_stats_soft |= 128;
+        soft_hold = 60;
     }
-    if (b->soft) {
-        scale_back(b, display_h);
-        back_hash = 0;
-        return;
-    }
-    u32 hash = 2166136261u ^ texture_writes;
-    for (int k = 0; k < b->count; ++k)
-        if (prim_layer[k] == L_BACK) {
-            const u8 *bytes = (const u8 *)&b->prims[k];
-            for (unsigned int i = 0; i < sizeof(Prim); ++i) hash = (hash ^ bytes[i]) * 16777619u;
-        }
-    if (hash != back_hash) {
-        replay(b, 0, b->count, L_BACK);
-        scale_back(b, display_h);
-        key_fill(b);
-        back_hash = hash;
-    }
-    replay(b, 0, b->count, L_UI);
-    dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
+    if (!b->soft) { key_fill(b); go_software(b); }
+    /* hold software: the GPU straight to the software renderer until it ends (present_direct) */
+    direct_soft = 1;
+    gp0_backend = &psx_softgpu;
+    bank_a_as_bg(1);
+    scale_back(b, display_h);
+    memset(prim_layer, L_UI, b->count); /* (none left: the scene is all in PS1 VRAM) */
+    plan_textures(b);
 }
 
 /* Send a buffer's scene to the 3D engine; it is shown from the next frame on. */
 static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     unsigned int profile = port_profile_begin();
     while (dmaBusy(0)) {} /* the previous scene's list */
-    if (place->field) field_layers(b, display_h, 0);
-    else memset(prim_layer, L_3D, b->count);
-    plan_textures(b);
-    if (place->field && gxh_stats_unplaced && !b->soft) {
-        /* its textures don't fit: the background's sprites to the software layer, and if that isn't enough either,
-         * all in software, exactly, rather than with holes */
-        gxh_stats_soft |= 128;
-        key_fill(b);
-        field_layers(b, display_h, 1);
-        plan_textures(b);
-        if (gxh_stats_unplaced && !b->soft) {
-            key_fill(b);
-            go_software(b);
-            field_layers(b, display_h, 1);
-            plan_textures(b);
-        }
-    }
-    if (place->field && back_bg >= 0) {
-        static int back_shown = 1;
-        if (field_layered != back_shown) { if (field_layered) bgShow(back_bg); else bgHide(back_bg); back_shown = field_layered; }
-    }
+    if (place->field) field_frame(b, display_h);
+    else { memset(prim_layer, L_3D, b->count); plan_textures(b); }
     gxh_stats_regions = gxh_stats_units = 0;
     for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) { gxh_stats_regions++; gxh_stats_units += regions[i].units; }
     if (gxh_stats_units > gxh_stats_units_peak) gxh_stats_units_peak = gxh_stats_units;
     u32 saved = 0;
-    if (place->field) { vramSetBankB(VRAM_B_LCD); vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); }
+    if (place->field && bank_a_bg) { vramSetBankB(VRAM_B_LCD); vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); }
     else saved = vramSetPrimaryBanks(VRAM_A_LCD, VRAM_B_LCD, VRAM_C_LCD, VRAM_D_LCD);
     vramSetBankF(VRAM_F_LCD);
     vramSetBankG(VRAM_G_LCD);
     upload();
-    if (place->field) {
+    if (place->field && bank_a_bg) {
         vramSetBankB(VRAM_B_TEXTURE_SLOT1); vramSetBankC(VRAM_C_TEXTURE_SLOT2); vramSetBankD(VRAM_D_TEXTURE_SLOT3);
     } else vramRestorePrimaryBanks(saved);
     vramSetBankF(VRAM_F_TEX_PALETTE_SLOT0);
@@ -1679,7 +1635,7 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     glOrthof32(0, 320, h, 0, -4096, 4096);
     glMatrixMode(GL_MODELVIEW);
     unsigned int c = b->clear;
-    glClearColor(c & 31, (c >> 5) & 31, (c >> 10) & 31, place->field && field_layered ? 0 : 31); /* the background layer shows */
+    glClearColor(c & 31, (c >> 5) & 31, (c >> 10) & 31, place->field && bank_a_bg ? 0 : 31); /* a software frame shows */
     emit_scene(b);
     flush_chunk();
     b->submitted = 1;
@@ -1759,7 +1715,31 @@ static void dirty_cells(int x0, int y0, int x1, int y1) {
 /* FNV-1a's prime, read at run time: as a constant the compiler multiplies by shifts and adds (9 instructions) */
 static volatile const u32 fnv_prime = 16777619u;
 
+/* Field, while textures don't fit (soft_hold): the GPU goes straight to the software renderer (the hybrid's per-
+ * primitive bookkeeping costs 2 us a primitive), and each new frame shown is scaled into bank A; the hybrid takes the
+ * primitives again when the hold ends. */
+static void present_direct(const PsxDisplayInfo *d) {
+    static int last_x = -1, last_y = -1;
+    if (d->x == last_x && d->y == last_y) return; /* the same frame, shown again */
+    last_x = d->x; last_y = d->y;
+    Buffer *b = buffer_at(d->x, d->y);
+    if (!b) return;
+    bank_a_as_bg(1);
+    scale_back(b, d->h);
+    if (soft_hold && --soft_hold) return;
+    direct_soft = 0; /* the hybrid again: the buffers' next draws start scenes */
+    gp0_backend = &hybrid_backend;
+    for (int i = 0; i < 2; ++i) { buffers[i].shown = 1; buffers[i].soft = 1; buffers[i].submitted = 1; }
+    last_x = last_y = -1;
+}
+
 void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, int w, int h)) {
+    scale_fn = scale;
+    if (direct_soft) {
+        if (layer_bg >= 0) bgHide(layer_bg);
+        present_direct(d);
+        return;
+    }
     ui_flush();
     Buffer *b = buffer_at(d->x, d->y);
     if (b) {
