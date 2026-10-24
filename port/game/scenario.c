@@ -13,7 +13,7 @@ void o14_func_800A741C(void);
 void port_scenario_set_enemy_hp(const int *values);
 s32 chr_resetToLevel(s32,s32,u8);
 static struct {
-    int enabled,consumed,kind,disc,field,battle,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil;
+    int enabled,consumed,kind,disc,field,battle,world,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil;
     unsigned seed;
     int party[4],hp[4],enemy_hp[4],trance[4],preset[4],equip[4][5],events[0x800],items[256];
     char characters[256],event_blob[256];
@@ -27,7 +27,7 @@ void port_scenario_load(const char *path) {
     FILE *f=fopen(path,"r");
     if(!f) port_fatal("scenario: cannot open %s",path);
     __builtin_memset(&scenario,0,sizeof scenario);
-    scenario.disc=1;scenario.field=70;scenario.battle=-1;
+    scenario.disc=1;scenario.field=70;scenario.battle=-1;scenario.world=0x2331;
     scenario.level=-1;scenario.story=-1;scenario.gil=-1;scenario.seed=1;
     for(int i=0;i<4;++i) {scenario.party[i]=i;scenario.hp[i]=scenario.enemy_hp[i]=scenario.trance[i]=scenario.preset[i]=-1;for(int j=0;j<5;++j) scenario.equip[i][j]=-1;}
     for(int i=0;i<0x800;++i) scenario.events[i]=-1;
@@ -44,10 +44,12 @@ void port_scenario_load(const char *path) {
         if(!__builtin_strcmp(s,"kind")) {
             if(!__builtin_strcmp(eq,"field")) scenario.kind=1;
             else if(!__builtin_strcmp(eq,"battle")) scenario.kind=2;
-            else port_fatal("scenario: kind must be field or battle");
+            else if(!__builtin_strcmp(eq,"world")) scenario.kind=3;
+            else port_fatal("scenario: kind must be field, battle or world");
         } else if(!__builtin_strcmp(s,"disc")) scenario.disc=number(eq,1,4);
         else if(!__builtin_strcmp(s,"field")) {scenario.field=number(eq,0,32767);scenario.field_explicit=1;}
         else if(!__builtin_strcmp(s,"battle")) scenario.battle=number(eq,0,65535);
+        else if(!__builtin_strcmp(s,"world")) scenario.world=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"level")) scenario.level=number(eq,1,99);
         else if(!__builtin_strcmp(s,"story")) scenario.story=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"gil")) scenario.gil=number(eq,0,9999999);
@@ -83,7 +85,8 @@ void port_scenario_load(const char *path) {
     if(scenario.kind!=2) for(int i=0;i<4;i++) if(scenario.enemy_hp[i]>=0)
         port_fatal("scenario: enemy_hp requires kind=battle");
     scenario.enabled=1;psx_cd_select_disc((unsigned)scenario.disc);
-    port_log("scenario configured: disc %d, %s %d\n",scenario.disc,scenario.kind==1?"field":"battle",scenario.kind==1?scenario.field:scenario.battle);
+    port_log("scenario configured: disc %d, %s %d\n",scenario.disc,scenario.kind==1?"field":scenario.kind==2?"battle":"world",
+             scenario.kind==1?scenario.field:scenario.kind==2?scenario.battle:scenario.world);
 }
 static void load_blob(const char *path,void *data,size_t size) {
     if(!*path) return;
@@ -232,6 +235,8 @@ void port_scenario_bootstrap(void) {
     g_gameState->unkA=1; /* ordinary battle entry from a field */
     d->fieldId=(u16)scenario.field;
     if(scenario.kind==1) o14_func_800A741C();
+    else if(scenario.kind==3) {d->unk7DC=(u16)scenario.world;o14_func_800A741C();} /* as a save made on the world map */
     else {prepare_return_field(d);prepare_battle_resources(d);d->battleId=(u16)scenario.battle;}
-    port_log("scenario entered without title/intro: mode %d, disc %d, id %d\n",scenario.kind,scenario.disc,scenario.kind==1?scenario.field:scenario.battle);
+    port_log("scenario entered without title/intro: mode %d, disc %d, id %d\n",scenario.kind,scenario.disc,
+             scenario.kind==1?scenario.field:scenario.kind==2?scenario.battle:scenario.world);
 }

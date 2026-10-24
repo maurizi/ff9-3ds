@@ -135,6 +135,16 @@ def main():
             if name in defined[b] or name in funcs.get(b, {}):
                 continue
             target = owner_of_name(b, name) if any(name in funcs.get(x, {}) or name in defined[x] for x in bins) else None
+            if target is None and name.startswith("func_") and (m := ff9sym.ADDR_NAME.match(name)):
+                # a placeholder name for a function another binary has since named: resolve it by its address
+                vram = int(m.group(1), 16)
+                target = owner_of_addr(b, vram)
+                if target == TRAMP:
+                    mapping[name] = f"xt_{vram:08X}"
+                elif target and target != b:
+                    mapping[name] = qualified(target, starts[target][vram])
+                    report.append(f"by address: {b} {name} -> {target} {starts[target][vram]}")
+                continue
             if target == TRAMP:
                 mapping[name] = f"xt_{name}"
             elif target and target not in ("main", b):
