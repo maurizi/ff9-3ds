@@ -1520,6 +1520,8 @@ answers the call with the native function; other modules keep running in the eff
 - Ark (fx_0b2): frame-identical to the VM on the host (80 frames).
 - 293 native at decomp 4289c37 (every module whose C is complete): all 11 battle scenarios frame-identical to the
   VM on the host (12 frames each over 3000; `make pc FXNATIVE=` builds the VM-only reference).
+- All 380 native at decomp 4c752a08: the 11 scenarios frame-identical to the VM (which remains the DS's fallback
+  when `fxmods.bin` is missing or from another build).
 - 379 native at decomp 9487b43 (all but fx_0fb_1): the same 11 scenarios frame-identical to the VM. Every encounter
   (1085, `bg_present_on_discs`) rerun with them: the same 1068 pass and the same 17 fixture returns.
 
