@@ -980,7 +980,7 @@ static void ui_mode(const UiPrim *p, Gp0Mode *m) {
     *m = (Gp0Mode){p->flags & UI_TEXTURED ? 1 : 0, p->flags & UI_RAW ? 1 : 0, p->flags & UI_SEMI ? 1 : 0,
                    p->flags & UI_GOURAUD ? 1 : 0, p->abr, p->depth, p->tx, p->ty, p->clut_x, p->clut_y};
 }
-#define UI_MAX 256   /* the battle UI draws about 110 a VBlank */
+#define UI_MAX 192   /* the battle UI draws about 110 a VBlank; more are drawn at once (ui_defer), as exactly */
 static UiPrim *ui_list[2]; /* [0] the previous VBlank's, [1] this one's (swapped); in psx_spare_alloc's range */
 static int ui_count[2], ui_overflow;
 static Buffer *ui_buffer;             /* the displayed buffer the list belongs to */

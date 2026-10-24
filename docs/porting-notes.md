@@ -1578,3 +1578,8 @@ battles reach their rewards and return to a field, which showed:
 
 Result: 1061/1085 at 12000 frames; the others are those two and the 22 disc-2 encounters whose bundle the disc 2
 directory lacks.
+
+`tools/battle_fixtures.py` now writes the sweep's fixtures from the decomp's encounter catalogue
+(`decomp/tools/encounter_catalog.py`, R24): the 1085 encounters whose background is on their disc, the 397 a field
+starts returning to that field. 1065/1085 at 12000 frames: 18 disc-2 encounters still read sector 0xFFFFFFFF, and
+Yan (world map only, so returning to the stand-in field) still meets the guarded division.
