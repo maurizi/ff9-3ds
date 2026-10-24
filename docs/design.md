@@ -439,3 +439,22 @@ build/  ff9ds/     generated; never committed
 ```
 
 Licence: port code GPL (D4); tools CC0 like the decomp's.
+
+## Field 3D prototype (branch field-gx, 2026-10-24)
+
+`FIELDGX=1` runs the hybrid renderer in fields: its scene buffers in ovl_0a's dead MIPS code range
+(`ovl0a_layout.h`, 1450 primitives each), the GX command chunks in VRAM bank I (all modes), every primitive drawn into
+the back buffer a 3D quad in scene order (opaque sprites too, rows of background sprites merged into one quad), the UI
+pages' sprites (text, windows) on the exact 2D layer. Scenes hold up to 2774 primitives (median 1012, 90% 1681, 10 of
+563 fields over the 3D engine's 2048: host census, 2500 frames of random walking with `--render`).
+
+28 DS sample fields at frame 1500 (DSi, PROFILE=1), software path -> 3D: 24 as fast or faster (306 31.8 -> 20.7 ms,
+2055 39.8 -> 25.8, 1812 71.0 -> 54.8, 453 54.3 -> 35.5), two slower (931 62.7 -> 75.3, 1102 43.4 -> 54.8). Not ready:
+- texture overflow: a field's background spans more texture pages than the 512 KB of texture VRAM, so the planner
+  re-places and re-uploads everything every frame (the slow fields) and what doesn't fit is missing (holes, black
+  blocks, missing characters in 1812 and 2110);
+- a fade to black (931) doesn't show: the PS1 subtracts, the 3D engine can't.
+Next: layers. Sprites drawn before the scene's first polygon are the background, after its last the foreground: both
+software-rendered and cached across frames (block hashes, as the 2D layer), behind and in front of the 3D engine;
+only sprites between polygons become quads, which keeps textures small. Fades through master brightness where the
+whole screen is covered by one subtractive or additive rectangle.

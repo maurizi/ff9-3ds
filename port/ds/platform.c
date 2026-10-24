@@ -124,12 +124,15 @@ void plat_wait_frame(void) {
         {
             extern int gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail, gxh_stats_palette_fail,
                 gxh_stats_blocks, gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced, gxh_stats_units_peak;
-            status_row(20, "gx %d dr%d tx%d pl%d", gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail,
-                       gxh_stats_palette_fail);
+            extern int gxh_stats_soft;
+            status_row(20, "gx %d dr%d tx%d pl%d sw%x", gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail,
+                       gxh_stats_palette_fail, gxh_stats_soft);
             extern int gxh_stats_upload_bytes, gxh_stats_upload_regions, gxh_stats_upload_palettes;
             status_row(18, "up %dK %d rg %d pal", gxh_stats_upload_bytes >> 10, gxh_stats_upload_regions,
                        gxh_stats_upload_palettes);
             extern int gxh_stats_ui_drawn, gxh_stats_ui_skipped;
+            extern unsigned int gxh_debug[4];
+            status_row(9, "dbg %x %x %x %x", gxh_debug[0], gxh_debug[1], gxh_debug[2], gxh_debug[3]);
             status_row(21, "rg %d u%d/%d np%d col %d ui %d/%d", gxh_stats_regions, gxh_stats_units, gxh_stats_units_peak,
                        gxh_stats_unplaced,
                        gxh_stats_blocks, gxh_stats_ui_drawn, gxh_stats_ui_skipped);

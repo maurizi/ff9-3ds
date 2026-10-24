@@ -9,6 +9,6 @@
 #define OVL0B_PRIMS_AT_1    0x28C20
 #define OVL0B_FX_AREA_AT    0x1EA80   /* the loaded effect module's native code (port/ds/fx_pack.c) */
 #define OVL0B_FX_AREA_END   0x28580
-#define OVL0B_CHUNKS_AT     0x46100   /* the hybrid's GX command chunks */
+#define OVL0B_CHUNKS_AT     0x46100   /* free (the hybrid's GX command chunks went to VRAM bank I) */
 #define OVL0B_CODE_END      0x4E1E8
 #endif
