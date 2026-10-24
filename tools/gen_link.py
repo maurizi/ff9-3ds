@@ -123,6 +123,14 @@ def main():
     TRAMP = "<trampoline>"
     tramps = {}  # trampoline symbol -> [(binary, target symbol)]
 
+    def d_is_function(src, vram):
+        """A D_XXXXXXXX that `src`'s C uses is another binary's function: it starts one there, outside `src`'s own
+        image (an overlay's data at an address where another overlay has code is the overlay's data)."""
+        bi = bins[src]
+        if src != "main" and bi.vram_of(0) <= vram < bi.vram_of(bi.end):
+            return False
+        return any(vram in starts.get(x, {}) for x in bins if x != src)
+
     # --- redefine maps --------------------------------------------------------------------------------------
     for b in bins:
         mapping = {}
@@ -135,8 +143,10 @@ def main():
             if name in defined[b] or name in funcs.get(b, {}):
                 continue
             target = owner_of_name(b, name) if any(name in funcs.get(x, {}) or name in defined[x] for x in bins) else None
-            if target is None and name.startswith("func_") and (m := ff9sym.ADDR_NAME.match(name)):
-                # a placeholder name for a function another binary has since named: resolve it by its address
+            if target is None and (m := ff9sym.ADDR_NAME.match(name)) and \
+                    (name.startswith("func_") or (name.startswith("D_") and d_is_function(b, int(m.group(1), 16)))):
+                # a placeholder name for a function another binary has since named, or a function the C calls
+                # through a D_ name (main's D_800BED6C, ovl_0b's btl_findUnitByBit): resolve it by its address
                 vram = int(m.group(1), 16)
                 target = owner_of_addr(b, vram)
                 if target == TRAMP:

@@ -116,7 +116,11 @@ static void prepare_return_field(GameData *d) {
     for(int i=0;i<dirs[4].unk4;i++) if(entries[i].field==scenario.field) {found=1;break;}
     if(!found) {
         if(scenario.field_explicit) port_fatal("scenario: return field %d absent on disc %d",scenario.field,scenario.disc);
-        return;
+        /* A battle-only fixture still needs a field to return to: without one the game preloads stale sectors as the
+         * return field while the rewards run, over ovl_65's own data. The disc's first field stands in. */
+        if(dirs[4].unk4<=0) port_fatal("scenario: no field on disc %d to return to",scenario.disc);
+        scenario.field=entries[0].field;d->fieldId=(u16)scenario.field;
+        port_log("scenario: battle returns to field %d (the disc's first)\n",scenario.field);
     }
     u8 mode=g_gameState->mode;
     g_gameState->mode=1;o14_func_800A741C();g_gameState->mode=mode;

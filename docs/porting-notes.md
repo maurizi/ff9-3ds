@@ -1557,3 +1557,24 @@ pairs), with all 279 matched effect modules native: 1068 pass, and the 17 others
 the 2500 frames and returned to a field the fixture never set up (6 of them field 70 on disc 2). Every encounter
 enters and runs on the host without a fault. Rerun with 293 native modules and the software renderer's new paths (same
 day, later): the same 1068 pass and the same 17 fixture returns.
+
+## Battle sweep to the battle's end (2026-10-24)
+
+The sweep ran 2500 frames per encounter, short of most battles' end. At 12000 frames (the scenario_smoke default)
+battles reach their rewards and return to a field, which showed:
+
+- **Fixtures without a return field corrupted ovl_65.** A battle-only fixture that names no field (field 70 by
+  default, absent on discs 2-4) left the return context empty; while the rewards ran the game preloaded stale sectors
+  as the return field, over ovl_65's text bank (0x801EDF04): text_get then read zeros, the rewards' text overran its
+  two 5 KB primitive buffers into the rewards state, and its dispatch index ran past its table (a jump to 0x67), or
+  the ordering table looped. `port/game/scenario.c` now returns to the disc's first field.
+- **Functions the C names as data.** main's `fn = D_800BED6C` is ovl_0b's `btl_findUnitByBit`, and ovl_0d/33/34/37
+  register main's `D_800355DC` as a callback; mapped into psx_ram, calling them ran raw MIPS bytes (Abadon crashed).
+  `gen_link.py` resolves a `D_` name to a function when another binary starts one at that address outside the
+  referencing binary's own image.
+- Yan (disc 4, 920/921) returning to the stand-in field 350 reaches `func_800579B4`'s `0x1000000 / (unk5C >> 12)` with
+  a zero divisor: the original has `break 7` there, so the PS1 stops too; with disc 4's own fields 2950/2951 it
+  doesn't happen. A fixture artifact until R24 says which field starts which encounter.
+
+Result: 1061/1085 at 12000 frames; the others are those two and the 22 disc-2 encounters whose bundle the disc 2
+directory lacks.
