@@ -20,6 +20,7 @@ p.add_argument('state', type=Path)
 p.add_argument('--elf', required=True, type=Path)
 p.add_argument('--overlay', default='0a')
 p.add_argument('--top', type=int, default=40)
+p.add_argument('--detail', help='a function: its buckets with their source lines')
 a = p.parse_args()
 data = a.state.read_bytes()
 if data[:4] != b'MELN':
@@ -56,6 +57,7 @@ if head[0] != 0x53504331:
     p.error('no sampler header in the state')
 _, main_lo, main_n, itcm_lo, itcm_n, total, outside, _ = head
 counts = collections.Counter()
+detail = []
 
 
 # a function without a size (assembly) runs to the next symbol
@@ -81,6 +83,8 @@ def attribute(base, n, table):
             counts['?%08X' % lo] += c
             continue
         total_overlap = sum(o for o, _ in parts)
+        if a.detail and any(fname == a.detail for _, fname in parts):
+            detail.append((c, lo))
         for o, fname in parts:
             counts[fname] += c * o / total_overlap
 
@@ -99,3 +103,11 @@ if 'port_pc_memset' in symbols:
     for nbytes, calls, caller in sorted(callers, key=lambda r: -r[1])[:16]:
         k = bisect.bisect_right(starts, caller & ~1) - 1
         print(f'{nbytes:12d} {calls:8d}  {funcs[k][2] if k >= 0 else "?"}+0x{(caller & ~1) - funcs[k][0]:x}')
+
+if a.detail:
+    detail.sort(reverse=True)
+    lines = subprocess.check_output(['addr2line', '-e', str(a.elf)] + ['%x' % (lo + 32) for _, lo in detail[:20]],
+                                    text=True).splitlines()
+    print('hottest buckets of', a.detail)
+    for (c, lo), line in zip(detail[:20], lines):
+        print(f'{100 * c / total:6.2f}%  {lo:08X}  {line.split("/")[-1]}')

@@ -69,9 +69,12 @@ typedef struct {
     int polys;           /* field: polygons recorded (before the first, sprites are the software background layer) */
     struct { u16 k; u8 mask_x, mask_y, off_x, off_y; } twins[32]; /* field: the P_TWIN primitives' windows */
     int twin_count;      /* (the dialog windows' borders, 10 or so a scene) */
+    u64 touched[64];     /* field: the 8x8 cells (from the buffer's corner) that may differ from the clear value:
+                          * the 2D layer skips the others (gxh_present) */
 } Buffer;
 
 static Buffer buffers[2];
+static Buffer *clear_fill; /* the game's fill that's about to land covers this buffer (psx_vram_filled) */
 
 /* Where the scene buffers and the GX chunks live: the resident mode overlay's MIPS code range, which the port never
  * runs. Battle: ovl_0b (ovl0b_layout.h). Field (FIELDGX=1): ovl_0a (ovl0a_layout.h), where the scene also holds the
@@ -133,7 +136,7 @@ static void key_fill(Buffer *b) {
     }
 }
 
-static void start_scene(Buffer *b) {
+static void start_scene(Buffer *b, int filled /* the game's fill is about to cover it */) {
     b->shown = 0;
     b->count = 0;
     b->submitted = 0;
@@ -144,9 +147,10 @@ static void start_scene(Buffer *b) {
         b->soft = 1; /* textures didn't fit lately: drawn straight in software, nothing recorded (field_frame) */
     } else if (place->field) {
         /* nothing clears a field's buffer (its background covers it): the scene's PS1 VRAM starts as the key */
-        key_fill(b);
+        if (!filled) key_fill(b);
         b->clear = FIELD_KEY;
         dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
+        memset(b->touched, 0, sizeof b->touched); /* all the clear value */
     }
     for (int row = 0; row < b->h; ++row)
         memset(marks + (((b->y + row) & 511) * 1024 + b->x) / 8, 0,
@@ -173,7 +177,7 @@ static Buffer *target(Buffer **shown) {
         last.x = x; last.y = y; last.w = w; last.h = h; last.ax = gp0_state.area_x0; last.ay = gp0_state.area_y0;
         last.dx = dx; last.dy = dy; last.version = buffers_version; last.shown = *shown; last.b = b;
     }
-    if (b && b->shown && b != *shown) start_scene(b);
+    if (b && b->shown && b != *shown) start_scene(b, 0);
     return b;
 }
 
@@ -427,6 +431,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
     ui_note_write(x, y, w, h);
     ui_dirty_rect(x, y, x + w - 1, y + h - 1);
     dirty_cells(x, y, x + w - 1, y + h - 1);
+    if (clear_fill) { memset(clear_fill->touched, 0, sizeof clear_fill->touched); clear_fill = NULL; }
     regions_touch(x, y, w, h);
 }
 
@@ -1685,8 +1690,10 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
     if (!active) return;
     Buffer *b = buffer_at(x, y);
     if (b && w * h * 2 >= b->w * b->h) {
-        if (b->shown && b != displayed()) start_scene(b);
+        int covers = x <= b->x && y <= b->y && x + w >= b->x + b->w && y + h >= b->y + b->h;
+        if (b->shown && b != displayed()) start_scene(b, covers);
         b->clear = rgb15;
+        if (covers) clear_fill = b; /* psx_vram_touch, next: the buffer is all its clear value */
     }
 }
 
@@ -1878,7 +1885,18 @@ static void field_frame(Buffer *b, int display_h) {
             plan_textures(b);
             if (!gxh_stats_unplaced) {
                 replay(b, 0, b->count, L_UI);
-                dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
+                for (int k = 0; k < b->count; ++k) { /* where the UI landed: the 2D layer's other cells are clear */
+                    if (prim_layer[k] != L_UI) continue;
+                    const Prim *p = &b->prims[k];
+                    int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
+                    for (int i = 1; i < p->n; ++i) {
+                        if (p->x[i] < x0) x0 = p->x[i];
+                        if (p->x[i] > x1) x1 = p->x[i];
+                        if (p->y[i] < y0) y0 = p->y[i];
+                        if (p->y[i] > y1) y1 = p->y[i];
+                    }
+                    dirty_cells(b->x + x0, b->y + y0, b->x + x1, b->y + y1);
+                }
                 return;
             }
             gxh_stats_soft |= 128;
@@ -2000,6 +2018,26 @@ static inline int shows(u16 c, u16 clear, u8 mark) {
 static void dirty_cells(int x0, int y0, int x1, int y1) {
     for (int y = y0 >> 3; y <= y1 >> 3; ++y)
         for (int x = x0 >> 3; x <= x1 >> 3; ++x) cell_dirty[y & 63][x & 127] = 1;
+    for (int i = 0; i < 2; ++i) { /* buffers start on 8-pixel columns and rows */
+        Buffer *b = &buffers[i];
+        int bx0 = (x0 - b->x) >> 3, bx1 = (x1 - b->x) >> 3, by0 = (y0 - b->y) >> 3, by1 = (y1 - b->y) >> 3;
+        if (!b->valid || bx1 < 0 || by1 < 0 || bx0 > 63 || by0 > 63) continue;
+        if (bx0 < 0) bx0 = 0;
+        if (by0 < 0) by0 = 0;
+        if (bx1 > 63) bx1 = 63;
+        if (by1 > 63) by1 = 63;
+        u64 bits = (bx1 == 63 ? ~0ull : (2ull << bx1) - 1) & ~((1ull << bx0) - 1);
+        for (int y = by0; y <= by1; ++y) b->touched[y] |= bits;
+    }
+}
+
+/* nothing that may differ from the clear value was written in PS1 rectangle (x, y, w, h) of buffer b */
+static int untouched(const Buffer *b, int x, int y, int w, int h) {
+    int bx0 = (x - b->x) >> 3, bx1 = (x + w - 1 - b->x) >> 3, by0 = (y - b->y) >> 3, by1 = (y + h - 1 - b->y) >> 3;
+    if (bx0 < 0 || by0 < 0 || bx1 > 63 || by1 > 63) return 0;
+    u64 bits = (bx1 == 63 ? ~0ull : (2ull << bx1) - 1) & ~((1ull << bx0) - 1);
+    for (int r = by0; r <= by1; ++r) if (b->touched[r] & bits) return 0;
+    return 1;
 }
 
 /* FNV-1a's prime, read at run time: as a constant the compiler multiplies by shifts and adds (9 instructions) */
@@ -2065,11 +2103,23 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
     u8 memo_index = 0;
     u16 *bitmap = (u16 *)BG_BMP_RAM(0);
     int shown = 0;
+    int field_scene = place->field && b && !b->soft && b->x == d->x && b->y == d->y; /* (touched is kept for it) */
     for (int by = 0, row = 0; by < out_h; by += BLOCK, ++row)
         for (int bx = 0, col = 0; bx < out_w; bx += BLOCK, ++col) {
             int sx0 = d->x + bx * 5 / 4, sy0 = d->y + by * 5 / 4;
             int bw = (bx + BLOCK < out_w ? BLOCK : out_w - bx), bh = (by + BLOCK < out_h ? BLOCK : out_h - by);
             int sw = bw * 5 / 4, sh = bh * 5 / 4;
+            if (field_scene && untouched(b, sx0, sy0, sw, sh)) { /* the clear value only: nothing on the layer */
+                if (block_shown[row][col] || rebuild) {
+                    for (int oy = 0; oy < bh; ++oy) {
+                        u16 *out = bitmap + ((top + by + oy) * 256 + bx) / 2;
+                        for (int k = 0; k < bw / 2; ++k) out[k] = 0;
+                    }
+                    block_shown[row][col] = 0;
+                    block_hash[row][col] = 0;
+                }
+                continue;
+            }
             if (!check_all) {
                 int dirty = 0;
                 for (int y = sy0 >> 3; y <= (sy0 + sh) >> 3 && !dirty; ++y)
