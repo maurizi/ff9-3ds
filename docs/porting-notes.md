@@ -1591,3 +1591,15 @@ fields on other discs), and disc 4's use a late story counter (ovl_65 then loads
 one disc 4 has). The stand-in fields' failures (movies and music from other discs, Yan's guarded division) are gone,
 and world map 9001 showed a read through a NULL block node (`nd->unk8->unk21`, low RAM on the PS1): a counted
 `PSX_NZ` patch. **1085/1085 at 12000 frames.**
+
+## Field sweep with walking (2026-10-24)
+
+Every field ID again (1131), now with `tools/walk_presses.py`'s pseudo-random input from frame 400 (directions held
+0.5-1.5 s, Cross every 0.75 s, Circle bursts every 10 s) for 6000 frames: it walks into exits, talks, reads signs and
+triggers events and encounters. 1126/1131 pass; the five are fixture limits (four fields reached on foot that aren't
+on the fixture's disc, which the scenario layer reports; disc 2's opening field, whose movie is on disc 1). Its first
+run crashed field 158 at once: the counted patch for movement's read through a NULL collision result still named the
+draft file the function had left (`portify.py` now refuses a patch whose file doesn't exist).
+
+The host prints the most primitives a displayed scene had (frame-limit line): over half the fields with walking and
+`--render`, median 1012, 90% 1681, maximum 2774 (field 1217).

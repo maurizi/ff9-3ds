@@ -25,15 +25,92 @@
 #define USER_OFFSET 24
 #define MAX_SECTORS_PER_PUMP 1 /* keep data delivery separate from command completion */
 
-/* libcd command numbers (libcd.h CdlXxx) */
-enum {
-    CdlNop = 0x01, CdlSetloc = 0x02, CdlPlay = 0x03, CdlForward = 0x04, CdlBackward = 0x05, CdlReadN = 0x06,
-    CdlStandby = 0x07, CdlStop = 0x08, CdlPause = 0x09, CdlInit = 0x0A, CdlMute = 0x0B, CdlDemute = 0x0C,
-    CdlSetfilter = 0x0D, CdlSetmode = 0x0E, CdlGetparam = 0x0F, CdlGetlocL = 0x10, CdlGetlocP = 0x11,
-    CdlGetTN = 0x13, CdlGetTD = 0x14, CdlSeekL = 0x15, CdlSeekP = 0x16, CdlReadS = 0x1B,
-};
+/* libcd command numbers (libcd.h CdlXxx; the decomp's psyq.h defines some) */
+#ifndef CdlNop
+#define CdlNop 0x01
+#endif
+#ifndef CdlSetloc
+#define CdlSetloc 0x02
+#endif
+#ifndef CdlPlay
+#define CdlPlay 0x03
+#endif
+#ifndef CdlForward
+#define CdlForward 0x04
+#endif
+#ifndef CdlBackward
+#define CdlBackward 0x05
+#endif
+#ifndef CdlReadN
+#define CdlReadN 0x06
+#endif
+#ifndef CdlStandby
+#define CdlStandby 0x07
+#endif
+#ifndef CdlStop
+#define CdlStop 0x08
+#endif
+#ifndef CdlPause
+#define CdlPause 0x09
+#endif
+#ifndef CdlInit
+#define CdlInit 0x0A
+#endif
+#ifndef CdlMute
+#define CdlMute 0x0B
+#endif
+#ifndef CdlDemute
+#define CdlDemute 0x0C
+#endif
+#ifndef CdlSetfilter
+#define CdlSetfilter 0x0D
+#endif
+#ifndef CdlSetmode
+#define CdlSetmode 0x0E
+#endif
+#ifndef CdlGetparam
+#define CdlGetparam 0x0F
+#endif
+#ifndef CdlGetlocL
+#define CdlGetlocL 0x10
+#endif
+#ifndef CdlGetlocP
+#define CdlGetlocP 0x11
+#endif
+#ifndef CdlGetTN
+#define CdlGetTN 0x13
+#endif
+#ifndef CdlGetTD
+#define CdlGetTD 0x14
+#endif
+#ifndef CdlSeekL
+#define CdlSeekL 0x15
+#endif
+#ifndef CdlSeekP
+#define CdlSeekP 0x16
+#endif
+#ifndef CdlReadS
+#define CdlReadS 0x1B
+#endif
 /* interrupt kinds passed to the callbacks */
-enum { CdlNoIntr = 0, CdlDataReady = 1, CdlComplete = 2, CdlAcknowledge = 3, CdlDataEnd = 4, CdlDiskError = 5 };
+#ifndef CdlNoIntr
+#define CdlNoIntr 0
+#endif
+#ifndef CdlDataReady
+#define CdlDataReady 1
+#endif
+#ifndef CdlComplete
+#define CdlComplete 2
+#endif
+#ifndef CdlAcknowledge
+#define CdlAcknowledge 3
+#endif
+#ifndef CdlDataEnd
+#define CdlDataEnd 4
+#endif
+#ifndef CdlDiskError
+#define CdlDiskError 5
+#endif
 /* status bits */
 #define STAT_MOTOR 0x02
 #define STAT_READ 0x20

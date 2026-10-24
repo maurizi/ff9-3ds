@@ -5,7 +5,7 @@
 #include "psx_display.h"
 #include "psx_runtime.h"
 
-extern unsigned int psx_gpu_scene_prims; /* gpu.c */
+unsigned int psx_gpu_scene_prims; /* primitives drawn since the display last moved (gpu.c PutDispEnv) */
 
 Gp0State gp0_state = {0, 0, 1023, 511, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 const Gp0Backend *gp0_backend;

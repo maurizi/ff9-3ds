@@ -16,10 +16,10 @@
 /* ---- hand-written: calls that don't fit any single prototype -------------------------------------------- */
 
 #ifdef PORT_BIN_ovl_0a
-/* Defined with 4 parameters, called with 5 (ovl_0a.c ~10295, ~10372). The MIPS callee never reads the 5th. The
- * macro drops it at the call sites and leaves the 4-argument definition unchanged. (Decomp request R1 note.) */
-s32 func_800C6C04(u8 *, Unk800C6C04A *, Unk800C6C04B *, s16);
-#define func_800C6C04(a, b, c, d, ...) func_800C6C04(a, b, c, d)
+/* Defined with 4 parameters, called with 5 (bgi.c). The MIPS callee never reads the 5th. The macro drops it at the
+ * call sites and leaves the 4-argument definition unchanged. (Decomp request R1 note.) */
+s32 bgi_remapActors(u8 *, BgiAnim *, BgiKeyframe *, s16);
+#define bgi_remapActors(a, b, c, d, ...) bgi_remapActors(a, b, c, d)
 #endif
 
 /* Preserve the explicit AKAO hardware boundary. Without noipa, GCC embeds

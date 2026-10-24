@@ -8,8 +8,8 @@
 #include <stdlib.h>
 #include <errno.h>
 void psx_cd_select_disc(unsigned);
-void o14_func_800A7578(void);
-void o14_func_800A741C(void);
+void o14_opening_initNewGame(void);
+void o14_opening_findSceneSectors(void);
 void port_scenario_set_enemy_hp(const int *values);
 s32 chr_resetToLevel(s32,s32,u8);
 static struct {
@@ -112,7 +112,7 @@ void port_scenario_battle_ready(void) {
 static void prepare_return_world(GameData *d) {
     u8 mode=g_gameState->mode;
     d->unk7DC=(u16)scenario.world;
-    g_gameState->mode=3;o14_func_800A741C();g_gameState->mode=mode;
+    g_gameState->mode=3;o14_opening_findSceneSectors();g_gameState->mode=mode;
     if(d->sceneSectors[1]<=0) port_fatal("scenario: world map %d absent on disc %d",scenario.world,scenario.disc);
     for(int i=0;i<2;i++) {
         d->returnSector[i]=d->sceneSector[i];d->returnSectors[i]=d->sceneSectors[i];
@@ -123,8 +123,8 @@ static void prepare_return_world(GameData *d) {
 static void prepare_return_field(GameData *d) {
     typedef struct {u16 field,area;u32 sector;} FieldEntry;
     _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
-    FileDirEntry *dirs=(FileDirEntry *)g_gameState->unk14;
-    const FieldEntry *entries=(const FieldEntry *)(D_80067944+0x14c700+(dirs[4].unk8<<11));
+    FileDirEntry *dirs=(FileDirEntry *)g_gameState->dirs;
+    const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+0x14c700+(dirs[4].unk8<<11));
     int found=0;
     for(int i=0;i<dirs[4].unk4;i++) if(entries[i].field==scenario.field) {found=1;break;}
     if(!found) {
@@ -136,7 +136,7 @@ static void prepare_return_field(GameData *d) {
         port_log("scenario: battle returns to field %d (the disc's first)\n",scenario.field);
     }
     u8 mode=g_gameState->mode;
-    g_gameState->mode=1;o14_func_800A741C();g_gameState->mode=mode;
+    g_gameState->mode=1;o14_opening_findSceneSectors();g_gameState->mode=mode;
     for(int i=0;i<2;i++) {
         d->returnSector[i]=d->sceneSector[i];d->returnSectors[i]=d->sceneSectors[i];
     }
@@ -152,8 +152,8 @@ static int n_field_ids=-1;
 static void cache_field_ids(void) {
     typedef struct {u16 field,area;u32 sector;} FieldEntry;
     _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
-    FileDirEntry *dirs=(FileDirEntry *)g_gameState->unk14;
-    const FieldEntry *entries=(const FieldEntry *)(D_80067944+0x14c700+(dirs[4].unk8<<11));
+    FileDirEntry *dirs=(FileDirEntry *)g_gameState->dirs;
+    const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+0x14c700+(dirs[4].unk8<<11));
     if(dirs[4].unk4>(s32)(sizeof field_ids/sizeof field_ids[0])) port_fatal("scenario: %d field entries",(int)dirs[4].unk4);
     for(n_field_ids=0;n_field_ids<dirs[4].unk4;n_field_ids++) field_ids[n_field_ids]=entries[n_field_ids].field;
 }
@@ -179,8 +179,8 @@ static void prepare_battle_resources(GameData *d) {
     /* The ordinary field/world transition supplies these two CD ranges.
      * Resolve the encounter's bundle and its background dependency directly
      * from the selected disc's own directories instead of fabricating them. */
-    FileDirEntry *dirs=(FileDirEntry *)g_gameState->unk14;
-    FileIdEntry *entries=(FileIdEntry *)(D_80067944+0x14c700+(dirs[5].unk8<<11));
+    FileDirEntry *dirs=(FileDirEntry *)g_gameState->dirs;
+    FileIdEntry *entries=(FileIdEntry *)(g_loadAreaEnd+0x14c700+(dirs[5].unk8<<11));
     int found=-1;
     for(int i=0;i<dirs[5].unk4;++i) if(entries[i].unk0==scenario.battle) {found=i;break;}
     if(found<0) port_fatal("scenario: battle %d is absent on disc %d",scenario.battle,scenario.disc);
@@ -190,7 +190,7 @@ static void prepare_battle_resources(GameData *d) {
     if(size<=0) port_fatal("scenario: invalid encounter bundle extent");
     u8 *buffer=malloc((unsigned)size);
     if(!buffer) port_fatal("scenario: no memory for encounter metadata");
-    cd_readAsync(g_gameState->unk20+d->sceneSector[0],size,buffer,NULL);
+    cd_readAsync(g_gameState->imgSector+d->sceneSector[0],size,buffer,NULL);
     while(cd_getState()) {}
     FileTable *table=(FileTable *)db_lookup((s32)buffer,4,0x140000,0);
     if((u8 *)table<buffer || (u8 *)table+4>buffer+size ||
@@ -210,7 +210,7 @@ void port_scenario_bootstrap(void) {
     scenario.consumed=1;
     /* Main has initialized allocator/file tables/GPU/GameData. Use the
      * title overlay's New Game initializer without entering its loop. */
-    game_loadModeOverlay(0);o14_func_800A7578();
+    game_loadModeOverlay(0);o14_opening_initNewGame();
     cache_field_ids();
     GameData *d=g_gameState->unk1C;
     d->firstUseFxSeen=(u16)scenario.summons_seen;
@@ -234,8 +234,8 @@ void port_scenario_bootstrap(void) {
         Character *c=&d->characters[ch];
         if(scenario.preset[i]>=0) {
             int preset=scenario.preset[i];
-            u8 flags=func_80033A50(preset);
-            if(func_80033964(preset)!=D_8006CAA4[ch][(flags>>4)&1])
+            u8 flags=chr_getClassFlags(preset);
+            if(chr_getClass(preset)!=D_8006CAA4[ch][(flags>>4)&1])
                 port_fatal("scenario: preset %d incompatible with character %d",preset,ch);
             c->unk34.b.row=preset;
             c->unkA=flags;
@@ -244,7 +244,7 @@ void port_scenario_bootstrap(void) {
             chr_setDefaultEquip(c->equip,defaults);
         }
         for(int j=0;j<5;++j) if(scenario.equip[i][j]>=0) c->equip[j]=(u8)scenario.equip[i][j];
-        c->unk34.b.unk4=func_80033280(c->unk34.b.id,(c->unkA>>4)&1,c->equip);
+        c->unk34.b.unk4=chr_calcAppearance(c->unk34.b.id,(c->unkA>>4)&1,c->equip);
         if(scenario.level>0 || scenario.preset[i]>=0) chr_resetToLevel(ch,scenario.level>0?scenario.level:c->level,1);
         if(scenario.trance[i]>=0) c->trance=(u8)scenario.trance[i];
         if(scenario.hp[i]>=0) {if(scenario.hp[i]>c->maxHp) port_fatal("scenario: HP exceeds maximum");c->hp=(u16)scenario.hp[i];}
@@ -252,8 +252,8 @@ void port_scenario_bootstrap(void) {
     rand_init((s32)scenario.seed);g_gameState->mode=(u8)scenario.kind;
     g_gameState->unkA=1; /* ordinary battle entry from a field */
     d->fieldId=(u16)scenario.field;
-    if(scenario.kind==1) o14_func_800A741C();
-    else if(scenario.kind==3) {d->unk7DC=(u16)scenario.world;o14_func_800A741C();} /* as a save made on the world map */
+    if(scenario.kind==1) o14_opening_findSceneSectors();
+    else if(scenario.kind==3) {d->unk7DC=(u16)scenario.world;o14_opening_findSceneSectors();} /* as a save made on the world map */
     else {
         if(scenario.world_explicit) prepare_return_world(d); else prepare_return_field(d);
         prepare_battle_resources(d);d->battleId=(u16)scenario.battle;

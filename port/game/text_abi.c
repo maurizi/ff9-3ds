@@ -4,6 +4,6 @@
 #define M2CTX
 #include "ff9.h"
 void port_measure_text_into(void *out, const void *text) {
-    TextSize size = func_8002AF70((u8 *)text);
+    TextSize size = text_measure((u8 *)text);
     __builtin_memcpy(out, &size, sizeof size);
 }
