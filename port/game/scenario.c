@@ -212,7 +212,7 @@ void port_scenario_bootstrap(void) {
      * title overlay's New Game initializer without entering its loop. */
     game_loadModeOverlay(0);o14_opening_initNewGame();
     cache_field_ids();
-    GameData *d=g_gameState->unk1C;
+    GameData *d=g_gameState->gameData;
     d->firstUseFxSeen=(u16)scenario.summons_seen;
     if(scenario.gil>=0) d->gil=(u32)scenario.gil;
     _Static_assert(sizeof(Character)==0x90,"scenario character layout");

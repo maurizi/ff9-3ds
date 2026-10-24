@@ -60,7 +60,7 @@ src/ovl_0b/btlfx_op.c | if (arg0 & 0x90000000) { | if ((u32)arg0 >= PSX_RAM_SIZE
 # Full-screen TIM display follows OT[8]'s 24-bit link on the CPU (MIPS
 # 0x800B4DC4 / 0x800B4E40). Restore its native arena address before addPrim.
 # The raw link points into ITCM on DS and caused the post-briefing data abort.
-src/ovl_0a/tu_800B0124.c | (u32 *)g_gameState->unk1C->unk10[g_gameState->unk1C->unk8][8] | PSX_OT_PTR(g_gameState->unk1C->unk10[g_gameState->unk1C->unk8][8]) | 2
+src/ovl_0a/tu_800B0124.c | (u32 *)g_gameState->gameData->unk10[g_gameState->gameData->unk8][8] | PSX_OT_PTR(g_gameState->gameData->unk10[g_gameState->gameData->unk8][8]) | 2
 
 # Script values are 26 bits; on the PS1 a RAM pointer popped back (0x00xxxxxx, the RAM mirror) works as is. DS
 # pointers (0x02xxxxxx) set bit 25, which the 26-bit sign extension turns into 0xFExxxxxx: mask it back.
@@ -151,8 +151,8 @@ src/ovl_0b/btl_unit.c | u == cmd->caster && (u32)(cmd->cmdNo - 0x37) >= 7 | u ==
 # KO motion selection also reads curCmd+4 while no command is active.
 # MIPS B915C/B9514/B986C perform the read without a NULL branch. Preserve
 # the low-RAM value and stored NULL; do not skip the motion transition.
-src/ovl_0b/btl_cmd.c | && (!(u->flags & 1) || (s32)m->motion != u->motions[9]) && u != g_gameState->unk1C->unk8E4.battle->curCmd->caster | && (!(u->flags & 1) || (s32)m->motion != u->motions[9]) && u != PSX_NZ(g_gameState->unk1C->unk8E4.battle->curCmd)->caster | 2
-src/ovl_0b/btl_cmd.c | && (!(arg0->flags & 1) || (s32)m->motion != arg0->motions[9]) && arg0 != g_gameState->unk1C->unk8E4.battle->curCmd->caster | && (!(arg0->flags & 1) || (s32)m->motion != arg0->motions[9]) && arg0 != PSX_NZ(g_gameState->unk1C->unk8E4.battle->curCmd)->caster | 1
+src/ovl_0b/btl_cmd.c | && (!(u->flags & 1) || (s32)m->motion != u->motions[9]) && u != g_gameState->gameData->unk8E4.battle->curCmd->caster | && (!(u->flags & 1) || (s32)m->motion != u->motions[9]) && u != PSX_NZ(g_gameState->gameData->unk8E4.battle->curCmd)->caster | 2
+src/ovl_0b/btl_cmd.c | && (!(arg0->flags & 1) || (s32)m->motion != arg0->motions[9]) && arg0 != g_gameState->gameData->unk8E4.battle->curCmd->caster | && (!(arg0->flags & 1) || (s32)m->motion != arg0->motions[9]) && arg0 != PSX_NZ(g_gameState->gameData->unk8E4.battle->curCmd)->caster | 1
 # The definition takes a 12-byte struct by value to reproduce the MIPS stack homes (ovl_0b.h); its callers pass two
 # pointers. Natively the struct's third word lies past the callers' arguments, in the caller's frame, and the
 # definition stores to it: define it as the callers see it, with the struct a local.
@@ -196,5 +196,5 @@ src/ovl_0b/btl_init.c | arg0->model->texAnims | PSX_NZ(arg0->model->texAnims) | 
 src/ovl_0b/btl_status.c | u->model->texAnims | PSX_NZ(u->model->texAnims) | 2
 src/ovl_0b/btlfx_op.c | u->model->texAnims | PSX_NZ(u->model->texAnims) | 7
 src/ovl_0b/btlseq.c | arg1->model->texAnims | PSX_NZ(arg1->model->texAnims) | 6
-src/ovl_0b/btl_status.c | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != g_gameState->unk1C->unk8E4.battle->curCmd->caster | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != PSX_NZ(g_gameState->unk1C->unk8E4.battle->curCmd)->caster | 1
+src/ovl_0b/btl_status.c | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != g_gameState->gameData->unk8E4.battle->curCmd->caster | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != PSX_NZ(g_gameState->gameData->unk8E4.battle->curCmd)->caster | 1
 src/ovl_0b/btl_unit.c | unk34.b.unk4 == 2 && cmd->cmdNo == BTL_CMD_SWD_MAG | unk34.b.unk4 == 2 && PSX_NZ(cmd)->cmdNo == BTL_CMD_SWD_MAG | 1

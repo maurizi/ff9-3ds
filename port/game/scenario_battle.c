@@ -3,7 +3,7 @@
 #include "ovl_0b.h"
 
 void port_scenario_set_enemy_hp(const int *values) {
-    Battle *battle=g_gameState->unk1C->unk8E4.battle;
+    Battle *battle=g_gameState->gameData->unk8E4.battle;
     unsigned found=0;
     for(BtlUnit *unit=battle->unitList;unit;unit=unit->next) {
         unsigned id=(unit->flags>>5)&7;
