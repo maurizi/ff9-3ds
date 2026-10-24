@@ -1020,8 +1020,8 @@ enum { CMD_COLOR = 0x20, CMD_TEXCOORD = 0x22, CMD_VTX16 = 0x23, CMD_VTXXY = 0x25
 
 /* The scene's commands (packed FIFO format, one command per header), fed to the geometry FIFO by DMA while the
  * CPU goes on. Worst case per polygon: 4 state commands and 4 vertices of colour, texcoord and position. */
-#define CHUNK_WORDS 2048   /* two 8 KB halves: one fills while the other goes to the FIFO */
-static u32 (*chunks)[CHUNK_WORDS]; /* two, in VRAM bank I (16 KB, LCDC: the CPU writes, DMA reads; nothing else uses it) */
+#define CHUNK_WORDS 512    /* two 2 KB halves: one fills while the other goes to the FIFO */
+static u32 (*chunks)[CHUNK_WORDS]; /* two, in main RAM: the CPU writes VRAM (bank I before) more slowly */
 static int chunk, chunk_words;
 
 static void flush_chunk(void) {
@@ -1751,8 +1751,8 @@ static void use_place(const Place *p) {
 
 void gxh_init(void) {
     use_place(&places[0]);
-    vramSetBankI(VRAM_I_LCD);
-    chunks = (u32 (*)[CHUNK_WORDS])VRAM_I;
+    static u32 main_chunks[2][CHUNK_WORDS] __attribute__((aligned(32)));
+    chunks = main_chunks;
     marks = psx_spare_alloc(1024 * 512 / 8); /* in main's MIPS code range, see psx_spare_alloc */
     for (int i = 0; i < 2; ++i) ui_list[i] = psx_spare_alloc(UI_MAX * sizeof(UiPrim));
     memset(marks, 0, 1024 * 512 / 8);
