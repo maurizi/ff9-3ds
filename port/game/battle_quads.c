@@ -3,7 +3,7 @@
  * the entire batch when it is zero; do not substitute a new NCLIP operation. */
 #include "psyq_port.h"
 #include "gte.h"
-#include "effect_vm.h"
+#include "effect_bridge.h"
 static u32 word(const void *p, unsigned offset) { return *(const u32 *)((const u8 *)p + offset); }
 /* Single textured effect rectangle. Preserve MAC0's existing cull decision;
  * the original RTPT sequence does not issue NCLIP. */

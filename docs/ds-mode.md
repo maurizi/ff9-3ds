@@ -150,7 +150,8 @@ main executable's symbols (`--just-symbols`; `tools/fx_extern.py` keeps what the
 (`tools/pack_fxmods.py`). `port/ds/fx_pack.c` reads the module the slot holds when `effect_native.c` identifies
 it, as the PS1 reads it from the disc, then flushes the data cache and invalidates the instruction cache. The pack
 carries the main executable's build id (new each link) and `psx_fx_area`'s address; without a matching pack the
-modules run in the effect VM, which is exact. The host build keeps them linked in.
+modules can't run (the effect VM that was the fallback is removed: every module is native). The host build keeps
+them linked in.
 
 Result: `.text` 1,410,568 -> 732,640 bytes, `.rodata` 115 KB -> 88 KB, `.bss` 2.45 MB -> 2.39 MB (the 40 KB area
 included). The total is about 4.7 MB against 4 MB. Battles (capture at 1761, PROFILE=2): screenshots identical,

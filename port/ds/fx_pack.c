@@ -27,11 +27,11 @@ static int open_pack(void) {
     pack = fopen(path, "rb");
     u32 head[4];
     if (!pack || fread(head, 4, 4, pack) != 4) {
-        port_log("effect modules: no %s, they run in the VM\n", path);
+        port_log("effect modules: no %s\n", path);
         return 0;
     }
     if (head[0] != FX_PACK_MAGIC || head[1] != psx_fx_build_id || head[3] != (u32)(uintptr_t)psx_fx_area) {
-        port_log("effect modules: %s is from another build, they run in the VM\n", path);
+        port_log("effect modules: %s is from another build\n", path);
         return 0;
     }
     pack_count = head[2];
@@ -52,7 +52,7 @@ const void *port_fx_pack_load(unsigned int index) {
     if (size > sizeof psx_fx_area || fseek(pack, (long)offset, SEEK_SET) != 0 ||
         fread(psx_fx_area, 1, size, pack) != size || h[0] != FX_HEAD_MAGIC || h[2] < h[1] ||
         h[1] < (u32)(uintptr_t)psx_fx_area || h[2] > (u32)(uintptr_t)(psx_fx_area + sizeof psx_fx_area)) {
-        port_log("effect modules: module %u unreadable, the VM runs it\n", index);
+        port_log("effect modules: module %u unreadable\n", index);
         return NULL;
     }
     memset((void *)(uintptr_t)h[1], 0, h[2] - h[1]);

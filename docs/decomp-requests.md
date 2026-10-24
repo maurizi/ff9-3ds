@@ -210,6 +210,7 @@ ovl_0a.c:5430/6144, the battle equivalent, ovl_0c), and the animation format. Th
 DS display lists with hardware transform.
 
 ### R23. Battle effect modules as C (2026-10-17)
+Done (2026-10-24): all 380 modules are matched C and native in the port; the interpreter is removed.
 The CD-loaded effect modules (loaded at 0x801E7700, header pointer there, callbacks into the ovl_0b export table
 `g_btlfxModuleExports`) are the one body of game code the port still interprets: `port/game/effect_vm.c` runs their
 MIPS. With export calls cached and aligned memory accesses fixed, the interpreter still costs about 100 ARM9

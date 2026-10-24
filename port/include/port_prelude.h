@@ -45,7 +45,7 @@
 #define BTLFX_EXPORTS(env) ((void)(env), (BtlfxExports *)PSX_ADDR(0x800F7510))
 #endif
 #include "psx_runtime.h"
-#include "effect_vm.h"
+#include "effect_bridge.h"
 void port_measure_text_into(void *out, const void *text);
 void battleEnd_main(void);
 void port_draw_ot_buffer(unsigned int *head, const void *buffer, unsigned int size);

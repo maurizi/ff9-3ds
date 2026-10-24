@@ -1,14 +1,14 @@
-/* Battle effect modules compiled from the decomp's C (FXNATIVE in the Makefile) run natively; the others stay
- * in the effect VM (effect_vm.c). A module's image reaches 0x801E7700 as raw disc bytes. The first call into it
- * (an op through port_effect_call, its address read from the raw header) identifies it by a hash of its code
- * bytes (tools/gen_link.py psx_fxmods), applies its relocations as an overlay's (data pointers to psx_ram, code
- * pointers to the native functions: the header's ops become native, so later calls skip the VM), and answers
- * that call with the native function at the same PS1 address.
+/* Battle effect modules, compiled from the decomp's C (all 380: FXNATIVE in the Makefile), run natively. A module's
+ * image reaches 0x801E7700 as raw disc bytes. The first call into it (an op through port_effect_call, its address
+ * read from the raw header) identifies it by a hash of its code bytes (tools/gen_link.py psx_fxmods), applies its
+ * relocations as an overlay's (data pointers to psx_ram, code pointers to the native functions: the header's ops
+ * become native, so later calls go straight there), and answers that call with the native function at the same
+ * PS1 address. effect_bridge.c stops on a call it can't map.
  *
  * On the DS the modules' code isn't part of the executable (over 600 KB): each is linked on its own at
  * psx_fx_area, and the one the slot holds is read from ff9ds/fxmods.bin (tools/pack_fxmods.py) when it is
  * identified (port/ds/fx_pack.c), as the PS1 reads it from the disc. Its relocations and functions come with it.
- * Without a pack built with this executable, modules run in the VM. */
+ * Without a pack built with this executable the modules can't run (effect_bridge.c stops with the reason). */
 #include <stdint.h>
 #include "psyq_port.h"
 
@@ -59,7 +59,7 @@ static void relocate(const u32 *relocs) {
     }
 }
 
-/* The native function for a call into the module slot at PS1 address `target`, or 0 (the VM runs it). */
+/* The native function for a call into the module slot at PS1 address `target`, or 0 (none: effect_bridge.c stops). */
 u32 port_fxmod_native(u32 target) {
     u32 now[4] = {at(SLOT), at(SLOT + 4), at(SLOT + 0x100), at(SLOT + 0x400)};
     if (now[0] != seen[0] || now[1] != seen[1] || now[2] != seen[2] || now[3] != seen[3]) {

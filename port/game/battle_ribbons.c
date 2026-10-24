@@ -2,7 +2,7 @@
  * OP/SQR and the game's reciprocal-root table, then emit joined GT4s. */
 #include "psyq_port.h"
 #include "gte.h"
-#include "effect_vm.h"
+#include "effect_bridge.h"
 #include <stdint.h>
 static u32 load(const void *p,unsigned offset) { return *(const u32 *)((const u8 *)p+offset); }
 static void vertex(unsigned reg,const u8 *p) { gte_mtc2(reg,load(p,0));gte_mtc2(reg+1,load(p,4)); }

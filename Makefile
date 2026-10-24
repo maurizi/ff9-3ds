@@ -22,7 +22,7 @@ PYTHON   := python3
 
 # The decomp's binaries: main + the FF9.IMG dir-0 code overlays.
 OVLS     := $(shell awk '/^[0-9a-f]/ {print $$1}' $(DECOMP)/config/overlays.$(VERSION).txt)
-# Battle effect modules (FF9.IMG dir 13) built natively; the rest run in the effect VM (port/game/effect_vm.c).
+# Battle effect modules (FF9.IMG dir 13) built natively; the rest run in the effect VM (port/game/effect_bridge.c).
 # Only complete C (no INCLUDE_ASM) with an extracted image is used (tools/ff9sym.py native_fxmods).
 FXNATIVE ?= $(notdir $(wildcard $(DECOMP)/src/fxmod/fx_*))
 export FXNATIVE
@@ -452,9 +452,9 @@ $(BUILD)/tests/battle_motion_probe: tests/battle/motion_probe.c tests/battle/pos
 	@mkdir -p $(dir $@)
 	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/motion_probe.c port/game/battle_motion.c port/game/battle_pose.c port/game/anim_key.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
 
-$(BUILD)/tests/battle_quads_probe: tests/battle/quads_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_vm.c
+$(BUILD)/tests/battle_quads_probe: tests/battle/quads_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_bridge.c
 	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include -DPORT_GTE_IMPL tests/battle/quads_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_vm.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include -DPORT_GTE_IMPL tests/battle/quads_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_bridge.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
 
 $(BUILD)/tests/battle_strips_probe: tests/battle/strips_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c
 	@mkdir -p $(dir $@)
@@ -463,14 +463,6 @@ $(BUILD)/tests/battle_strips_probe: tests/battle/strips_probe.c tests/battle/bac
 .PHONY: test-battle-strips
 test-battle-strips: $(BUILD)/tests/battle_strips_probe
 	$(PYTHON) tools/test_battle_strips.py
-
-$(BUILD)/tests/effect_vm_probe: tests/battle/effect_vm_probe.c tests/battle/background_probe.c port/game/effect_vm.c port/game/battle_background.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include -DPORT_GTE_IMPL tests/battle/effect_vm_probe.c port/game/effect_vm.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
-
-.PHONY: test-effect-vm
-test-effect-vm: $(BUILD)/tests/effect_vm_probe
-	$(PYTHON) tools/test_effect_vm.py
 
 $(BUILD)/tests/battle_trails_probe: tests/battle/trails_probe.c port/game/battle_trails.c
 	@mkdir -p $(dir $@)
@@ -500,9 +492,9 @@ $(BUILD)/tests/gte_oracle.so: tests/gte/oracle.c port/psx/gte.c port/include/gte
 	@mkdir -p $(dir $@)
 	$(CC) -shared -fPIC -std=gnu17 -O2 -Iport/include $< -o $@
 
-$(BUILD)/tests/battle_ribbons_probe: tests/battle/ribbons_probe.c port/game/battle_ribbons.c port/psx/gte.c port/game/effect_vm.c
+$(BUILD)/tests/battle_ribbons_probe: tests/battle/ribbons_probe.c port/game/battle_ribbons.c port/psx/gte.c port/game/effect_bridge.c
 	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/ribbons_probe.c port/game/battle_ribbons.c port/game/effect_vm.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
+	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/ribbons_probe.c port/game/battle_ribbons.c port/game/effect_bridge.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
 
 .PHONY: test-battle-ribbons
 test-battle-ribbons: $(BUILD)/tests/gte_oracle.so $(BUILD)/tests/battle_ribbons_probe

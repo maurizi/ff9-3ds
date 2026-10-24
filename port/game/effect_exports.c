@@ -1,7 +1,7 @@
 /* Battle effect modules read $v0 after three exports that ovl_0b defines as void (decomp docs/effect-modules.md,
  * "Void exports whose result is read"): on the PS1 the register still holds what each one's tail call returned.
  * Native void functions leave nothing defined there, so their entries in the export table modules call through
- * (g_btlfxModuleExports, ovl_0b data) point at these instead, for the effect VM and native modules alike; ovl_0b
+ * (g_btlfxModuleExports, ovl_0b data) point at these instead, for the native modules; ovl_0b
  * calls the originals directly. Each does what the export does and returns that tail call's value. */
 #include <stdint.h>
 #include "psyq_port.h"
