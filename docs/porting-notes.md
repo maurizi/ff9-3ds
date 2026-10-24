@@ -1520,6 +1520,7 @@ answers the call with the native function; other modules keep running in the eff
 - Ark (fx_0b2): frame-identical to the VM on the host (80 frames).
 - 293 native at decomp 4289c37 (every module whose C is complete): all 11 battle scenarios frame-identical to the
   VM on the host (12 frames each over 3000; `make pc FXNATIVE=` builds the VM-only reference).
+- 379 native at decomp 9487b43 (all but fx_0fb_1): the same 11 scenarios frame-identical to the VM.
 
 ## Field sweep (2026-10-18)
 
