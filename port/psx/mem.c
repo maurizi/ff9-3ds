@@ -22,22 +22,19 @@ void psx_bad_overlay_call(const char *tramp) {
                psx_ovl_resident[2]);
 }
 
-/* PS1 RAM the port never touches (docs/ds-mode.md), where port buffers that would otherwise take DS heap live,
- * allocated once, first fit:
- * - main's MIPS code range (0x800127A0-0x800665E0). The PS1 copies that code there; the port runs native code and
- *   loads only main's data, and the range stayed zero in field, battle and New Game runs;
- * - the top 12 KB, the PS1 stack (native code has its own), above the highest overlay (ovl_33, to 0x801FCF00): no
- *   scene measured reads or writes it. */
-static unsigned int spare[2][2] = {{0x12800, 0x66500}, {0x1FD000, 0x200000}}; /* (next, end) */
+/* PS1 RAM the port never touches: main's MIPS code range (0x800127A0-0x800665E0). The PS1 copies that code there;
+ * the port runs native code and loads only main's data, and the range stayed zero in field, battle and New Game
+ * runs (docs/ds-mode.md). Port buffers that would otherwise take DS heap live here, allocated once. (The PS1 stack
+ * above the highest overlay is not free: battles load disc sectors to 0x801FCF00 and up.) */
+#define SPARE_LO 0x12800
+#define SPARE_HI 0x66500
 void *psx_spare_alloc(unsigned int size) {
+    static unsigned int next = SPARE_LO;
     size = (size + 31) & ~31u;
-    for (int i = 0; i < 2; ++i)
-        if (spare[i][0] + size <= spare[i][1]) {
-            void *p = psx_ram + spare[i][0];
-            spare[i][0] += size;
-            return p;
-        }
-    port_fatal("psx_spare_alloc: no room for %u bytes", size);
+    if (next + size > SPARE_HI) port_fatal("psx_spare_alloc: %u bytes over the spare range", size);
+    void *p = psx_ram + next;
+    next += size;
+    return p;
 }
 
 void psx_load_image(const PsxImageChunk *img) {

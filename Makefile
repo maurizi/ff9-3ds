@@ -345,31 +345,6 @@ $(BUILD)/tests/gpu_ordering_test: tests/gpu/ordering_test.c port/psx/gpu.c port/
 	@mkdir -p $(dir $@)
 	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/gpu/ordering_test.c port/psx/gpu.c -Wl,--gc-sections -o $@
 
-.PHONY: test-battle
-test-battle: $(BUILD)/tests/battle_math_probe $(BUILD)/tests/battle_background_probe $(BUILD)/tests/battle_pose_probe $(BUILD)/tests/battle_packets_probe $(BUILD)/tests/battle_angles_probe $(BUILD)/tests/battle_motion_probe $(BUILD)/tests/battle_quads_probe
-	@python3 tools/test_battle_math.py
-	@python3 tools/test_battle_background.py
-	@python3 tools/test_battle_pose.py
-	@python3 tools/test_battle_packets.py
-	@python3 tools/test_battle_angles.py
-	@python3 tools/test_battle_motion.py
-	@python3 tools/test_battle_quads.py
-$(BUILD)/tests/battle_angles_probe: tests/battle/angles_probe.c tests/battle/pose_probe.c tests/battle/background_probe.c port/game/battle_angles.c port/game/battle_pose.c port/game/anim_key.c port/game/battle_background.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/angles_probe.c port/game/battle_angles.c port/game/battle_pose.c port/game/anim_key.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
-$(BUILD)/tests/battle_packets_probe: tests/battle/packets_probe.c tests/battle/background_probe.c port/game/battle_packets.c port/game/battle_background.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/packets_probe.c port/game/battle_packets.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -Wl,--defsym=g_vtxScreenXY=0x020711A8 -Wl,--defsym=g_vtxScreenZ=0x02070520 -o $@
-$(BUILD)/tests/battle_pose_probe: tests/battle/pose_probe.c tests/battle/background_probe.c port/game/battle_pose.c port/game/anim_key.c port/game/battle_background.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/pose_probe.c port/game/battle_pose.c port/game/anim_key.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
-$(BUILD)/tests/battle_background_probe: tests/battle/background_probe.c port/game/battle_background.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/background_probe.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
-$(BUILD)/tests/battle_math_probe: tests/battle/math_probe.c port/game/battle_math.c port/include/psx_mem.h
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/math_probe.c port/game/battle_math.c -o $@
-
 # PC: 32-bit, non-PIE (psx_ram is mapped at a fixed address, like the DS's main RAM), 8-byte doubles like
 # ARM/MIPS. psx_ram is placed with --defsym and mapped by port/pc before anything runs.
 PC_ARCH  := -m32 -malign-double -fno-pie
@@ -460,30 +435,6 @@ extract:
 clean:
 	rm -rf $(BUILD)
 
-$(BUILD)/tests/battle_motion_probe: tests/battle/motion_probe.c tests/battle/pose_probe.c tests/battle/background_probe.c port/game/battle_motion.c port/game/battle_pose.c port/game/anim_key.c port/game/battle_background.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/motion_probe.c port/game/battle_motion.c port/game/battle_pose.c port/game/anim_key.c port/game/battle_background.c -Wl,--defsym=psx_ram=0x02000000 -o $@
-
-$(BUILD)/tests/battle_quads_probe: tests/battle/quads_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_bridge.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include -DPORT_GTE_IMPL tests/battle/quads_probe.c port/game/battle_quads.c port/game/battle_background.c port/game/effect_bridge.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
-
-$(BUILD)/tests/battle_strips_probe: tests/battle/strips_probe.c tests/battle/background_probe.c port/game/battle_quads.c port/game/battle_background.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include -DPORT_GTE_IMPL tests/battle/strips_probe.c port/game/battle_quads.c port/game/battle_background.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
-
-.PHONY: test-battle-strips
-test-battle-strips: $(BUILD)/tests/battle_strips_probe
-	$(PYTHON) tools/test_battle_strips.py
-
-$(BUILD)/tests/battle_trails_probe: tests/battle/trails_probe.c port/game/battle_trails.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $^ -Wl,--defsym=psx_ram=0x02000000 -o $@
-
-.PHONY: test-battle-trails
-test-battle-trails: $(BUILD)/tests/battle_trails_probe
-	$(PYTHON) tools/test_battle_trails.py
-
 $(BUILD)/tests/window_probe: tests/battle/window_probe.c port/game/window_tween.c
 	@mkdir -p $(dir $@)
 	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include $^ -Wl,--defsym=psx_ram=0x02000000 -o $@
@@ -492,25 +443,9 @@ $(BUILD)/tests/window_probe: tests/battle/window_probe.c port/game/window_tween.
 test-window: $(BUILD)/tests/window_probe
 	$(PYTHON) tools/test_window_tween.py
 
-$(BUILD)/tests/battle_morph_probe: tests/battle/morph_probe.c port/game/battle_morph.c tests/gte/oracle.c port/psx/gte.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/morph_probe.c port/game/battle_morph.c tests/gte/oracle.c -Wl,--defsym=psx_ram=0x02000000 -Wl,--defsym=g_vtxScreenXY=0x020711a8 -Wl,--defsym=g_vtxScreenZ=0x02070520 -o $@
-
-.PHONY: test-battle-morph
-test-battle-morph: $(BUILD)/tests/gte_oracle.so $(BUILD)/tests/battle_morph_probe
-	$(PYTHON) tools/test_battle_morph.py
-
 $(BUILD)/tests/gte_oracle.so: tests/gte/oracle.c port/psx/gte.c port/include/gte.h
 	@mkdir -p $(dir $@)
 	$(CC) -shared -fPIC -std=gnu17 -O2 -Iport/include $< -o $@
-
-$(BUILD)/tests/battle_ribbons_probe: tests/battle/ribbons_probe.c port/game/battle_ribbons.c port/psx/gte.c port/game/effect_bridge.c
-	@mkdir -p $(dir $@)
-	$(CC) -m32 -fno-pie -no-pie -std=gnu17 -O1 -g -ffunction-sections -fdata-sections -fsanitize=address,undefined -Wno-builtin-declaration-mismatch -Iport/include -I$(DECOMP)/include tests/battle/ribbons_probe.c port/game/battle_ribbons.c port/game/effect_bridge.c -Wl,--gc-sections -Wl,--defsym=psx_ram=0x02000000 -o $@
-
-.PHONY: test-battle-ribbons
-test-battle-ribbons: $(BUILD)/tests/gte_oracle.so $(BUILD)/tests/battle_ribbons_probe
-	$(PYTHON) tools/test_battle_ribbons.py
 
 .PHONY: test-gte
 test-gte: $(BUILD)/tests/gte_op_test $(BUILD)/tests/gte_probe

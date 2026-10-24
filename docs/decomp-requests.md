@@ -223,6 +223,9 @@ to behave the same. The port would then compile them like the overlays and load 
 If (b) is out of scope, the port can instead translate MIPS to ARM when a module loads, and (a) is enough.
 
 ### R25. The last code without C or a port equivalent (2026-10-24)
+**Done** (decomp 1e155f14): C for all 11 world-map routines (the world map runs on the host), the two cross-binary
+calls named, the 24 main routines audited as unreachable PsyQ internals (they stay link stubs), C for ovl_0b's 46
+hand-written routines (the port's own `battle_*.c` versions are retired: 270 host frames over nine battles identical).
 With every effect module native, the port interprets no MIPS. What its link still stubs (calling one stops with
 its name; `build/ds/stubs.txt`):
 

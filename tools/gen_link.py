@@ -158,7 +158,16 @@ def main():
             t = s.read_text()
             m = re.search(r"\.section \.text.*?nonmatching (\w+), (0x[0-9A-Fa-f]+)", t, re.S)
             if m and ".incbin" in t:  # data embedded in .text (ovl_0b's textbin table)
-                vram = int(ff9sym.ADDR_NAME.match(m.group(1)).group(1), 16)
+                named = ff9sym.ADDR_NAME.match(m.group(1))
+                if named:
+                    vram = int(named.group(1), 16)
+                else:  # a name from the symbol files
+                    syms = {}
+                    for f in ff9sym.symbol_files(b):
+                        syms.update(ff9sym.read_symbols(f))
+                    if m.group(1) not in syms:
+                        sys.exit(f"gen_link.py: no address for {b}'s {m.group(1)} in .text")
+                    vram = syms[m.group(1)][0]
                 regions.append((bi.off_of(vram), bi.off_of(vram) + int(m.group(2), 16)))
         in_region = lambda v: any(bi.vram_of(lo) <= v < bi.vram_of(hi) for lo, hi in regions)
 

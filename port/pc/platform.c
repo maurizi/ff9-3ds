@@ -140,11 +140,11 @@ static void dump_frame(void) {
     dump_area("frame", d.x, d.y, d.w ? d.w : 320, d.h ? d.h : 240, d.rgb24);
 }
 
-/* PS1 RAM the DS reuses because the game never touches it once it runs (port/psx/mem.c: the BIOS's RAM above 0x2000,
- * the PS1 stack above 0x1FD000; docs/ds-mode.md): here it faults instead, so any scene that does shows. */
+/* PS1 RAM the DS reuses because the game never touches it once it runs (port/psx/mem.c: the BIOS's RAM above 0x2000;
+ * docs/ds-mode.md): here it faults instead, so any scene that does shows. */
 void plat_guard_unused_ram(int on) {
     int prot = on ? PROT_NONE : PROT_READ | PROT_WRITE;
-    if (mprotect(psx_ram + 0x2000, 0xE000, prot) || mprotect(psx_ram + 0x1FD000, 0x3000, prot)) {
+    if (mprotect(psx_ram + 0x2000, 0xE000, prot)) {
         perror("plat_guard_unused_ram");
         exit(1);
     }

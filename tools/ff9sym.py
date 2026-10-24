@@ -115,6 +115,8 @@ def functions():
         if line.startswith("#") or not line.strip():
             continue
         b, name = line.split()[:2]
+        if name.startswith("g_"):
+            continue  # a data word splat keeps in .text (ovl_0b's g_btlbgOtShift...): data (data_symbols)
         m = ADDR_NAME.match(name)
         addr = int(m.group(1), 16) if m else named.get(b, {}).get(name)
         if addr is None:
@@ -145,7 +147,7 @@ def data_symbols(bins):
     for b in bins:
         for f in symbol_files(b):
             for n, (a, is_func) in read_symbols(f).items():
-                if not is_func and n not in funcs:
+                if (not is_func or n.startswith("g_")) and n not in funcs:
                     add(n, a)
         asm = DECOMP / f"asm/{VERSION}/{'main' if b == 'main' else b}"
         for s in asm.rglob("*.s"):

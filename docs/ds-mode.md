@@ -181,8 +181,9 @@ changing what the game sees or hears:
 * **Unused PS1 RAM, measured.** Probes on the host `mprotect` a psx_ram range once the game runs and play 135
   scenes (a field every 20th of the sweep, every 25th encounter, the boss and regression scenarios, 2500 frames
   each; `build/memuse/`): a touch faults with a backtrace. 0x1000 up is read in every battle (`g_btlUi->menuState`
-  through a NULL `g_btlUi`: offset 0x12B4 of the BIOS's RAM), 0x2000-0xFFFF never; nor is the PS1 stack above the
-  highest overlay (0x1FD000 up). The latter joins main's code range as spare (`psx_spare_alloc`).
+  through a NULL `g_btlUi`: offset 0x12B4 of the BIOS's RAM), 0x2000-0xFFFF never. (The PS1 stack above the highest
+  overlay looked unused too, but battles that reach their rewards load disc sectors to 0x801FCF00 and up: the probes
+  ran 2500 frames, which is short of a battle's end. Longer runs are needed before trusting such a range.)
 * **SPU RAM in pieces (HWSOUND).** The hardware mixer reads SPU RAM only a 16-byte ADPCM block at a time
   (`psx_spu_source_fetch`) and never runs the PS1 reverb, so SPU RAM can be kept in pieces with one compare per
   block: [0, 0xE000) in the BIOS's old RAM at psx_ram 0x2000, [0xE000, 0x16000) in the shared WRAM on an original DS,
@@ -199,7 +200,7 @@ changing what the game sees or hears:
   battle ovl_0b's code range holds the hybrid's buffers.
 * **16 HWSOUND rings for 24 voices** (at most 16 can play): a voice holds a ring from its key-on while it sounds
   (64 KB of the spare range, which now holds the hybrid's UI lists, its block buffer and the display's text
-  rectangles and scaling band instead of bss).
+  rectangles instead of bss).
 
 * **The battle overlay is built with `-Os`** on the DS (`DECOMP_OPT_ds_ovl_0b`): it alone sets slot 0's size,
   174 -> 146 KB. Battle frame times stay within noise (48.31 -> 48.07, 31.26 -> 31.51, 37.87 -> 38.00 ms) with
@@ -211,7 +212,7 @@ changing what the game sees or hears:
 * The host build `mprotect`s the reused PS1 RAM (`plat_guard_unused_ram`), so a scene that touches it crashes there
   instead of corrupting SPU RAM on the DS.
 
-Result: 1,457 KB of heap for 1,420 KB of shadows (VRAM 1 MB and SPU RAM's heap piece 396 KB in one block); the
+Result: 1,449 KB of heap for 1,420 KB of shadows (VRAM 1 MB and SPU RAM's heap piece 396 KB in one block); the
 original DS runs with graphics and sound memory.
 
 ## Implementation order and acceptance

@@ -189,8 +189,7 @@ void display_present(void) {
      * would cost 96 KB. A band's 16 rows come from 20 source rows; one more lets the text filter at its last row
      * read the next band's first, as a whole-frame pass does. */
     enum { BAND = 16 };
-    static u16 *band; /* psx_spare_alloc: 32-byte aligned */
-    if (!band) band = psx_spare_alloc(256 * BAND * sizeof *band);
+    static u16 band[256 * BAND] __attribute__((aligned(32)));
     u16 *bitmap = (u16 *)BG_BMP_RAM_MAIN(back_buffer*8);
     const int out_h = h * 4 / 5;
     for (int oy = 0; oy < out_h; oy += BAND) {

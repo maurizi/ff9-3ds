@@ -214,6 +214,17 @@
 #define gte_nct() GTE_CMD(0x4AD80420)
 #define gte_dpcs() GTE_CMD(0x4A780010)
 #define gte_strgb3(r0) do { void *_p = (r0); GTE_SWC2(20, _p, 0); GTE_SWC2(21, _p, 4); GTE_SWC2(22, _p, 8); } while (0)
+#define gte_intpl() GTE_CMD(0x4A980011)
+#define gte_ldir1(v) gte_mtc2(9, (u32)(v))
+#define gte_stmac1(r) ((r) = gte_mfc2(25))
+#define gte_ldrfc(v) gte_ctc2(21, (u32)(v))
+#define gte_strfc(r) ((r) = gte_cfc2(21))
+#define gte_stopz_r(r) ((r) = gte_mfc2(24))
+/* register-level access (src_equiv.h: routines its hand-written asm drove one GTE register at a time) */
+#define GTE_MTC2(reg, v) gte_mtc2((reg), (u32)(v))
+#define GTE_CTC2(reg, v) gte_ctc2((reg), (u32)(v))
+#define GTE_MFC2(reg) ((u32)gte_mfc2(reg))
+#define GTE_CFC2(reg) ((u32)gte_cfc2(reg))
 #define SCRATCHPAD ((u8 *)psx_scratchpad)
 
 /* depth-cue rgb toward the far colour by (0x1000 - p): FC = 0, then DPCS (sf=1) on the colour at rgb */
