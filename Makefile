@@ -173,8 +173,9 @@ PORT_ARCH_ds_psx/mdec_decode := -marm
 PORT_ARCH_ds_psx/movie_vlc := -marm
 # The GTE's 64-bit MAC arithmetic: Thumb has no SMLAL/SMULL and calls __aeabi_lmul instead.
 PORT_ARCH_ds_psx/gte := -marm
-# The hybrid's per-primitive planning and command packing (gx_hybrid.c): faster as ARM.
+# The hybrid's per-primitive planning and command packing (gx_hybrid.c) and GP0 decoding: faster as ARM.
 PORT_ARCH_ds_ds/gx_hybrid := -marm
+PORT_ARCH_ds_psx/gp0 := -marm
 # ARMv5TE DSP code generation; keep Thumb available for measured comparisons.
 ifeq ($(SPUARM),1)
 PORT_ARCH_ds_psx/spu_core := -marm

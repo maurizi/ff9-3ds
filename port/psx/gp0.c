@@ -31,15 +31,14 @@ static inline int sext11(int v) {
     return (v & 0x7FF) - ((v & 0x400) << 1);
 }
 
-static Gp0Vtx vtx(unsigned int xy, unsigned int col) {
-    Gp0Vtx v;
-    v.u = v.v = 0;
-    v.x = sext11((int)(xy & 0x7FF)) + gp0_state.ofs_x;
-    v.y = sext11((int)((xy >> 16) & 0x7FF)) + gp0_state.ofs_y;
-    v.r = col & 0xFF;
-    v.g = (col >> 8) & 0xFF;
-    v.b = (col >> 16) & 0xFF;
-    return v;
+/* a vertex, filled in place (returned by value it was a 28-byte copy per vertex) */
+static inline void vtx(Gp0Vtx *v, unsigned int xy, unsigned int col) {
+    v->u = v->v = 0;
+    v->x = sext11((int)(xy & 0x7FF)) + gp0_state.ofs_x;
+    v->y = sext11((int)((xy >> 16) & 0x7FF)) + gp0_state.ofs_y;
+    v->r = col & 0xFF;
+    v->g = (col >> 8) & 0xFF;
+    v->b = (col >> 16) & 0xFF;
 }
 
 static void apply_texpage(Gp0Mode *m, unsigned int tp) {
@@ -132,7 +131,7 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
         unsigned int k = 1;
         for (int i = 0; i < nv; i++) {
             unsigned int col = (i == 0 || !m.gouraud) ? w[0] : w[k++];
-            v[i] = vtx(w[k++], col);
+            vtx(&v[i], w[k++], col);
             if (m.textured) {
                 unsigned int uv = w[k++];
                 v[i].u = uv & 0xFF;
@@ -157,7 +156,8 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
         m.semi = (cmd >> 1) & 1;
         int poly = (cmd >> 3) & 1;
         unsigned int k = 1;
-        Gp0Vtx prev = vtx(w[k++], w[0]);
+        Gp0Vtx prev;
+        vtx(&prev, w[k++], w[0]);
         for (;;) {
             if (k >= avail) {
                 return avail;
@@ -172,7 +172,8 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
                     return avail;
                 }
             }
-            Gp0Vtx next = vtx(w[k++], col);
+            Gp0Vtx next;
+            vtx(&next, w[k++], col);
             if (gp0_backend && gp0_backend->line) {
                 ++psx_gpu_scene_prims;
                 gp0_backend->line(&m, &prev, &next);
@@ -192,7 +193,8 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
         if (need > avail) {
             return avail;
         }
-        Gp0Vtx v = vtx(w[1], w[0]);
+        Gp0Vtx v;
+        vtx(&v, w[1], w[0]);
         unsigned int k = 2;
         if (m.textured) {
             unsigned int uv = w[k++];
