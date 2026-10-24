@@ -140,6 +140,16 @@ static void dump_frame(void) {
     dump_area("frame", d.x, d.y, d.w ? d.w : 320, d.h ? d.h : 240, d.rgb24);
 }
 
+/* PS1 RAM the DS reuses because the game never touches it once it runs (port/psx/mem.c: the BIOS's RAM above 0x2000,
+ * the PS1 stack above 0x1FD000; docs/ds-mode.md): here it faults instead, so any scene that does shows. */
+void plat_guard_unused_ram(int on) {
+    int prot = on ? PROT_NONE : PROT_READ | PROT_WRITE;
+    if (mprotect(psx_ram + 0x2000, 0xE000, prot) || mprotect(psx_ram + 0x1FD000, 0x3000, prot)) {
+        perror("plat_guard_unused_ram");
+        exit(1);
+    }
+}
+
 __attribute__((constructor(101))) static void map_psx_ram(void) {
     void *p = mmap(psx_ram, PSX_RAM_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
                    -1, 0);
@@ -200,6 +210,7 @@ void plat_wait_frame(void) {
     }
     if (spu_replay && frames == spu_snapshot_at + SPU_REPLAY_FRAMES) spu_replay_close();
     if (frames == ram_dump_at) {
+        plat_guard_unused_ram(0);
         FILE *f = fopen(ram_dump_path, "wbx");
         if (!f || fwrite(psx_ram, 1, PSX_RAM_SIZE, f) != PSX_RAM_SIZE || fclose(f)) {
             perror("ram dump");

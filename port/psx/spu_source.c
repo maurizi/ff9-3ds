@@ -3,6 +3,10 @@
 #include "spu_inline.h"
 #include <string.h>
 
+/* spu_layout.c: how the shadow keeps SPU RAM (weak: the SPU unit tests have one plain SPU RAM) */
+extern unsigned psx_spu_ram_size __attribute__((weak)), psx_spu_ram_split[2] __attribute__((weak));
+extern uint8_t *psx_spu_ram_mid __attribute__((weak)), *psx_spu_ram_hi __attribute__((weak));
+
 SPU_HOT void psx_spu_source_key_on(PsxSpuSource *source, uint16_t start_address) {
     memset(source, 0, sizeof *source);
     source->address = start_address & 0xfffeu;
@@ -25,7 +29,11 @@ SPU_HW_HOT void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
     /* Key-on, increment, and loop redirects all align to 16 bytes. The last
      * block starts at 0x7fff0 and fits entirely inside the RAM image. */
     unsigned byte_address = (unsigned)source->address * 8;
-    source->flags = psx_spu_decode_block(ram + byte_address, &source->history,
+    static const uint8_t zeros[16];
+    const uint8_t *block = !&psx_spu_ram_size || byte_address < psx_spu_ram_split[0] ? ram + byte_address
+                         : byte_address < psx_spu_ram_split[1] ? psx_spu_ram_mid + byte_address
+                         : byte_address < psx_spu_ram_size ? psx_spu_ram_hi + byte_address : zeros;
+    source->flags = psx_spu_decode_block(block, &source->history,
                                          source->samples + 3);
     source->fetched = 1;
     if ((source->flags & 4) && !source->ignore_loop_start)

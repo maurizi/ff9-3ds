@@ -123,14 +123,15 @@ void plat_wait_frame(void) {
 #ifdef PORT_GX_HYBRID
         {
             extern int gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail, gxh_stats_palette_fail,
-                gxh_stats_blocks, gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced;
+                gxh_stats_blocks, gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced, gxh_stats_units_peak;
             status_row(20, "gx %d dr%d tx%d pl%d", gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail,
                        gxh_stats_palette_fail);
             extern int gxh_stats_upload_bytes, gxh_stats_upload_regions, gxh_stats_upload_palettes;
             status_row(18, "up %dK %d rg %d pal", gxh_stats_upload_bytes >> 10, gxh_stats_upload_regions,
                        gxh_stats_upload_palettes);
             extern int gxh_stats_ui_drawn, gxh_stats_ui_skipped;
-            status_row(21, "rg %d u%d np%d col %d ui %d/%d", gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced,
+            status_row(21, "rg %d u%d/%d np%d col %d ui %d/%d", gxh_stats_regions, gxh_stats_units, gxh_stats_units_peak,
+                       gxh_stats_unplaced,
                        gxh_stats_blocks, gxh_stats_ui_drawn, gxh_stats_ui_skipped);
         }
 #endif
@@ -202,6 +203,13 @@ const char *plat_data_dir(void) {
 
 int main(void) {
     defaultExceptionHandler();
+#ifdef PORT_DS_MODE
+    WRAM_CR = 0; /* both shared WRAM banks to the ARM9, at 0x03000000: its ARM7 doesn't use them (port/arm7/main.c) */
+    /* BlocksDS's crt0 keeps the top 48 KB of main RAM from the heap, for a loader's return-to-loader stub; the game
+     * never exits, so the heap goes up to the system area (__eheap_end) */
+    extern char *fake_heap_end, __eheap_end[];
+    fake_heap_end = __eheap_end;
+#endif
     stack_paint();
     /* A 4bpp font and one tile map fit in bank H. Leave all four 128 KiB banks for GX textures. */
     videoSetModeSub(MODE_0_2D);
@@ -212,6 +220,7 @@ int main(void) {
     }
     printf("ff9-ds (%s mode)\n", isDSiMode() ? "DSi" : "DS");
     printf("psx_ram %p\n", (void *)psx_ram);
+    psx_mem_init(); /* the VRAM and SPU RAM shadows, before anything else takes heap */
     if (!fatInitDefault()) {
         printf("no SD card / flashcart filesystem\n");
     } else {

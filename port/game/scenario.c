@@ -15,7 +15,8 @@ s32 chr_resetToLevel(s32,s32,u8);
 static struct {
     int enabled,consumed,kind,disc,field,battle,world,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil;
     unsigned seed;
-    int party[4],hp[4],enemy_hp[4],trance[4],preset[4],equip[4][5],events[0x800],items[256];
+    int party[4],hp[4],enemy_hp[4],trance[4],preset[4],equip[4][5];
+    s16 events[0x800],items[256]; /* -1: unset */
     char characters[256],event_blob[256];
 } scenario;
 static int number(const char *s,int low,int high) {

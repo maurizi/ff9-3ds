@@ -172,6 +172,48 @@ link (NOCROSSREFS refuses calls between overlays of one slot). `tools/pack_overl
 is fatal. `.text` 733 KB -> 286 KB; static memory ends at 2.83 MB, about 4.33 MB with the VRAM and SPU RAM shadows.
 Black Waltz rewards on the DS (battle, rewards menu, back to the field) loads 0b, 65 and 0a and shows each correctly.
 
+## Fitting the VRAM and SPU RAM shadows (2026-10-24)
+
+The DS-mode build (`DSMODE=1 HYBRID=1 HWSOUND=1`) logs its free heap before allocating the shadows
+(`port/psx/mem.c`). At the start of this work it had 1,275 KB for 1,536 KB of shadows. What made room, all without
+changing what the game sees or hears:
+
+* **Unused PS1 RAM, measured.** Probes on the host `mprotect` a psx_ram range once the game runs and play 135
+  scenes (a field every 20th of the sweep, every 25th encounter, the boss and regression scenarios, 2500 frames
+  each; `build/memuse/`): a touch faults with a backtrace. 0x1000 up is read in every battle (`g_btlUi->menuState`
+  through a NULL `g_btlUi`: offset 0x12B4 of the BIOS's RAM), 0x2000-0xFFFF never; nor is the PS1 stack above the
+  highest overlay (0x1FD000 up). The latter joins main's code range as spare (`psx_spare_alloc`).
+* **SPU RAM in pieces (HWSOUND).** The hardware mixer reads SPU RAM only a 16-byte ADPCM block at a time
+  (`psx_spu_source_fetch`) and never runs the PS1 reverb, so SPU RAM can be kept in pieces with one compare per
+  block: [0, 0xE000) in the BIOS's old RAM at psx_ram 0x2000, [0xE000, 0x16000) in the shared WRAM on an original DS,
+  the rest on the heap. FF9's reverb work area ("studio large", 0x79020 up: the base register in all 135 scenes) is
+  not kept: it reads as zeros, as it always did with hardware mixing, and no scene writes above it (a write there
+  is dropped and logged once).
+* **Shared WRAM.** DSMODE builds use their own ARM7 (`port/arm7/main.c`: BlocksDS's minimal core, linked with
+  `__shared_wram_size=0`, all in the ARM7's 64 KB), so the ARM9 maps both shared WRAM banks (`WRAM_CR = 0`).
+* **Main's data image (46 KB of .rodata) is read once, at boot**: it is now overlay 0xFF in `ovls.bin`, loaded into
+  slot 0's place before the game starts.
+* **The menus' and the movie player's overlays run in their own MIPS code range** in psx_ram (dead while they are
+  resident; every native image is smaller than its MIPS code), linked there; `ovl_pack.c` reads the native bytes
+  again wherever a disc sector of that overlay lands. Their two slots are gone (22 KB). Slot 0's overlays can't: in
+  battle ovl_0b's code range holds the hybrid's buffers.
+* **16 HWSOUND rings for 24 voices** (at most 16 can play): a voice holds a ring from its key-on while it sounds
+  (64 KB of the spare range, which now holds the hybrid's UI lists, its block buffer and the display's text
+  rectangles and scaling band instead of bss).
+
+* **The battle overlay is built with `-Os`** on the DS (`DECOMP_OPT_ds_ovl_0b`): it alone sets slot 0's size,
+  174 -> 146 KB. Battle frame times stay within noise (48.31 -> 48.07, 31.26 -> 31.51, 37.87 -> 38.00 ms) with
+  identical screens. `-Os` for all of the decomp's code would save 74 KB but costs up to 5.7% in fields.
+* **The heap.** libnds's `sbrk` stops at `fake_heap_end`, which BlocksDS's crt0 sets 48 KB below the end of main
+  RAM for a loader's return stub; the game never exits, so DS mode moves it up to the system area. The shadows are
+  allocated first thing in `main`, as one block (the allocator doesn't grow a free block at the heap's end, so a
+  second large block would need room for both).
+* The host build `mprotect`s the reused PS1 RAM (`plat_guard_unused_ram`), so a scene that touches it crashes there
+  instead of corrupting SPU RAM on the DS.
+
+Result: 1,457 KB of heap for 1,420 KB of shadows (VRAM 1 MB and SPU RAM's heap piece 396 KB in one block); the
+original DS runs with graphics and sound memory.
+
 ## Implementation order and acceptance
 
 1. Remove inactive backend storage (done), then inventory resident code/data by

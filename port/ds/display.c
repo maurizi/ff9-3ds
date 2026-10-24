@@ -10,6 +10,7 @@
 #include "psx_mem.h"
 #include "profile.h"
 #include "psx_display.h"
+#include "psx_runtime.h"
 #ifdef PORT_GX_HYBRID
 #include "gx_hybrid.h"
 extern unsigned char *g_gameState;
@@ -20,8 +21,8 @@ void psx_softgpu_enable(int on);
 
 static int bg = -1;
 static int back_buffer=1;
-static DsTextRect text_rects[1024];
-static DsTextRect previous_rects[1024];
+#define TEXT_RECTS 1024
+static DsTextRect *text_rects, *previous_rects; /* TEXT_RECTS each (psx_spare_alloc) */
 static unsigned text_count;
 static unsigned previous_count;
 static int drawing;
@@ -41,7 +42,7 @@ void psx_display_drawing(void) {
 void psx_display_glyph(int x, int y, int w, int h) {
 #ifdef PORT_SOFT_DISPLAY
     psx_display_font_calls++;
-    if (text_count < sizeof text_rects / sizeof text_rects[0])
+    if (text_count < TEXT_RECTS)
         text_rects[text_count++] = (DsTextRect){x,y,w,h};
 #endif
 }
@@ -52,6 +53,8 @@ static volatile unsigned int real_vblanks;
 static unsigned int virtual_frames;
 
 void display_init(void) {
+    text_rects = psx_spare_alloc(TEXT_RECTS * sizeof *text_rects);
+    previous_rects = psx_spare_alloc(TEXT_RECTS * sizeof *previous_rects);
     if (!psx_vram) {
         return; /* 4 MB DS: no VRAM shadow, nothing to show */
     }
@@ -186,7 +189,8 @@ void display_present(void) {
      * would cost 96 KB. A band's 16 rows come from 20 source rows; one more lets the text filter at its last row
      * read the next band's first, as a whole-frame pass does. */
     enum { BAND = 16 };
-    static u16 band[256 * BAND] __attribute__((aligned(32)));
+    static u16 *band; /* psx_spare_alloc: 32-byte aligned */
+    if (!band) band = psx_spare_alloc(256 * BAND * sizeof *band);
     u16 *bitmap = (u16 *)BG_BMP_RAM_MAIN(back_buffer*8);
     const int out_h = h * 4 / 5;
     for (int oy = 0; oy < out_h; oy += BAND) {

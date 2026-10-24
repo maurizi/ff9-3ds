@@ -37,7 +37,7 @@ extern unsigned short *psx_vram;
 #define MAX_VERTICES 6140
 
 int gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail, gxh_stats_palette_fail, gxh_stats_blocks;
-int gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced; /* the last plan: regions and 2 KB units in use */
+int gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced, gxh_stats_units_peak; /* the last plan: regions and 2 KB units in use */
 static int active;
 
 /* ---- recorded primitives ----------------------------------------------------------------------------------- */
@@ -981,8 +981,7 @@ static void ui_mode(const UiPrim *p, Gp0Mode *m) {
                    p->flags & UI_GOURAUD ? 1 : 0, p->abr, p->depth, p->tx, p->ty, p->clut_x, p->clut_y};
 }
 #define UI_MAX 256   /* the battle UI draws about 110 a VBlank */
-static UiPrim ui_lists[2][UI_MAX];
-static UiPrim *ui_list[2] = {ui_lists[0], ui_lists[1]}; /* [0] the previous VBlank's, [1] this one's (swapped) */
+static UiPrim *ui_list[2]; /* [0] the previous VBlank's, [1] this one's (swapped); in psx_spare_alloc's range */
 static int ui_count[2], ui_overflow;
 static Buffer *ui_buffer;             /* the displayed buffer the list belongs to */
 #define UI_RECTS 64
@@ -1284,6 +1283,7 @@ void gxh_init(void) {
     for (int i = 0; i < 2; ++i) buffers[i].prims = (Prim *)(psx_ram + OVL0B_AT + prims_at[i]);
     chunks = (u32 (*)[CHUNK_WORDS])(psx_ram + OVL0B_AT + OVL0B_CHUNKS_AT);
     marks = psx_spare_alloc(1024 * 512 / 8); /* in main's MIPS code range, see psx_spare_alloc */
+    for (int i = 0; i < 2; ++i) ui_list[i] = psx_spare_alloc(UI_MAX * sizeof(UiPrim));
     memset(marks, 0, 1024 * 512 / 8);
 }
 
@@ -1336,6 +1336,7 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     plan_textures(b);
     gxh_stats_regions = gxh_stats_units = 0;
     for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) { gxh_stats_regions++; gxh_stats_units += regions[i].units; }
+    if (gxh_stats_units > gxh_stats_units_peak) gxh_stats_units_peak = gxh_stats_units;
     u32 saved = vramSetPrimaryBanks(VRAM_A_LCD, VRAM_B_LCD, VRAM_C_LCD, VRAM_D_LCD);
     vramSetBankF(VRAM_F_LCD);
     vramSetBankG(VRAM_G_LCD);
@@ -1455,7 +1456,8 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
     int rebuild = check_all && colours_full && presents - last_rebuild >= 64;
     if (rebuild) { reset_colours(); last_rebuild = presents; }
     last_shown = b; last_x = d->x; last_y = d->y; last_w = w; last_h = h;
-    static u16 block[BLOCK * 256] __attribute__((aligned(4)));   /* a scaled block, stride 256 */
+    static u16 *block;   /* a scaled block, stride 256 (psx_spare_alloc) */
+    if (!block) block = psx_spare_alloc(BLOCK * 256 * sizeof *block);
     u32 memo_colour = 0x10000; /* none yet (colours are 15-bit plus STP): the palette may have been reset above */
     u8 memo_index = 0;
     u16 *bitmap = (u16 *)BG_BMP_RAM(0);

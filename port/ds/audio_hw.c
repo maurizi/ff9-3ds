@@ -5,6 +5,10 @@
  * loop at the voice's sample rate. A key-on restarts the ring; the channel starts at the next frame, when that
  * frame's samples are in. Once a frame, each sounding voice's envelope, volumes and main volume set its channel's
  * volume and pan, and its pitch the frequency. The first 16 sounding voices get channels.
+ *
+ * At most 16 voices can play, so there are 16 rings, not one per voice: a voice holds one from its key-on while it
+ * sounds. One that finds none, or loses its channel, plays from its next samples once it gets both again, as a
+ * voice that lost its channel always did.
  */
 #ifdef PORT_HW_SOUND
 #include <nds.h>
@@ -16,6 +20,7 @@
 #define VOICES 24
 #define RING 4096          /* samples per voice ring: ~93 ms at 44.1 kHz, longer at lower pitches */
 #define LEAD 1             /* frames of samples written before a channel starts */
+#define RINGS 16
 
 typedef struct {
     s16 *ring;
@@ -32,7 +37,21 @@ typedef struct {
 static Voice voices[VOICES];
 /* Noise voices play on the PSG noise channels 14 and 15 (the DS has noise only there), the two loudest at once */
 static struct { int voice, sound_id; u8 volume, pan; u16 freq; } noise_slots[2] = {{-1, -1, 0, 0, 0}, {-1, -1, 0, 0, 0}};
-static s16 (*rings)[RING]; /* VOICES x RING, in PS1 RAM the port never uses (psx_spare_alloc) */
+static s16 (*rings)[RING]; /* RINGS x RING, in PS1 RAM the port never uses (psx_spare_alloc) */
+static u32 rings_used;     /* bit per ring */
+
+static void ring_take(Voice *p) {
+    if (p->ring) return;
+    for (int i = 0; i < RINGS; ++i)
+        if (!(rings_used >> i & 1)) { rings_used |= 1u << i; p->ring = rings[i]; return; }
+}
+
+static void ring_give_back(Voice *p) {
+    if (!p->ring) return;
+    rings_used &= ~(1u << ((p->ring - rings[0]) / RING));
+    p->ring = NULL;
+    p->write = p->flush_from = 0;
+}
 static u32 channel_used; /* bit per DS channel */
 int port_hw_sound_stats[4];
 
@@ -43,11 +62,14 @@ static void key_on(unsigned v, void *user) {
     p->flush_from = 0;
     p->restart = 1;
     p->lost = 0;
+    ring_take(p);
+    if (!p->ring) p->lost = 1; /* none free: it plays from later samples once it gets one */
 }
 
 static void block(unsigned v, const int16_t *samples, void *user) {
     (void)user;
     Voice *p = &voices[v];
+    if (!p->ring) return;
     unsigned at = p->write % RING;
     unsigned first = RING - at < 28 ? RING - at : 28;
     memcpy(p->ring + at, samples, first * 2);
@@ -59,9 +81,9 @@ static const PsxSpuSink sink = {key_on, block, NULL};
 
 void port_hw_sound_init(void) {
     soundEnable();
-    rings = psx_spare_alloc(VOICES * RING * sizeof(s16));
+    rings = psx_spare_alloc(RINGS * RING * sizeof(s16));
     for (int i = 0; i < VOICES; ++i)
-        voices[i] = (Voice){rings[i], 0, 0, -1, -1, 0, 64, 0, 0, 0};
+        voices[i] = (Voice){NULL, 0, 0, -1, -1, 0, 64, 0, 0, 0};
     psx_spu_set_hw(&sink);
 }
 
@@ -164,6 +186,7 @@ void port_hw_sound_frame(void) {
             if (amps[v]) port_hw_sound_stats[1]++;
             if (amps[v]) p->lost = 1; /* still sounding without a channel: its ring falls behind */
             stop(p);
+            if (p->lost || !out->on) ring_give_back(p); /* it starts over, or it is silent for good */
             continue;
         }
         ++granted;
@@ -187,6 +210,8 @@ void port_hw_sound_frame(void) {
         }
         if (p->sound_id < 0 && p->lost) {
             /* back from losing its channel: start over from the samples written from now on */
+            ring_take(p);
+            if (!p->ring) continue;
             p->lost = 0;
             p->write = p->flush_from = 0;
             continue;

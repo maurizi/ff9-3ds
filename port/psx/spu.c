@@ -15,6 +15,41 @@
 #define SPU_RAM 0x80000
 
 u8 *psx_spu_ram; /* allocated by psx_mem_init (NULL on a 4 MB DS: transfers are dropped) */
+/* spu_layout.c: how the shadow keeps SPU RAM (weak: the SPU unit tests have one plain SPU RAM) */
+extern unsigned psx_spu_ram_size __attribute__((weak)), psx_spu_ram_split[2] __attribute__((weak));
+extern u8 *psx_spu_ram_mid __attribute__((weak)), *psx_spu_ram_hi __attribute__((weak));
+__attribute__((weak)) void port_log(const char *fmt, ...); /* absent from the SPU unit tests */
+
+/* Copy `n` bytes at SPU RAM address `at` in (src), out (dst) or clear them (neither), piece by piece; what lies
+ * past the kept size is dropped (out: zeros). */
+static void spu_ram_span(u32 at, u32 n, const u8 *src, u8 *dst) {
+    static int logged;
+    if (!&psx_spu_ram_size) { /* one plain SPU RAM */
+        u8 *p = psx_spu_ram + at;
+        if (src) __builtin_memcpy(p, src, n);
+        else if (dst) __builtin_memcpy(dst, p, n);
+        else __builtin_memset(p, 0, n);
+        if (!dst) psx_spu_trace(PSX_SPU_TRACE_RAM, at, n, p);
+        return;
+    }
+    while (n) {
+        if (at >= psx_spu_ram_size) {
+            if (dst) __builtin_memset(dst, 0, n);
+            for (u32 i = 0; src && i < n && !logged; ++i)
+                if (src[i] && port_log) { port_log("SPU RAM write at 0x%X beyond the 0x%X bytes kept: dropped\n", at + i, psx_spu_ram_size); logged = 1; }
+            return;
+        }
+        int piece = at < psx_spu_ram_split[0] ? 0 : at < psx_spu_ram_split[1] ? 1 : 2;
+        u32 end = piece < 2 ? psx_spu_ram_split[piece] : psx_spu_ram_size;
+        u32 len = n < end - at ? n : end - at;
+        u8 *p = (piece == 0 ? psx_spu_ram : piece == 1 ? psx_spu_ram_mid : psx_spu_ram_hi) + at;
+        if (src) __builtin_memcpy(p, src, len), src += len;
+        else if (dst) __builtin_memcpy(dst, p, len), dst += len;
+        else __builtin_memset(p, 0, len);
+        if (!dst) psx_spu_trace(PSX_SPU_TRACE_RAM, at, len, p);
+        at += len; n -= len;
+    }
+}
 
 static u32 transfer_addr;
 static void (*transfer_cb)(void);
@@ -25,8 +60,7 @@ static SpuReverbAttr reverb_attr;
 void SpuInit(void) {
     psx_spu_reset();
     if (psx_spu_ram) {
-        __builtin_memset(psx_spu_ram, 0, SPU_RAM);
-        psx_spu_trace(PSX_SPU_TRACE_RAM, 0, SPU_RAM, psx_spu_ram);
+        spu_ram_span(0, SPU_RAM, NULL, NULL);
     }
     reverb_type = 0;
     __builtin_memset(&reverb_attr, 0, sizeof reverb_attr);
@@ -72,8 +106,7 @@ u32 SpuWrite(u8 *addr, u32 size) {
         size = SPU_RAM - transfer_addr;
     }
     if (psx_spu_ram) {
-        __builtin_memcpy(psx_spu_ram + transfer_addr, addr, size);
-        psx_spu_trace(PSX_SPU_TRACE_RAM, transfer_addr, size, psx_spu_ram + transfer_addr);
+        spu_ram_span(transfer_addr, size, addr, NULL);
     }
     if (transfer_cb) {
         transfer_cb();
@@ -91,7 +124,7 @@ s32 SpuRead(s32 addr, s32 size) {
         n = SPU_RAM - transfer_addr;
     }
     if (psx_spu_ram) {
-        __builtin_memcpy((void *)addr, psx_spu_ram + transfer_addr, n);
+        spu_ram_span(transfer_addr, n, NULL, (u8 *)addr);
     }
     if (transfer_cb) {
         transfer_cb();
@@ -191,8 +224,7 @@ long SpuClearReverbWorkArea(long mode) {
     /* Synchronous transfer policy, like SpuWrite. Preserve the caller's DMA
      * address/callback; this internal clear must not invoke its callback. */
     if (psx_spu_ram) {
-        __builtin_memset(psx_spu_ram + SPU_RAM - bytes, 0, bytes);
-        psx_spu_trace(PSX_SPU_TRACE_RAM, SPU_RAM - bytes, bytes, psx_spu_ram + SPU_RAM - bytes);
+        spu_ram_span(SPU_RAM - bytes, bytes, NULL, NULL);
     }
     return 0;
 }

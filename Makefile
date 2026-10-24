@@ -56,6 +56,8 @@ DECOMP_CFLAGS := -std=gnu89 -fpermissive -O2 -g -fsigned-char -fno-strict-aliasi
                  -fno-delete-null-pointer-checks -fno-builtin-memcpy -ffunction-sections -fdata-sections -w \
                  -I$(DECOMP)/include -Iport/include -include port_prelude.h \
                  $(addprefix -I,$(wildcard $(DECOMP)/src_equiv/*/)) # their "../src_equiv.h" resolves from here
+# On the DS the battle overlay is optimized for size: it alone sets the size of the code overlay slot (ds-mode.md)
+DECOMP_OPT_ds_ovl_0b := -Os
 PORT_CFLAGS   := -std=gnu17 -O2 -g -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter -Wno-builtin-declaration-mismatch -ffunction-sections -fdata-sections \
                  -Iport/include -I$(DECOMP)/include
 
@@ -106,7 +108,7 @@ $(1)_MAINLINK := $$(filter-out $$($(1)_FXOBJS),$$($(1)_LINK))
 $$($(1)_DIR)/obj/%.o: $(BUILD)/portified/%.c $(PORT_HDRS)
 	@mkdir -p $$(dir $$@)
 	@echo "CC   [$(1)] $$*"
-	@$(2) $(4) $(DECOMP_CFLAGS) -DPORT_HEADER='"$$(call header_of,$$(call bin_of,$$*))"' \
+	@$(2) $(4) $(DECOMP_CFLAGS) $$(DECOMP_OPT_$(1)_$$(call bin_of,$$*)) -DPORT_HEADER='"$$(call header_of,$$(call bin_of,$$*))"' \
 		-DPORT_BIN_$$(call bin_of,$$*) -c $$< -o $$@ $$(if $$(filter docs/wip/%,$$*),2> $$@.log || \
 		{ echo "draft $$* doesn't compile against current headers (skipped, see $$@.log)"; \
 		  echo "" | $(2) $(4) -x c -c - -o $$@; })
@@ -191,7 +193,7 @@ DS_ARCH  := -mcpu=arm946e-s -mthumb -mthumb-interwork
 PORT_EXTRA_ds := $(if $(filter 1,$(SPUITCM)),-DPORT_SPU_ITCM) $(if $(filter 1,$(HWSOUND)),-DPORT_HW_SOUND -DPORT_GTE_ITCM,$(if $(filter 1,$(AUDIO)),-DPORT_AUDIO)) $(if $(filter 1,$(AUDIOHASH)),-DPORT_AUDIO_HASH) $(if $(AUDIOCAPTURE),-DPORT_AUDIO_CAPTURE=$(AUDIOCAPTURE)) -I$(BLOCKSDS)/libs/maxmod/include -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include $(if $(AUTORUN),-DPORT_AUTORUN) \
                  $(if $(CAPTURE_FRAME),-DPORT_CAPTURE_FRAME=$(CAPTURE_FRAME)) \
                  $(if $(filter 1,$(CAPTURE_READBACK)),-DPORT_CAPTURE_READBACK) \
-                 $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') $(if $(filter 1,$(SOFTDISPLAY) $(HYBRID)),-DPORT_SOFT_DISPLAY) $(if $(filter 1,$(HYBRID)),-DPORT_GX_HYBRID) $(if $(filter 0,$(GXMERGE)),-DPORT_GX_NO_MERGE) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) $(if $(filter 1,$(GXEXPERIMENTAL)),-DPORT_GX_EXPERIMENTAL) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXLAZY)),-DPORT_GX_LAZY) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD) $(if $(filter 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD_LOW) $(if $(filter 1 2,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 2,$(PROFILE)),-DPORT_PROFILE_FRAME_ONLY) $(if $(filter 1,$(CANARY)),-DPORT_CANARY)
+                 $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') $(if $(filter 1,$(SOFTDISPLAY) $(HYBRID)),-DPORT_SOFT_DISPLAY) $(if $(filter 1,$(HYBRID)),-DPORT_GX_HYBRID) $(if $(filter 0,$(GXMERGE)),-DPORT_GX_NO_MERGE) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) $(if $(filter 1,$(GXEXPERIMENTAL)),-DPORT_GX_EXPERIMENTAL) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXLAZY)),-DPORT_GX_LAZY) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD) $(if $(filter 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD_LOW) $(if $(filter 1 2,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 2,$(PROFILE)),-DPORT_PROFILE_FRAME_ONLY) $(if $(filter 1,$(CANARY)),-DPORT_CANARY) $(if $(filter 1,$(DSMODE)),-DPORT_DS_MODE)
 ds_FXOVL := 1
 # The game's ARM9 link: BlocksDS's script with the code overlays' areas (gen_link.py psx_ovl_areas.ld) before the heap
 $(BUILD)/ds/ff9ds_arm9.ld: $(BLOCKSDS)/sys/crts/ds_arm9.ld $(GEN)/stamp
@@ -394,6 +396,16 @@ $(BUILD)/tests/gx_backend.o: port/ds/render_gx.c tests/gx/nds.h $(BUILD)/ds/runt
 	$(CC) $(PC_ARCH) $(PORT_CFLAGS) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXLAZY)),-DPORT_GX_LAZY) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) -Itests/gx -c $< -o $@
 
 ARM7ELF  := $(BLOCKSDS)/sys/arm7/main_core/arm7_maxmod.elf
+ifeq ($(DSMODE),1)
+# BlocksDS's minimal ARM7 core without the shared WRAM, which the ARM9 then takes (port/arm7/main.c)
+ARM7ELF  := $(BUILD)/arm7/ff9ds_arm7.elf
+endif
+$(BUILD)/arm7/ff9ds_arm7.elf: port/arm7/main.c
+	@mkdir -p $(dir $@)
+	@echo "ARM7 $@"
+	@arm-none-eabi-gcc -mcpu=arm7tdmi -mthumb -O2 -Wall -specs=$(BLOCKSDS)/sys/crts/ds_arm7.specs \
+		-I$(BLOCKSDS)/libs/libnds/include -DARM7 $< -L$(BLOCKSDS)/libs/libnds/lib -lnds7 \
+		-Wl,--start-group -lnds7 -lc -Wl,--end-group -Wl,--gc-sections -Wl,--defsym=__shared_wram_size=0 -o $@
 NDSTOOL  := $(BLOCKSDS)/tools/ndstool/ndstool
 
 ds: $(BUILD)/ff9ds.nds $(BUILD)/fxmods.bin $(BUILD)/ovls.bin
