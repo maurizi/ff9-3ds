@@ -158,6 +158,19 @@ and slightly faster (Ark 39.1 -> 38.9 ms per frame, Ifrit 39.7 -> 39.3, Trance 3
 pack, in the VM: 38.0). `fxmods.bin` goes in `ff9ds/` next to `raw/` (the build copies it into the test SD
 folders); like the disc images, it is derived from game data and never committed.
 
+## Code overlays load from SD (2026-10-24)
+
+The decomp's code overlays (field 0a, battle 0b, world map 0c, Tetra Master 0d, the menus 32-3e and 65, ...) were all
+linked into the executable: 447 KB, of which one slot's largest (battle, 174 KB) is ever needed at once. On the DS
+their sections are prefixed `.psxovl_<id>` (Makefile, nsobj step), and `gen_link.py` writes OVERLAY statements that
+the build splices into a copy of BlocksDS's ARM9 script (`build/ds/ff9ds_arm9.ld`, before the heap): each slot's
+overlays share one address, outside the load segments, so ndstool leaves them out. Everything still resolves in one
+link (NOCROSSREFS refuses calls between overlays of one slot). `tools/pack_overlays.py` extracts them into
+`ovls.bin`; `port/ds/ovl_pack.c` reads an overlay's native code when the game loads its MIPS code
+(`psx_overlay_patch`), then flushes the data cache and invalidates the instruction cache. A missing or stale pack
+is fatal. `.text` 733 KB -> 286 KB; static memory ends at 2.83 MB, about 4.33 MB with the VRAM and SPU RAM shadows.
+Black Waltz rewards on the DS (battle, rewards menu, back to the field) loads 0b, 65 and 0a and shows each correctly.
+
 ## Implementation order and acceptance
 
 1. Remove inactive backend storage (done), then inventory resident code/data by

@@ -118,7 +118,8 @@ $$($(1)_DIR)/nsobj/%.o: $$($(1)_DIR)/obj/%.o $(GEN)/stamp config/overrides.txt
 	@mkdir -p $$(dir $$@)
 	@$(3) $$(if $$(call weak_src,$$*),--weaken) $$< $$@.tmp
 	@$(3) --redefine-syms=$(GEN)/redefine_$$(call bin_of,$$*).txt $$@.tmp $$@.tmp2
-	@$(3) --weaken-symbols=config/overrides.txt $$@.tmp2 $$@
+	@$(3) --weaken-symbols=config/overrides.txt $$@.tmp2 $$@ \
+		$$(if $$($(1)_FXOVL),$$(if $$(filter ovl_%,$$(call bin_of,$$*)),&& $(3) --prefix-alloc-sections=.psxovl_$$(patsubst ovl_%,%,$$(call bin_of,$$*)) $$@))
 	@rm -f $$@.tmp $$@.tmp2
 
 $$($(1)_DIR)/gen/%.o: $(GEN)/%.s
@@ -149,7 +150,9 @@ $$($(1)_DIR)/ff9ds.elf: $$($(1)_LINK) $$($(1)_DIR)/stubs.o $$(if $$($(1)_FXOVL),
 	@echo "LD   $$@"
 	$$(if $$($(1)_FXOVL),@$(PYTHON) tools/fx_extern.py --build-id $$($(1)_DIR)/fxid.s && $(2) $(4) -c $$($(1)_DIR)/fxid.s -o $$($(1)_DIR)/fxid.o)
 	@$(2) $(4) -o $$@ $$($(1)_MAINLINK) $$($(1)_DIR)/stubs.o $$(if $$($(1)_FXOVL),$$($(1)_DIR)/fxid.o $$($(1)_DIR)/fx_extern.ld) \
-		$(GEN)/psx_syms.ld $(7) -Wl,-Map,$$($(1)_DIR)/ff9ds.map -Wl,--start-group $(8) -Wl,--end-group
+		$(GEN)/psx_syms.ld $(7) -Wl,-Map,$$($(1)_DIR)/ff9ds.map -Wl,--start-group $(8) -Wl,--end-group \
+		2> $$($(1)_DIR)/link.log; status=$$$$?; grep -v "allocated section .\.psxovl_.* not in segment" $$($(1)_DIR)/link.log >&2; \
+		exit $$$$status
 endef
 
 # DS: BlocksDS, DSi-mode memory map, Thumb.
@@ -190,8 +193,15 @@ PORT_EXTRA_ds := $(if $(filter 1,$(SPUITCM)),-DPORT_SPU_ITCM) $(if $(filter 1,$(
                  $(if $(filter 1,$(CAPTURE_READBACK)),-DPORT_CAPTURE_READBACK) \
                  $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') $(if $(filter 1,$(SOFTDISPLAY) $(HYBRID)),-DPORT_SOFT_DISPLAY) $(if $(filter 1,$(HYBRID)),-DPORT_GX_HYBRID) $(if $(filter 0,$(GXMERGE)),-DPORT_GX_NO_MERGE) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) $(if $(filter 1,$(GXEXPERIMENTAL)),-DPORT_GX_EXPERIMENTAL) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXLAZY)),-DPORT_GX_LAZY) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD) $(if $(filter 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD_LOW) $(if $(filter 1 2,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 2,$(PROFILE)),-DPORT_PROFILE_FRAME_ONLY) $(if $(filter 1,$(CANARY)),-DPORT_CANARY)
 ds_FXOVL := 1
+# The game's ARM9 link: BlocksDS's script with the code overlays' areas (gen_link.py psx_ovl_areas.ld) before the heap
+$(BUILD)/ds/ff9ds_arm9.ld: $(BLOCKSDS)/sys/crts/ds_arm9.ld $(GEN)/stamp
+	@mkdir -p $(dir $@)
+	@$(PYTHON) -c "import sys; s = open(sys.argv[1]).read(); m = '    /* Space reserved for the thread local storage'; assert s.count(m) == 1; open(sys.argv[3], 'w').write(s.replace(m, open(sys.argv[2]).read() + m))" $< $(GEN)/psx_ovl_areas.ld $@
+$(BUILD)/ds/ff9ds.specs: $(SPECS) $(BUILD)/ds/ff9ds_arm9.ld
+	@sed 's|%:getenv(BLOCKSDS /sys/crts/ds_arm9.ld)|$(BUILD)/ds/ff9ds_arm9.ld|' $< > $@
+$(BUILD)/ds/stubs.c $(BUILD)/ds/ff9ds.elf: $(BUILD)/ds/ff9ds.specs
 $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH),ds,arm,\
-	-specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib -L$(BLOCKSDS)/libs/maxmod/lib -Wl$(,)--gc-sections,-lmm9 -lnds9 -lc))
+	-specs=$(BUILD)/ds/ff9ds.specs -L$(BLOCKSDS)/libs/libnds/lib -L$(BLOCKSDS)/libs/maxmod/lib -Wl$(,)--gc-sections,-lmm9 -lnds9 -lc))
 
 # Changing a DS runtime option must rebuild its users even when sources are unchanged.
 .PHONY: FORCE_DS_CONFIG
@@ -373,7 +383,7 @@ $(BUILD)/tests/gx_backend.o: port/ds/render_gx.c tests/gx/nds.h $(BUILD)/ds/runt
 ARM7ELF  := $(BLOCKSDS)/sys/arm7/main_core/arm7_maxmod.elf
 NDSTOOL  := $(BLOCKSDS)/tools/ndstool/ndstool
 
-ds: $(BUILD)/ff9ds.nds $(BUILD)/fxmods.bin
+ds: $(BUILD)/ff9ds.nds $(BUILD)/fxmods.bin $(BUILD)/ovls.bin
 
 # Effect modules on the DS: each is linked on its own at psx_fx_area against the main executable's symbols, and
 # the pack (fxmods.bin, derived from game data: never commit it) goes next to the disc images in ff9ds/; the
@@ -387,6 +397,12 @@ $(BUILD)/ds/fx/%.elf: $$(call fx_objs_of,%) $(BUILD)/ds/ff9ds.elf port/ds/fxmod.
 	arm-none-eabi-gcc $(DS_ARCH) -nostdlib -nostartfiles -o $@ $(call fx_objs_of,$*) $(GEN)/psx_syms.ld \
 		-Wl,--just-symbols=$(BUILD)/ds/ff9ds.elf -Wl,--defsym=FX_BASE=$$(echo $$area | cut -d' ' -f1) \
 		-Wl,--defsym=FX_SIZE=$$(echo $$area | cut -d' ' -f2) -T port/ds/fxmod.ld -Wl,--gc-sections
+# The code overlays' native code, kept out of the executable's load segments (gen_link.py psx_ovl_areas.ld) and
+# read by port/ds/ovl_pack.c when the game loads an overlay; like fxmods.bin, it goes next to the disc images.
+$(BUILD)/ovls.bin: $(BUILD)/ds/ff9ds.elf tools/pack_overlays.py
+	@echo "PACK $@"
+	@$(PYTHON) tools/pack_overlays.py $(BUILD)/ds/fxid.s $< $@
+	@for d in $(BUILD)/sdroot*/ff9ds; do [ -d $$d ] && cp $@ $$d/ovls.bin; done; true
 $(BUILD)/fxmods.bin: $(addprefix $(BUILD)/ds/fx/,$(addsuffix .elf,$(sort $(FXMODS)))) tools/pack_fxmods.py
 	@echo "PACK $@"
 	@$(PYTHON) tools/pack_fxmods.py $(BUILD)/ds/fxid.s $(BUILD)/ds/ff9ds.elf $@ $(addprefix $(BUILD)/ds/fx/,$(addsuffix .elf,$(sort $(FXMODS))))

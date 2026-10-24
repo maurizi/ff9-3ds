@@ -92,12 +92,16 @@ __attribute__((weak)) void port_overlay_relocated(unsigned int id, unsigned int 
     (void)id; (void)off; (void)len;
 }
 
+/* port/ds/ovl_pack.c: the DS reads an overlay's native code when the game loads it; elsewhere it is linked in */
+__attribute__((weak)) void port_ovl_native_load(unsigned int id) { (void)id; }
+
 void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len) {
     for (const PsxOverlay *o = psx_overlays; o->relocs != NULL; o++) {
         if (o->id != id) {
             continue;
         }
         psx_ovl_resident[o->slot] = (unsigned char)id;
+        port_ovl_native_load(id);
         gxh_ram_overwritten(off, len);
         /* The disc bytes are in place; convert the pointer words in [off, off + len). A word that no longer holds a
          * PS1 address (a sector read again after its conversion) is left alone. */

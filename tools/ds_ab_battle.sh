@@ -9,11 +9,12 @@ sd=build/sdroot_disc$disc; img=build/melon_sd_disc$disc.img
 [ $disc = 1 ] && { sd=build/sdroot; img=build/melon_dsisd.img; }
 build() { tools/docker.sh make -j16 ds HYBRID=1 HWSOUND=1 AUTORUN=1 PROFILE=2 CAPTURE_FRAME=$frame SCENARIO=sd:/ff9ds/scenarios/$scen.cfg > $W/capcmp_build.log 2>&1; }
 for f in "$@"; do mkdir -p $S/$(dirname $f); cp $f $S/$f; git show HEAD:$f > $f; done
-if build; then cp build/ff9ds.nds $W/c_old.nds; cp build/ds/ff9ds.elf $W/c_old.elf; else echo "OLD BUILD FAILED"; fi
+if build; then cp build/ff9ds.nds $W/c_old.nds; cp build/ds/ff9ds.elf $W/c_old.elf; for k in fxmods ovls; do [ -f build/$k.bin ] && cp build/$k.bin $W/c_old_$k.bin; done; else echo "OLD BUILD FAILED"; fi
 for f in "$@"; do cp $S/$f $f; done
-if build; then cp build/ff9ds.nds $W/c_new.nds; cp build/ds/ff9ds.elf $W/c_new.elf; else echo "NEW BUILD FAILED"; exit 1; fi
+if build; then cp build/ff9ds.nds $W/c_new.nds; cp build/ds/ff9ds.elf $W/c_new.elf; for k in fxmods ovls; do [ -f build/$k.bin ] && cp build/$k.bin $W/c_new_$k.bin; done; else echo "NEW BUILD FAILED"; exit 1; fi
 for v in old new; do
     rm -f "$W/c_$v.ml8" "$W/c_$v.png"
+    for k in fxmods ovls; do rm -f "$sd/ff9ds/$k.bin"; [ -f $W/c_${v}_$k.bin ] && cp $W/c_${v}_$k.bin $sd/ff9ds/$k.bin; done
     timeout 1700 python3 tools/ds_profile.py --rom $W/c_$v.nds --elf $W/c_$v.elf --frame $frame --out $W/c_$v.ml8 \
         --sd-folder $sd --sd-image $img --screenshot $W/c_$v.png --timeout 1600 > $W/c_$v.log 2>&1
     echo "$scen $v: $(grep -v '^{' $W/c_$v.log | head -1)"
