@@ -321,3 +321,12 @@ late bosses are slowest (Ozma 99, Lich 90, Nova Dragon 88, Trance Kuja 85, Earth
 | d4 ozma | 99.3 |
 | d4 tiamat | 53.8 |
 | d4 trance_kuja | 85.0 |
+
+### Where a slow battle's time goes on an original DS
+
+Ozma (PROFILE=1, 104 ms a frame, no VBlank wait: CPU-bound; a scene is submitted every ~3 frames): per scene
+46 ms building the GX list (`emit_scene`), 31 ms copying textures (256 KB: the effects rewrite 4 whole regions,
+so copying only written rows doesn't help), 7 ms planning; per frame ~20 ms on the 2D layer, 17 ms in effect
+callbacks, 14 ms GTE, 16 ms software rasterising (the 2D layer's primitives). The scene has ~2800 primitives: the 3D
+engine takes 489 and drops 2355 (the starfield's small ones, `plan_drops`), so it is also a fidelity problem: drawing
+such scenes needs the two-pass capture (design.md) rather than dropping.
