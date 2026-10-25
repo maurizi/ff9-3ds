@@ -1645,11 +1645,47 @@ static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     soft_touch(x0, y0, x1, y1);
 }
 
+/* Line a-b clipped to the drawing area (Liang-Barsky; colours interpolated): 0 when it lies outside */
+static int clip_line(const Gp0Vtx *a, const Gp0Vtx *b, Gp0Vtx *ca, Gp0Vtx *cb) {
+    int dx = b->x - a->x, dy = b->y - a->y;
+    int p[4] = {-dx, dx, -dy, dy};
+    int q[4] = {a->x - gp0_state.area_x0, gp0_state.area_x1 - a->x, a->y - gp0_state.area_y0, gp0_state.area_y1 - a->y};
+    int t0n = 0, t0d = 1, t1n = 1, t1d = 1; /* t0 = t0n / t0d, t1 = t1n / t1d, as fractions of the line */
+    for (int i = 0; i < 4; ++i) {
+        if (!p[i]) { if (q[i] < 0) return 0; continue; }
+        int n = q[i], d = p[i];
+        if (d < 0) { n = -n; d = -d; if ((long long)n * t1d > (long long)t1n * d) return 0; /* entering */
+                     if ((long long)n * t0d > (long long)t0n * d) t0n = n, t0d = d; }
+        else { if ((long long)n * t0d < (long long)t0n * d) return 0; /* leaving */
+               if ((long long)n * t1d < (long long)t1n * d) t1n = n, t1d = d; }
+    }
+#define AT(v, n, d, f) (v.f + (int)((long long)(b->f - a->f) * (n) / (d)))
+    *ca = *a; *cb = *a;
+    ca->x = AT((*a), t0n, t0d, x); ca->y = AT((*a), t0n, t0d, y);
+    ca->r = AT((*a), t0n, t0d, r); ca->g = AT((*a), t0n, t0d, g); ca->b = AT((*a), t0n, t0d, b);
+    cb->x = AT((*a), t1n, t1d, x); cb->y = AT((*a), t1n, t1d, y);
+    cb->r = AT((*a), t1n, t1d, r); cb->g = AT((*a), t1n, t1d, g); cb->b = AT((*a), t1n, t1d, b);
+#undef AT
+    return 1;
+}
+
 static void hybrid_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b2) {
     Buffer *shown, *b = target(&shown);
     Gp0Vtx pair[2] = {*a, *b2};
     if (b && b == shown && ui_defer(b, UI_LINE, m, pair, 2, 0, 0)) return;
     ui_flush();
+    /* A scene's line (a field's, in its order; a battle's translucent one: Burmecia's rain) to the 3D engine: a
+     * triangle with two equal vertices is drawn as a one-pixel line, blending with the scene (on the 2D layer it
+     * blended with the buffer's key or clear value and covered the scene opaquely) */
+    Gp0Vtx ca, cb;
+    if (b && b != shown && (place->field ? !b->soft && !field_unexact(b, m) : m->semi) && clip_line(a, b2, &ca, &cb)) {
+        Gp0Vtx t[3] = {ca, cb, cb};
+        Gp0Mode lm = *m;
+        lm.textured = 0;
+        record(b, &lm, t, 3);
+        if (place->field) b->polys++;
+        return;
+    }
     psx_softgpu.line(m, a, b2);
     soft_touch(a->x < b2->x ? a->x : b2->x, a->y < b2->y ? a->y : b2->y,
                a->x > b2->x ? a->x : b2->x, a->y > b2->y ? a->y : b2->y);
