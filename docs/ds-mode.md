@@ -517,6 +517,9 @@ the backdrop (sky dome, 280 faces at one OT entry), models, effects, the navigat
 
 Original DS, PROFWIN=1024: d1_w9009 167 -> 36.5 ms, d3_w9000 37.8, d3_w9006 45.7, d4_w9000 37, d4_w9006 41.2 (2-3x the
 PS1's 16.7 at 20 fps instead of 10x). Against the host's frames: fog worlds, the clear sky and both seas close.
+With walking input from frame 300 (`tools/walk_presses.py`, encounters and all), the 20 world maps of the earlier
+sweep all reach frame 1500 (two, d4_w9000 and d4_w9009, inside a battle with no complete timing block): 20.6-45.8 ms
+per VBlank where timed. d4_w9000 had stalled at frame 1453 in software.
 
 ## 54 battles after the architecture levers (2026-10-25)
 
