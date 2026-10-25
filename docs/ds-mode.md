@@ -356,3 +356,12 @@ orange instead of white, Tiamat's beam purplish, Necron's glow bluish, Kraken's 
 additive layer (their glows are too large to draw in software affordably), so this needs the capture pass; text at
 the 0.8 scale is heavier ("Meteor"). The fields' 58 screenshots matched apart from field 767's rain (fixed) and
 additive lights (2910: fixed by the exact layer).
+
+## 30 random battles as an original DS (2026-10-25)
+
+Ordinary encounters drawn at random (seed 26, `build/validation/dsmode_battle30.list`), each to game frame 1500: all
+30 ran without a crash or stall. Frame times 46.2-68.8 ms, mean 54.2 (the PS1 runs battles at 33 ms): d1_b0032 48.9,
+d1_b0182 47.5, d1_b0186 58.5, d1_b0187 53.9, d1_b0230 54.2, d1_b0238 60.8, d1_b0296 46.2, d2_b0091 57.8, d2_b0098 68.8,
+d2_b0102 51.7, d2_b0140 62.7, d2_b0229 54.4, d2_b0331 50.3, d2_b0342 59.7, d2_b0355 51.7, d2_b0647 48.1, d2_b0678 50.9,
+d2_b0840 50.2, d2_b0844 53.1, d3_b0216 50.0, d3_b0837 65.1, d3_b0905 54.3, d4_b0137 59.3, d4_b0215 54.1, d4_b0223 58.8,
+d4_b0586 53.6, d4_b0664 50.4, d4_b0686 46.7, d4_b0839 53.7, d4_b0919 49.1 ms.
