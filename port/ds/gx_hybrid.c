@@ -485,6 +485,7 @@ static void regions_touch(int x, int y, int w, int h) {
 #define RUN_NONE 0xFFFF
 #define RUN_GROUP 0xFE    /* prim_group: the primitive's texels are in a run */
 #define RUN_SIZE_BITS (5u << 20 | 1u << 23) /* TEXIMAGE: 256 x 16 */
+#define RUN_TABLES (RUN_ROWS * 4 + MAX_RUNS * 12 + MAX_NEEDS * 8 + 32) /* rows, runs, needs (+ alignment) */
 /* a page row of blocks: page x / 64 (4 bits), page y / 256 (1), depth (2), additive copy (1), block row (4), and for
  * an additive copy its CLUT: x / 16 (6), y (9) */
 #define STRIP_KEY(depth, conv, tx, ty, cx, cy, bv) \
@@ -501,7 +502,7 @@ enum { RUN_USED = 1, RUN_DIRTY = 2, RUN_WANTED = 4 };
 typedef struct { u8 unit, fmt_units; u16 slots; } Row;  /* fmt << 4 | units (0: free); slots: a bit per block in use */
 typedef struct { u32 key; u8 bu, n, slot, flags, cpal, row; u16 next; } Run; /* blocks bu.., at slot.. of row */
 typedef struct { u32 key; u16 mask, next; } Need;        /* the blocks of a page row a scene samples */
-static Row *rows;         /* these three in psx_spare_alloc's range (field only) */
+static Row *rows;         /* these three after the first field buffer in ovl_0a's dead code (use_place; NULL: none) */
 static Run *runs;
 static Need *needs;
 static u16 run_hash[256], need_hash[256];
@@ -1773,7 +1774,12 @@ static void buffers_overwritten(uintptr_t at, unsigned int len) {
         if (at < hi && lo < at + len) { buffers[i].count = 0; buffers[i].submitted = 0; }
     }
 }
-void gxh_ram_overwritten(unsigned int off, unsigned int len) { buffers_overwritten((uintptr_t)psx_ram + off, len); }
+static void textures_reset(void);
+void gxh_ram_overwritten(unsigned int off, unsigned int len) {
+    buffers_overwritten((uintptr_t)psx_ram + off, len);
+    uintptr_t at = (uintptr_t)psx_ram + off, lo = (uintptr_t)rows, hi = lo + RUN_TABLES;
+    if (rows && at < hi && lo < at + len) textures_reset();
+}
 /* ovl_pack.c: native code was read over [at, at + len) */
 void gxh_native_overwritten(uintptr_t at, unsigned int len) { buffers_overwritten(at, len); }
 
@@ -1792,11 +1798,29 @@ static void use_place(const Place *p) {
         int fit = ((uintptr_t)__psxovl_slot0_end - tail) / sizeof(Prim), first = (OVL0A_CODE_END - p->prims_at[0]) / sizeof(Prim);
         if (fit > first) fit = first;
         if (fit > MAX_PRIMS) fit = MAX_PRIMS;
+        /* the first buffer leaves room for the block runs' tables after it */
+        int room = (int)((OVL0A_CODE_END - p->prims_at[0] - RUN_TABLES) / sizeof(Prim));
+        if (fit > room) fit = room;
         if (fit > prims_max) {
             buffers[1].prims = (Prim *)tail;
             prims_max = fit;
         }
     }
+    rows = NULL; runs = NULL; needs = NULL;
+    if (p->field && buffers[1].prims != (Prim *)(psx_ram + p->at + p->prims_at[1])) {
+        u8 *t = (u8 *)(((uintptr_t)(buffers[0].prims + prims_max) + 31) & ~(uintptr_t)31);
+        rows = (Row *)t; runs = (Run *)(t + RUN_ROWS * sizeof(Row)); needs = (Need *)((u8 *)runs + MAX_RUNS * sizeof(Run));
+    }
+}
+
+/* The textures' bookkeeping from scratch (the block runs' tables were overwritten: gxh_ram_overwritten) */
+static void textures_reset(void) {
+    for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) free_region(&regions[i]);
+    runs_reset();
+    memset(unit_used, 0, sizeof unit_used);
+    unit_used[RAMP_UNIT] = 1;
+    if (bank_a_bg) memset(unit_used, 1, 64); /* (bank A is a background) */
+    field_runs = 0;
 }
 
 void gxh_init(void) {
@@ -1852,11 +1876,6 @@ void gxh_enable(int on) {
         bgSetPriority(0, 1);
         memset(regions, 0, sizeof regions);
         memset(cpal_users, 0, sizeof cpal_users);
-        if (place->field && !runs) {
-            rows = psx_spare_alloc(RUN_ROWS * sizeof *rows);
-            runs = psx_spare_alloc(MAX_RUNS * sizeof *runs);
-            needs = psx_spare_alloc(MAX_NEEDS * sizeof *needs);
-        }
         runs_reset();
         field_runs = 0;
         memset(unit_used, 0, sizeof unit_used);
