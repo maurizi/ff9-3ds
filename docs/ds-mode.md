@@ -250,3 +250,41 @@ cartridge space, unused). The DSi's regions differ, so DSi runs were never affec
 `ds_profile.py` saves a state when the game frame stops for 90 s (`*.timeout.ml8`; melonDS keeps ARM9 registers in its
 `ARM9` section: R0-R15 at +24, CPSR after, then the banked FIQ/SVC/ABT/IRQ/UND registers); `BLACKBOX=1` keeps the
 last 64 phases in DTCM; `CANARY=1` fits DS mode (8 KB tails); the status screen's row 9 shows the free heap.
+
+## The 28 sample fields as an original DS (2026-10-25)
+
+`build/validation/dsmode_bench.sh` (DSMODE=1 HYBRID=1 HWSOUND=1 FIELDGX=1, melonDS as a DS at 67 MHz with 4 MB, a
+DLDI card per disc, PROFILE=2 frame times at frame 1500): all 28 ran their 1500 frames, none stalled. 10 are at or
+under the PS1's 33.3 ms; the slowest are the scenes over the 3D engine's limits (931 83 ms, 1812 118 ms, drawn in
+software) and the large 3D scenes (955, 2110 66 ms, 1508 62 ms). Speed is now the original DS's gap.
+
+| field | ms/frame |
+|---|---|
+| d1_f0158 | 22.0 |
+| d1_f0110 | 35.5 |
+| d1_f0615 | 25.6 |
+| d1_f0453 | 54.3 |
+| d1_f0306 | 30.4 |
+| d1_f0205 | 35.2 |
+| d1_f0162 | 32.8 |
+| d2_f0931 | 83.4 |
+| d2_f1425 | 34.9 |
+| d2_f1203 | 31.4 |
+| d2_f1414 | 58.5 |
+| d2_f1102 | 41.2 |
+| d2_f0955 | 66.0 |
+| d2_f1057 | 46.8 |
+| d3_f2714 | 33.6 |
+| d3_f1551 | 25.9 |
+| d3_f1811 | 19.7 |
+| d3_f1508 | 61.5 |
+| d3_f1812 | 117.7 |
+| d3_f1606 | 28.8 |
+| d3_f2055 | 39.7 |
+| d4_f1706 | 54.5 |
+| d4_f2934 | 30.6 |
+| d4_f1953 | 26.0 |
+| d4_f1911 | 35.8 |
+| d4_f0351 | 50.6 |
+| d4_f2110 | 66.5 |
+| d4_f2162 | 53.4 |
