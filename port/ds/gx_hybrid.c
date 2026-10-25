@@ -78,6 +78,16 @@ static Buffer buffers[2];
 /* A primitive copied word by word (a struct assignment is a memcpy call) */
 typedef union { Prim p; u32 w[12]; } PrimCopy;
 _Static_assert(sizeof(Prim) == 48, "PrimCopy");
+/* A primitive stored in 4-word bursts: the ARM9's data cache allocates on reads only, so the buffers' lines aren't
+ * cached and single stores would go out one by one */
+static inline void store_prim(Prim *d, const PrimCopy *s) {
+    u32 *dw = (u32 *)d;
+    const u32 *sw = s->w;
+    __asm__ volatile("ldmia %1!, {r4, r5, r6, r7}\n\tstmia %0!, {r4, r5, r6, r7}\n\t"
+                     "ldmia %1!, {r4, r5, r6, r7}\n\tstmia %0!, {r4, r5, r6, r7}\n\t"
+                     "ldmia %1!, {r4, r5, r6, r7}\n\tstmia %0!, {r4, r5, r6, r7}"
+                     : "+l"(dw), "+l"(sw) : : "r4", "r5", "r6", "r7", "memory");
+}
 static inline void copy_prim(PrimCopy *d, const Prim *s) {
     const u32 *w = (const u32 *)s; /* buffers and Prim are 4-byte aligned */
     d->w[0] = w[0]; d->w[1] = w[1]; d->w[2] = w[2]; d->w[3] = w[3]; d->w[4] = w[4]; d->w[5] = w[5];
@@ -196,7 +206,8 @@ static int triangle_area(const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
 
 static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (b->count >= prims_max) { gxh_stats_dropped++; return; }
-    Prim *p = &b->prims[b->count++];
+    PrimCopy t; /* built on the stack (DTCM), stored in bursts */
+    Prim *p = &t.p; /* (a triangle's fourth vertex is left as it is: nothing reads it) */
     p->n = (u8)n;
     p->flags = (u8)((m->textured ? P_TEXTURED : 0) | (m->raw ? P_RAW : 0) | (m->semi ? P_SEMI : 0) |
                     (m->gouraud ? P_GOURAUD : 0) | (place->field && (gp0_state.texpage & 0x200) ? P_DITHER : 0));
@@ -209,6 +220,7 @@ static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) {
         p->b[i] = (u8)(v[i].b < 0 ? 0 : v[i].b > 255 ? 255 : v[i].b);
         p->u[i] = (u8)v[i].u; p->v[i] = (u8)v[i].v;
     }
+    store_prim(&b->prims[b->count++], &t);
 }
 
 /* Clip against the drawing area (the 3D engine only clips to the viewport). */
