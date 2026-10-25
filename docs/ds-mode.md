@@ -330,3 +330,13 @@ so copying only written rows doesn't help), 7 ms planning; per frame ~20 ms on t
 callbacks, 14 ms GTE, 16 ms software rasterising (the 2D layer's primitives). (A first reading of the status
 screen's drop count as Ozma's per scene was wrong: it counted the whole run. At frame 1500 Ozma's scene is 1768
 primitives, 42 over the vertex RAM; the split frame below draws those in software.)
+
+### Ozma sampled as an original DS (PROFILE=3 in DS mode, 2026-10-25)
+
+With ITCM counted (earlier samples there were taken for idle time) and 1 KB buckets: GTE emulation ~11% (`rtp_sf1`
+6%, `gte_cmd`, `mat_mul`, `interpolate`), the 2D layer ~9% (`ds_scale_display_text_pair` 5%, `gxh_present` 4%), the
+software rasteriser ~7% (the battle windows' primitives), the GX path ~17% (`emit_scene` 4.8, GP0 `command` 4.5,
+`upload` 3.8, `plan_textures` 2.1, `translucent_id` 1.2), interrupts ~3% (the sampler's own included). Two things
+tried that the DSi's profile suggested did nothing on a DS (copying only a texture region's written rows; reusing
+a buffer's 2D-layer block hashes across switches). The time is spread: matching the PS1 in heavy battles on a 67 MHz
+ARM9 means cutting all of these, the exact GTE included.
