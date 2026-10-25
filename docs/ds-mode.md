@@ -383,3 +383,13 @@ primitives) 7%, GP0 decoding 7% (about 3 us a primitive), the text scaler 2.3%, 
 `plat_vsync_begin` (display.c): a VSync call's frames count the real VBlanks that passed while the game worked, as
 the PS1's `VSync(n)` does, instead of giving the debt up past `MAX_LAG` and waiting again. Virtual time is
 unchanged. d2_b0098 68.8 -> 68.4 ms, d1_b0186 58.5 -> 58.3, d1_f0110 35.5 -> 33.7, d4_f2110 66.5 -> 63.8.
+
+### Approximate geometry: RTPS/RTPT in 32 bits (2026-10-25)
+
+The user's choice for the speed gap: geometry may be approximate on the original DS. First step, `PORT_GTE_APPROX`
+(DSMODE=1 builds): the sf=1 perspective transform in 32-bit arithmetic. (TR << 12 + M * V) >> 12 is TR + (M * V >> 12)
+exactly, so it differs only where M * V passes 2^31, and it never sets MAC1-3's 44-bit overflow flags. Against the
+exact code over 2 million random RTPT+RTPS with FF9-like ranges (matrix entries within 1.0, vertices within 4000,
+translations within 32000): no output register differs; with full-range random matrices and vertices 0.19% do.
+Screenshots at frame 1500 are identical. 1.5-2.7% faster: d2_b0098 68.4 -> 67.3 ms, d1_b0186 58.3 -> 57.3, d4_f2110
+63.8 -> 62.0.

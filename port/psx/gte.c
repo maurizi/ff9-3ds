@@ -306,7 +306,68 @@ static inline __attribute__((always_inline)) void rtp_body(int v, int sf, int lm
 }
 
 /* sf = 1 is what the game's projections use: that copy is the hot one */
+#ifndef PORT_GTE_APPROX
 GTE_HOT static void rtp_sf1(int v, int lm, int last) { rtp_body(v, 1, lm, last); }
+#else
+/* DS mode (the original DS, user's choice of 2026-10-25: geometry may be approximate for speed): the same steps in
+ * 32 bits. (TR << 12 + M * V) >> 12 is TR + (M * V >> 12) exactly; the differences are that M * V wraps past 2^31
+ * (matrix entries near 8.0 times vertices near 32767) and MAC1-3's 44-bit overflow flags, which need that, are
+ * never set. */
+GTE_HOT static void rtp_sf1(int v, int lm, int last) {
+    u32 f = FLAG;
+    const gte_u32 *c = g.c;
+    u32 vxy = g.d[v * 2];
+    i32 x = (i16)vxy, y = (i32)vxy >> 16, z = (i16)g.d[v * 2 + 1];
+    u32 c0 = c[0], c1 = c[1], c2 = c[2], c3 = c[3];
+    i32 s1 = (i16)c0 * x + ((i32)c0 >> 16) * y + (i16)c1 * z;
+    i32 s2 = ((i32)c1 >> 16) * x + (i16)c2 * y + ((i32)c2 >> 16) * z;
+    i32 s3 = (i16)c3 * x + ((i32)c3 >> 16) * y + (i16)c[4] * z;
+    i32 ir1 = (i32)c[5] + (s1 >> 12), ir2 = (i32)c[6] + (s2 >> 12), mac3 = (i32)c[7] + (s3 >> 12);
+    i32 ir3 = mac3;
+    g.d[25] = (u32)ir1; g.d[26] = (u32)ir2; g.d[27] = (u32)ir3;
+    const i32 lo = lm ? 0 : -0x8000;
+    if (ir1 > 0x7FFF) { ir1 = 0x7FFF; f |= 1u << 24; } else if (ir1 < lo) { ir1 = lo; f |= 1u << 24; }
+    if (ir2 > 0x7FFF) { ir2 = 0x7FFF; f |= 1u << 23; } else if (ir2 < lo) { ir2 = lo; f |= 1u << 23; }
+    if (ir3 > 0x7FFF) { ir3 = 0x7FFF; f |= 1u << 22; } else if (ir3 < -0x8000) f |= 1u << 22;
+    if (ir3 < lo) ir3 = lo;
+    g.d[9] = (u32)ir1; g.d[10] = (u32)ir2; g.d[11] = (u32)ir3;
+    u32 sz3;
+    if (mac3 > 0xFFFF) { f |= 1u << 18; sz3 = 0xFFFF; } else if (mac3 < 0) { f |= 1u << 18; sz3 = 0; } else sz3 = (u32)mac3;
+    push_sz(sz3);
+    u32 div, h = H;
+    if (h >= sz3 * 2) {
+        f |= 1u << 17;
+        div = 0x1FFFF;
+    } else {
+        if (unr_table[0] == 0) init_unr();
+        int sh = __builtin_clz(sz3) - 16;
+        u32 n = h << sh, d = sz3 << sh;
+        u32 u = unr_table[(d - 0x7FC0) >> 7] + 0x101;
+        d = (0x2000080 - d * u) >> 8;
+        d = (0x0000080 + d * u) >> 8;
+        uint64_t q = ((uint64_t)n * d + 0x8000) >> 16;
+        div = q > 0x1FFFF ? 0x1FFFF : (u32)q;
+    }
+#define MAC0_FLAG(m) do { if ((m) > 0x7FFFFFFFLL) f |= 1u << 16; else if ((m) < -0x80000000LL) f |= 1u << 15; } while (0)
+    i64 mx = (i64)(i16)ir1 * div + OFX, my = (i64)(i16)ir2 * div + OFY;
+    MAC0_FLAG(mx); MAC0_FLAG(my);
+    g.d[24] = (u32)(i32)my;
+    i32 sx = (i32)(mx >> 16), sy = (i32)(my >> 16);
+    if (sx > 0x3FF) { f |= 1u << 14; sx = 0x3FF; } else if (sx < -0x400) { f |= 1u << 14; sx = -0x400; }
+    if (sy > 0x3FF) { f |= 1u << 13; sy = 0x3FF; } else if (sy < -0x400) { f |= 1u << 13; sy = -0x400; }
+    push_sxy(sx, sy);
+    if (last) {
+        i64 m0 = (i64)DQA * div + DQB;
+        MAC0_FLAG(m0);
+        g.d[24] = (u32)(i32)m0;
+        i32 ir0 = (i32)(m0 >> 12);
+        if (ir0 > 0x1000) { ir0 = 0x1000; f |= 1u << 12; } else if (ir0 < 0) { ir0 = 0; f |= 1u << 12; }
+        g.d[8] = (u32)ir0;
+    }
+#undef MAC0_FLAG
+    FLAG = f;
+}
+#endif
 static void rtp_sf0(int v, int lm, int last) { rtp_body(v, 0, lm, last); }
 static inline __attribute__((always_inline)) void rtp(int v, int sf, int lm, int last) {
     if (sf) rtp_sf1(v, lm, last);
