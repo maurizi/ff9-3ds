@@ -25,6 +25,9 @@ typedef int64_t i64;
 typedef uint16_t u16;
 typedef uint32_t u32;
 
+#if defined(PORT_GTE_ITCM) && defined(__arm__)
+__attribute__((section(".dtcm"))) /* in DTCM beside the commands in ITCM: the game moves registers in and out constantly */
+#endif
 struct psx_gte_regs psx_gte; /* gte.h */
 #define g psx_gte
 
