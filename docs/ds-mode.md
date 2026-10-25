@@ -486,6 +486,38 @@ menu opened every 450 frames and wandered through): the host ran 100 fields x 30
 and an original DS 10 fields x 1500 frames. The main menu costs 56-115 ms per VBlank on an original DS (the Config
 screen at capture: 109 ms): left for the dual-screen redesign, which moves these screens to the bottom screen.
 
+## The world map native (WORLDGX=1, 2026-10-25)
+
+The user's choice of 2026-10-25: native drawing with the 3D hardware's fog. The world map was drawn in software
+(gx_hybrid had no place for it): 140-216 ms per VBlank, about 10x the PS1. About 3300 primitives a frame, over the 3D
+engine's 2048: ~2400 terrain faces (a lit POLY_GT3 each, and a POLY_G3 of fog colours added over it, blend mode 1),
+the backdrop (sky dome, 280 faces at one OT entry), models, effects, the navigation map.
+
+- A place for ovl_0c in gx_hybrid (`port/include/ovl0c_layout.h`: two buffers of 560 primitives, their tables and depths,
+  three frames' terrain in ovl_0c's dead code range).
+- `wm_drawBlock` and `wm_drawBackdrop` are overridden (`port/game/world_native.c`): after the game's vertex pass,
+  `port_native_world_block` keeps the projected vertices and the faces `wf_face` would draw (its culling, OT range,
+  half-resolution and alternate pages), instead of the face routines' packets.
+- Fog: the PS1's lit colours are darkened toward a black far colour by depth and the fog triangle adds the fog colour
+  by depth, which is the 3D engine's fog (colour x (1 - d) + fog x d) with each vertex's colour lit / (1 - d). A face
+  with only the fog triangle is a black polygon fogged. The fog table follows the vertex pass's ramp. Vertices of the
+  second fog entry get the first's ramp. The backdrop's fog is the alpha ramp's (fog colour, alpha d), the
+  translucent fog polygons under one ID.
+- The scene is depth tested: every other primitive at its OT entry's depth (opaque ones from the last, so the first of
+  equal depths drawn is the PS1's topmost; translucent ones in order just in front), terrain vertices at their own.
+  A terrain face reaching past the backdrop's OT entry stays behind it (the PS1 draws it first); faces the GPU wouldn't
+  draw (1024+ wide, 512+ high) are left out.
+- Colours over x1 (the PS1 modulates up to x2, the DS x1): a texture use with such vertices gets its palette pre-scaled.
+- Over the 3D engine's polygons and vertices (the sea: ~2060 faces), fog-only faces go first, then lit ones, smallest
+  first in each.
+- A frame's terrain is needed until its scene is sent two frames later (the world map shows a buffer before walking
+  its new OT into it): three slots by OT generation.
+- Palettes generally: TEXIMAGE's colour-0-transparent bit only where the CLUT's first colour is 0x0000 (the sea's CLUT
+  has a colour there; fields' and battles' frames unchanged).
+
+Original DS, PROFWIN=1024: d1_w9009 167 -> 36.5 ms, d3_w9000 37.8, d3_w9006 45.7, d4_w9000 37, d4_w9006 41.2 (2-3x the
+PS1's 16.7 at 20 fps instead of 10x). Against the host's frames: fog worlds, the clear sky and both seas close.
+
 ## 54 battles after the architecture levers (2026-10-25)
 
 The 24 bosses and the 30 random battles again on 0f71760 (UI drawn once a game frame, GTE register file in DTCM,
