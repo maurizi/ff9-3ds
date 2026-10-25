@@ -82,6 +82,10 @@ void ds_scale_display_text_pair(uint16_t *dst, const uint16_t *vram,
     for(int oy=0;oy<out_h;++oy) for(int group=0;group<groups;++group) text_mask[oy][group]=0;
     for(unsigned i=0;i<count+previous_count;++i) {
         const DsTextRect *rect=i<count ? rects+i : previous+i-count;
+        /* most glyphs are nowhere near this area (the hybrid scales 32x32 blocks): a plain overlap test first,
+         * where neither wraps around VRAM's edges */
+        if(x+width<=1024 && y+height<=512 && rect->x+rect->w<=1024 && rect->y+rect->h<=512 &&
+           (rect->x+rect->w+2<x || rect->x>x+width+2 || rect->y+rect->h+2<y || rect->y>y+height+2)) continue;
         int rx=(rect->x-x)&1023, ry=(rect->y-y)&511;
         if(rx>=512) rx-=1024;
         if(ry>=256) ry-=512;
