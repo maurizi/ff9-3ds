@@ -515,3 +515,20 @@ primitive and scaling both layers cost what the 3D part saves). Those scenes sta
 Tried first: a software background layer for the sprites before the first
 polygon, to keep their textures out of the 3D engine; re-rendering it each frame (the game writes VRAM every frame,
 and which sprites move there changes as characters move) cost more than it saved.
+
+## Scenes over the 3D engine's budget: options (2026-10-25)
+
+Battles such as Ozma draw ~2800 primitives a scene; the 3D engine takes 2048 polygons and 6144 vertices, and
+`plan_drops` drops the rest (2355 small starfield primitives there): a fidelity loss on DSi and DS alike. Fields over
+budget (931, 1812) go software instead, exact but slow. Options considered:
+- Two 3D passes with display capture: pass 1 (the back) captured to a VRAM bank and shown behind pass 2 (BG3), the
+  previous complete frame shown from a second bank (VRAM display mode) while pass 1 renders. Needs two of A-D, which
+  halves texture memory while it runs (Ozma holds 354 KB of textures); per-pass texture swaps would have to fit in
+  VBlank. Feasible on DSi with the display FIFO from main RAM instead of the second bank; tight on a DS.
+- Split frames (tried for fields, see above): the back part drawn exactly in software and scaled into bank A behind
+  a transparent 3D layer. Correct and as fast as full software in fields. In battles the software-drawn UI shares the
+  PS1 buffer, so the back part must land before it in drawing order yet stay off the 2D layer: that needs either the
+  UI recorded and replayed (as fields do) or a per-pixel "background" mark that later drawing clears (the existing
+  mark plane is set-only and serves additive glows). Fits the DS's memory; the most promising for the original DS.
+- Smarter dropping (only primitives invisible at the 0.8 scale): lossless only for sub-pixel ones; Ozma's stars are
+  2x2 and up, still visible.
