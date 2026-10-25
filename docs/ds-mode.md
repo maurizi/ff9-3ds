@@ -478,6 +478,14 @@ menus, disc 4); it has 16 slots now (16 KB), with no change in time or frames on
 
 World maps are drawn in software (gx_hybrid has no place for them): 140-216 ms per VBlank, about 10x the PS1.
 
+## With input: battle menus and the main menu (2026-10-25)
+
+The 30 random battles again on an original DS, now with `tools/walk_presses.py` input (Cross every 0.75 s opens
+commands, items and targets): 30/30 after the spare-RAM fix (20fb4d0, f9a4ff8). `tools/menu_presses.py` (the main
+menu opened every 450 frames and wandered through): the host ran 100 fields x 3000 frames with it without a crash,
+and an original DS 10 fields x 1500 frames. The main menu costs 56-115 ms per VBlank on an original DS (the Config
+screen at capture: 109 ms): left for the dual-screen redesign, which moves these screens to the bottom screen.
+
 ## 54 battles after the architecture levers (2026-10-25)
 
 The 24 bosses and the 30 random battles again on 0f71760 (UI drawn once a game frame, GTE register file in DTCM,
