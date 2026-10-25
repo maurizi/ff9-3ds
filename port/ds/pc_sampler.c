@@ -6,11 +6,16 @@
 #include <nds.h>
 
 #define MAIN_LO 0x02000000u
-#define MAIN_BUCKETS ((0x022A0000u - MAIN_LO) >> 6)
-#define ITCM_LO 0x01FF8000u
-#define ITCM_BUCKETS (0x8000u >> 6)
+#ifdef PORT_DS_MODE
+#define SHIFT 10  /* 1 KB buckets: 5 KB, what DS mode's heap can spare */
+#else
+#define SHIFT 6
+#endif
+#define MAIN_BUCKETS ((0x022A0000u - MAIN_LO) >> SHIFT)
+#define ITCM_LO 0x01000000u   /* (BlocksDS links ITCM here, __itcm_start) */
+#define ITCM_BUCKETS (0x8000u >> SHIFT)
 /* header: magic, main base, main buckets, ITCM base, ITCM buckets, samples, outside (BIOS waits, other memory) */
-volatile u32 port_pc_header[8] = {0x53504331, MAIN_LO, MAIN_BUCKETS, ITCM_LO, ITCM_BUCKETS, 0, 0, 0};
+volatile u32 port_pc_header[8] = {0x53504331, MAIN_LO, MAIN_BUCKETS, ITCM_LO, ITCM_BUCKETS, 0, 0, SHIFT};
 u16 port_pc_main[MAIN_BUCKETS];
 u16 port_pc_itcm[ITCM_BUCKETS];
 extern u32 __sp_irq[];
@@ -18,19 +23,23 @@ extern u32 __sp_irq[];
 static void sample(void) {
     u32 pc = __sp_irq[-1] - 4;
     port_pc_header[5]++;
-    if (pc - MAIN_LO < (MAIN_BUCKETS << 6)) { u16 *c = &port_pc_main[(pc - MAIN_LO) >> 6]; if (*c != 0xFFFF) ++*c; }
-    else if (pc - ITCM_LO < (ITCM_BUCKETS << 6)) { u16 *c = &port_pc_itcm[(pc - ITCM_LO) >> 6]; if (*c != 0xFFFF) ++*c; }
+    if (pc - MAIN_LO < (MAIN_BUCKETS << SHIFT)) { u16 *c = &port_pc_main[(pc - MAIN_LO) >> SHIFT]; if (*c != 0xFFFF) ++*c; }
+    else if (pc - ITCM_LO < (ITCM_BUCKETS << SHIFT)) { u16 *c = &port_pc_itcm[(pc - ITCM_LO) >> SHIFT]; if (*c != 0xFFFF) ++*c; }
     else port_pc_header[6]++;
 }
 
 /* memset's callers of 16 bytes or more (linked with --wrap=memset): caller, calls, bytes */
+#ifdef PORT_DS_MODE
+#define MEMSET_CALLERS 64
+#else
 #define MEMSET_CALLERS 256
+#endif
 volatile u32 port_pc_memset[MEMSET_CALLERS][3];
 void *__real_memset(void *p, int c, size_t n);
 void *__wrap_memset(void *p, int c, size_t n) {
     if (n >= 16) {
         u32 caller = (u32)__builtin_return_address(0);
-        for (u32 i = (caller >> 1) * 2654435761u >> 24, tries = 0; tries < 8; ++tries, i = (i + 1) & 255)
+        for (u32 i = (caller >> 1) * 2654435761u % MEMSET_CALLERS, tries = 0; tries < 8; ++tries, i = (i + 1) % MEMSET_CALLERS)
             if (port_pc_memset[i][0] == caller || !port_pc_memset[i][0]) {
                 port_pc_memset[i][0] = caller; port_pc_memset[i][1]++; port_pc_memset[i][2] += n;
                 break;

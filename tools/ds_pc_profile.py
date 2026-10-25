@@ -27,6 +27,7 @@ if data[:4] != b'MELN':
     p.error('expected a melonDS state')
 
 symbols = {}
+sizes = {}
 funcs = []
 for line in subprocess.check_output(['objdump', '-t', str(a.elf)], text=True).splitlines():
     m = re.match(r'([0-9a-f]{8}) (.{7}) (\S+)\s+([0-9a-f]{8})\s+(?:\.hidden )?(\S+)$', line)
@@ -35,6 +36,7 @@ for line in subprocess.check_output(['objdump', '-t', str(a.elf)], text=True).sp
     addr, flags, section, size, name = int(m[1], 16), m[2], m[3], int(m[4], 16), m[5]
     if name in ('port_pc_header', 'port_pc_main', 'port_pc_itcm', 'port_pc_memset'):
         symbols[name] = addr
+        sizes[name] = size
     if 'F' not in flags:
         continue
     if section.startswith('.psxovl_') and section != '.psxovl_' + a.overlay and section[len('.psxovl_'):] < '32':
@@ -55,7 +57,9 @@ def ram(addr, size):
 head = struct.unpack('<8I', ram(symbols['port_pc_header'], 32))
 if head[0] != 0x53504331:
     p.error('no sampler header in the state')
-_, main_lo, main_n, itcm_lo, itcm_n, total, outside, _ = head
+_, main_lo, main_n, itcm_lo, itcm_n, total, outside, shift = head
+shift = shift or 6
+bucket = 1 << shift
 counts = collections.Counter()
 detail = []
 
@@ -70,7 +74,7 @@ def attribute(base, n, table):
     for i, c in enumerate(words):
         if not c:
             continue
-        lo, hi = base + i * 64, base + i * 64 + 64
+        lo, hi = base + i * bucket, base + i * bucket + bucket
         k = max(bisect.bisect_right(starts, lo) - 1, 0)
         parts = []
         while k < len(funcs) and funcs[k][0] < hi:
@@ -96,8 +100,9 @@ for name, c in counts.most_common(a.top):
     print(f'{100 * c / total:6.2f}%  {c:9.0f}  {name}')
 
 if 'port_pc_memset' in symbols:
-    rows = struct.unpack('<768I', ram(symbols['port_pc_memset'], 3072))
-    callers = [(rows[i * 3 + 2], rows[i * 3 + 1], rows[i * 3]) for i in range(256) if rows[i * 3]]
+    nrow = sizes.get('port_pc_memset', 3072) // 12
+    rows = struct.unpack('<%dI' % (3 * nrow), ram(symbols['port_pc_memset'], 12 * nrow))
+    callers = [(rows[i * 3 + 2], rows[i * 3 + 1], rows[i * 3]) for i in range(nrow) if rows[i * 3]]
     if callers:
         print('memset callers (16 bytes or more): bytes, calls, caller')
     for nbytes, calls, caller in sorted(callers, key=lambda r: -r[1])[:16]:
@@ -106,7 +111,7 @@ if 'port_pc_memset' in symbols:
 
 if a.detail:
     detail.sort(reverse=True)
-    lines = subprocess.check_output(['addr2line', '-e', str(a.elf)] + ['%x' % (lo + 32) for _, lo in detail[:20]],
+    lines = subprocess.check_output(['addr2line', '-e', str(a.elf)] + ['%x' % (lo + bucket // 2) for _, lo in detail[:20]],
                                     text=True).splitlines()
     print('hottest buckets of', a.detail)
     for (c, lo), line in zip(detail[:20], lines):
