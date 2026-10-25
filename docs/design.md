@@ -459,6 +459,8 @@ don't fit switches its sprites to **block runs** until the mode ends: 16x16-texe
 row's consecutive blocks the scene samples into 256x16 rows, so only what is drawn is held (field 931: 576 KB of
 regions, 334 KB of runs and polygon regions). A sprite's texels are consecutive blocks of one row, so a merged row
 of sprites stays one quad. Fields that fit keep regions: runs cost a texture switch per sprite, 2-3%.
+Lines (Burmecia's rain, field 767) are 3D too: a triangle with two equal vertices, which the DS draws as a one-pixel
+line, clipped to the drawing area; on the 2D layer they had blended with the buffer's key and covered the scene.
 Subtractive and additive blends drawn by the 3D engine are approximated as in battle (a subtractive shadow over a
 character, the commonest case, is in nearly every scene; additive mist over a dark tile can show as a lighter
 square). Scenes hold up to 2774 primitives (median 1012, 90% 1681, 10 of 563 fields over the 3D engine's 2048:
