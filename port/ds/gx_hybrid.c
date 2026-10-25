@@ -359,7 +359,18 @@ int port_native_mesh(const NativeMesh *nm) {
     u32 *xy = (u32 *)(mi + 1);
     u16 *z = (u16 *)(xy + nm->nverts);
     u8 *info = (u8 *)(z + nm->nverts);
-    for (int i = 0; i < nm->nverts; ++i) { xy[i] = nm->sxy[i]; z[i] = (u16)nm->sz[i]; }
+    int bx0 = 1 << 30, by0 = 1 << 30, bx1 = -(1 << 30), by1 = -(1 << 30);
+    for (int i = 0; i < nm->nverts; ++i) {
+        u32 w = nm->sxy[i];
+        xy[i] = w; z[i] = (u16)nm->sz[i];
+        int x = (s16)w, y = (s16)(w >> 16);
+        if (x < bx0) bx0 = x;
+        if (x > bx1) bx1 = x;
+        if (y < by0) by0 = y;
+        if (y > by1) by1 = y;
+    }
+    /* (a model all inside the buffer needs no test per polygon) */
+    int inside = bx0 + b->ofs_x >= 0 && bx1 + b->ofs_x < b->w && by0 + b->ofs_y >= 0 && by1 + b->ofs_y < b->h;
     mi->src = nm->src; mi->uvs = nm->uvs; mi->colors = (const u32 *)nm->colors; mi->bias = (s16)nm->ot_bias;
     mi->xy = xy; mi->z = z; mi->info = info; mi->nuses = 0; mi->kind = MESH_MODEL; mi->untex_abr = 0;
     for (int t = 0; t < 8; ++t) mi->count[t] = nm->count[t];
@@ -368,6 +379,7 @@ int port_native_mesh(const NativeMesh *nm) {
     /* each polygon once: the PS1's culling (NCLIP <= 0 unless double-sided), no area or off the buffer (as
      * hybrid_poly), its size for the budget, the texture word and blend mode it uses and their texels' bounds */
     unsigned polys = 0, vertices = 0;
+    int last_use = 0;
     const u8 *s = nm->src;
     for (int t = 0, k = 0, pi = 0; t < 8; ++t)
         for (k = 0; k < nm->count[t]; ++k, s += mesh_size[t], ++pi) {
@@ -380,15 +392,18 @@ int port_native_mesh(const NativeMesh *nm) {
             info[pi] = 0xFF;
             if (!(f & 2) && nclip <= 0) continue;
             int a2 = mesh_area2(xy, s, t, nclip);
-            if (!a2 || offscreen(b, xy, vi, nv)) continue;
+            if (!a2 || (!inside && offscreen(b, xy, vi, nv))) continue;
             int tier = 0, use = 15, semi = 0;
             while (a2 >= drop_bounds[tier]) ++tier;
             if (t < 4) {
                 u8 tex = MB(s, mesh_tex_at[t]), mode = f & 0xE1;
                 u16 uv[4];
                 mesh_uvs(mi, t, s, uv);
-                for (use = 0; use < mi->nuses; ++use)
-                    if (mi->uses[use].tex == tex && mi->uses[use].mode == mode) break;
+                use = last_use; /* (consecutive polygons nearly always share one) */
+                if (use >= mi->nuses || mi->uses[use].tex != tex || mi->uses[use].mode != mode)
+                    for (use = 0; use < mi->nuses; ++use)
+                        if (mi->uses[use].tex == tex && mi->uses[use].mode == mode) break;
+                last_use = use;
                 if (use == mi->nuses) {
                     if (mi->nuses == MESH_USES) { gxh_stats_mesh_fallback++; return 0; }
                     mi->uses[mi->nuses++] = (MeshUse){nm->tex[tex], tex, mode, (u8)(mode & 0xE0), (u8)(mode & 1), 255, 255, 0,
