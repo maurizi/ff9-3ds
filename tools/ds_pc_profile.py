@@ -21,6 +21,7 @@ p.add_argument('--elf', required=True, type=Path)
 p.add_argument('--overlay', default='0a')
 p.add_argument('--top', type=int, default=40)
 p.add_argument('--detail', help='a function: its buckets with their source lines')
+p.add_argument('--detail-n', type=int, default=20, help='how many of its buckets')
 a = p.parse_args()
 data = a.state.read_bytes()
 if data[:4] != b'MELN':
@@ -113,10 +114,10 @@ if 'port_pc_memset' in symbols:
 
 if a.detail:
     detail.sort(reverse=True)
-    lines = subprocess.check_output(['addr2line', '-e', str(a.elf)] + ['%x' % (lo + 2) for _, lo in detail[:20]],
+    lines = subprocess.check_output(['addr2line', '-e', str(a.elf)] + ['%x' % (lo + 2) for _, lo in detail[:a.detail_n]],
                                     text=True).splitlines()
     print('hottest buckets of', a.detail)
-    for (c, lo), line in zip(detail[:20], lines):
+    for (c, lo), line in zip(detail[:a.detail_n], lines):
         print(f'{100 * c / total:6.2f}%  {lo:08X}  {line.split("/")[-1]}')
 
 if 'port_pc_wait' in symbols:

@@ -274,6 +274,39 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
     return 1;
 }
 
+/* A packet of exactly a texture page (E1) and a 16x16 sprite (SPRT_16, 7C-7F): a field background tile (BgSprt,
+ * MargePrim'd). Both commands as command() runs them, without its dispatch; the font pages' sprites (their glyph
+ * coverage, below) are left to it. 0: not run. */
+int gp0_tpage_sprite16(const unsigned int *w) {
+    unsigned int tp = w[0] & 0xFFFFFF, cmd = w[1] >> 24;
+    if ((tp & 0x10) && (tp & 15) >= 14) return 0; /* (page 896 or 960, 256) */
+    if (!gp0_backend || !gp0_backend->rect) return 0;
+    gp0_state.texpage = tp;
+    psx_display_drawing();
+    psx_vram_generation++;
+    if (!area_hits_valid || area_hits_version != psx_display_watch_version) {
+        area_hits = psx_display_hits(gp0_state.area_x0, gp0_state.area_y0, gp0_state.area_x1 - gp0_state.area_x0 + 1,
+                                     gp0_state.area_y1 - gp0_state.area_y0 + 1);
+        area_hits_version = psx_display_watch_version;
+        area_hits_valid = 1;
+    }
+    if (area_hits) psx_display_generation++;
+    Gp0Mode m;
+    m.textured = 1;
+    m.raw = cmd & 1;
+    m.semi = (cmd >> 1) & 1;
+    m.gouraud = 0;
+    apply_texpage(&m, tp);
+    set_clut(&m, w[3]);
+    Gp0Vtx v;
+    vtx(&v, w[2], w[1]);
+    v.u = w[3] & 0xFF;
+    v.v = (w[3] >> 8) & 0xFF;
+    ++psx_gpu_scene_prims;
+    gp0_backend->rect(&m, &v, 16, 16);
+    return 1;
+}
+
 /* The commands from w on that are drawing primitives (polygons, lines, rectangles) or drawing state (E0 up), up to
  * the first other one: their words used. One loop for a packet's run of them (gpu.c draw_packet). */
 unsigned int gp0_run_plain(const unsigned int *w, unsigned int len) {

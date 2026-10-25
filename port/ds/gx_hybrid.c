@@ -2009,6 +2009,61 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             if (polys >= MAX_POLYS || vertices + src->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
             z = with_meshes ? Z_STEP * ++zc : kk + 1; /* (a field's buffers hold more than 2047) */
             grp = prim_group[kk]; pal = prim_palette[kk];
+            if ((src->flags & (P_RECT | P_TEXTURED | P_SEMI | P_GOURAUD | P_UI | P_TWIN)) == (P_RECT | P_TEXTURED) && src->n == 4) {
+                /* An opaque textured sprite (a field's background tiles): the general path's words, without its
+                 * blending cases. Its fields are read first: stores through wp would reload them. */
+                int depth = src->depth, u0 = src->u[0], v0 = src->v[0], tu, tv;
+                u32 unit, size_bits;
+                if (grp == RUN_GROUP) {
+                    const Run *r = run_holding(STRIP_KEY(depth, 0, src->tx, src->ty, src->clut_x, src->clut_y, v0 >> 4),
+                                               u0 >> 4, src->u[1] >> 4);
+                    if (!r) { gxh_stats_texture_fail++; continue; }
+                    unit = rows[r->row].unit; size_bits = RUN_SIZE_BITS;
+                    tu = (r->bu - r->slot) * 16;
+                    tv = (v0 >> 4) * 16;
+                } else {
+                    const Region *r = grp == 0xFF ? NULL : groups[grp].region;
+                    if (!r) { gxh_stats_texture_fail++; continue; }
+                    if (r->conv) goto general;
+                    unit = r->unit; size_bits = r->size_bits;
+                    tu = (r->x - src->tx) * texels_per_halfword(depth);
+                    tv = r->y - src->ty;
+                }
+                u32 want_image = (u32)(unit * TEX_UNIT / 8) | size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
+                u32 set_palette = ~0u;
+                if (depth < 2) {
+                    if (pal == 0xFF) { gxh_stats_palette_fail++; continue; }
+                    want_image |= 1u << 29;
+                    u32 want_palette = (u32)pal * 512 / 16;
+                    if (want_palette != palette) set_palette = want_palette;
+                }
+                u32 colour;
+                if (src->flags & P_RAW) colour = 0x7FFF;
+                else {
+                    int r = src->r[0] >> 2, g = src->g[0] >> 2, bl = src->b[0] >> 2;
+                    colour = (u32)((r > 31 ? 31 : r) | (g > 31 ? 31 : g) << 5 | (bl > 31 ? 31 : bl) << 10);
+                }
+                u32 xy[4], uv[4];
+                static const u8 order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
+                for (int j = 0; j < 4; ++j) {
+                    int i = order[j];
+                    xy[j] = (u32)(u16)src->x[i] | (u32)(u16)src->y[i] << 16;
+                    uv[j] = (u32)(u16)((src->u[i] - tu + (i & 1)) * 16) | (u32)(u16)((src->v[i] - tv + (i >> 1)) * 16) << 16;
+                }
+                pack_begin();
+                if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); palette = set_palette; }
+                if (want_image != image) { pack(CMD_TEXIMAGE); put(want_image); image = want_image; }
+                if (attr != INITIAL_ATTR) { pack(CMD_POLYATTR); put(INITIAL_ATTR); attr = INITIAL_ATTR; }
+                pack(CMD_BEGIN); put(1);
+                pack_end();
+                put(CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTX16 << 16);
+                put(colour); put(uv[0]); put(xy[0]); put((u32)(u16)z);
+                for (int j = 1; j < 4; ++j) { put(CMD_TEXCOORD | CMD_VTXXY << 8); put(uv[j]); put(xy[j]); }
+                ++polys;
+                vertices += 4;
+                continue;
+            }
+        general:
             copy_prim(&local, src);
         } else {
             break;
@@ -2523,8 +2578,43 @@ static int extend_rect(Buffer *b, const Gp0Mode *m, const Gp0Vtx *c, int w, int 
     return 1;
 }
 
+/* hybrid_rect's field case for its common sprite (a background tile): inside the drawing area, without a texture
+ * window, mask bits or a page wrap, not on the UI pages. Recorded as the general path records it, without its copies
+ * (0: left to it). */
+static int field_sprite(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
+    if (b->soft || gp0_state.twin_mask_x || gp0_state.twin_mask_y || gp0_state.set_mask || gp0_state.check_mask ||
+        b->count >= prims_max || w <= 0 || h <= 0 || ui_page_of(m))
+        return 0;
+    if (m->textured && (v->u + w > 256 || v->v + h > 256)) return 0;
+    if (v->x < gp0_state.area_x0 || v->y < gp0_state.area_y0 || v->x + w > gp0_state.area_x1 + 1 ||
+        v->y + h > gp0_state.area_y1 + 1)
+        return 0;
+    ui_flush();
+    if (extend_rect(b, m, v, w, h)) return 1;
+    note_walk(b);
+    PrimCopy t;
+    Prim *p = &t.p;
+    p->n = 4;
+    p->flags = (u8)((m->textured ? P_TEXTURED : 0) | (m->raw ? P_RAW : 0) | (m->semi ? P_SEMI : 0) | P_RECT |
+                    (gp0_state.texpage & 0x200 ? P_DITHER : 0));
+    p->abr = (u8)m->abr; p->depth = (u8)(m->depth > 2 ? 2 : m->depth);
+    p->tx = (u16)m->tx; p->ty = (u16)m->ty; p->clut_x = (u16)m->clut_x; p->clut_y = (u16)m->clut_y;
+    s16 x0 = (s16)(v->x - b->x), y0 = (s16)(v->y - b->y);
+    p->x[0] = p->x[2] = x0; p->x[1] = p->x[3] = (s16)(x0 + w);
+    p->y[0] = p->y[1] = y0; p->y[2] = p->y[3] = (s16)(y0 + h);
+    u8 r = (u8)(v->r < 0 ? 0 : v->r > 255 ? 255 : v->r), g = (u8)(v->g < 0 ? 0 : v->g > 255 ? 255 : v->g),
+       bl = (u8)(v->b < 0 ? 0 : v->b > 255 ? 255 : v->b);
+    u8 u0 = (u8)v->u, u1 = (u8)(v->u + w - 1), v0 = (u8)v->v, v1 = (u8)(v->v + h - 1);
+    for (int i = 0; i < 4; ++i) { p->r[i] = r; p->g[i] = g; p->b[i] = bl; }
+    p->u[0] = p->u[2] = u0; p->u[1] = p->u[3] = u1;
+    p->v[0] = p->v[1] = v0; p->v[2] = p->v[3] = v1;
+    store_prim(&b->prims[b->count++], &t);
+    return 1;
+}
+
 static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     Buffer *shown, *b = target(&shown);
+    if (b && b != shown && place->field && field_sprite(b, m, v, w, h)) return;
     if (b && b == shown && ui_defer(b, UI_RECT, m, v, 1, w, h)) return;
     ui_flush();
     /* A semi-transparent sprite or tile in the scene is a quad of the 3D layer like a polygon, so it blends with it
