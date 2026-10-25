@@ -518,8 +518,8 @@ and which sprites move there changes as characters move) cost more than it saved
 
 ## Scenes over the 3D engine's budget: options (2026-10-25)
 
-Battles such as Ozma draw ~2800 primitives a scene; the 3D engine takes 2048 polygons and 6144 vertices, and
-`plan_drops` drops the rest (2355 small starfield primitives there): a fidelity loss on DSi and DS alike. Fields over
+Battle scenes can exceed the 3D engine's 2048 polygons and 6144 vertices (Ozma's at frame 1500: 1768 primitives, a
+few over the vertex RAM), and `plan_drops` dropped the excess: a fidelity loss on DSi and DS alike. Fields over
 budget (931, 1812) go software instead, exact but slow. Options considered:
 - Two 3D passes with display capture: pass 1 (the back) captured to a VRAM bank and shown behind pass 2 (BG3), the
   previous complete frame shown from a second bank (VRAM display mode) while pass 1 renders. Needs two of A-D, which
@@ -530,5 +530,10 @@ budget (931, 1812) go software instead, exact but slow. Options considered:
   PS1 buffer, so the back part must land before it in drawing order yet stay off the 2D layer: that needs either the
   UI recorded and replayed (as fields do) or a per-pixel "background" mark that later drawing clears (the existing
   mark plane is set-only and serves additive glows). Fits the DS's memory; the most promising for the original DS.
-- Smarter dropping (only primitives invisible at the 0.8 scale): lossless only for sub-pixel ones; Ozma's stars are
-  2x2 and up, still visible.
+- Smarter dropping (only primitives invisible at the 0.8 scale): lossless only for sub-pixel ones.
+
+Tried: split frames for battles, recording a battle's 2D-layer primitives (opaque sprites, texture windows, lines)
+for replay when the scene is sent, as a field's UI is. 4 bosses matched; 8 more showed missing or damaged windows and
+text (Garuda, Plant Brain, Nova Dragon) and slowdowns up to 60% (Antlion 59 -> 91 ms): reverted. Scenes over the
+budget are rarer than first read (Ozma: 42 primitives over), so dropping stays until the battle UI's replay is
+understood.
