@@ -74,6 +74,15 @@ typedef struct {
 } Buffer;
 
 static Buffer buffers[2];
+
+/* A primitive copied word by word (a struct assignment is a memcpy call) */
+typedef union { Prim p; u32 w[12]; } PrimCopy;
+_Static_assert(sizeof(Prim) == 48, "PrimCopy");
+static inline void copy_prim(PrimCopy *d, const Prim *s) {
+    const u32 *w = (const u32 *)s; /* buffers and Prim are 4-byte aligned */
+    d->w[0] = w[0]; d->w[1] = w[1]; d->w[2] = w[2]; d->w[3] = w[3]; d->w[4] = w[4]; d->w[5] = w[5];
+    d->w[6] = w[6]; d->w[7] = w[7]; d->w[8] = w[8]; d->w[9] = w[9]; d->w[10] = w[10]; d->w[11] = w[11];
+}
 static Buffer *clear_fill; /* the game's fill that's about to land covers this buffer (psx_vram_filled) */
 
 /* Where the scene buffers and the GX chunks live: the resident mode overlay's MIPS code range, which the port never
@@ -657,9 +666,11 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
         for (int i = 0; i < MAX_RUNS; ++i) runs[i].flags &= (u8)~RUN_WANTED;
     }
     for (int k = 0; k < b->count; ++k) {
-        Prim *p = &b->prims[k];
         prim_group[k] = 0xFF;
-        if (!(p->flags & P_TEXTURED) || !in_scene(p, k)) continue;
+        if (!(b->prims[k].flags & P_TEXTURED) || !in_scene(&b->prims[k], k)) continue;
+        PrimCopy local; /* (the stores below can't alias it: emit_scene) */
+        copy_prim(&local, &b->prims[k]);
+        const Prim *p = &local.p;
         int per = texels_per_halfword(p->depth);
         int u0 = p->u[0], u1 = u0, v0 = p->v[0], v1 = v0;
         for (int i = 1; i < p->n; ++i) {
@@ -1174,7 +1185,17 @@ static int translucent_id(const Prim *p, int polys) {
     return id;
 }
 
+/* an untextured additive glow's alpha by mode and brightness: m * 31 / 255 (subtraction twice that, mode 3 a quarter),
+ * at most 31 */
+static u8 glow_alpha[4][256];
+
 static __attribute__((noinline)) void emit_scene(Buffer *b) {
+    if (!glow_alpha[1][255])
+        for (int abr = 0; abr < 4; ++abr)
+            for (int m = 0; m < 256; ++m) {
+                int a = m * 31 * (abr == 2 ? 2 : 1) / (abr == 3 ? 1020 : 255);
+                glow_alpha[abr][m] = (u8)(a > 31 ? 31 : a);
+            }
     memset(recent, 0, sizeof recent);
     u32 attr = INITIAL_ATTR, image = 0, palette = ~0u;
     u32 *wp = chunks[chunk] + chunk_words;
@@ -1186,12 +1207,17 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     int polys = 0, vertices = 0, z = 0;
     plan_drops(b);
     for (int k = 0; k < b->count; ++k) {
-        Prim *p = &b->prims[k];
-        if (!in_scene(p, k)) continue;
+        const Prim *src = &b->prims[k];
+        if (!in_scene(src, k)) continue;
         ++z;
         if (prim_drop[k]) { gxh_stats_dropped++; continue; }
         reserve();
-        if (polys >= MAX_POLYS || vertices + p->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
+        if (polys >= MAX_POLYS || vertices + src->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
+        /* a copy the command words can't alias (with -fno-strict-aliasing every store through wp would reload the
+         * primitive's fields); translucent_id keeps pointers to the buffer's */
+        PrimCopy local;
+        copy_prim(&local, src);
+        const Prim *p = &local.p;
         int tu = 0, tv = 0, additive = 0;
         u32 want_image = 0, set_palette = ~0u; /* state to send with the primitive's BEGIN (~0: unchanged) */
         if (p->flags & P_TEXTURED) {
@@ -1234,7 +1260,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         if (want_image != image) set_image = want_image;
         int alpha = 31, id = 0;
         if (glow) {
-            id = translucent_id(p, polys);
+            id = translucent_id(src, polys);
         } else if (additive) {
             /* the source's brightness (PS1 128 = x1; mode 3 adds a quarter), at most opaque */
             int m = 0;
@@ -1248,14 +1274,14 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             if (alpha > 31) alpha = 31;
             if (!alpha) continue; /* adds nothing (alpha 0 would be wireframe) */
             additive = m;
-            id = translucent_id(p, polys);
+            id = translucent_id(src, polys);
         } else if (p->flags & P_SEMI) {
             alpha = p->abr == 3 ? 8 : p->abr == 1 ? 24 : 16; /* additive: a brighter blend than 50% */
             if (p->abr == 2) {
                 alpha = (p->r[0] + p->g[0] + p->b[0]) * 31 / (3 * 255); /* darkening as black at source luminance */
                 if (!alpha) continue; /* alpha 0 would be wireframe */
             }
-            id = translucent_id(p, polys);
+            id = translucent_id(src, polys);
         }
         u32 want_attr = 3u << 6 | (u32)alpha << 16 | (u32)id << 24;
         /* the state that changed and BEGIN, in one packed group (a primitive skipped above sends nothing and leaves
@@ -1277,8 +1303,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 if (k != i) m = p->r[k] > p->g[k] ? (p->r[k] > p->b[k] ? p->r[k] : p->b[k]) : (p->g[k] > p->b[k] ? p->g[k] : p->b[k]);
                 u32 colour = m && p->abr != 2 ? div31(p->r[k], (u32)m) | div31(p->g[k], (u32)m) << 5 | div31(p->b[k], (u32)m) << 10 : 0;
                 /* subtraction (dst - s, clamped) as dst x (1 - 2s): equal at mid grey, black where the PS1 is */
-                int a = m * 31 * (p->abr == 2 ? 2 : 1) / (p->abr == 3 ? 1020 : 255);
-                if (a > 31) a = 31;
+                int a = glow_alpha[p->abr][m];
                 pack(CMD_COLOR); put(colour);
                 pack(CMD_TEXCOORD); put((u32)(u16)(a * 16 + 8) | (u32)(u16)(4 * 16) << 16);
             } else if (j == 0 || (p->flags & P_GOURAUD)) { pack(CMD_COLOR); put(rgb_for(p, i, additive)); }
