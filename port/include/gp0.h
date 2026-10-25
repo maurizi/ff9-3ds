@@ -47,4 +47,8 @@ unsigned int gp0_run_plain(const unsigned int *w, unsigned int len);
 void psx_gpu_draw_area(int *x, int *y, int *w, int *h);
 void psx_gpu_display_area(int *x, int *y, int *w, int *h);
 
+/* the scene's main OT and the entry of it the OT walk last passed (gpu.c) */
+extern unsigned int *psx_main_ot;
+extern unsigned int psx_main_ot_n, psx_ot_slot, psx_ot_generation;
+
 #endif

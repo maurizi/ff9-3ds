@@ -1,0 +1,7 @@
+# Decomp functions the port wraps: renamed in the one object that defines them (names as linked, after the overlay
+# prefix), so the port defines the original name, every caller reaches the port's, and the port can still call the
+# game's version under the new name. Lines: object (as under nsobj/), old name, new name.
+# Battle model packets: port/game/mesh_native.c draws them natively when the hybrid renderer takes them.
+src_equiv/ovl_0b/mesh_packets o0b_btl_drawMesh o0b_btl_drawMesh_packets
+# Battle background records: the same, port/game/mesh_native.c.
+src_equiv/ovl_0b/background o0b_btlbg_drawRecord o0b_btlbg_drawRecord_packets

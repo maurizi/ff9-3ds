@@ -5,8 +5,9 @@
 #ifndef OVL0A_LAYOUT_H
 #define OVL0A_LAYOUT_H
 #define OVL0A_AT            0xA7000   /* in psx_ram */
-#define OVL0A_FIELD_PRIMS   1450      /* a field scene's primitives, both buffers here (gx_hybrid.c use_place:
-                                         * usually the second goes to native slot 0's free end, and both hold more) */
+#define OVL0A_FIELD_PRIMS   1330      /* a field scene's primitives, both buffers here, with 4 bytes each of tables
+                                         * after the second (gx_hybrid.c use_place: usually the second goes to native
+                                         * slot 0's free end, and both hold more) */
 #define OVL0A_PRIMS_AT_0    0xA60     /* the hybrid's two scene buffers (gx_hybrid.c), 48 bytes a primitive */
 #define OVL0A_PRIMS_AT_1    0x11A40
 #define OVL0A_CODE_END      0x22CCC

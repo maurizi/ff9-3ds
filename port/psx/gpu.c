@@ -471,7 +471,13 @@ u32 *ClearOTag(u32 *ot, int n) {
     return ot;
 }
 
+/* The scene's main OT (the largest ClearOTagR'd, 0x1000 entries and up: battle's 0x1010) and the entry of it the
+ * walk last passed (draw_ot): the hybrid renderer places native meshes among the packets by it (gx_hybrid.c). */
+unsigned int *psx_main_ot;
+unsigned int psx_main_ot_n, psx_ot_slot, psx_ot_generation; /* generation: bumped when the main OT is cleared */
+
 u32 *ClearOTagR(u32 *ot, int n) {
+    if (n >= 0x1000) { psx_main_ot = (unsigned int *)ot; psx_main_ot_n = (unsigned int)n; psx_ot_slot = (unsigned int)n; ++psx_ot_generation; }
     ot[0] = OT_END;
     for (int i = 1; i < n; i++) {
         ot[i] = (u32)&ot[i - 1] & 0xFFFFFF;
@@ -566,6 +572,7 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     while (((u32)p & 0xFFFFFF) != OT_END) {
         if (ram_window && (unsigned char *)p > psx_ram && (unsigned char *)p < psx_ram + PSX_RAM_SIZE)
             while ((unsigned char *)p > psx_ram && *p == (((u32)(p - 1)) & 0xFFFFFF)) --p;
+        if ((unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n) psx_ot_slot = (unsigned int)((unsigned int *)p - psx_main_ot);
         u32 addr = *p & 0xFFFFFF;
         if (((P_TAG *)p)->len) {
             draw_packet(p);

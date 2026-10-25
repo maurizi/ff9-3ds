@@ -289,6 +289,32 @@ The PS1 has four semi-transparency modes. The DS 3D engine only alpha-blends.
    transform runs in hardware. The ARM9 then only does game logic.
 3. **Text and windows**: rendered as 2D tiles (see `dual-screen.md`), not as GPU sprites.
 
+**Battle models native (2026-10-25, first step of item 2).** `btl_drawMesh` is wrapped (config/renames.txt keeps the
+game's version as `o0b_btl_drawMesh_packets`; port/game/mesh_native.c): while the hybrid renderer runs, a mesh is
+kept as its source lists, a copy of its projected vertices (`gte_rtpt_batch`) and the texture words it uses, with
+the buffer the frame's OT is drawn into (`drawEnv[unk8]`: the game builds frame N while its target buffer is still
+shown, btl_endFrame). No packets are written, walked, decoded, recorded or planned one by one. The walk notes the
+main OT entry it is in (gpu.c `psx_ot_slot`; the main OT is the one ClearOTagR clears with 0x1000+ entries); the
+renderer keeps, per 4 entries, how many primitives were recorded when the walk got there. The scene's primitives
+go out at depth 2 (k + 1), then the meshes' polygons with each vertex at 2 rank + 1 for its own OT entry (8 - the
+mesh's bias + SZ / 16), so the depth test puts their pixels among the rest where the PS1 sorted whole polygons into
+the OT. The PS1's culling stays (NCLIP <= 0 unless double-sided, no area). Their polygons count toward the 2048 /
+6144 budget after culling, and the budget drops the smallest first across both kinds (by size tier; within the
+last tier, as many mesh polygons as it takes). Over most of a battle (PROFWIN=1024): d2_b0098 36.3 -> 32.3 ms,
+d1_b0186 33.6 -> 29.8 (11%); the frames match the host's (d1_b0186's spell, where the packet path had drawn a
+model the PS1 doesn't show). Translucent model polygons are collected first and sorted by
+depth into the scene's primitives where the OT had them (the 3D engine draws translucent polygons in the order they
+come; Lani's sphere came out red over the model's ring before that); opaque ones go out after all the scene's.
+Effect models (`btl_drawMeshOffset`) keep their packets. The battle background's records (`btlbg_drawRecord`) take
+the same path: their vertices projected (`gte_rtpt_batch`), each polygon's OT entry by the record's rules (front,
+back, depth sum shifted) kept with the snapshot, colours scaled by the brightness as its GPF does. Mesh polygons get
+the additive whitening's base only (its stacking follows the drawing order, which for them isn't the OT's). The
+renderer's per-primitive tables (10 KB) moved to the mode overlays' dead code with the rank tables (battle) or after
+the field buffers (OVL0A_FIELD_PRIMS 1450 -> 1330 when both are in ovl_0a). The 24 boss fixtures (last 128 frames,
+against the first boss sweep): Beatrix 46.4 -> 32.2, Black Waltz 42.0 -> 30.0, Ozma 99.3 -> 95.1, Lich 90 -> 70, Nova
+Dragon 88 -> 73, Trance Kuja 85 -> 76 (all of 2026-10-25's changes); the fields unchanged. Next: the hardware
+transform with display lists (item 2 proper).
+
 ### 5.4 Polygon budget
 DS: 2048 polygons per frame. PS1 FF9 counts per scene aren't known yet. R9 asks for primitive counts per frame
 from the emulator (field, a dense field, the world map, a normal battle, a summon, Tetra Master). If a scene goes

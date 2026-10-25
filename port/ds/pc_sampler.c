@@ -12,7 +12,7 @@
 #else
 #define MAIN_LO 0x02000000u
 #ifdef PORT_DS_MODE
-#define SHIFT 10  /* 1 KB buckets: 5 KB, what DS mode's heap can spare */
+#define SHIFT 11  /* 2 KB buckets: 2.7 KB, what DS mode's heap can spare */
 #else
 #define SHIFT 6
 #endif

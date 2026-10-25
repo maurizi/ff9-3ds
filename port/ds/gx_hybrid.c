@@ -31,10 +31,24 @@
 #include "psx_mem.h"
 #include "ovl0b_layout.h"
 #include "ovl0a_layout.h"
+#include "native_mesh.h"
+#include "gte.h"
 
 extern unsigned short *psx_vram;
 
 #define MAX_PRIMS 2500   /* recorded; the hardware takes 2048 polygons and 6144 vertices a frame */
+#define BATTLE_PRIMS 2000 /* battle: the rest of each buffer's range holds its native meshes (port_native_mesh) */
+#define MAX_MESHES 64
+#ifndef NATIVE_BG_OFF
+#define NATIVE_BG_OFF 0
+#endif
+#define PRIM_TABLES 4     /* bytes per recorded primitive: prim_group, prim_palette, prim_drop, prim_layer */
+#define RANK_SHIFT 2       /* main-OT entries per rank bucket (note_walk) */
+/* plan_drops drops the smallest first, by twice the area: below 16, then 64, ... */
+static const int drop_bounds[6] = {16, 64, 256, 1024, 4096, 1 << 30};
+#define DROP_TIERS 6
+
+#define RANK_BUCKETS ((0x1010 >> RANK_SHIFT) + 1)
 #define MAX_POLYS 2044
 #define MAX_VERTICES 6140
 
@@ -72,6 +86,17 @@ typedef struct {
     int twin_count;      /* (the dialog windows' borders, 10 or so a scene) */
     u64 touched[64];     /* field: the 8x8 cells (from the buffer's corner) that may differ from the clear value:
                           * the 2D layer skips the others (gxh_present) */
+    /* battle: native meshes (port_native_mesh) */
+    u16 *ranks;          /* per 4 entries of the main OT: primitives recorded when the walk reached them */
+    int last_bucket;     /* the nearest bucket the walk has reached (RANK_BUCKETS: none) */
+    unsigned scene_gen;  /* psx_ot_generation of the walk that drew the scene */
+    int ofs_x, ofs_y;    /* the walk's drawing offset less the buffer's corner */
+    u8 *pool;            /* the meshes' snapshots (NULL: none in this place) */
+    unsigned pool_used, mesh_gen;
+    int meshes;
+    u16 mesh_at[MAX_MESHES]; /* their places in the pool, in drawing order */
+    int mesh_drop;       /* plan_drops: the meshes' polygons below this (twice the area) are dropped, */
+    int mesh_quota_bound, mesh_quota; /* and the first mesh_quota below mesh_quota_bound */
 } Buffer;
 
 static Buffer buffers[2];
@@ -102,7 +127,7 @@ static Buffer *clear_fill; /* the game's fill that's about to land covers this b
 typedef struct { int overlay, field; unsigned int at, prims_at[2], max_prims; } Place;
 static int prims_max;     /* the buffers' capacity (use_place) */
 static const Place places[] = {
-    {0x0B, 0, OVL0B_AT, {OVL0B_PRIMS_AT_0, OVL0B_PRIMS_AT_1}, MAX_PRIMS},
+    {0x0B, 0, OVL0B_AT, {OVL0B_PRIMS_AT_0, OVL0B_PRIMS_AT_1}, BATTLE_PRIMS},
 #ifdef PORT_FIELD_GX
     {0x0A, 1, OVL0A_AT, {OVL0A_PRIMS_AT_0, OVL0A_PRIMS_AT_1}, OVL0A_FIELD_PRIMS},
 #endif
@@ -160,6 +185,8 @@ static void key_fill(Buffer *b) { fill_buffer(b, FIELD_KEY); }
 static void start_scene(Buffer *b, int filled /* the game's fill is about to cover it */) {
     b->shown = 0;
     b->count = 0;
+    b->last_bucket = RANK_BUCKETS;
+    b->scene_gen = ~0u;
     b->submitted = 0;
     b->soft = 0;
     b->polys = 0;
@@ -206,8 +233,22 @@ static int triangle_area(const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
     return (b->x - a->x) * (c->y - a->y) - (b->y - a->y) * (c->x - a->x);
 }
 
+/* Native meshes are placed among the scene's primitives by their OT entry: as the walk reaches each bucket of
+ * RANK_SHIFT entries of the main OT (far to near), the count of primitives recorded so far is its rank. */
+static inline void note_walk(Buffer *b) {
+    if (!b->ranks) return;
+    int q = (int)(psx_ot_slot >> RANK_SHIFT);
+    if (q < b->last_bucket) {
+        for (int i = q; i < b->last_bucket; ++i) b->ranks[i] = (u16)b->count;
+        b->last_bucket = q;
+    }
+    b->scene_gen = psx_ot_generation;
+    b->ofs_x = gp0_state.ofs_x - b->x; b->ofs_y = gp0_state.ofs_y - b->y;
+}
+
 static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (b->count >= prims_max) { gxh_stats_dropped++; return; }
+    note_walk(b);
     PrimCopy t; /* built on the stack (DTCM), stored in bursts */
     Prim *p = &t.p; /* (a triangle's fourth vertex is left as it is: nothing reads it) */
     p->n = (u8)n;
@@ -225,11 +266,262 @@ static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) {
     store_prim(&b->prims[b->count++], &t);
 }
 
+/* ---- native battle meshes (port/game/mesh_native.c) ---------------------------------------------------------
+ *
+ * btl_drawMesh's models come here instead of as PS1 packets: the mesh's source lists, a copy of its projected
+ * vertices and the texture words it uses, kept with the buffer the frame's OT is drawn into. The scene drawn by the
+ * walk of the same frame (psx_ot_generation) emits them after its primitives, each vertex at the depth of the
+ * primitives the walk had recorded when it reached the vertex's OT entry (emit_scene), so the 3D engine's depth
+ * test sorts their pixels among the rest, where the PS1 sorted whole polygons into its OT. The PS1's culling is
+ * kept (NCLIP <= 0, except double-sided). The packets' cost goes: writing them, walking and decoding them,
+ * recording and planning each polygon. */
+#define MESH_USES 16
+#define POOL_BYTES ((MAX_PRIMS - BATTLE_PRIMS) * (int)sizeof(Prim))
+/* a texture word and blend mode a mesh uses: its key (tex, mode), the tpage bits the game ors in, its texels' bounds,
+ * and its plan */
+typedef struct { u32 page; u8 tex, mode, orbits, semi, u0, v0, u1, v1, group, palette; } MeshUse;
+typedef struct {
+    const u8 *src;       /* a model mesh's source lists; a background record (BtlBgRec) */
+    const u16 *uvs;
+    const u32 *colors;
+    const u32 *xy;
+    const u16 *z;        /* a mesh's vertex depths; a record's OT entries per polygon (0xFFFF: not drawn) */
+    u8 kind;             /* MESH_MODEL, MESH_BG */
+    u16 bright;          /* a record's brightness (0x80: as is) */
+    u16 count[8];        /* a record: [0] quads, [1] triangles */
+    s16 bias;
+    u8 nuses, pad;
+    u16 polys, vertices; /* after the PS1's culling (plan_drops) */
+    u16 tier_polys[6], tier_vertices[6]; /* by size (drop_bounds) */
+    MeshUse uses[MESH_USES];
+} MeshInst;
+enum { MESH_MODEL, MESH_BG };
+static const u8 mesh_size[8] = {0x18, 0x14, 0x20, 0x18, 0x18, 0x14, 0x10, 0x0C};
+static const u8 mesh_tex_at[4] = {0x13, 0x06, 0x1D, 0x16}, mesh_flags_at[8] = {0x15, 0x12, 0x1C, 0x0F, 0x14, 0x13, 0x0D, 0x0B};
+#define MW(p, o) (*(const u32 *)((p) + (o)))
+#define MH(p, o) (*(const u16 *)((p) + (o)))
+#define MB(p, o) (*(const u8 *)((p) + (o)))
+int gxh_stats_meshes, gxh_stats_mesh_fallback;
+
+/* the uv words of a textured source polygon (type 0-3) into u[4]/v[4] */
+static inline int mesh_uvs(const MeshInst *mi, int type, const u8 *s, u16 *uv) {
+    switch (type) {
+    case 0: uv[0] = mi->uvs[MW(s, 8) & 0xFFFF]; uv[1] = mi->uvs[MW(s, 8) >> 16];
+            uv[2] = mi->uvs[MW(s, 0xC) & 0xFFFF]; uv[3] = mi->uvs[MW(s, 0xC) >> 16]; return 4;
+    case 1: uv[0] = mi->uvs[MW(s, 0xC) & 0xFFFF]; uv[1] = mi->uvs[MW(s, 0xC) >> 16]; uv[2] = mi->uvs[MH(s, 0x10)]; return 3;
+    case 2: uv[0] = mi->uvs[MW(s, 8) & 0xFFFF]; uv[1] = mi->uvs[MW(s, 8) >> 16];
+            uv[2] = mi->uvs[MW(s, 0xC) & 0xFFFF]; uv[3] = mi->uvs[MW(s, 0xC) >> 16]; return 4;
+    default: uv[0] = mi->uvs[MH(s, 6)]; uv[1] = mi->uvs[MW(s, 8) & 0xFFFF]; uv[2] = mi->uvs[MW(s, 8) >> 16]; return 3;
+    }
+}
+
+/* twice a source polygon's screen area (as prim_area2), given NCLIP of its first three vertices */
+static int mesh_area2(const u32 *xy, const u8 *s, int t, int nclip) {
+    int a = nclip < 0 ? -nclip : nclip;
+    if (!(t & 1)) {
+        u32 c = xy[MW(s, 0) >> 16], d = xy[MW(s, 4) & 0xFFFF], e = xy[MW(s, 4) >> 16];
+        int x1 = (s16)c, y1 = (s16)(c >> 16), x2 = (s16)d, y2 = (s16)(d >> 16), x3 = (s16)e, y3 = (s16)(e >> 16);
+        int q = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
+        a += q < 0 ? -q : q;
+    }
+    return a;
+}
+
+int port_native_mesh(const NativeMesh *nm) {
+    if (!active || place->field) return 0;
+    Buffer *b = buffer_at(nm->draw_x, nm->draw_y);
+    if (!b || !b->pool) return 0;
+    if (b->mesh_gen != psx_ot_generation) { b->mesh_gen = psx_ot_generation; b->pool_used = 0; b->meshes = 0; }
+    unsigned need = (sizeof(MeshInst) + (unsigned)nm->nverts * 6 + 3) & ~3u;
+    if (b->meshes >= MAX_MESHES || b->pool_used + need > POOL_BYTES) { gxh_stats_mesh_fallback++; return 0; }
+    MeshInst *mi = (MeshInst *)(b->pool + b->pool_used);
+    b->mesh_at[b->meshes] = (u16)b->pool_used;
+    mi->src = nm->src; mi->uvs = nm->uvs; mi->colors = (const u32 *)nm->colors; mi->bias = (s16)nm->ot_bias; mi->nuses = 0;
+    mi->kind = MESH_MODEL;
+    for (int t = 0; t < 8; ++t) mi->count[t] = nm->count[t];
+    /* the textures it uses (a texture word and blend mode each) and their texels' bounds */
+    const u8 *s = nm->src;
+    for (int t = 0; t < 4; ++t)
+        for (int k = 0; k < nm->count[t]; ++k, s += mesh_size[t]) {
+            u8 tex = MB(s, mesh_tex_at[t]), mode = MB(s, mesh_flags_at[t]) & 0xE1;
+            u16 uv[4];
+            int n = mesh_uvs(mi, t, s, uv);
+            MeshUse *u = NULL;
+            for (int i = 0; i < mi->nuses; ++i)
+                if (mi->uses[i].tex == tex && mi->uses[i].mode == mode) { u = &mi->uses[i]; break; }
+            if (!u) {
+                if (mi->nuses == MESH_USES) { gxh_stats_mesh_fallback++; return 0; }
+                u = &mi->uses[mi->nuses++];
+                *u = (MeshUse){nm->tex[tex], tex, mode, (u8)(mode & 0xE0), (u8)(mode & 1), 255, 255, 0, 0, 0xFF, 0xFF};
+            }
+            for (int i = 0; i < n; ++i) {
+                u8 cu = (u8)uv[i], cv = (u8)(uv[i] >> 8);
+                if (cu < u->u0) u->u0 = cu;
+                if (cu > u->u1) u->u1 = cu;
+                if (cv < u->v0) u->v0 = cv;
+                if (cv > u->v1) u->v1 = cv;
+            }
+        }
+    u32 *xy = (u32 *)(mi + 1);
+    u16 *z = (u16 *)(xy + nm->nverts);
+    for (int i = 0; i < nm->nverts; ++i) { xy[i] = nm->sxy[i]; z[i] = (u16)nm->sz[i]; }
+    mi->xy = xy; mi->z = z;
+    /* the faces that survive the PS1's culling, for the scene's polygon budget */
+    unsigned polys = 0, vertices = 0;
+    memset(mi->tier_polys, 0, sizeof mi->tier_polys);
+    memset(mi->tier_vertices, 0, sizeof mi->tier_vertices);
+    s = nm->src;
+    for (int t = 0; t < 8; ++t)
+        for (int k = 0; k < nm->count[t]; ++k, s += mesh_size[t]) {
+            u32 a = xy[MW(s, 0) & 0xFFFF], c = xy[MW(s, 0) >> 16], d = xy[t & 1 ? MH(s, 4) : MW(s, 4) & 0xFFFF];
+            int x0 = (s16)a, y0 = (s16)(a >> 16), x1 = (s16)c, y1 = (s16)(c >> 16), x2 = (s16)d, y2 = (s16)(d >> 16);
+            int nclip = x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1;
+            if (!(MB(s, mesh_flags_at[t]) & 2) && nclip <= 0) continue;
+            int nv = t & 1 ? 3 : 4, a2 = mesh_area2(xy, s, t, nclip), tier = 0;
+            while (a2 >= drop_bounds[tier]) ++tier;
+            ++polys;
+            vertices += nv;
+            mi->tier_polys[tier]++;
+            mi->tier_vertices[tier] += (u16)nv;
+        }
+    mi->polys = (u16)polys; mi->vertices = (u16)vertices;
+    b->pool_used += need;
+    b->meshes++;
+    gxh_stats_meshes++;
+    return 1;
+}
+
+/* A background record's polygons: the OT entry each would link into (btlbg_drawRecord's rules), 0xFFFF where it
+ * culls (NCLIP < 0) or skips (depth 0) one. */
+static int bg_entry(u32 flags, u32 shift, u32 z, int quad, int base) {
+    if (flags & 8) return base + 0x3FC / 4;
+    if (flags == 0) {
+        if (quad) {
+            z = (z << shift) & 0xFFFC;
+            if (!z) return -1;
+            if (z & 0xC000) z = 0x3FFC;
+        } else {
+            if (!z) return -1;
+            z = (z << shift) << 2;
+            if (z & 0xC000) z = 0x3FFC;
+        }
+    } else {
+        z >>= quad ? 6 : 4;
+        if (flags & 2) z = 0;
+        else if (z & 0xFF00) z = 0x3FC;
+        else { z <<= 2; if (!z) return -1; }
+    }
+    return base + (int)(z / 4);
+}
+
+int port_native_bg(const NativeBg *r) {
+    if (NATIVE_BG_OFF || !active || place->field || !psx_main_ot) return 0;
+    Buffer *b = buffer_at(r->draw_x, r->draw_y);
+    if (!b || !b->pool) return 0;
+    int base = (int)(r->ot - psx_main_ot);
+    if (base < 0 || base >= (int)psx_main_ot_n) return 0; /* (another OT: keep its packets) */
+    const u8 *rec = r->rec;
+    u32 flags = MH(rec, 0), nv = MH(rec, 2), nquad = MH(rec, 0xC), ntri = MH(rec, 0xE);
+    if (!nv || nv > 128) return 0;
+    if (b->mesh_gen != psx_ot_generation) { b->mesh_gen = psx_ot_generation; b->pool_used = 0; b->meshes = 0; }
+    unsigned need = (sizeof(MeshInst) + nv * 4 + (nquad + ntri) * 2 + 3) & ~3u;
+    if (b->meshes >= MAX_MESHES || b->pool_used + need > POOL_BYTES) { gxh_stats_mesh_fallback++; return 0; }
+    MeshInst *mi = (MeshInst *)(b->pool + b->pool_used);
+    u32 *xy = (u32 *)(mi + 1);
+    u16 *oti = (u16 *)(xy + nv);
+    /* the vertices through RTPT's projection (btlbg_project: SZ >> 4 for the depths), the last three again
+     * through the GTE so its registers end as the game's loop leaves them */
+    u32 pair[2 * 6], sz[128];
+    for (u32 i = 0; i < nv; i += 6) {
+        for (int k = 0; k < 6; ++k) {
+            const u8 *v = r->verts + (i + k) * 6;
+            pair[2 * k] = (u32)(v[0] | v[1] << 8) | (u32)(v[2] | v[3] << 8) << 16;
+            pair[2 * k + 1] = (u32)(v[4] | v[5] << 8);
+        }
+        gte_rtpt_batch((const gte_u32 *)pair, 6, (gte_u32 *)&xy[i], (gte_u32 *)&sz[i]);
+    }
+    for (int k = 0; k < 3; ++k) { psx_gte.d[2 * k] = pair[6 + 2 * k]; psx_gte.d[2 * k + 1] = pair[7 + 2 * k]; }
+    gte_cmd(0x0280030);
+    const u32 *col = (const u32 *)(rec + MH(rec, 6));
+    const u8 *idx = rec + MH(rec, 8), *uv = rec + MH(rec, 0xA);
+    mi->src = rec; mi->uvs = NULL; mi->colors = col; mi->xy = xy; mi->z = oti; mi->kind = MESH_BG;
+    mi->bright = (u16)r->bright; mi->bias = 0; mi->nuses = 0;
+    memset(mi->count, 0, sizeof mi->count);
+    mi->count[0] = (u16)nquad; mi->count[1] = (u16)ntri;
+    memset(mi->tier_polys, 0, sizeof mi->tier_polys);
+    memset(mi->tier_vertices, 0, sizeof mi->tier_vertices);
+    unsigned polys = 0, vertices = 0;
+    for (u32 k = 0; k < nquad + ntri; ++k) {
+        int quad = k < nquad;
+        const u8 *ix = quad ? idx + k * 8 : idx + nquad * 8 + (k - nquad) * 6;
+        const u8 *uw = quad ? uv + k * 8 : uv + nquad * 8 + (k - nquad) * 6;
+        u32 v0 = MH(ix, 0) / 4, v1 = MH(ix, 2) / 4, v2 = MH(ix, 4) / 4, v3 = quad ? MH(ix, 6) / 4 : 0;
+        int x0 = (s16)xy[v0], y0 = (s16)(xy[v0] >> 16), x1 = (s16)xy[v1], y1 = (s16)(xy[v1] >> 16);
+        int x2 = (s16)xy[v2], y2 = (s16)(xy[v2] >> 16);
+        int nclip = x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1;
+        oti[k] = 0xFFFF;
+        if (nclip < 0) continue;
+        u32 z0 = (u16)(sz[v0] >> 4), z1 = (u16)(sz[v1] >> 4), z2 = (u16)(sz[v2] >> 4);
+        u32 z = quad ? z0 + z1 + z2 + (flags & 8 ? 0 : (u16)(sz[v3] >> 4)) : (((z0 + z1) >> 1) + z2) >> 1;
+        int e = bg_entry(flags, r->shift, z, quad, base);
+        if (e < 0) continue;
+        if (e >= (int)psx_main_ot_n) e = (int)psx_main_ot_n - 1;
+        oti[k] = (u16)e;
+        /* the texture word and blend mode it uses, and its texels' bounds */
+        u32 c = col[k];
+        u8 tex = (u8)((c >> 24) & 0x1F), mode = (u8)((c >> 24) & 0xE0);
+        MeshUse *u = NULL;
+        for (int i = 0; i < mi->nuses; ++i)
+            if (mi->uses[i].tex == tex && mi->uses[i].mode == mode) { u = &mi->uses[i]; break; }
+        if (!u) {
+            if (mi->nuses == MESH_USES) { gxh_stats_mesh_fallback++; return 0; }
+            u = &mi->uses[mi->nuses++];
+            *u = (MeshUse){r->textab[tex], tex, mode, (u8)((c >> 25) & 0x60), (u8)((c >> 29) & 1), 255, 255, 0, 0,
+                           0xFF, 0xFF};
+        }
+        for (int i = 0; i < (quad ? 4 : 3); ++i) {
+            u16 w = MH(uw, 2 * i);
+            u8 cu = (u8)w, cv = (u8)(w >> 8);
+            if (cu < u->u0) u->u0 = cu;
+            if (cu > u->u1) u->u1 = cu;
+            if (cv < u->v0) u->v0 = cv;
+            if (cv > u->v1) u->v1 = cv;
+        }
+        int a2 = nclip, tier = 0, nvx = quad ? 4 : 3;
+        if (quad) {
+            int x3 = (s16)xy[v3], y3 = (s16)(xy[v3] >> 16), q = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
+            a2 += q < 0 ? -q : q;
+        }
+        while (a2 >= drop_bounds[tier]) ++tier;
+        ++polys;
+        vertices += (unsigned)nvx;
+        mi->tier_polys[tier]++;
+        mi->tier_vertices[tier] += (u16)nvx;
+    }
+    mi->polys = (u16)polys; mi->vertices = (u16)vertices;
+    b->mesh_at[b->meshes] = (u16)b->pool_used;
+    b->pool_used += need;
+    b->meshes++;
+    gxh_stats_meshes++;
+    return 1;
+}
+
+static inline MeshInst *mesh_at(Buffer *b, int m) { return (MeshInst *)(b->pool + b->mesh_at[m]); }
+
+/* A textured use's texture page as GP0 sees it: btl_drawMesh and btlbg_drawRecord or blend bits into the tpage. */
+static inline void use_page(const MeshUse *u, Prim *p) {
+    u32 tp = (u->page & 0xFFFF) | u->orbits, clut = u->page >> 16;
+    p->tx = (u16)((tp & 15) * 64); p->ty = (u16)(((tp >> 4) & 1) * 256);
+    p->abr = (u8)((tp >> 5) & 3);
+    p->depth = (u8)((tp >> 7) & 3); if (p->depth == 3) p->depth = 2;
+    p->clut_x = (u16)((clut & 0x3F) * 16); p->clut_y = (u16)((clut >> 6) & 0x1FF);
+}
+
 /* Clip against the drawing area (the 3D engine only clips to the viewport). */
 /* Field: draw b's primitives [from, to) in software into PS1 VRAM, as the game drew them (only the UI pages' with
  * ui_only), exactly: whole-buffer drawing area, the dithering each was drawn with, no mask bits or texture window
  * (scenes with those go software when they appear). */
-static u8 prim_layer[];
+static u8 *prim_layer;
 static void replay(Buffer *b, int from, int to, int layer /* -1: all */) {
     Gp0State saved = gp0_state;
     gp0_state.area_x0 = b->x; gp0_state.area_y0 = b->y;
@@ -736,8 +1028,8 @@ static void upload_run(const Run *r, u8 *base) {
 typedef struct { int depth, tx, ty, x0, y0, x1, y1; Region *region; int conv, cx, cy; } Group;
 static Group groups[MAX_GROUPS];
 static int group_count;
-static u8 prim_group[MAX_PRIMS];
-static u8 prim_palette[MAX_PRIMS];
+/* per recorded primitive (prim_tables: in the resident mode overlay's dead range, use_place) */
+static u8 *prim_group, *prim_palette;
 
 /* hints for plan_textures' searches: the group or palette slot a key's hash last found (checked before use) */
 static u8 group_hash[256], palette_hash[256];
@@ -745,8 +1037,97 @@ static u8 group_hash[256], palette_hash[256];
 /* Which layer each primitive goes to: the 3D engine (all of a battle's), or in a field the software background layer
  * or the 2D layer (field_layers). */
 enum { L_3D, L_UI, L_ADD /* field: an additive primitive, drawn exactly in software into the added layer */ };
-static u8 prim_layer[MAX_PRIMS];
 static inline int in_scene(const Prim *p, int k) { (void)p; return prim_layer[k] == L_3D; }
+
+/* One textured primitive's texture group and palette slot (0xFF: none) for plan_textures. */
+static __attribute__((noinline)) void plan_prim(const Prim *p, int use_runs, int *last_group, int *last_palette, u8 *group_out,
+                             u8 *palette_out) {
+    *group_out = 0xFF;
+    *palette_out = 0xFF;
+    int sh = texel_shift(p->depth);
+    int u0 = p->u[0], u1 = u0, v0 = p->v[0], v1 = v0;
+    for (int i = 1; i < p->n; ++i) {
+        if (p->u[i] < u0) u0 = p->u[i];
+        if (p->u[i] > u1) u1 = p->u[i];
+        if (p->v[i] < v0) v0 = p->v[i];
+        if (p->v[i] > v1) v1 = p->v[i];
+    }
+    /* Additive polygons (modes 1, 3) use a 15-bit copy through their CLUT whose dark texels are transparent:
+     * under alpha blending a black background would darken what an additive one leaves alone. */
+    int conv = (p->flags & P_SEMI) && p->abr != 0; /* modes 1-3: brightness as alpha (conv_upload) */
+    if (use_runs && (p->flags & P_RECT) && !(conv && p->depth == 2) && v0 >> 4 == v1 >> 4 &&
+        need_blocks(STRIP_KEY(p->depth, conv, p->tx, p->ty, p->clut_x, p->clut_y, v0 >> 4), u0 >> 4, u1 >> 4)) {
+        *group_out = RUN_GROUP;
+        goto palette;
+    }
+    int x0, x1, y0, y1;
+    if (conv) { /* effect-sized: the texels' own box, in 8-texel steps */
+        u0 &= ~7; u1 |= 7;
+        x0 = p->tx + (u0 >> sh); x1 = p->tx + (u1 >> sh); y0 = p->ty + (v0 & ~7); y1 = p->ty + (v1 | 7);
+    } else {
+        /* Stable regions: U and V in 64-texel steps, so a page keeps its region (and copies nothing) while the
+         * camera moves over it, without holding the parts of the page no primitive uses. */
+        u0 &= ~63; u1 |= 63; v0 &= ~63; v1 |= 63;
+        x0 = p->tx + (u0 >> sh); x1 = p->tx + (u1 >> sh); y0 = p->ty + v0; y1 = p->ty + v1;
+    }
+    /* consecutive primitives nearly always share a page and CLUT: try the last match first */
+#define SAME_GROUP(q) ((q).depth == p->depth && (q).tx == p->tx && (q).ty == p->ty && (q).conv == conv && \
+                   (!conv || p->depth == 2 || ((q).cx == p->clut_x && (q).cy == p->clut_y)))
+    int g = *last_group;
+    if (g >= group_count || !SAME_GROUP(groups[g])) {
+        /* then the group this key last mapped to (a hash of page, depth and CLUT), then a search */
+        unsigned h = (p->tx >> 6 ^ p->ty >> 4 ^ p->depth << 4 ^ conv << 6 ^ p->clut_x >> 4 ^ p->clut_y * 7) & 255;
+        g = group_hash[h];
+        if (g >= group_count || !SAME_GROUP(groups[g])) {
+            for (g = 0; g < group_count; ++g)
+                if (SAME_GROUP(groups[g])) break;
+            if (g < group_count) group_hash[h] = (u8)g;
+            else if (group_count < MAX_GROUPS) group_hash[h] = (u8)group_count;
+        }
+    }
+#undef SAME_GROUP
+    *last_group = g;
+    if (g == group_count) {
+        if (group_count == MAX_GROUPS) return;
+        groups[group_count++] = (Group){p->depth, p->tx, p->ty, x0, y0, x1, y1, NULL, conv, p->clut_x, p->clut_y};
+    } else {
+        Group *q = &groups[g];
+        if (x0 < q->x0) q->x0 = x0;
+        if (x1 > q->x1) q->x1 = x1;
+        if (y0 < q->y0) q->y0 = y0;
+        if (y1 > q->y1) q->y1 = y1;
+    }
+    *group_out = (u8)g;
+palette:
+    if (p->depth < 2) {
+        int count = p->depth ? 256 : 16, s = *last_palette, empty = -1;
+        Palette *lq = &palettes[s];
+        if (!(lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count)) {
+            /* then the slot this CLUT last had, then a search (which also finds the first free slot) */
+            unsigned h = (p->clut_x >> 4 ^ p->clut_y * 13) & 255;
+            s = palette_hash[h];
+            lq = &palettes[s];
+            if (!(s < PAL_SLOTS && lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count)) {
+                for (s = 0; s < PAL_SLOTS; ++s) {
+                    Palette *q = &palettes[s];
+                    if (q->used && q->x == p->clut_x && q->y == p->clut_y && q->count >= count) break;
+                    if (!q->used && empty < 0) empty = s;
+                }
+                if (s < PAL_SLOTS) palette_hash[h] = (u8)s;
+            }
+        }
+        if (s == PAL_SLOTS) {
+            if (empty < 0)
+                for (int t = 0; t < PAL_SLOTS; ++t) if (!palettes[t].wanted) { empty = t; break; }
+            if (empty < 0) return;
+            s = empty;
+            palettes[s] = (Palette){1, p->clut_x, p->clut_y, count, 1, 0};
+        }
+        palettes[s].wanted = 1;
+        *palette_out = (u8)s;
+        *last_palette = s;
+    }
+}
 
 static __attribute__((noinline)) int plan_textures(Buffer *b) {
     int last_group = 0, last_palette = 0;
@@ -764,92 +1145,21 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
         if (!(b->prims[k].flags & P_TEXTURED) || !in_scene(&b->prims[k], k)) continue;
         PrimCopy local; /* (the stores below can't alias it: emit_scene) */
         copy_prim(&local, &b->prims[k]);
-        const Prim *p = &local.p;
-        int sh = texel_shift(p->depth);
-        int u0 = p->u[0], u1 = u0, v0 = p->v[0], v1 = v0;
-        for (int i = 1; i < p->n; ++i) {
-            if (p->u[i] < u0) u0 = p->u[i];
-            if (p->u[i] > u1) u1 = p->u[i];
-            if (p->v[i] < v0) v0 = p->v[i];
-            if (p->v[i] > v1) v1 = p->v[i];
-        }
-        /* Additive polygons (modes 1, 3) use a 15-bit copy through their CLUT whose dark texels are transparent:
-         * under alpha blending a black background would darken what an additive one leaves alone. */
-        int conv = (p->flags & P_SEMI) && p->abr != 0; /* modes 1-3: brightness as alpha (conv_upload) */
-        if (use_runs && (p->flags & P_RECT) && !(conv && p->depth == 2) && v0 >> 4 == v1 >> 4 &&
-            need_blocks(STRIP_KEY(p->depth, conv, p->tx, p->ty, p->clut_x, p->clut_y, v0 >> 4), u0 >> 4, u1 >> 4)) {
-            prim_group[k] = RUN_GROUP;
-            goto palette;
-        }
-        int x0, x1, y0, y1;
-        if (conv) { /* effect-sized: the texels' own box, in 8-texel steps */
-            u0 &= ~7; u1 |= 7;
-            x0 = p->tx + (u0 >> sh); x1 = p->tx + (u1 >> sh); y0 = p->ty + (v0 & ~7); y1 = p->ty + (v1 | 7);
-        } else {
-            /* Stable regions: U and V in 64-texel steps, so a page keeps its region (and copies nothing) while the
-             * camera moves over it, without holding the parts of the page no primitive uses. */
-            u0 &= ~63; u1 |= 63; v0 &= ~63; v1 |= 63;
-            x0 = p->tx + (u0 >> sh); x1 = p->tx + (u1 >> sh); y0 = p->ty + v0; y1 = p->ty + v1;
-        }
-        /* consecutive primitives nearly always share a page and CLUT: try the last match first */
-#define SAME_GROUP(q) ((q).depth == p->depth && (q).tx == p->tx && (q).ty == p->ty && (q).conv == conv && \
-                       (!conv || p->depth == 2 || ((q).cx == p->clut_x && (q).cy == p->clut_y)))
-        int g = last_group;
-        if (g >= group_count || !SAME_GROUP(groups[g])) {
-            /* then the group this key last mapped to (a hash of page, depth and CLUT), then a search */
-            unsigned h = (p->tx >> 6 ^ p->ty >> 4 ^ p->depth << 4 ^ conv << 6 ^ p->clut_x >> 4 ^ p->clut_y * 7) & 255;
-            g = group_hash[h];
-            if (g >= group_count || !SAME_GROUP(groups[g])) {
-                for (g = 0; g < group_count; ++g)
-                    if (SAME_GROUP(groups[g])) break;
-                if (g < group_count) group_hash[h] = (u8)g;
-                else if (group_count < MAX_GROUPS) group_hash[h] = (u8)group_count;
-            }
-        }
-#undef SAME_GROUP
-        last_group = g;
-        if (g == group_count) {
-            if (group_count == MAX_GROUPS) continue;
-            groups[group_count++] = (Group){p->depth, p->tx, p->ty, x0, y0, x1, y1, NULL, conv, p->clut_x, p->clut_y};
-        } else {
-            Group *q = &groups[g];
-            if (x0 < q->x0) q->x0 = x0;
-            if (x1 > q->x1) q->x1 = x1;
-            if (y0 < q->y0) q->y0 = y0;
-            if (y1 > q->y1) q->y1 = y1;
-        }
-        prim_group[k] = (u8)g;
-    palette:
-        prim_palette[k] = 0xFF;
-        if (p->depth < 2) {
-            int count = p->depth ? 256 : 16, s = last_palette, empty = -1;
-            Palette *lq = &palettes[s];
-            if (!(lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count)) {
-                /* then the slot this CLUT last had, then a search (which also finds the first free slot) */
-                unsigned h = (p->clut_x >> 4 ^ p->clut_y * 13) & 255;
-                s = palette_hash[h];
-                lq = &palettes[s];
-                if (!(s < PAL_SLOTS && lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count)) {
-                    for (s = 0; s < PAL_SLOTS; ++s) {
-                        Palette *q = &palettes[s];
-                        if (q->used && q->x == p->clut_x && q->y == p->clut_y && q->count >= count) break;
-                        if (!q->used && empty < 0) empty = s;
-                    }
-                    if (s < PAL_SLOTS) palette_hash[h] = (u8)s;
-                }
-            }
-            if (s == PAL_SLOTS) {
-                if (empty < 0)
-                    for (int t = 0; t < PAL_SLOTS; ++t) if (!palettes[t].wanted) { empty = t; break; }
-                if (empty < 0) continue;
-                s = empty;
-                palettes[s] = (Palette){1, p->clut_x, p->clut_y, count, 1, 0};
-            }
-            palettes[s].wanted = 1;
-            prim_palette[k] = (u8)s;
-            last_palette = s;
-        }
+        plan_prim(&local.p, use_runs, &last_group, &last_palette, &prim_group[k], &prim_palette[k]);
     }
+    /* the native meshes' textures: each use as a primitive covering its texels */
+    if (b->meshes && b->mesh_gen == b->scene_gen)
+        for (int m = 0; m < b->meshes; ++m) {
+            MeshInst *mi = mesh_at(b, m);
+            for (int i = 0; i < mi->nuses; ++i) {
+                MeshUse *u = &mi->uses[i];
+                Prim q;
+                q.n = 4; q.flags = (u8)(P_TEXTURED | (u->semi ? P_SEMI : 0));
+                use_page(u, &q);
+                q.u[0] = q.u[2] = u->u0; q.u[1] = q.u[3] = u->u1; q.v[0] = q.v[1] = u->v0; q.v[2] = q.v[3] = u->v1;
+                plan_prim(&q, 0, &last_group, &last_palette, &u->group, &u->palette);
+            }
+        }
     /* Keep regions that already hold a group's texels; place the rest, largest first, after freeing the unwanted.
      * If that fails (fragmentation), start the texture memory over and place every group largest first. */
     int missing = 0;
@@ -1211,20 +1521,42 @@ static int prim_area2(const Prim *p) {
  * primitives from the start of the drawing order: in painter's order that is the far scene, whose small pieces are
  * the least visible and often covered later. Size alone would take the nearest characters, whose models are many
  * tiny triangles drawn last. The size bound grows only while the budget isn't met. */
-static u8 prim_drop[MAX_PRIMS];
+static u8 *prim_drop;
 static void plan_drops(Buffer *b) {
     int vertices = 0, prims = 0;
     for (int k = 0; k < b->count; ++k) if (in_scene(&b->prims[k], k)) vertices += b->prims[k].n, ++prims;
+    if (b->meshes && b->mesh_gen == b->scene_gen) /* the native meshes' polygons */
+        for (int m = 0; m < b->meshes; ++m) {
+            const MeshInst *mi = mesh_at(b, m);
+            prims += mi->polys;
+            vertices += mi->vertices;
+        }
+
     memset(prim_drop, 0, b->count);
     int over_p = prims - MAX_POLYS, over_v = vertices - MAX_VERTICES;
-    static const int bounds[] = {16, 64, 256, 1024, 4096, 1 << 30}; /* twice the area */
-    for (unsigned t = 0; t < sizeof bounds / sizeof *bounds && (over_p > 0 || over_v > 0); ++t)
+    int meshes = b->meshes && b->mesh_gen == b->scene_gen;
+    b->mesh_drop = 0; b->mesh_quota = 0; b->mesh_quota_bound = 0;
+    for (int t = 0; t < DROP_TIERS && (over_p > 0 || over_v > 0); ++t) {
         for (int k = 0; k < b->count && (over_p > 0 || over_v > 0); ++k)
-            if (!prim_drop[k] && in_scene(&b->prims[k], k) && prim_area2(&b->prims[k]) < bounds[t]) {
+            if (!prim_drop[k] && in_scene(&b->prims[k], k) && prim_area2(&b->prims[k]) < drop_bounds[t]) {
                 prim_drop[k] = 1;
                 --over_p;
                 over_v -= b->prims[k].n;
             }
+        if (meshes && (over_p > 0 || over_v > 0)) { /* then the meshes' polygons of that size, as many as it takes */
+            int tp = 0, tv = 0;
+            for (int m = 0; m < b->meshes; ++m) { tp += mesh_at(b, m)->tier_polys[t]; tv += mesh_at(b, m)->tier_vertices[t]; }
+            int need = over_p, by_v = tp ? (over_v * tp + tv - 1) / tv : 0;
+            if (by_v > need) need = by_v;
+            if (need >= tp) { /* the whole tier */
+                b->mesh_drop = drop_bounds[t];
+                over_p -= tp; over_v -= tv;
+            } else if (need > 0) {
+                b->mesh_quota_bound = drop_bounds[t]; b->mesh_quota = need;
+                over_p -= need; over_v -= tp ? need * tv / tp : 0;
+            }
+        }
+    }
 }
 
 /* Translucent polygons with one ID don't blend over each other. Each gets its own, so overlapping layers add up,
@@ -1283,6 +1615,199 @@ static int translucent_id(const Prim *p, int polys) {
     return id;
 }
 
+/* The native meshes' polygons one at a time, as GP0 would have recorded their packets (btl_drawMesh), with
+ * each vertex's depth (emit_scene). Faces the PS1 culls (NCLIP <= 0 unless double-sided) and zero-area ones
+ * (hybrid_poly) are skipped. */
+typedef struct { Buffer *b; int m, t, k; MeshInst *mi; const u8 *s; int abr; } MeshIter;
+
+static inline int sext11i(u32 v) { return (int)(v & 0x7FF) - (int)((v & 0x400) << 1); }
+
+static inline u16 mesh_rank_z(const Buffer *b, int e) {
+    int q = e >> RANK_SHIFT;
+    int rank = q >= b->last_bucket ? b->ranks[q] : b->count;
+    return (u16)(2 * rank + 1);
+}
+
+/* A background record's next polygon (1), one it skips (0) or its end (-1): btlbg_drawRecord's POLY_FT4/FT3,
+ * colours scaled by the brightness as its GPF does. */
+static int next_bg_poly(MeshIter *it, const MeshInst *mi, Prim *p, u16 *zv, u8 *group, u8 *palette) {
+    const Buffer *b = it->b;
+    int nquad = mi->count[0], k = it->k++;
+    if (k >= nquad + mi->count[1]) return -1;
+    if (mi->z[k] == 0xFFFF) return 0;
+    const u8 *rec = mi->src, *idx = rec + MH(rec, 8), *uvs = rec + MH(rec, 0xA);
+    int quad = k < nquad, n = quad ? 4 : 3;
+    const u8 *ix = quad ? idx + k * 8 : idx + nquad * 8 + (k - nquad) * 6;
+    const u8 *uw = quad ? uvs + k * 8 : uvs + nquad * 8 + (k - nquad) * 6;
+    u32 v[4];
+    for (int i = 0; i < n; ++i) v[i] = MH(ix, 2 * i) / 4;
+    if (b->mesh_drop || b->mesh_quota) {
+        int x0 = (s16)mi->xy[v[0]], y0 = (s16)(mi->xy[v[0]] >> 16), x1 = (s16)mi->xy[v[1]], y1 = (s16)(mi->xy[v[1]] >> 16);
+        int x2 = (s16)mi->xy[v[2]], y2 = (s16)(mi->xy[v[2]] >> 16);
+        int a2 = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
+        if (a2 < 0) a2 = -a2;
+        if (quad) {
+            int x3 = (s16)mi->xy[v[3]], y3 = (s16)(mi->xy[v[3]] >> 16), q = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
+            a2 += q < 0 ? -q : q;
+        }
+        if (a2 < it->b->mesh_drop) { gxh_stats_dropped++; return 0; }
+        if (it->b->mesh_quota && a2 < it->b->mesh_quota_bound) { it->b->mesh_quota--; gxh_stats_dropped++; return 0; }
+    }
+    u32 c = mi->colors[k];
+    u8 tex = (u8)((c >> 24) & 0x1F), mode = (u8)((c >> 24) & 0xE0);
+    const MeshUse *u = NULL;
+    for (int q = 0; q < mi->nuses; ++q)
+        if (mi->uses[q].tex == tex && mi->uses[q].mode == mode) { u = &mi->uses[q]; break; }
+    if (!u) return 0;
+    p->n = (u8)n;
+    p->flags = (u8)(P_TEXTURED | (c & 0x20000000 ? P_SEMI : 0));
+    use_page(u, p);
+    *group = u->group; *palette = u->palette;
+    u32 r = c & 0xFF, g = (c >> 8) & 0xFF, bl = (c >> 16) & 0xFF;
+    if (mi->bright != 0x80) {
+        u32 br = mi->bright;
+        r = r * br > 0x7FFF ? 0x7FFF >> 7 : r * br >> 7;
+        g = g * br > 0x7FFF ? 0x7FFF >> 7 : g * br >> 7;
+        bl = bl * br > 0x7FFF ? 0x7FFF >> 7 : bl * br >> 7;
+    }
+    u16 z = mesh_rank_z(b, mi->z[k]);
+    for (int i = 0; i < n; ++i) {
+        u32 xy = mi->xy[v[i]];
+        p->x[i] = (s16)(sext11i(xy) + b->ofs_x);
+        p->y[i] = (s16)(sext11i(xy >> 16) + b->ofs_y);
+        p->r[i] = (u8)r; p->g[i] = (u8)g; p->b[i] = (u8)bl;
+        u16 w = MH(uw, 2 * i);
+        p->u[i] = (u8)w; p->v[i] = (u8)(w >> 8);
+        zv[i] = z;
+    }
+    return 1;
+}
+
+static int next_mesh_poly(MeshIter *it, Prim *p, u16 *zv, u8 *group, u8 *palette) {
+    Buffer *b = it->b;
+    for (;;) {
+        if (!it->mi) {
+            if (it->m >= b->meshes) return 0;
+            it->mi = mesh_at(b, it->m++);
+            it->t = 0; it->k = 0; it->s = it->mi->src; it->abr = 0;
+        }
+        MeshInst *mi = it->mi;
+        if (mi->kind == MESH_BG) {
+            int r = next_bg_poly(it, mi, p, zv, group, palette);
+            if (r < 0) { it->mi = NULL; continue; }
+            if (!r) continue;
+            return 1;
+        }
+        while (it->t < 8 && it->k >= mi->count[it->t]) { it->t++; it->k = 0; }
+        if (it->t == 8) { it->mi = NULL; continue; }
+        int t = it->t;
+        const u8 *s = it->s;
+        it->s += mesh_size[t];
+        it->k++;
+        u32 i[4];
+        int quad = !(t & 1);
+        i[0] = MW(s, 0) & 0xFFFF; i[1] = MW(s, 0) >> 16;
+        if (quad) { i[2] = MW(s, 4) & 0xFFFF; i[3] = MW(s, 4) >> 16; } else i[2] = MH(s, 4);
+        u8 f = MB(s, mesh_flags_at[t]);
+        u32 xy0 = mi->xy[i[0]], xy1 = mi->xy[i[1]], xy2 = mi->xy[i[2]];
+        int x0 = (s16)xy0, y0 = (s16)(xy0 >> 16), x1 = (s16)xy1, y1 = (s16)(xy1 >> 16), x2 = (s16)xy2, y2 = (s16)(xy2 >> 16);
+        int nclip = x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1;
+        if (!(f & 2) && nclip <= 0) continue; /* the PS1's culling */
+        if (!nclip) { /* hybrid_poly drops a polygon without area (a quad: both its triangles) */
+            if (!quad) continue;
+            u32 xy3 = mi->xy[i[3]];
+            int x3 = (s16)xy3, y3 = (s16)(xy3 >> 16);
+            if (!((x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1))) continue;
+        }
+        if (b->mesh_drop || b->mesh_quota) {
+            int a2 = mesh_area2(mi->xy, s, t, nclip);
+            if (a2 < b->mesh_drop) { gxh_stats_dropped++; continue; }
+            if (b->mesh_quota && a2 < b->mesh_quota_bound) { b->mesh_quota--; gxh_stats_dropped++; continue; }
+        }
+        int n = quad ? 4 : 3;
+        p->n = (u8)n;
+        u32 col[4];
+        p->flags = 0;
+        *group = 0xFF; *palette = 0xFF;
+        if (t < 4) { /* textured */
+            u8 tex = MB(s, mesh_tex_at[t]), mode = f & 0xE1;
+            const MeshUse *u = NULL;
+            for (int q = 0; q < mi->nuses; ++q)
+                if (mi->uses[q].tex == tex && mi->uses[q].mode == mode) { u = &mi->uses[q]; break; }
+            if (!u) continue;
+            use_page(u, p);
+            it->abr = p->abr;
+            *group = u->group; *palette = u->palette;
+            p->flags = (u8)(P_TEXTURED | (f & 1 ? P_SEMI : 0));
+            u16 uv[4];
+            mesh_uvs(mi, t, s, uv);
+            for (int v = 0; v < n; ++v) { p->u[v] = (u8)uv[v]; p->v[v] = (u8)(uv[v] >> 8); }
+            if (t < 2) {
+                col[0] = col[1] = col[2] = col[3] = MW(s, t == 0 ? 0x10 : 8);
+            } else {
+                p->flags |= P_GOURAUD;
+                col[0] = mi->colors[MW(s, 0x10) & 0xFFFF]; col[1] = mi->colors[MW(s, 0x10) >> 16];
+                if (t == 2) { col[2] = mi->colors[MW(s, 0x14) & 0xFFFF]; col[3] = mi->colors[MW(s, 0x14) >> 16]; }
+                else col[2] = mi->colors[MH(s, 0x14)];
+            }
+        } else {
+            p->tx = p->ty = p->clut_x = p->clut_y = 0; p->depth = 0;
+            p->abr = (u8)it->abr; /* (the GPU's current mode: the last textured polygon's) */
+            if (t < 6) {
+                p->flags = P_GOURAUD;
+                col[0] = mi->colors[MW(s, 8) & 0xFFFF]; col[1] = mi->colors[MW(s, 8) >> 16];
+                if (t == 4) { col[2] = mi->colors[MW(s, 0xC) & 0xFFFF]; col[3] = mi->colors[MW(s, 0xC) >> 16]; }
+                else col[2] = mi->colors[MH(s, 0xC)];
+            } else {
+                u32 w = MW(s, 8); /* its top byte is ored into the command: the semi-transparency bit */
+                if (w & 0x02000000) p->flags = P_SEMI;
+                col[0] = col[1] = col[2] = col[3] = w;
+            }
+            for (int v = 0; v < n; ++v) p->u[v] = p->v[v] = 0;
+        }
+        for (int v = 0; v < n; ++v) {
+            u32 xy = mi->xy[i[v]];
+            p->x[v] = (s16)(sext11i(xy) + b->ofs_x);
+            p->y[v] = (s16)(sext11i(xy >> 16) + b->ofs_y);
+            p->r[v] = (u8)col[v]; p->g[v] = (u8)(col[v] >> 8); p->b[v] = (u8)(col[v] >> 16);
+            /* the vertex's main-OT entry: the mesh's OT is 8 - bias entries into the cleared array */
+            int e = 8 - mi->bias + (mi->z[i[v]] >> 4);
+            if (e < 0) e = 0; else if (e > 0x100F) e = 0x100F;
+            zv[v] = mesh_rank_z(b, e);
+        }
+        return 1;
+    }
+}
+
+/* The native meshes' translucent polygons, sorted by depth: the 3D engine draws translucent polygons in the order
+ * they come (after the opaque ones), so each goes out among the scene's primitives where the PS1's OT had it (before
+ * the primitive recorded when the walk reached its entry); the opaque ones go after them all, the depth test
+ * placing their pixels. In ovl_0b's dead code after the primitive tables. */
+typedef struct { PrimCopy p; u16 z[4]; u8 group, palette, pad[2]; } SemiPoly;
+#define MAX_SEMI ((int)((OVL0B_CODE_END - OVL0B_SEMI_AT) / sizeof(SemiPoly)))
+static SemiPoly *semi_polys;
+static int semi_count;
+
+static void collect_semi(Buffer *b) {
+    semi_count = 0;
+    if (!semi_polys) return;
+    MeshIter it = {b, 0, 0, 0, NULL, NULL, 0};
+    PrimCopy local;
+    u16 z[4];
+    u8 g, pal;
+    int quota = b->mesh_quota; /* (next_mesh_poly spends it; the opaque pass starts it again) */
+    while (next_mesh_poly(&it, &local.p, z, &g, &pal)) {
+        if (!(local.p.flags & P_SEMI)) continue;
+        if (semi_count == MAX_SEMI) break; /* the rest go out with the opaque ones */
+        int i = semi_count++;
+        while (i > 0 && semi_polys[i - 1].z[0] > z[0]) { semi_polys[i] = semi_polys[i - 1]; --i; } /* stable */
+        copy_prim(&semi_polys[i].p, &local.p);
+        for (int v = 0; v < 4; ++v) semi_polys[i].z[v] = z[v];
+        semi_polys[i].group = g; semi_polys[i].palette = pal;
+    }
+    b->mesh_quota = quota;
+}
+
 /* an untextured additive glow's alpha by mode and brightness: m * 31 / 255 (subtraction twice that, mode 3 a quarter),
  * at most 31 */
 static u8 glow_alpha[4][256];
@@ -1305,17 +1830,55 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     int polys = 0, vertices = 0, z = 0;
     plan_drops(b);
     memset(light_cells, 0, sizeof light_cells);
-    for (int k = 0; k < b->count; ++k) {
-        const Prim *src = &b->prims[k];
-        if (!in_scene(src, k)) continue;
-        ++z;
-        if (prim_drop[k]) { gxh_stats_dropped++; continue; }
-        reserve();
-        if (polys >= MAX_POLYS || vertices + src->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
+    /* the recorded primitives at depth 2 (k + 1) (k + 1 without meshes), then the native meshes' polygons, each
+     * vertex at 2 rank + 1: between the primitives recorded before and after the walk reached its OT entry */
+    MeshIter mit = {b, 0, 0, 0, NULL, NULL, 0};
+    int with_meshes = b->meshes && b->mesh_gen == b->scene_gen;
+    static PrimCopy mesh_ring[RECENT]; /* translucent_id keeps pointers to the last RECENT */
+    int ring_at = 0;
+    u16 mesh_z[4];
+    if (with_meshes) collect_semi(b);
+    int semi_at = 0, semi_skip = 0;
+    for (int k = 0;;) {
+        const Prim *src;
+        const u16 *vz = NULL;
+        u8 grp, pal;
         /* a copy the command words can't alias (with -fno-strict-aliasing every store through wp would reload the
          * primitive's fields); translucent_id keeps pointers to the buffer's */
         PrimCopy local;
-        copy_prim(&local, src);
+        if (with_meshes && semi_at < semi_count && (k >= b->count || semi_polys[semi_at].z[0] >> 1 <= k)) {
+            SemiPoly *sp = &semi_polys[semi_at++]; /* a translucent mesh polygon, where the OT had it */
+            reserve();
+            if (polys >= MAX_POLYS || vertices + sp->p.p.n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
+            copy_prim(&local, &sp->p.p);
+            src = &sp->p.p; vz = sp->z; grp = sp->group; pal = sp->palette;
+        } else if (k < b->count) {
+            int kk = k++;
+            src = &b->prims[kk];
+            if (!in_scene(src, kk)) continue;
+            z = with_meshes ? 2 * (kk + 1) : kk + 1; /* (a field's buffers hold more than 2047) */
+            if (prim_drop[kk]) { gxh_stats_dropped++; continue; }
+            reserve();
+            if (polys >= MAX_POLYS || vertices + src->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
+            grp = prim_group[kk]; pal = prim_palette[kk];
+            copy_prim(&local, src);
+        } else {
+            /* the opaque mesh polygons (the translucent ones collected above went out already) */
+            int got = 0;
+            while (with_meshes && next_mesh_poly(&mit, &local.p, mesh_z, &grp, &pal)) {
+                if ((local.p.flags & P_SEMI) && semi_skip < semi_count) { semi_skip++; continue; }
+                got = 1;
+                break;
+            }
+            if (!got) break;
+            vz = mesh_z;
+            reserve();
+            if (polys >= MAX_POLYS || vertices + local.p.n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
+            PrimCopy *keep = &mesh_ring[ring_at];
+            ring_at = (ring_at + 1) % RECENT;
+            copy_prim(keep, &local.p);
+            src = &keep->p;
+        }
         const Prim *p = &local.p;
         int tu = 0, tv = 0, additive = 0;
         u32 want_image = 0, set_palette = ~0u; /* state to send with the primitive's BEGIN (~0: unchanged) */
@@ -1323,7 +1886,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         if (p->flags & P_TEXTURED) {
             int conv, cpal, unit;
             u32 size_bits;
-            if (prim_group[k] == RUN_GROUP) { /* a sprite: u[0], v[0] are its first texels */
+            if (grp == RUN_GROUP) { /* a sprite: u[0], v[0] are its first texels */
                 int c = (p->flags & P_SEMI) && p->abr != 0;
                 const Run *r = run_holding(STRIP_KEY(p->depth, c, p->tx, p->ty, p->clut_x, p->clut_y, p->v[0] >> 4),
                                            p->u[0] >> 4, p->u[1] >> 4);
@@ -1332,13 +1895,13 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 tu = (r->bu - r->slot) * 16;
                 tv = (p->v[0] >> 4) * 16;
             } else {
-                const Region *r = prim_group[k] == 0xFF ? NULL : groups[prim_group[k]].region;
+                const Region *r = grp == 0xFF ? NULL : groups[grp].region;
                 if (!r) { gxh_stats_texture_fail++; continue; }
                 conv = r->conv; cpal = r->cpal; unit = r->unit; size_bits = r->size_bits;
                 tu = (r->x - p->tx) * texels_per_halfword(p->depth);
                 tv = r->y - p->ty;
             }
-            if (p->depth < 2 && !conv && prim_palette[k] == 0xFF) { gxh_stats_palette_fail++; continue; }
+            if (p->depth < 2 && !conv && pal == 0xFF) { gxh_stats_palette_fail++; continue; }
             want_image = (u32)(unit * TEX_UNIT / 8) | size_bits | (u32)(conv ? 6 : p->depth == 2 ? 7 : p->depth == 0 ? 3 : 4) << 26;
             if (conv) {
                 tex_hue = cpal_hue[cpal & 63];
@@ -1347,7 +1910,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 additive = 1;
             } else if (p->depth < 2) {
                 want_image |= 1u << 29; /* PS1 0x0000 at index 0 is transparent (FF9's CLUTs) */
-                u32 want_palette = (u32)prim_palette[k] * 512 / 16;
+                u32 want_palette = (u32)pal * 512 / 16;
                 if (want_palette != palette) set_palette = want_palette;
             }
         }
@@ -1369,7 +1932,8 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                     if (v > m) m = v;
                 }
                 u32 hue = m ? hue_of(p, 0, (u32)m) : 0;
-                add_white = light_under(p, m * 31 >> (p->abr == 3 ? 9 : 7) > 31 ? 31 : m * 31 >> (p->abr == 3 ? 9 : 7), hue);
+                /* (a native mesh's polygons take the base only: the order they come in isn't the OT's) */
+                add_white = vz ? ADD_BASE : light_under(p, m * 31 >> (p->abr == 3 ? 9 : 7) > 31 ? 31 : m * 31 >> (p->abr == 3 ? 9 : 7), hue);
                 /* a flat glow is as bright to its edges: whitening past the base would show its shape */
                 if (!(p->flags & P_GOURAUD)) add_white = ADD_BASE;
             }
@@ -1388,7 +1952,8 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             additive = m;
             id = translucent_id(src, polys);
             if (p->abr != 2)
-                add_white = light_under(p, alpha, modulate(tex_hue, (p->flags & P_RAW) ? 0x7FFF : hue_of(p, 0, (u32)m)));
+                add_white = vz ? ADD_BASE
+                               : light_under(p, alpha, modulate(tex_hue, (p->flags & P_RAW) ? 0x7FFF : hue_of(p, 0, (u32)m)));
         } else if (p->flags & P_SEMI) {
             alpha = p->abr == 3 ? 8 : p->abr == 1 ? 24 : 16; /* additive: a brighter blend than 50% */
             if (p->abr == 2) {
@@ -1426,7 +1991,9 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 if (p->flags & P_RECT) { u += i & 1; v += i >> 1; } /* vertices 1, 3 right; 2, 3 bottom */
                 pack(CMD_TEXCOORD); put((u32)(u16)(u * 16) | (u32)(u16)(v * 16) << 16);
             }
-            if (j == 0) { /* the primitive's depth; the others keep it */
+            if (vz) { /* a mesh: each vertex its own depth */
+                pack(CMD_VTX16); put((u32)(u16)p->x[i] | (u32)(u16)p->y[i] << 16); put((u32)vz[i]);
+            } else if (j == 0) { /* the primitive's depth; the others keep it */
                 pack(CMD_VTX16); put((u32)(u16)p->x[i] | (u32)(u16)p->y[i] << 16); put((u32)(u16)z);
             } else {
                 pack(CMD_VTXXY); put((u32)(u16)p->x[i] | (u32)(u16)p->y[i] << 16);
@@ -1901,12 +2468,16 @@ static void reset_colours(void);     /* the 2D layer: an 8-bit bitmap BG in bank
 _Static_assert(OVL0B_PRIMS_AT_0 + MAX_PRIMS * sizeof(Prim) <= OVL0B_FX_AREA_AT, "buffer 0 overruns the module area");
 _Static_assert(OVL0A_PRIMS_AT_0 + OVL0A_FIELD_PRIMS * sizeof(Prim) <= OVL0A_PRIMS_AT_1, "field buffer 0 overruns buffer 1");
 _Static_assert(OVL0A_PRIMS_AT_1 + OVL0A_FIELD_PRIMS * sizeof(Prim) <= OVL0A_CODE_END, "field buffer 1 overruns ovl_0a's code");
-_Static_assert(OVL0B_PRIMS_AT_1 + MAX_PRIMS * sizeof(Prim) <= OVL0B_CHUNKS_AT, "buffer 1 overruns the chunks");
+_Static_assert(OVL0B_PRIMS_AT_1 + MAX_PRIMS * sizeof(Prim) <= OVL0B_RANKS_AT, "buffer 1 overruns the rank tables");
+_Static_assert(OVL0B_RANKS_AT + 2 * RANK_BUCKETS * 2 <= OVL0B_PRIMTAB_AT, "the rank tables overrun the primitive tables");
+_Static_assert(OVL0B_PRIMTAB_AT + PRIM_TABLES * BATTLE_PRIMS <= OVL0B_SEMI_AT, "the primitive tables overrun the semi list");
+_Static_assert(OVL0A_PRIMS_AT_1 + OVL0A_FIELD_PRIMS * (sizeof(Prim) + PRIM_TABLES) <= OVL0A_CODE_END,
+               "field buffer 1 and the primitive tables overrun ovl_0a's code");
 
 static void buffers_overwritten(uintptr_t at, unsigned int len) {
     for (int i = 0; i < 2; ++i) {
-        uintptr_t lo = (uintptr_t)buffers[i].prims, hi = lo + prims_max * sizeof(Prim);
-        if (at < hi && lo < at + len) { buffers[i].count = 0; buffers[i].submitted = 0; }
+        uintptr_t lo = (uintptr_t)buffers[i].prims, hi = lo + (buffers[i].pool ? MAX_PRIMS : prims_max) * sizeof(Prim);
+        if (at < hi && lo < at + len) { buffers[i].count = 0; buffers[i].submitted = 0; buffers[i].meshes = 0; buffers[i].pool_used = 0; }
     }
 }
 static void textures_reset(void);
@@ -1934,18 +2505,34 @@ static void use_place(const Place *p) {
         if (fit > first) fit = first;
         if (fit > MAX_PRIMS) fit = MAX_PRIMS;
         /* the first buffer leaves room for the block runs' tables after it */
-        int room = (int)((OVL0A_CODE_END - p->prims_at[0] - RUN_TABLES) / sizeof(Prim));
+        int room = (int)((OVL0A_CODE_END - p->prims_at[0] - RUN_TABLES) / (sizeof(Prim) + PRIM_TABLES));
         if (fit > room) fit = room;
         if (fit > prims_max) {
             buffers[1].prims = (Prim *)tail;
             prims_max = fit;
         }
     }
+    for (int i = 0; i < 2; ++i) {
+        buffers[i].pool = NULL; buffers[i].ranks = NULL; buffers[i].meshes = 0; buffers[i].pool_used = 0;
+        if (p->field) continue;
+        buffers[i].pool = (u8 *)(buffers[i].prims + BATTLE_PRIMS); /* (MAX_PRIMS fit: the asserts above) */
+        buffers[i].ranks = (u16 *)(psx_ram + p->at + OVL0B_RANKS_AT) + i * RANK_BUCKETS;
+        buffers[i].last_bucket = RANK_BUCKETS;
+    }
     rows = NULL; runs = NULL; needs = NULL;
-    if (p->field && buffers[1].prims != (Prim *)(psx_ram + p->at + p->prims_at[1])) {
+    u8 *tables;
+    if (!p->field) {
+        tables = psx_ram + p->at + OVL0B_PRIMTAB_AT;
+    } else if (buffers[1].prims != (Prim *)(psx_ram + p->at + p->prims_at[1])) {
         u8 *t = (u8 *)(((uintptr_t)(buffers[0].prims + prims_max) + 31) & ~(uintptr_t)31);
         rows = (Row *)t; runs = (Run *)(t + RUN_ROWS * sizeof(Row)); needs = (Need *)((u8 *)runs + MAX_RUNS * sizeof(Run));
+        tables = t + RUN_TABLES;
+    } else {
+        tables = (u8 *)(buffers[1].prims + prims_max);
     }
+    semi_polys = p->field ? NULL : (SemiPoly *)(psx_ram + p->at + OVL0B_SEMI_AT);
+    prim_group = tables; prim_palette = tables + prims_max; prim_drop = tables + 2 * prims_max;
+    prim_layer = tables + 3 * prims_max;
 }
 
 /* The textures' bookkeeping from scratch (the block runs' tables were overwritten: gxh_ram_overwritten) */

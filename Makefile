@@ -118,12 +118,14 @@ $$($(1)_DIR)/obj/%.o: $(BUILD)/portified/%.c $(PORT_HDRS)
 
 # src_equiv/ is weakened first, so a matched src/ definition of the same function always wins; then overlay
 # functions get their namespace prefix and cross-binary references are pointed at the right overlay; last, the
-# functions the port replaces (config/overrides.txt) are weakened.
-$$($(1)_DIR)/nsobj/%.o: $$($(1)_DIR)/obj/%.o $(GEN)/stamp config/overrides.txt
+# functions the port wraps are renamed in their defining object (config/renames.txt) and the ones it replaces
+# (config/overrides.txt) are weakened.
+$$($(1)_DIR)/nsobj/%.o: $$($(1)_DIR)/obj/%.o $(GEN)/stamp config/overrides.txt config/renames.txt
 	@mkdir -p $$(dir $$@)
 	@$(3) $$(if $$(call weak_src,$$*),--weaken) $$< $$@.tmp
 	@$(3) --redefine-syms=$(GEN)/redefine_$$(call bin_of,$$*).txt $$@.tmp $$@.tmp2
-	@$(3) --weaken-symbols=config/overrides.txt $$@.tmp2 $$@ \
+	@$(3) $$(shell awk '$$$$1 == "$$*" { printf "--redefine-sym %s=%s ", $$$$2, $$$$3 }' config/renames.txt) $$@.tmp2 $$@.tmp
+	@$(3) --weaken-symbols=config/overrides.txt $$@.tmp $$@ \
 		$$(if $$($(1)_FXOVL),$$(if $$(filter ovl_%,$$(call bin_of,$$*)),&& $(3) --prefix-alloc-sections=.psxovl_$$(patsubst ovl_%,%,$$(call bin_of,$$*)) $$@))
 	@rm -f $$@.tmp $$@.tmp2
 
