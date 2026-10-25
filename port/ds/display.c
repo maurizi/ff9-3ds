@@ -165,13 +165,16 @@ void display_present(void) {
     static unsigned int shown_generation;
     static int shown_valid;
 #ifdef PORT_GX_HYBRID
-    /* Battle (mode 2) uses the hybrid renderer, and fields (mode 1) too with FIELDGX=1; its 3D scenes and VRAM layout
-     * replace the software bitmaps. A mode change re-enables it: its buffers live in the mode's overlay. */
+    /* Battle (mode 2) uses the hybrid renderer, fields (mode 1) too with FIELDGX=1 and the world map (mode 3) with
+     * WORLDGX=1; its 3D scenes and VRAM layout replace the software bitmaps. A mode change re-enables it: its
+     * buffers live in the mode's overlay. */
     int mode = g_gameState ? g_gameState[8] : 0;
-#ifdef PORT_FIELD_GX
-    int hybrid = mode == 2 || mode == 1;
-#else
     int hybrid = mode == 2;
+#ifdef PORT_FIELD_GX
+    hybrid |= mode == 1;
+#endif
+#ifdef PORT_WORLD_GX
+    hybrid |= mode == 3;
 #endif
     static int hybrid_mode = -1;
     if (hybrid != gxh_active() || (hybrid && mode != hybrid_mode)) {

@@ -26,3 +26,6 @@ akao_initState
 o0b_btl_projectMesh
 o0a_fldmdl_projectMesh
 o0c_wm_projectMesh
+
+# World map blocks: the renderer may take a block's faces after the game's vertex pass (port/game/world_native.c).
+o0c_wm_drawBlock

@@ -31,6 +31,7 @@
 #include "psx_mem.h"
 #include "ovl0b_layout.h"
 #include "ovl0a_layout.h"
+#include "ovl0c_layout.h"
 #include "native_mesh.h"
 #include "gte.h"
 
@@ -91,6 +92,8 @@ typedef struct {
                           * MoveImage, fills) when the scene had count primitives: while it still has, a read inside
                           * one is of what was written, not of the scene (file_copyViaVram's scratch) */
     int over_count;
+    /* world map: each recorded primitive's depth (its OT entry, world_depth), and the native terrain */
+    u16 *slots;
     u64 touched[64];     /* field: the 8x8 cells (from the buffer's corner) that may differ from the clear value:
                           * the 2D layer skips the others (gxh_present) */
     /* battle: native meshes (port_native_mesh) */
@@ -131,15 +134,21 @@ static Buffer *clear_fill; /* the game's fill that's about to land covers this b
 /* Where the scene buffers and the GX chunks live: the resident mode overlay's MIPS code range, which the port never
  * runs. Battle: ovl_0b (ovl0b_layout.h). Field (FIELDGX=1): ovl_0a (ovl0a_layout.h), where the scene also holds the
  * background sprites, so they keep their depth order with the characters. */
-typedef struct { int overlay, field; unsigned int at, prims_at[2], max_prims; } Place;
+typedef struct { int overlay, field; unsigned int at, prims_at[2], max_prims; int world; } Place;
 static int prims_max;     /* the buffers' capacity (use_place) */
 static const Place places[] = {
-    {0x0B, 0, OVL0B_AT, {OVL0B_PRIMS_AT_0, OVL0B_PRIMS_AT_1}, BATTLE_PRIMS},
+    {0x0B, 0, OVL0B_AT, {OVL0B_PRIMS_AT_0, OVL0B_PRIMS_AT_1}, BATTLE_PRIMS, 0},
 #ifdef PORT_FIELD_GX
-    {0x0A, 1, OVL0A_AT, {OVL0A_PRIMS_AT_0, OVL0A_PRIMS_AT_1}, OVL0A_FIELD_PRIMS},
+    {0x0A, 1, OVL0A_AT, {OVL0A_PRIMS_AT_0, OVL0A_PRIMS_AT_1}, OVL0A_FIELD_PRIMS, 0},
+#endif
+#ifdef PORT_WORLD_GX
+    /* the world map: as a battle, with its terrain native (world_terrain) and depths by OT entry */
+    {0x0C, 0, OVL0C_AT, {OVL0C_PRIMS_AT_0, OVL0C_PRIMS_AT_1}, OVL0C_PRIMS, 1},
 #endif
 };
 static const Place *place = &places[0];
+/* A depth on the world scene's scale: OT entry e (of the 0x1010 from the main OT's base) nearer for larger values */
+static inline int world_entry_depth(int e) { return (0x1010 - e) * 4; }
 /* a field scene starts from this in PS1 VRAM: only what software draws (text, UI) differs, for the 2D layer */
 #define FIELD_KEY 0x7C1F
 static void dirty_cells(int x0, int y0, int x1, int y1);
@@ -257,6 +266,11 @@ static inline void note_walk(Buffer *b) {
 static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (b->count >= prims_max) { gxh_stats_dropped++; return; }
     note_walk(b);
+    if (b->slots) { /* the world map: the depth of the walk's OT entry (emit_scene orders those of one entry) */
+        b->slots[b->count] = (u16)world_entry_depth((int)psx_ot_slot);
+        b->scene_gen = psx_ot_generation;
+        b->ofs_x = gp0_state.ofs_x - b->x; b->ofs_y = gp0_state.ofs_y - b->y;
+    }
     PrimCopy t; /* built on the stack (DTCM), stored in bursts */
     Prim *p = &t.p; /* (a triangle's fourth vertex is left as it is: nothing reads it) */
     p->n = (u8)n;
@@ -578,6 +592,184 @@ int port_native_bg(const NativeBg *r) {
 
 static inline MeshInst *mesh_at(Buffer *b, int m) { return (MeshInst *)(b->pool + b->mesh_at[m]); }
 
+/* ---- world map terrain ------------------------------------------------------------------------------------- */
+
+/* wm_drawBlock's blocks (port/game/world_native.c) come here after the game's vertex pass, instead of as the
+ * POLY_GT3s and fog POLY_G3s of its face routines (decomp src_equiv/ovl_0c/world_faces.c). Each face the PS1 would
+ * draw is one polygon of the 3D engine: textured with its lit colours, or black where the PS1 draws only the fog
+ * triangle, and fogged by the 3D engine's fog. The PS1 adds the fog triangle (blend mode 1, every face measured)
+ * over the lit one, whose colours the vertex pass darkened toward a black far colour: lit + fog colour x d. The 3D
+ * engine's fog gives colour x (1 - d) + fog colour x d, d from each pixel's depth by a table: so each vertex's
+ * colour is its lit colour / (1 - d) (d by the first fog entry's offset; a vertex of the second entry gets the
+ * first's ramp: the user's choice of 2026-10-25, native drawing with the hardware's fog). The scene is depth
+ * tested: every primitive at the depth of its OT entry (world_depth), the terrain's vertices at theirs, so the
+ * fog follows each pixel's depth. */
+#define TB_MAX 24     /* blocks a frame (the game draws at most 17) */
+#define TV_MAX 1700   /* projected vertices */
+#define TF_MAX 1750   /* faces drawn */
+#define TU_MAX 32     /* texture page and CLUT pairs */
+typedef struct { const u32 *faces; u16 vbase; u8 variant, pad; u32 alt[3]; } TBlock;
+typedef struct { u32 xy; s16 z; u16 colour; } TVert;     /* screen position, depth (world_depth), RGB15 */
+typedef struct { u32 ref; u8 use, pad[3]; } TFace;       /* ref: block << 27 | face << 15 | otz << 2 | fog << 1 | lit */
+typedef struct { u16 tpage, clut; u8 u0, v0, u1, v1, group, palette, pad[2]; } TUse;
+struct Terrain {
+    unsigned gen;                    /* psx_ot_generation of the frame the blocks were drawn for */
+    int buffer;                      /* the buffer they were drawn into */
+    int nblocks, nverts, nfaces, nuses;
+    int fog_mode;                    /* 0 none, 1 fog (wm_blockVertsFog), 2 far blocks' (wm_blockVertsFar) */
+    u32 fog_colour, fog_offset;      /* the first fog entry's colour and fog offset */
+    TBlock blocks[TB_MAX];
+    TUse uses[TU_MAX];
+    TVert verts[TV_MAX];
+    TFace faces[TF_MAX];
+};
+_Static_assert(sizeof(struct Terrain) <= OVL0C_TERRAIN_BYTES, "the terrain overruns its place in ovl_0c");
+_Static_assert(OVL0C_TERRAIN_AT + 3 * OVL0C_TERRAIN_BYTES <= OVL0C_CODE_END, "the world's tables overrun ovl_0c's code");
+/* Three frames' terrain, by OT generation: the world map shows a buffer, and its scene is sent, only after the game
+ * has drawn the next frame's blocks for that buffer (wm_endFrame: PutDispEnv before DrawOTagEnv), so a frame's
+ * terrain is still needed while the next two are drawn. */
+static struct Terrain *terrain_ring[3];
+static struct Terrain *scene_terrain(const Buffer *b) {
+    if (!b->slots) return NULL;
+    struct Terrain *t = terrain_ring[b->scene_gen % 3];
+    return t && t->gen == b->scene_gen && t->buffer == (int)(b - buffers) ? t : NULL;
+}
+int gxh_stats_terrain;
+
+static void terrain_reset(struct Terrain *t) { t->gen = ~0u; t->nblocks = t->nverts = t->nfaces = t->nuses = 0; }
+
+
+/* the fog amount d (0-4096) at depth sz: the vertex pass's (world_verts.c wv_depth) */
+static inline int terrain_fog(u32 sz, u32 ofs, int shift) {
+    int d = (int)(sz - 0x8000 + ofs) >> shift;
+    return d < 0 ? 0 : d > 0x1000 ? 0x1000 : d;
+}
+
+/* A face's three uv words as wf_face sends them (half-resolution and alternate pages by its OT entry) */
+static inline void terrain_uvs(const u32 *face, const u32 *alt, int lod, int otz, u32 *o0, u32 *o1, u32 *o2) {
+    u32 uv0 = face[1], uv1 = face[2], uv2 = face[3];
+    if (!lod || otz < 0x9C4) { /* (WF_ALT never set on blocks) */
+        if (lod && (uv2 & 0x20000)) {
+            u32 a = alt[2];
+            uv0 += a & 0xFFFF0000;
+            uv1 = (uv1 & 0xFFFF) + (a << 16);
+        }
+    } else if (uv2 & 0x20000) {
+        u32 a = alt[0], b = alt[1], tp = (a & 0xFFFF) << 16;
+        a &= 0xFFFF0000;
+        uv0 = ((((uv0 & 0xFEFE) >> 1) | (((uv0 & 0xFFFF0000) >> 6) + a)) + b);
+        uv1 = (((uv1 & 0xFEFE) >> 1) | tp) + b;
+        uv2 = ((uv2 & 0xFEFE) >> 1) + b;
+    } else {
+        uv0 = ((uv0 & 0xFEFE) >> 1) | ((uv0 & 0xFFFF0000) - 0x10000);
+        uv1 = ((uv1 & 0xFEFE) >> 1) | (uv1 & 0xFE7F0000);
+        uv2 = (uv2 & 0xFEFE) >> 1;
+    }
+    *o0 = uv0; *o1 = uv1; *o2 = uv2;
+}
+
+static inline int max3_index(u32 a, u32 b, u32 c) {
+    if ((s32)(a - b) > 0) return (s32)(a - c) > 0 ? 0 : 2;
+    return (s32)(b - c) > 0 ? 1 : 2;
+}
+
+int port_native_world_block(const NativeWorldBlock *n) {
+    if (!active || !place->world) return 0;
+    Buffer *b = buffer_at(n->draw_x, n->draw_y);
+    if (!b || !b->slots) return 0;
+    struct Terrain *t = terrain_ring[psx_ot_generation % 3];
+    if (t->gen != psx_ot_generation) {
+        terrain_reset(t);
+        t->gen = psx_ot_generation;
+        t->buffer = (int)(b - buffers);
+        t->fog_mode = 0;
+    }
+    const u8 *blk = n->block;
+    int nv = blk[0], nf = *(const u16 *)(blk + 2);
+    nv = (nv + 2) / 3 * 3; /* (the vertex pass does whole groups of three) */
+    if (!nf || t->nblocks == TB_MAX || t->nverts + nv > TV_MAX || t->nfaces + nf > TF_MAX) return 0;
+    int fog = n->variant != WORLD_FACES_NEAR, shift = n->variant == WORLD_FACES_FAR ? 1 : 2;
+    u32 fog_offset = n->fog_params[1] & 0xFFFF;
+    if (fog) { t->fog_mode = n->variant == WORLD_FACES_FAR ? 2 : 1; t->fog_colour = n->fog_params[0]; t->fog_offset = fog_offset; }
+    /* the vertices: depth on the scene's scale, colour lit / (1 - d) */
+    int vbase = t->nverts;
+    for (int i = 0; i < nv; ++i) {
+        u32 sz = n->sz[i], lit = n->lit[i];
+        int z = world_entry_depth((int)(sz >> 3) + 8);
+        if (z < -32000) z = -32000;
+        if (z > 32000) z = 32000;
+        u32 r = lit & 0xFF, g = (lit >> 8) & 0xFF, bl = (lit >> 16) & 0xFF;
+        if (fog) {
+            int d = terrain_fog(sz, fog_offset, shift);
+            if (d >= 0x1000) r = g = bl = 0;
+            else { u32 k = (0x1000u << 12) / (u32)(0x1000 - d); r = r * k >> 12; g = g * k >> 12; bl = bl * k >> 12; }
+        }
+        r = r >> 2 > 31 ? 31 : r >> 2; g = g >> 2 > 31 ? 31 : g >> 2; bl = bl >> 2 > 31 ? 31 : bl >> 2; /* 128 = x1 */
+        t->verts[vbase + i] = (TVert){n->sxy[i], (s16)z, (u16)(r | g << 5 | bl << 10)};
+    }
+    /* the faces wf_face would draw */
+    int ti = t->nblocks;
+    TBlock *tb = &t->blocks[ti];
+    tb->faces = *(const u32 *const *)(blk + 8); tb->vbase = (u16)vbase; tb->variant = (u8)n->variant;
+    tb->alt[0] = n->alt[0]; tb->alt[1] = n->alt[1]; tb->alt[2] = n->alt[2];
+    int cull = n->variant == WORLD_FACES_NEAR, grid = n->variant == WORLD_FACES_FAR;
+    int limit = n->variant == WORLD_FACES_NEAR ? 0xF6A : 0xFFE, need_lit = n->variant != WORLD_FACES_NEAR;
+    int drawn = 0;
+    for (int f = 0; f < nf; ++f) {
+        const u32 *face = tb->faces + 4 * f;
+        u32 w = face[0];
+        int i0 = w & 0xFF, i1 = (w >> 8) & 0xFF, i2 = (w >> 16) & 0xFF;
+        u32 s0 = n->sxy[i0], s1 = n->sxy[i1], s2 = n->sxy[i2];
+        if (cull && (s0 & s1 & s2 & 0xFF008000)) continue;
+        int x0 = (s16)s0, y0 = (s16)(s0 >> 16), x1 = (s16)s1, y1 = (s16)(s1 >> 16), x2 = (s16)s2, y2 = (s16)(s2 >> 16);
+        if (x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1 <= 0) continue;
+        u32 bias = (w & 0x1000000) >> 15, z[3] = {n->sz[i0] + bias, n->sz[i1] + bias, n->sz[i2] + bias};
+        int otz;
+        if (grid) {
+            u32 zg[3] = {(z[0] >> 3) & ~0xFu, (z[1] >> 3) & ~0xFu, (z[2] >> 3) & ~0xFu};
+            int k = max3_index(zg[0], zg[1], zg[2]);
+            if ((s32)zg[k] <= 0 || (s32)zg[k] >= limit) continue;
+            otz = (int)(z[k] >> 3);
+        } else {
+            otz = (int)(z[max3_index(z[0], z[1], z[2])] >> 3);
+            if (otz <= 0 || otz >= limit) continue;
+        }
+        u32 lit_or = (n->lit[i0] | n->lit[i1] | n->lit[i2]) & 0xFFFFFF, fog_or = (n->fog[i0] | n->fog[i1] | n->fog[i2]) & 0xFFFFFF;
+        int has_fog = fog && fog_or, has_lit = !(need_lit && !lit_or);
+        if (!has_fog && !has_lit) continue;
+        u8 use = 0xFF;
+        if (has_lit) { /* its texture page and CLUT, and its texels' bounds */
+            u32 uv0, uv1, uv2;
+            terrain_uvs(face, tb->alt, 1, otz, &uv0, &uv1, &uv2);
+            u16 tpage = (u16)(uv1 >> 16), clut = (u16)(uv0 >> 16);
+            int u;
+            for (u = 0; u < t->nuses; ++u) if (t->uses[u].tpage == tpage && t->uses[u].clut == clut) break;
+            if (u == t->nuses) {
+                if (u == TU_MAX) { gxh_stats_mesh_fallback++; continue; }
+                t->uses[u] = (TUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF, {0, 0}};
+                t->nuses++;
+            }
+            TUse *tu = &t->uses[u];
+            u8 us[3] = {(u8)uv0, (u8)uv1, (u8)uv2}, vs[3] = {(u8)(uv0 >> 8), (u8)(uv1 >> 8), (u8)(uv2 >> 8)};
+            for (int k = 0; k < 3; ++k) {
+                if (us[k] < tu->u0) tu->u0 = us[k];
+                if (us[k] > tu->u1) tu->u1 = us[k];
+                if (vs[k] < tu->v0) tu->v0 = vs[k];
+                if (vs[k] > tu->v1) tu->v1 = vs[k];
+            }
+            use = (u8)u;
+        }
+        t->faces[t->nfaces + drawn] =
+            (TFace){(u32)ti << 27 | (u32)f << 15 | (u32)(otz & 0x1FFF) << 2 | (u32)has_fog << 1 | (u32)has_lit, use, {0, 0, 0}};
+        drawn++;
+    }
+    t->nfaces += drawn;
+    t->nverts += nv;
+    t->nblocks++;
+    gxh_stats_terrain = t->nfaces;
+    return 1;
+}
+
 /* A textured use's texture page as GP0 sees it: btl_drawMesh and btlbg_drawRecord or blend bits into the tpage. */
 static inline void use_page(const MeshUse *u, Prim *p) {
     u32 tp = (u->page & 0xFFFF) | u->orbits, clut = u->page >> 16;
@@ -878,7 +1070,7 @@ static u32 light_under(const Prim *p, int alpha, u32 hue) {
 static __attribute__((noinline)) u32 modulate(u32 a, u32 b) {
     return ((a & 31) * (b & 31) / 31) | ((a >> 5 & 31) * (b >> 5 & 31) / 31) << 5 | ((a >> 10 & 31) * (b >> 10 & 31) / 31) << 10;
 }
-typedef struct { int used, x, y, count, dirty, wanted; } Palette;
+typedef struct { int used, x, y, count, dirty, wanted, index0; } Palette; /* index0: TEXIMAGE bit 29 (emit_scene) */
 static Palette palettes[PAL_SLOTS];
 
 static void regions_touch(int x, int y, int w, int h);
@@ -1277,7 +1469,7 @@ palette:
                 for (int t = 0; t < PAL_SLOTS; ++t) if (!palettes[t].wanted) { empty = t; break; }
             if (empty < 0) return;
             s = empty;
-            palettes[s] = (Palette){1, p->clut_x, p->clut_y, count, 1, 0};
+            palettes[s] = (Palette){1, p->clut_x, p->clut_y, count, 1, 0, 0};
         }
         palettes[s].wanted = 1;
         *palette_out = (u8)s;
@@ -1303,6 +1495,18 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
         copy_prim(&local, &b->prims[k]);
         plan_prim(&local.p, use_runs, &last_group, &last_palette, &prim_group[k], &prim_palette[k]);
     }
+    /* the world terrain's textures: each page and CLUT as a primitive covering its texels */
+    struct Terrain *tr = scene_terrain(b);
+    if (tr)
+        for (int i = 0; i < tr->nuses; ++i) {
+            TUse *u = &tr->uses[i];
+            MeshUse mu = {(u32)u->tpage | (u32)u->clut << 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            Prim q;
+            q.n = 4; q.flags = P_TEXTURED;
+            use_page(&mu, &q);
+            q.u[0] = q.u[2] = u->u0; q.u[1] = q.u[3] = u->u1; q.v[0] = q.v[1] = u->v0; q.v[2] = q.v[3] = u->v1;
+            plan_prim(&q, 0, &last_group, &last_palette, &u->group, &u->palette);
+        }
     /* the native meshes' textures: each use as a primitive covering its texels */
     if (b->meshes && b->mesh_gen == b->scene_gen)
         for (int m = 0; m < b->meshes; ++m) {
@@ -1593,6 +1797,11 @@ static __attribute__((noinline)) void upload(void) {
 }
 
 /* ---- command emission -------------------------------------------------------------------------------------- */
+
+/* TEXIMAGE's colour-0-transparent bit for a palette slot: the PS1 hides texels whose CLUT colour is 0x0000, the DS
+ * index 0 of a palette, so the bit is set only when the CLUT's first colour is 0x0000 (FF9's usual layout; the world
+ * map's sea CLUT has a colour there, and its texels showed as holes). A 0x0000 elsewhere in a CLUT stays opaque. */
+static inline u32 index0_transparent(int pal) { return (u32)palettes[pal].index0; }
 
 enum { CMD_COLOR = 0x20, CMD_TEXCOORD = 0x22, CMD_VTX16 = 0x23, CMD_VTXXY = 0x25, CMD_POLYATTR = 0x29,
        CMD_TEXIMAGE = 0x2A, CMD_PLTTBASE = 0x2B, CMD_BEGIN = 0x40 };
@@ -1966,6 +2175,8 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 glow_alpha[abr][m] = (u8)(a > 31 ? 31 : a);
             }
     memset(recent, 0, sizeof recent);
+    for (int i = 0; i < PAL_SLOTS; ++i) /* (index0_transparent) */
+        if (palettes[i].used) palettes[i].index0 = psx_vram[(palettes[i].y & 511) * 1024 + (palettes[i].x & 1023)] ? 0 : 1 << 29;
     u32 attr = INITIAL_ATTR, image = 0, palette = ~0u;
     u32 *wp = chunks[chunk] + chunk_words;
     u32 *pack_header, pack_ids;
@@ -2000,14 +2211,24 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             if (!native_poly(b, r, &local.p, &grp, &pal)) continue; /* a native polygon, in OT order */
             native = 1;
             z = Z_STEP * ++zc;
-        } else if (k < b->count) {
+        } else if (k < (b->slots ? 2 * b->count : b->count)) {
             int kk = k++;
+            if (b->slots) {
+                /* The world map: the opaque primitives first, from the last, at their OT entries' depths (the depth
+                 * test keeps the first of equal depths: the PS1's topmost, however many share an entry), then the
+                 * translucent ones in the walk's order, just in front of their entries (the 3D engine draws them
+                 * after the opaque ones, without writing depth). */
+                int opaque_pass = kk < b->count;
+                kk = opaque_pass ? b->count - 1 - kk : kk - b->count;
+                if (opaque_pass == !!(b->prims[kk].flags & P_SEMI)) continue;
+            }
             src = &b->prims[kk];
             if (!in_scene(src, kk)) continue;
             if (prim_drop[kk]) { gxh_stats_dropped++; continue; }
             reserve();
             if (polys >= MAX_POLYS || vertices + src->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
-            z = with_meshes ? Z_STEP * ++zc : kk + 1; /* (a field's buffers hold more than 2047) */
+            /* (a field's buffers hold more than 2047; the world map's at their OT entries' depths) */
+            z = b->slots ? b->slots[kk] + (src->flags & P_SEMI ? 2 : 0) : with_meshes ? Z_STEP * ++zc : kk + 1;
             grp = prim_group[kk]; pal = prim_palette[kk];
             if ((src->flags & (P_RECT | P_TEXTURED | P_SEMI | P_GOURAUD | P_UI | P_TWIN)) == (P_RECT | P_TEXTURED) && src->n == 4) {
                 /* An opaque textured sprite (a field's background tiles): the general path's words, without its
@@ -2033,7 +2254,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 u32 set_palette = ~0u;
                 if (depth < 2) {
                     if (pal == 0xFF) { gxh_stats_palette_fail++; continue; }
-                    want_image |= 1u << 29;
+                    want_image |= index0_transparent(pal);
                     u32 want_palette = (u32)pal * 512 / 16;
                     if (want_palette != palette) set_palette = want_palette;
                 }
@@ -2109,7 +2330,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 if (want_palette != palette) set_palette = want_palette;
                 additive = 1;
             } else if (p->depth < 2) {
-                want_image |= 1u << 29; /* PS1 0x0000 at index 0 is transparent (FF9's CLUTs) */
+                want_image |= index0_transparent(pal);
                 u32 want_palette = (u32)pal * 512 / 16;
                 if (want_palette != palette) set_palette = want_palette;
             }
@@ -2199,6 +2420,56 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         ++polys;
         vertices += p->n;
     }
+    struct Terrain *tr = scene_terrain(b);
+    if (tr) /* the world map's terrain, after the primitives (depth tested: any order) */
+        for (int f = 0; f < tr->nfaces; ++f) {
+            reserve();
+            if (polys >= MAX_POLYS || vertices + 3 > MAX_VERTICES) { gxh_stats_dropped += tr->nfaces - f; break; }
+            const TFace tf = tr->faces[f];
+            const TBlock *tb = &tr->blocks[tf.ref >> 27];
+            const u32 *face = tb->faces + 4 * ((tf.ref >> 15) & 0xFFF);
+            int otz = (int)((tf.ref >> 2) & 0x1FFF), has_fog = (int)(tf.ref >> 1) & 1, has_lit = (int)(tf.ref & 1);
+            u32 w = face[0], uvw[3] = {0, 0, 0}, want_image = 0, set_palette = ~0u;
+            int tu = 0, tv = 0;
+            if (has_lit) {
+                const TUse *u = &tr->uses[tf.use];
+                const Region *r = u->group == 0xFF ? NULL : groups[u->group].region;
+                if (!r) { gxh_stats_texture_fail++; continue; }
+                int depth = (u->tpage >> 7) & 3;
+                if (depth == 3) depth = 2;
+                if (depth < 2 && u->palette == 0xFF) { gxh_stats_palette_fail++; continue; }
+                tu = (r->x - (u->tpage & 15) * 64) * texels_per_halfword(depth);
+                tv = r->y - ((u->tpage >> 4) & 1) * 256;
+                want_image = (u32)(r->unit * TEX_UNIT / 8) | r->size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
+                if (depth < 2) {
+                    want_image |= index0_transparent(u->palette);
+                    u32 want_palette = (u32)u->palette * 512 / 16;
+                    if (want_palette != palette) set_palette = want_palette;
+                }
+                terrain_uvs(face, tb->alt, 1, otz, &uvw[0], &uvw[1], &uvw[2]);
+            }
+            u32 want_attr = 3u << 6 | 31u << 16 | (has_fog ? 1u << 15 : 0);
+            pack_begin();
+            if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); palette = set_palette; }
+            if (want_image != image) { pack(CMD_TEXIMAGE); put(want_image); image = want_image; }
+            if (want_attr != attr) { pack(CMD_POLYATTR); put(want_attr); attr = want_attr; }
+            pack(CMD_BEGIN); put(0);
+            pack_end();
+            for (int k = 0; k < 3; ++k) {
+                const TVert *tv3 = &tr->verts[tb->vbase + ((w >> (8 * k)) & 0xFF)];
+                int x = (s16)tv3->xy + b->ofs_x, y = (s16)(tv3->xy >> 16) + b->ofs_y;
+                pack_begin();
+                pack(CMD_COLOR); put(has_lit ? tv3->colour : 0);
+                if (has_lit) {
+                    int u = (int)(uvw[k] & 0xFF) - tu, v = (int)((uvw[k] >> 8) & 0xFF) - tv;
+                    pack(CMD_TEXCOORD); put((u32)(u16)(u * 16) | (u32)(u16)(v * 16) << 16);
+                }
+                pack(CMD_VTX16); put((u32)(u16)x | (u32)(u16)y << 16); put((u32)(u16)tv3->z);
+                pack_end();
+            }
+            ++polys;
+            vertices += 3;
+        }
     reserve();
     fifo(0x50, GL_TRANS_MANUALSORT); /* SWAP_BUFFERS: shown from the next VBlank */
     chunk_words = wp - chunks[chunk];
@@ -2715,6 +2986,12 @@ _Static_assert(OVL0A_PRIMS_AT_1 + OVL0A_FIELD_PRIMS * (sizeof(Prim) + PRIM_TABLE
                "field buffer 1 and the primitive tables overrun ovl_0a's code");
 
 static void buffers_overwritten(uintptr_t at, unsigned int len) {
+    if (place->world) { /* (the world's slots and terrain after the buffers, in the same code range) */
+        uintptr_t lo = (uintptr_t)psx_ram + place->at + OVL0C_PRIMS_AT_0, hi = (uintptr_t)psx_ram + place->at + OVL0C_CODE_END;
+        if (at < hi && lo < at + len)
+            for (int i = 0; i < 2; ++i) { buffers[i].count = 0; buffers[i].submitted = 0; }
+        if (at < hi && lo < at + len) for (int i = 0; i < 3; ++i) terrain_reset(terrain_ring[i]);
+    }
     for (int i = 0; i < 2; ++i) {
         uintptr_t lo = (uintptr_t)buffers[i].prims, hi = lo + (buffers[i].pool ? MAX_PRIMS : prims_max) * sizeof(Prim);
         if (at < hi && lo < at + len) { buffers[i].count = 0; buffers[i].submitted = 0; buffers[i].meshes = 0; buffers[i].pool_used = 0; }
@@ -2754,14 +3031,25 @@ static void use_place(const Place *p) {
     }
     for (int i = 0; i < 2; ++i) {
         buffers[i].pool = NULL; buffers[i].ranks = NULL; buffers[i].meshes = 0; buffers[i].pool_used = 0;
+        buffers[i].slots = NULL;
+        if (p->world) {
+            buffers[i].slots = (u16 *)(psx_ram + p->at + OVL0C_SLOTS_AT) + i * OVL0C_PRIMS;
+            continue;
+        }
         if (p->field) continue;
         buffers[i].pool = (u8 *)(buffers[i].prims + BATTLE_PRIMS); /* (MAX_PRIMS fit: the asserts above) */
         buffers[i].ranks = (u16 *)(psx_ram + p->at + OVL0B_RANKS_AT) + i * RANK_BUCKETS;
         buffers[i].last_bucket = RANK_BUCKETS;
     }
+    for (int i = 0; i < 3; ++i) {
+        terrain_ring[i] = p->world ? (struct Terrain *)(psx_ram + p->at + OVL0C_TERRAIN_AT + i * OVL0C_TERRAIN_BYTES) : NULL;
+        if (terrain_ring[i]) terrain_reset(terrain_ring[i]);
+    }
     rows = NULL; runs = NULL; needs = NULL;
     u8 *tables;
-    if (!p->field) {
+    if (p->world) {
+        tables = psx_ram + p->at + OVL0C_PRIMTAB_AT;
+    } else if (!p->field) {
         tables = psx_ram + p->at + OVL0B_PRIMTAB_AT;
     } else if (buffers[1].prims != (Prim *)(psx_ram + p->at + p->prims_at[1])) {
         u8 *t = (u8 *)(((uintptr_t)(buffers[0].prims + prims_max) + 31) & ~(uintptr_t)31);
@@ -2770,7 +3058,7 @@ static void use_place(const Place *p) {
     } else {
         tables = (u8 *)(buffers[1].prims + prims_max);
     }
-    native_heads = p->field ? NULL : (u16 *)(psx_ram + p->at + OVL0B_HEADS_AT);
+    native_heads = p->field || p->world ? NULL : (u16 *)(psx_ram + p->at + OVL0B_HEADS_AT);
     prim_group = tables; prim_palette = tables + prims_max; prim_drop = tables + 2 * prims_max;
     prim_layer = tables + 3 * prims_max;
 }
@@ -3006,6 +3294,23 @@ static void field_frame(Buffer *b, int display_h) {
     plan_textures(b);
 }
 
+/* The 3D engine's fog for a world scene's terrain: the vertex pass's ramp, d = (SZ - 0x8000 + offset) >> 2 (>> 1 for
+ * far blocks without the world's fog) over 4096, on the 15-bit fog depth. A terrain vertex at SZ is at
+ * world_entry_depth(SZ / 8 + 8) = 16416 - SZ / 2 under glOrthof32(..., -32768, 32768), whose 15-bit depth is
+ * (32768 - z) / 2 = 8176 + SZ / 4; the ramp starts there at SZ = 0x8000 - offset and spans 4096 (2048) of it:
+ * 32 steps of 128 (64), FOG_SHIFT 3 (4). */
+static void terrain_fog_setup(Buffer *b) {
+    struct Terrain *t = scene_terrain(b);
+    if (!t || !t->fog_mode) { glDisable(GL_FOG); return; }
+    int shift = t->fog_mode == 2 ? 4 : 3;
+    u32 c = t->fog_colour;
+    glFogColor((c & 0xFF) >> 3, (c >> 8 & 0xFF) >> 3, (c >> 16 & 0xFF) >> 3, 31);
+    glFogShift(shift);
+    glFogOffset(8176 + (int)(0x8000 - t->fog_offset) / 4);
+    for (int i = 0; i < 32; ++i) glFogDensity(i, i * 127 / 31);
+    glEnable(GL_FOG);
+}
+
 /* Send a buffer's scene to the 3D engine; it is shown from the next frame on. */
 static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     BB(0x47580001, b->count);
@@ -3039,6 +3344,7 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     /* (battle: depths up to Z_STEP x the scene's primitives and native polygons, emit_scene) */
     if (place->field) glOrthof32(0, 320, h, 0, -4096, 4096);
     else glOrthof32(0, 320, h, 0, -32768, 32768);
+    terrain_fog_setup(b);
     glMatrixMode(GL_MODELVIEW);
     unsigned int c = b->clear;
     glClearColor(c & 31, (c >> 5) & 31, (c >> 10) & 31, place->field && bank_a_bg && !bank_a_add ? 0 : 31); /* a software frame shows */
