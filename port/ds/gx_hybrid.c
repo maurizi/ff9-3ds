@@ -823,6 +823,8 @@ static inline int colour_distance(u16 a, u16 b) {
 /* the A5I3 alpha of a texel: transparent 0x0000, opaque without the semi-transparency bit, else its brightness */
 static inline u8 texel_alpha(u16 c, int bright) { return !c ? 0 : (u8)(c & 0x8000 ? bright : 31); }
 
+static u32 conv_scratch[32768 / 32]; /* conv_choose's colours seen (a bit each), conv_upload's nearest choices */
+
 /* Choose an additive copy's 8 colours (from its 4- or 8-bit CLUT, or a sample of its 15-bit texels at x, y, wh, h)
  * and write them as palette cpal; code: each CLUT index's A5I3 texel (4- and 8-bit). Returns the colours chosen. */
 static __attribute__((noinline)) int conv_choose(int depth, int x, int y, int wh, int h, int clut_x, int clut_y, int cpal,
@@ -854,7 +856,7 @@ static __attribute__((noinline)) int conv_choose(int depth, int x, int y, int wh
     /* representatives: the brightest entry's colour, then repeatedly the colour farthest from those chosen. A
      * CLUT's entries mostly share a few hues, so the search runs over the distinct normalised colours (the
      * brightest entry of each), with each one's distance to the chosen set kept as it grows. */
-    static u32 seen[32768 / 32];
+    u32 *seen = conv_scratch; /* zero between uses (conv_upload clears its use) */
     static u16 cand[CHOICES];
     static u8 cand_alpha[CHOICES];
     static int cand_d[CHOICES];
@@ -924,8 +926,8 @@ static __attribute__((noinline)) void conv_upload(Region *r, u8 *dst, int row_by
         return;
     }
     /* 15-bit: each normalised colour's representative, found once per 12-bit key */
-    static u8 nearest[4096];
-    memset(nearest, 0xFF, sizeof nearest);
+    u8 *nearest = (u8 *)conv_scratch;
+    memset(nearest, 0xFF, 4096);
     for (int row = 0; row < r->h; ++row) {
         const u16 *src = psx_vram + ((r->y + row) & 511) * 1024;
         u16 *out = (u16 *)(dst + row * row_bytes);
@@ -948,6 +950,7 @@ static __attribute__((noinline)) void conv_upload(Region *r, u8 *dst, int row_by
         }
         if (r->wh & 1) out[r->wh / 2] = pair[0];
     }
+    memset(conv_scratch, 0, sizeof conv_scratch);
 }
 
 /* Copy dirty regions and palettes from PS1 VRAM. Banks A-D, F and G must be mapped to the CPU (LCDC). */
@@ -1957,7 +1960,8 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
  * colour takes its nearest entry and the next frame rebuilds the layer with a fresh palette. 32x32 blocks are
  * rebuilt when their source cells (8x8 PS1 pixels) were drawn and their pixels hash differently (the battle UI
  * redraws every window each VBlank, mostly unchanged). */
-static u8 cell_dirty[512 / 8][1024 / 8];
+static u64 cell_dirty[512 / 8][2]; /* a bit per 8x8 cell of PS1 VRAM: written since the 2D layer last looked */
+#define CELL_DIRTY(y, x) (cell_dirty[(y) & 63][((x) & 127) >> 6] >> ((x) & 63) & 1)
 static int last_x, last_y, last_w, last_h;
 static u8 *colour_map;          /* 32768 RGB15 -> palette index (0: not mapped yet) */
 static int colours, colours_full;
@@ -2017,7 +2021,7 @@ static inline int shows(u16 c, u16 clear, u8 mark) {
 
 static void dirty_cells(int x0, int y0, int x1, int y1) {
     for (int y = y0 >> 3; y <= y1 >> 3; ++y)
-        for (int x = x0 >> 3; x <= x1 >> 3; ++x) cell_dirty[y & 63][x & 127] = 1;
+        for (int x = x0 >> 3; x <= x1 >> 3; ++x) cell_dirty[y & 63][(x & 127) >> 6] |= 1ull << (x & 63);
     for (int i = 0; i < 2; ++i) { /* buffers start on 8-pixel columns and rows */
         Buffer *b = &buffers[i];
         int bx0 = (x0 - b->x) >> 3, bx1 = (x1 - b->x) >> 3, by0 = (y0 - b->y) >> 3, by1 = (y1 - b->y) >> 3;
@@ -2125,7 +2129,7 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
                 int dirty = 0;
                 for (int y = sy0 >> 3; y <= (sy0 + sh) >> 3 && !dirty; ++y)
                     for (int x = sx0 >> 3; x <= (sx0 + sw) >> 3; ++x)
-                        if (cell_dirty[y & 63][x & 127]) { dirty = 1; break; }
+                        if (CELL_DIRTY(y, x)) { dirty = 1; break; }
                 if (!dirty) { shown += block_shown[row][col]; continue; }
             }
             u32 any = 0, hash = 2166136261u, prime = fnv_prime;
@@ -2169,7 +2173,7 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
             shown += !!any;
         }
     for (int y = (d->y >> 3); y <= (d->y + h) >> 3; ++y)
-        for (int x = (d->x >> 3); x <= (d->x + w) >> 3; ++x) cell_dirty[y & 63][x & 127] = 0;
+        for (int x = (d->x >> 3); x <= (d->x + w) >> 3; ++x) cell_dirty[y & 63][(x & 127) >> 6] &= ~(1ull << (x & 63));
     gxh_stats_blocks = colours_full ? -colours : colours;
     (void)shown;
 }
