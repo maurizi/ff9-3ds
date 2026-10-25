@@ -337,6 +337,8 @@ static u8 unit_used[TEX_UNITS];
 static int ramp_written;
 
 static inline int texels_per_halfword(int depth) { return depth == 0 ? 4 : depth == 1 ? 2 : 1; }
+/* texels to halfwords: a shift (dividing by texels_per_halfword calls the ARM9's software division) */
+static inline int texel_shift(int depth) { return 2 - depth; }
 
 static int log2_at_least(int v) {
     int n = 0;
@@ -610,8 +612,8 @@ static void runs_touch(int x, int y, int w, int h) {
         Run *r = &runs[i];
         if (!r->flags) continue;
         u32 key = r->key;
-        int per = texels_per_halfword(KEY_DEPTH(key)), rx = KEY_TX(key) + r->bu * 16 / per, ry = KEY_TY(key) + KEY_BV(key) * 16;
-        if (x < rx + r->n * 16 / per && rx < x + w && y < ry + 16 && ry < y + h) r->flags |= RUN_DIRTY;
+        int sh = texel_shift(KEY_DEPTH(key)), rx = KEY_TX(key) + (r->bu * 16 >> sh), ry = KEY_TY(key) + KEY_BV(key) * 16;
+        if (x < rx + (r->n * 16 >> sh) && rx < x + w && y < ry + 16 && ry < y + h) r->flags |= RUN_DIRTY;
         if (KEY_CONV(key)) {
             int cx = KEY_CX(key), cy = KEY_CY(key);
             if (y <= cy && cy < y + h && x < cx + (KEY_DEPTH(key) ? 256 : 16) && cx < x + w) r->flags |= RUN_DIRTY;
@@ -626,7 +628,7 @@ static void upload_run(const Run *r, u8 *base) {
     u32 key = r->key;
     int depth = KEY_DEPTH(key), conv = KEY_CONV(key), per = texels_per_halfword(depth), fmt = run_format(key);
     int row_bytes = fmt == 0 ? 128 : fmt == 2 ? 512 : 256;
-    int x = KEY_TX(key) + r->bu * 16 / per, wh = r->n * 16 / per, y = KEY_TY(key) + KEY_BV(key) * 16;
+    int x = KEY_TX(key) + (r->bu * 16 >> texel_shift(depth)), wh = r->n * 16 >> texel_shift(depth), y = KEY_TY(key) + KEY_BV(key) * 16;
     u8 *dst = base + rows[r->row].unit * TEX_UNIT + r->slot * (fmt == 0 ? 8 : fmt == 2 ? 32 : 16);
     static u8 code[256];
     static u16 pair4[256];
@@ -684,7 +686,7 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
         PrimCopy local; /* (the stores below can't alias it: emit_scene) */
         copy_prim(&local, &b->prims[k]);
         const Prim *p = &local.p;
-        int per = texels_per_halfword(p->depth);
+        int sh = texel_shift(p->depth);
         int u0 = p->u[0], u1 = u0, v0 = p->v[0], v1 = v0;
         for (int i = 1; i < p->n; ++i) {
             if (p->u[i] < u0) u0 = p->u[i];
@@ -703,12 +705,12 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
         int x0, x1, y0, y1;
         if (conv) { /* effect-sized: the texels' own box, in 8-texel steps */
             u0 &= ~7; u1 |= 7;
-            x0 = p->tx + u0 / per; x1 = p->tx + u1 / per; y0 = p->ty + (v0 & ~7); y1 = p->ty + (v1 | 7);
+            x0 = p->tx + (u0 >> sh); x1 = p->tx + (u1 >> sh); y0 = p->ty + (v0 & ~7); y1 = p->ty + (v1 | 7);
         } else {
             /* Stable regions: U and V in 64-texel steps, so a page keeps its region (and copies nothing) while the
              * camera moves over it, without holding the parts of the page no primitive uses. */
             u0 &= ~63; u1 |= 63; v0 &= ~63; v1 |= 63;
-            x0 = p->tx + u0 / per; x1 = p->tx + u1 / per; y0 = p->ty + v0; y1 = p->ty + v1;
+            x0 = p->tx + (u0 >> sh); x1 = p->tx + (u1 >> sh); y0 = p->ty + v0; y1 = p->ty + v1;
         }
         /* consecutive primitives nearly always share a page and CLUT: try the last match first */
 #define SAME_GROUP(q) ((q).depth == p->depth && (q).tx == p->tx && (q).ty == p->ty && (q).conv == conv && \
@@ -1283,7 +1285,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 if (!(p->flags & P_GOURAUD)) break;
             }
             if (p->flags & P_RAW) m = 128;
-            alpha = m * 31 * (p->abr == 2 ? 2 : 1) / (p->abr == 3 ? 512 : 128); /* mode 2: see the glow ramp */
+            alpha = m * 31 * (p->abr == 2 ? 2 : 1) >> (p->abr == 3 ? 9 : 7); /* mode 2: see the glow ramp */
             if (alpha > 31) alpha = 31;
             if (!alpha) continue; /* adds nothing (alpha 0 would be wireframe) */
             additive = m;
