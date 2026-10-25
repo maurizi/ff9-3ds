@@ -239,3 +239,14 @@ original DS runs with graphics and sound memory.
 
 Whether this fits with acceptable performance is still open. The design now
 targets that possibility explicitly instead of assuming 16 MiB is available.
+
+## Shared WRAM needs an MPU region (2026-10-25)
+
+In DS mode BlocksDS's ARM9 protection regions cover main RAM up to 0x02FFFFFF but not 0x03000000, where the port
+keeps SPU RAM 0xE000-0x16000 (shared WRAM, `WRAM_CR = 0`). The first access to it is a data abort; fields died about
+a minute in (2110 at frame 821, 1102 at 1201), when a sound first used that part of SPU RAM, and the exception path
+then overwrote all of main RAM (and DTCM) with a 128 KB pattern. `main` now maps the 32 KB with region 3 (the Slot-2
+cartridge space, unused). The DSi's regions differ, so DSi runs were never affected. Tools from the hunt:
+`ds_profile.py` saves a state when the game frame stops for 90 s (`*.timeout.ml8`; melonDS keeps ARM9 registers in its
+`ARM9` section: R0-R15 at +24, CPSR after, then the banked FIQ/SVC/ABT/IRQ/UND registers); `BLACKBOX=1` keeps the
+last 64 phases in DTCM; `CANARY=1` fits DS mode (8 KB tails); the status screen's row 9 shows the free heap.
