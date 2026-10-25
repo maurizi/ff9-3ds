@@ -10,6 +10,7 @@
 #define OVL0B_FX_AREA_AT    0x1EA80   /* the loaded effect module's native code (port/ds/fx_pack.c) */
 #define OVL0B_FX_AREA_END   0x28580
 #define OVL0B_RANKS_AT      0x46100   /* the hybrid's native-mesh rank tables (2 x 8 KB) */
-#define OVL0B_PRIMTAB_AT    0x4A160   /* its per-primitive tables (4 bytes a primitive); after them free */
+#define OVL0B_PRIMTAB_AT    0x4A160   /* its per-primitive tables (4 bytes a primitive) */
+#define OVL0B_HEADS_AT      0x4B440   /* its native polygons' list heads per main-OT entry (8 KB); after them free */
 #define OVL0B_CODE_END      0x4E1E8
 #endif

@@ -1775,7 +1775,9 @@ static void decode_model(const Buffer *b, const MeshInst *mi, int t, const u8 *s
  * their entry), each at a depth above the last: the 3D engine draws them in the PS1's order, opaque or not, the depth
  * test ordering them as the OT did. (Per-vertex depths had sorted their pixels instead: a wing tip behind a wall
  * where the PS1 drew the whole wing over it.) The references sit in the buffer's pool after the snapshots. */
-typedef struct { u8 m, pad; u16 pi; u32 key; } NativeRef; /* instance, polygon, (0x1FFF - entry) << 19 | ~order */
+typedef struct { u8 m, pad; u16 pi, next; } NativeRef; /* instance, polygon, the next in its entry's list */
+#define NO_REF 0xFFFF
+static u16 *native_heads; /* per main-OT entry: its newest native polygon (NO_REF: none), in ovl_0b's dead code */
 static NativeRef *native_refs;
 
 /* a model's polygon pi: its type and source */
@@ -1790,18 +1792,20 @@ static const u8 *model_poly(const MeshInst *mi, int pi, int *type) {
     return NULL;
 }
 
-/* The scene's native polygons to draw, sorted (returns their count; ones the pool has no room for are dropped). */
+/* The scene's native polygons to draw, in a list per main-OT entry as the PS1 links them (returns their count; ones
+ * the pool has no room for are dropped). */
 static int collect_native(Buffer *b) {
     unsigned at = (b->pool_used + 3) & ~3u;
     native_refs = (NativeRef *)(b->pool + at);
     int cap = at < POOL_BYTES ? (int)((POOL_BYTES - at) / sizeof(NativeRef)) : 0, n = 0;
-    u32 order = 0;
+    if (cap > NO_REF) cap = NO_REF;
+    memset(native_heads, 0xFF, 0x1010 * sizeof *native_heads);
     for (int m = 0; m < b->meshes; ++m) {
         const MeshInst *mi = mesh_at(b, m);
         int np = mi->kind == MESH_BG ? mi->count[0] + mi->count[1] : 0;
         if (mi->kind != MESH_BG) for (int t = 0; t < 8; ++t) np += mi->count[t];
         const u8 *s = mi->src;
-        for (int t = 0, k = 0, pi = 0; pi < np; ++pi, ++order) {
+        for (int t = 0, k = 0, pi = 0; pi < np; ++pi) {
             u8 inf = mi->info[pi];
             int e;
             if (mi->kind == MESH_BG) {
@@ -1820,21 +1824,13 @@ static int collect_native(Buffer *b) {
                 if (e < 0) e = 0; else if (e > 0x100F) e = 0x100F;
             }
             if (n == cap) { gxh_stats_dropped++; continue; }
-            native_refs[n++] = (NativeRef){(u8)m, 0, (u16)pi, (u32)(0x1FFF - e) << 19 | (0x7FFFF - (order & 0x7FFFF))};
+            native_refs[n] = (NativeRef){(u8)m, 0, (u16)pi, native_heads[e]}; /* (an entry's list starts at its newest) */
+            native_heads[e] = (u16)n++;
         }
     }
-    static const u16 gaps[] = {701, 301, 132, 57, 23, 10, 4, 1}; /* (a shell sort: thousands in effect scenes) */
-    for (unsigned g = 0; g < sizeof gaps / sizeof *gaps; ++g)
-        for (int i = gaps[g]; i < n; ++i) {
-            NativeRef r = native_refs[i];
-            int j = i;
-            for (; j >= gaps[g] && native_refs[j - gaps[g]].key > r.key; j -= gaps[g]) native_refs[j] = native_refs[j - gaps[g]];
-            native_refs[j] = r;
-        }
     return n;
 }
 
-static inline int ref_rank(const Buffer *b, const NativeRef *r) { return entry_rank(b, 0x1FFF - (int)(r->key >> 19)); }
 
 /* a collected native polygon (0: plan_drops dropped it) */
 static int native_poly(Buffer *b, const NativeRef *r, Prim *p, u8 *group, u8 *palette) {
@@ -1878,7 +1874,8 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
      * vertex at 2 rank + 1: between the primitives recorded before and after the walk reached its OT entry */
     int with_meshes = b->meshes && b->mesh_gen == b->scene_gen;
     static PrimCopy mesh_ring[RECENT]; /* translucent_id keeps pointers to the last RECENT */
-    int ring_at = 0, nref = with_meshes ? collect_native(b) : 0, ri = 0, zc = 0;
+    int ring_at = 0, zc = 0, ne = -1, ri = NO_REF, erank = 0;
+    if (with_meshes && collect_native(b)) ne = 0x100F;
     for (int k = 0;;) {
         const Prim *src;
         int native = 0;
@@ -1886,8 +1883,15 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         /* a copy the command words can't alias (with -fno-strict-aliasing every store through wp would reload the
          * primitive's fields); translucent_id keeps pointers to the buffer's */
         PrimCopy local;
-        if (ri < nref && (k >= b->count || ref_rank(b, &native_refs[ri]) <= k)) {
-            if (!native_poly(b, &native_refs[ri++], &local.p, &grp, &pal)) continue; /* a native polygon, in OT order */
+        while (ri == NO_REF && ne >= 0) { /* the next entry, far to near, with native polygons */
+            ri = native_heads[ne];
+            erank = ri == NO_REF ? 0 : entry_rank(b, ne);
+            ne--;
+        }
+        if (ri != NO_REF && (k >= b->count || erank <= k)) {
+            const NativeRef *r = &native_refs[ri];
+            ri = r->next;
+            if (!native_poly(b, r, &local.p, &grp, &pal)) continue; /* a native polygon, in OT order */
             native = 1;
             z = Z_STEP * ++zc;
         } else if (k < b->count) {
@@ -2499,7 +2503,8 @@ _Static_assert(OVL0A_PRIMS_AT_1 + OVL0A_FIELD_PRIMS * sizeof(Prim) <= OVL0A_CODE
 _Static_assert(OVL0B_PRIMS_AT_1 + MAX_PRIMS * sizeof(Prim) <= OVL0B_RANKS_AT, "buffer 1 overruns the rank tables");
 _Static_assert(OVL0B_RANKS_AT + 2 * RANK_BUCKETS * 2 <= OVL0B_PRIMTAB_AT, "the rank tables overrun the primitive tables");
 _Static_assert(Z_STEP * (BATTLE_PRIMS + POOL_BYTES / 8 + 1) < 32768, "battle depths overrun VTX16");
-_Static_assert(OVL0B_PRIMTAB_AT + PRIM_TABLES * BATTLE_PRIMS <= OVL0B_CODE_END, "the primitive tables overrun ovl_0b's code");
+_Static_assert(OVL0B_PRIMTAB_AT + PRIM_TABLES * BATTLE_PRIMS <= OVL0B_HEADS_AT, "the primitive tables overrun the entry heads");
+_Static_assert(OVL0B_HEADS_AT + 0x1010 * 2 <= OVL0B_CODE_END, "the entry heads overrun ovl_0b's code");
 _Static_assert(OVL0A_PRIMS_AT_1 + OVL0A_FIELD_PRIMS * (sizeof(Prim) + PRIM_TABLES) <= OVL0A_CODE_END,
                "field buffer 1 and the primitive tables overrun ovl_0a's code");
 
@@ -2559,6 +2564,7 @@ static void use_place(const Place *p) {
     } else {
         tables = (u8 *)(buffers[1].prims + prims_max);
     }
+    native_heads = p->field ? NULL : (u16 *)(psx_ram + p->at + OVL0B_HEADS_AT);
     prim_group = tables; prim_palette = tables + prims_max; prim_drop = tables + 2 * prims_max;
     prim_layer = tables + 3 * prims_max;
 }
