@@ -13,8 +13,8 @@
 #include "psx_runtime.h"
 #ifdef PORT_GX_HYBRID
 #include "gx_hybrid.h"
-extern unsigned char *g_gameState;
 #endif
+extern unsigned char *g_gameState;
 
 extern unsigned short *psx_vram;
 void psx_softgpu_enable(int on);
