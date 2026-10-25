@@ -57,6 +57,10 @@ __attribute__((weak)) void psx_raster_rows_written(int y, int h) { (void)y; (voi
 /* Hardware backends materialise rendered pixels before CPU/GPU readback. */
 __attribute__((weak)) void psx_vram_read(int x, int y, int w, int h) {
 }
+/* A small read the backend can serve without materialising the whole scene: 1 if it put the pixels in place, which
+ * psx_vram_peek_end puts back after the copy (gx_hybrid.c). */
+__attribute__((weak)) int psx_vram_peek_begin(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; return 0; }
+__attribute__((weak)) void psx_vram_peek_end(void) {}
 
 __attribute__((weak)) unsigned int psx_vram_generation; /* also in gp0.c */
 __attribute__((weak)) unsigned int psx_display_generation;
@@ -164,7 +168,8 @@ int LoadImage(RECT *r, u32 *p) {
     psx_vram_generation++;
     psx_raster_rows_written(r->y, r->h);
     psx_display_written(r->x, r->y, r->w, r->h);
-    const u16 *src = (const u16 *)p;
+    /* the PS1 moves these by DMA, which ignores an address's low two bits (FF9 passes odd ones: field 1403) */
+    const u16 *src = (const u16 *)((uintptr_t)p & ~(uintptr_t)3);
     for (int j = 0; j < r->h; j++) {
         for (int i = 0; i < r->w; i++) {
             u16 *dst=vram_at(r->x+i,r->y+j);
@@ -182,8 +187,11 @@ int StoreImage(RECT *r, u32 *p) {
     if (!psx_vram) {
         return 0;
     }
-    psx_vram_read(r->x, r->y, r->w, r->h);
-    u16 *dst = (u16 *)p;
+    int peek = psx_vram_peek_begin(r->x, r->y, r->w, r->h);
+    if (!peek) psx_vram_read(r->x, r->y, r->w, r->h);
+    /* by DMA, word-aligned: FF9 stores a single pixel to an odd address (Fossil Roo, field 1403): unaligned, the
+     * pixel and the transfer's padding halfword landed two bytes past the PS1's word, over a pointer */
+    u16 *dst = (u16 *)((uintptr_t)p & ~(uintptr_t)3);
     for (int j = 0; j < r->h; j++) {
         for (int i = 0; i < r->w; i++) {
             *dst++ = *vram_at(r->x + i, r->y + j);
@@ -192,6 +200,7 @@ int StoreImage(RECT *r, u32 *p) {
     /* The PSX transfer is word-sized: ceil(w*h/2) GPUREAD words. An odd
      * final pixel has a zero high halfword, not the caller's previous data. */
     if (r->w > 0 && r->h > 0 && ((r->w * r->h) & 1)) *dst = 0;
+    if (peek) psx_vram_peek_end();
     return 0;
 }
 

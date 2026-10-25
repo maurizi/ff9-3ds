@@ -87,6 +87,10 @@ typedef struct {
     int polys;           /* field: polygons recorded (before the first, sprites are the software background layer) */
     struct { u16 k; u8 mask_x, mask_y, off_x, off_y; } twins[32]; /* field: the P_TWIN primitives' windows */
     int twin_count;      /* (the dialog windows' borders, 10 or so a scene) */
+    struct { s16 x0, y0, x1, y1; int count; } over[4]; /* field: rectangles written into PS1 VRAM (LoadImage,
+                          * MoveImage, fills) when the scene had count primitives: while it still has, a read inside
+                          * one is of what was written, not of the scene (file_copyViaVram's scratch) */
+    int over_count;
     u64 touched[64];     /* field: the 8x8 cells (from the buffer's corner) that may differ from the clear value:
                           * the 2D layer skips the others (gxh_present) */
     /* battle: native meshes (port_native_mesh) */
@@ -194,6 +198,7 @@ static void start_scene(Buffer *b, int filled /* the game's fill is about to cov
     b->soft = 0;
     b->polys = 0;
     b->twin_count = 0;
+    b->over_count = 0;
     if (place->field && soft_hold) {
         b->soft = 1; /* textures didn't fit lately: drawn straight in software, nothing recorded (field_frame) */
     } else if (place->field) {
@@ -587,15 +592,32 @@ static inline void use_page(const MeshUse *u, Prim *p) {
  * ui_only), exactly: whole-buffer drawing area, the dithering each was drawn with, no mask bits or texture window
  * (scenes with those go software when they appear). */
 static u8 *prim_layer;
-static void replay(Buffer *b, int from, int to, int layer /* -1: all */) {
+/* clip: VRAM x0, y0, x1, y1 inclusive to draw within (NULL: the whole buffer) */
+static void replay_clip(Buffer *b, int from, int to, int layer /* -1: all */, const int *clip) {
     Gp0State saved = gp0_state;
     gp0_state.area_x0 = b->x; gp0_state.area_y0 = b->y;
     gp0_state.area_x1 = b->x + b->w - 1; gp0_state.area_y1 = b->y + b->h - 1;
+    if (clip) {
+        if (gp0_state.area_x0 < clip[0]) gp0_state.area_x0 = clip[0];
+        if (gp0_state.area_y0 < clip[1]) gp0_state.area_y0 = clip[1];
+        if (gp0_state.area_x1 > clip[2]) gp0_state.area_x1 = clip[2];
+        if (gp0_state.area_y1 > clip[3]) gp0_state.area_y1 = clip[3];
+    }
     gp0_state.twin_mask_x = gp0_state.twin_mask_y = 0;
     gp0_state.set_mask = gp0_state.check_mask = 0;
     for (int k = from; k < to; ++k) {
         const Prim *p = &b->prims[k];
         if (layer >= 0 && prim_layer[k] != layer) continue;
+        if (clip) { /* (most miss a small area: their bounds first) */
+            int px0 = p->x[0], px1 = px0, py0 = p->y[0], py1 = py0;
+            for (int i = 1; i < p->n; ++i) {
+                if (p->x[i] < px0) px0 = p->x[i];
+                if (p->x[i] > px1) px1 = p->x[i];
+                if (p->y[i] < py0) py0 = p->y[i];
+                if (p->y[i] > py1) py1 = p->y[i];
+            }
+            if (b->x + px1 < clip[0] || b->x + px0 > clip[2] + 1 || b->y + py1 < clip[1] || b->y + py0 > clip[3] + 1) continue;
+        }
         gp0_state.texpage = (saved.texpage & ~0x200u) | (p->flags & P_DITHER ? 0x200u : 0);
         gp0_state.twin_mask_x = gp0_state.twin_mask_y = gp0_state.twin_off_x = gp0_state.twin_off_y = 0;
         if (p->flags & P_TWIN)
@@ -618,6 +640,7 @@ static void replay(Buffer *b, int from, int to, int layer /* -1: all */) {
     }
     gp0_state = saved;
 }
+static void replay(Buffer *b, int from, int to, int layer /* -1: all */) { replay_clip(b, from, to, layer, NULL); }
 
 /* Field: what the 3D engine can't draw exactly from here on (a subtractive blend, a texture window, mask bits, a
  * polygon past the drawing area, too many primitives) turns the scene into software: what it recorded is drawn
@@ -866,6 +889,72 @@ static void ui_dirty_rect(int x0, int y0, int x1, int y1);
 static int ui_flushing;
 
 /* gpu.c: StoreImage and MoveImage are about to read this rectangle: deferred UI drawing lands first. */
+/* A small read of a field scene's buffer (Fossil Roo polls one pixel off the screen's edge each frame): its
+ * recorded primitives over the rectangle are drawn into it there alone, and the pixels go back after the copy, so
+ * the scene stays in 3D. (Each such poll used to send the scene to software, whose held state then crashed field
+ * 1403 at its transition.) */
+#define PEEK_MAX 64
+static u16 peek_saved[PEEK_MAX];
+static int peek_rect[4], peek_active;
+/* A write over field buffers' scenes (Buffer.over) */
+static void over_note(int x, int y, int w, int h) {
+    for (int i = 0; i < 2; ++i) {
+        Buffer *b = &buffers[i];
+        if (!b->valid || b->soft || !b->count || x >= b->x + b->w || b->x >= x + w || y >= b->y + b->h ||
+            b->y >= y + h)
+            continue;
+        int n = 0;
+        for (int k = 0; k < b->over_count; ++k) /* (those this one contains, or ones from fewer primitives, go) */
+            if (b->over[k].count == b->count &&
+                !(x <= b->over[k].x0 && y <= b->over[k].y0 && b->over[k].x1 < x + w && b->over[k].y1 < y + h))
+                b->over[n++] = b->over[k];
+        if (n == 4) { /* (the oldest goes: a read there replays the scene, as without these) */
+            memmove(&b->over[0], &b->over[1], 3 * sizeof b->over[0]);
+            n = 3;
+        }
+        b->over[n].x0 = (s16)x; b->over[n].y0 = (s16)y; b->over[n].x1 = (s16)(x + w - 1);
+        b->over[n].y1 = (s16)(y + h - 1); b->over[n].count = b->count;
+        b->over_count = n + 1;
+    }
+}
+static int over_covers(const Buffer *b, int x, int y, int w, int h) {
+    for (int k = 0; k < b->over_count; ++k)
+        if (b->over[k].count == b->count && b->over[k].x0 <= x && b->over[k].y0 <= y && x + w - 1 <= b->over[k].x1 &&
+            y + h - 1 <= b->over[k].y1)
+            return 1;
+    return 0;
+}
+
+int psx_vram_peek_begin(int x, int y, int w, int h) {
+    if (!active || !place->field || w <= 0 || h <= 0 || w * h > PEEK_MAX) return 0;
+    ui_flush();
+    for (int i = 0; i < 2; ++i) {
+        const Buffer *b = &buffers[i];
+        if (b->valid && !b->soft && b->count && x < b->x + b->w && b->x < x + w && y < b->y + b->h && b->y < y + h &&
+            !over_covers(b, x, y, w, h) && (x < b->x || y < b->y || x + w > b->x + b->w || y + h > b->y + b->h))
+            return 0; /* (straddles a buffer's edge: the whole path) */
+    }
+    for (int j = 0; j < h; ++j)
+        for (int k = 0; k < w; ++k) peek_saved[j * w + k] = psx_vram[((y + j) & 511) * 1024 + ((x + k) & 1023)];
+    peek_rect[0] = x; peek_rect[1] = y; peek_rect[2] = w; peek_rect[3] = h; peek_active = 1;
+    for (int i = 0; i < 2; ++i) {
+        Buffer *b = &buffers[i];
+        if (!b->valid || b->soft || !b->count || x >= b->x + b->w || b->x >= x + w || y >= b->y + b->h ||
+            b->y >= y + h || over_covers(b, x, y, w, h))
+            continue;
+        int clip[4] = {x, y, x + w - 1, y + h - 1};
+        replay_clip(b, 0, b->count, -1, clip);
+    }
+    return 1;
+}
+void psx_vram_peek_end(void) {
+    if (!peek_active) return;
+    peek_active = 0;
+    int x = peek_rect[0], y = peek_rect[1], w = peek_rect[2], h = peek_rect[3];
+    for (int j = 0; j < h; ++j)
+        for (int k = 0; k < w; ++k) psx_vram[((y + j) & 511) * 1024 + ((x + k) & 1023)] = peek_saved[j * w + k];
+}
+
 void psx_vram_read(int x, int y, int w, int h) {
     if (!active) return;
     ui_flush();
@@ -874,7 +963,8 @@ void psx_vram_read(int x, int y, int w, int h) {
      * software first, so it reads the scene as the PS1 drew it; shown, it is sent again as such */
     for (int i = 0; i < 2; ++i) {
         Buffer *b = &buffers[i];
-        if (!b->valid || b->soft || !b->count || x >= b->x + b->w || b->x >= x + w || y >= b->y + b->h || b->y >= y + h)
+        if (!b->valid || b->soft || !b->count || x >= b->x + b->w || b->x >= x + w || y >= b->y + b->h ||
+            b->y >= y + h || over_covers(b, x, y, w, h))
             continue;
         key_fill(b);
         go_software(b);
@@ -887,6 +977,7 @@ void psx_vram_read(int x, int y, int w, int h) {
 void psx_vram_touch(int x, int y, int w, int h) {
     if (!active) return;
     ui_flush();
+    if (place->field) over_note(x, y, w, h);
     ui_note_write(x, y, w, h);
     ui_dirty_rect(x, y, x + w - 1, y + h - 1);
     dirty_cells(x, y, x + w - 1, y + h - 1);
@@ -1925,10 +2016,13 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         if (native) {
             reserve();
             if (polys >= MAX_POLYS || vertices + local.p.n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
-            PrimCopy *keep = &mesh_ring[ring_at];
-            ring_at = (ring_at + 1) % RECENT;
-            copy_prim(keep, &local.p);
-            src = &keep->p;
+            src = &local.p;
+            if (local.p.flags & P_SEMI) { /* (only translucent ones reach translucent_id, which keeps the pointer) */
+                PrimCopy *keep = &mesh_ring[ring_at];
+                ring_at = (ring_at + 1) % RECENT;
+                copy_prim(keep, &local.p);
+                src = &keep->p;
+            }
         }
         const Prim *p = &local.p;
         int tu = 0, tv = 0, additive = 0;
@@ -2280,6 +2374,13 @@ static void mark_ui(Buffer *b) {
     Prim *p = &b->prims[b->count - 1];
     p->flags |= P_UI;
     if (gp0_state.twin_mask_x || gp0_state.twin_mask_y) {
+        if (b->twin_count == (int)(sizeof b->twins / sizeof *b->twins)) {
+            /* more than its table holds (Fossil Roo's track map: field 1403 wrote past it into the next buffer and
+             * the statics after, then jumped to a garbage address): the scene goes software */
+            gxh_stats_soft |= 128;
+            go_software(b);
+            return;
+        }
         p->flags |= P_TWIN;
         b->twins[b->twin_count].k = (u16)(b->count - 1);
         b->twins[b->twin_count].mask_x = (u8)gp0_state.twin_mask_x; b->twins[b->twin_count].mask_y = (u8)gp0_state.twin_mask_y;
