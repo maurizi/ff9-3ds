@@ -377,3 +377,9 @@ ITCM): the renderer `gx_hybrid` 29% (`emit_scene` 6.8, `gxh_present` 4.9, `plan_
 primitives) 7%, GP0 decoding 7% (about 3 us a primitive), the text scaler 2.3%, `gpu.c` 3.4%, the game's own code
 8%, idle in the VBlank wait about 9%. The port's layers are about 70% of the time. Compiling `emit_scene`,
 `plan_textures` and `gxh_present` as ARM (3 KB more) changed nothing measurable (68.79 ms both ways): reverted.
+
+### VSync counts the VBlanks a slow frame took (2026-10-25)
+
+`plat_vsync_begin` (display.c): a VSync call's frames count the real VBlanks that passed while the game worked, as
+the PS1's `VSync(n)` does, instead of giving the debt up past `MAX_LAG` and waiting again. Virtual time is
+unchanged. d2_b0098 68.8 -> 68.4 ms, d1_b0186 58.5 -> 58.3, d1_f0110 35.5 -> 33.7, d4_f2110 66.5 -> 63.8.

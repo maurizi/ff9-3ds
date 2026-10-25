@@ -222,6 +222,8 @@ void psx_frame(void) {
  * way); here virtual time only moves at frame boundaries, so a long run of polls stands in for that time. */
 #define POLLS_PER_FRAME 512
 
+__attribute__((weak)) void plat_vsync_begin(unsigned int frames) { (void)frames; }
+
 long VSync(long mode) {
     if (mode < 0) {
         if (++polls >= POLLS_PER_FRAME) {
@@ -234,6 +236,8 @@ long VSync(long mode) {
     }
     unsigned int want = mode == 0 ? 1 : (unsigned int)mode;
     unsigned int start = vblanks;
+    unsigned int passed = vblanks - last_vsync;
+    plat_vsync_begin(mode == 0 || passed >= want ? 1 : want - passed); /* the frames the loop below runs */
     while (vblanks - last_vsync < want || vblanks == start) {
         psx_frame();
         if (mode == 0) {

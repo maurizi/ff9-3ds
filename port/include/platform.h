@@ -7,6 +7,10 @@
 /* Block until the next 60 Hz frame boundary (DS: the real VBlank; PC: a 60 Hz pace, or none when headless). */
 void plat_wait_frame(void);
 
+/* A VSync call is about to run `frames` virtual frames (plat_wait_frame each): VBlanks that passed while the game was
+ * working count toward them, as the PS1's VSync(n) counts them, so a slow frame doesn't wait again (DS display.c). */
+void plat_vsync_begin(unsigned int frames);
+
 /* Called once the PS1 memory (VRAM/SPU shadows) is allocated: platform video setup. */
 void plat_video_init(void);
 

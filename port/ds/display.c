@@ -99,6 +99,14 @@ static void vblank_irq(void) {
     }
 }
 
+/* The PS1's VSync(n) returns once n VBlanks have passed since the previous call, however long the game worked in
+ * between: virtual time catches up to within the call's own frames of real time, so they wait only for what's left
+ * (a battle frame working 10 VBlanks then runs VSync(3) at once and VSync(0) to the next VBlank, as on the PS1,
+ * rather than giving up the debt past MAX_LAG and waiting three more). */
+void plat_vsync_begin(unsigned int frames) {
+    if ((int)(real_vblanks - frames - virtual_frames) > 0) virtual_frames = real_vblanks - frames;
+}
+
 static void pace(void) {
     unsigned int profile_wait = port_profile_wait_begin();
     ++virtual_frames;
