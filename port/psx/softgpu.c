@@ -111,6 +111,14 @@ __attribute__((weak)) void *psx_spare_alloc(unsigned int size) {
 #define rows_written(y0, y1) ((void)0)
 #endif
 static int palette_ready;
+/* prepare_palette's cache of tinted palettes, 256 entries each: taken at start-up on the DS (display.c) */
+#define PALETTE_SLOTS 16
+static u32 (*cached)[256];
+void psx_softgpu_spare_init(void) {
+#ifndef PORT_SOFTGPU_REFERENCE
+    if (!cached) cached = psx_spare_alloc(PALETTE_SLOTS * 256 * sizeof(u32));
+#endif
+}
 
 static __attribute__((noinline)) void prepare_palette(const Gp0Mode *m, const Gp0Vtx *v,
                             int x0, int y0, int x1, int y1) {
@@ -143,10 +151,10 @@ static __attribute__((noinline)) void prepare_palette(const Gp0Mode *m, const Gp
         /* tinted sprites and polygons: background tiles reuse a few CLUT rows in one colour */
         /* 16 KB, in PS1 RAM the port never uses (main's MIPS code range: psx_spare_alloc, which has no room left
          * for 32 slots in a battle with every lazily allocated buffer: battle 46's item menu, disc 4) */
-        enum { SLOTS = 16 };
+        enum { SLOTS = PALETTE_SLOTS };
         static struct { u32 writes, used; u16 x, y; u8 depth, r, g, b; } key[SLOTS];
-        static u32 (*cached)[256], clock;
-        if (!cached) cached = psx_spare_alloc(SLOTS * 256 * sizeof(u32));
+        static u32 clock;
+        if (!cached) psx_softgpu_spare_init();
         const u32 writes = band_writes[(m->clut_y & 511) >> 3] + 1; /* 0: never built */
         int victim = 0;
         for (int k = 0; k < SLOTS; ++k) {

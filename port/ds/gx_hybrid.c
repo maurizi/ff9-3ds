@@ -2785,8 +2785,10 @@ static void textures_reset(void) {
     field_runs = 0;
 }
 
+static void spare_buffers(void);
 void gxh_init(void) {
     use_place(&places[0]);
+    spare_buffers();
     static u32 main_chunks[2][CHUNK_WORDS] __attribute__((aligned(32)));
     chunks = main_chunks;
     marks = psx_spare_alloc(1024 * 512 / 8); /* in main's MIPS code range, see psx_spare_alloc */
@@ -3057,6 +3059,12 @@ static u64 cell_dirty[512 / 8][2]; /* a bit per 8x8 cell of PS1 VRAM: written si
 #define CELL_DIRTY(y, x) (cell_dirty[(y) & 63][((x) & 127) >> 6] >> ((x) & 63) & 1)
 static int last_x, last_y, last_w, last_h;
 static u8 *colour_map;          /* 32768 RGB15 -> palette index (0: not mapped yet) */
+/* The spare PS1 RAM's buffers all taken at start-up (gxh_init), so one that doesn't fit stops the port at boot
+ * rather than in whichever scene first needs it */
+static void spare_buffers(void) {
+    colour_map = psx_spare_alloc(32768);
+    (void)scaled_block();
+}
 static int colours, colours_full;
 
 /* Palette: 1-64 a fixed 4x4x4 colour cube for software glows (gradients with many shades), 65-255 exact colours
@@ -3065,7 +3073,6 @@ static int colours, colours_full;
 static const u8 cube_level[4] = {0, 10, 21, 31};
 
 static void reset_colours(void) {
-    if (!colour_map) colour_map = psx_spare_alloc(32768);
     memset(colour_map, 0, 32768);
     for (int i = 0; i < CUBE; ++i)
         BG_PALETTE[1 + i] = cube_level[i & 3] | cube_level[(i >> 2) & 3] << 5 | cube_level[i >> 4] << 10;

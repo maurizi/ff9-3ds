@@ -11,6 +11,7 @@
 #include "profile.h"
 #include "psx_display.h"
 #include "psx_runtime.h"
+#include "psx_raster.h"
 #ifdef PORT_GX_HYBRID
 #include "gx_hybrid.h"
 #endif
@@ -23,6 +24,8 @@ static int bg = -1;
 static int back_buffer=1;
 #define TEXT_RECTS 1024
 static DsTextRect *text_rects, *previous_rects; /* TEXT_RECTS each (psx_spare_alloc) */
+#define BAND_ROWS 16
+static u16 *band; /* the software display's scaling band (display_present; psx_spare_alloc, 32-byte aligned) */
 static unsigned text_count;
 static unsigned previous_count;
 static int drawing;
@@ -54,6 +57,8 @@ static unsigned int virtual_frames;
 
 void display_init(void) {
     text_rects = psx_spare_alloc(TEXT_RECTS * sizeof *text_rects);
+    band = psx_spare_alloc(256 * BAND_ROWS * sizeof *band);
+    psx_softgpu_spare_init();
     previous_rects = psx_spare_alloc(TEXT_RECTS * sizeof *previous_rects);
     if (!psx_vram) {
         return; /* 4 MB DS: no VRAM shadow, nothing to show */
@@ -228,9 +233,7 @@ void display_present(void) {
      * stores to VRAM cross the slow external bus and cost most of the scaling time, and a whole frame's buffer
      * would cost 96 KB. A band's 16 rows come from 20 source rows; one more lets the text filter at its last row
      * read the next band's first, as a whole-frame pass does. */
-    enum { BAND = 16 };
-    static u16 *band; /* (in PS1 RAM the port keeps spare: psx_spare_alloc, 32-byte aligned) */
-    if (!band) band = psx_spare_alloc(256 * BAND * sizeof *band);
+    enum { BAND = BAND_ROWS };
     u16 *bitmap = (u16 *)BG_BMP_RAM_MAIN(back_buffer*8);
     const int out_h = h * 4 / 5;
     for (int oy = 0; oy < out_h; oy += BAND) {

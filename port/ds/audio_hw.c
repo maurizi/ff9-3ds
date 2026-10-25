@@ -78,10 +78,12 @@ static void block(unsigned v, const int16_t *samples, void *user) {
 }
 
 static const PsxSpuSink sink = {key_on, block, NULL};
+static void echo_alloc(void);
 
 void port_hw_sound_init(void) {
     soundEnable();
     rings = psx_spare_alloc(RINGS * RING * sizeof(s16));
+    echo_alloc(); /* (at start-up, as every spare PS1 RAM buffer: one that doesn't fit stops the port at boot) */
     for (int i = 0; i < VOICES; ++i)
         voices[i] = (Voice){NULL, 0, 0, -1, -1, 0, 64, 0, 0, 0};
     psx_spu_set_hw(&sink);
@@ -94,6 +96,7 @@ void port_hw_sound_init(void) {
 #define ECHO_HZ 11025
 #define ECHO_MAX 3072  /* samples per side: 0.28 s */
 static struct { int on, ids[2]; u8 volume; unsigned words; s16 *ring; } echo = {0, {-1, -1}, 0, 0, NULL};
+static void echo_alloc(void) { echo.ring = psx_spare_alloc(2 * ECHO_MAX * sizeof(s16)); }
 
 static void echo_stop(void) {
     for (int k = 0; k < 2; ++k) {
@@ -106,7 +109,6 @@ static void echo_stop(void) {
 
 static void echo_frame(const PsxSpuReverbState *r) {
     if (!r->on) { if (echo.on) echo_stop(); return; }
-    if (!echo.ring) echo.ring = psx_spare_alloc(2 * ECHO_MAX * sizeof(s16));
     /* the work area holds about area / 4 stereo samples at 22.05 kHz */
     unsigned samples = (unsigned)((unsigned long long)r->area * ECHO_HZ / (4 * 22050));
     if (samples > ECHO_MAX) samples = ECHO_MAX;

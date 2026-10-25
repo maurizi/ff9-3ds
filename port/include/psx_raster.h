@@ -16,4 +16,5 @@ void psx_softgpu_shadow_rect(const Gp0Mode *, const Gp0Vtx *, int, int,
                             unsigned short *, unsigned char *, int, int, int, int);
 /* While plane is non-NULL, each pixel a primitive writes sets its bit (1024x512 bit plane, VRAM coordinates). */
 void psx_softgpu_set_marks(unsigned char *plane, unsigned bit);
+void psx_softgpu_spare_init(void); /* its buffers in spare PS1 RAM, at start-up (DS) */
 #endif
