@@ -560,3 +560,16 @@ toward white on the PS1. The DS's 3D engine only alpha-blends, and its 2D compos
 - a whiter approximation (biasing bright texels' colours toward white) helps stacked cores but over-whitens single
   glows over dark backgrounds.
 Exact battle effects therefore trade speed (software) or exactness (approximations); a decision for the user.
+
+### Additive light whiter (2026-10-25, the user's choice)
+
+The 3D engine draws additive light as dst x (1 - a) + hue x a, the PS1 as dst + source; over a background d the two
+agree with d added to the hue (per channel, clamped), and on the PS1 that background is the light already added, which
+is what turns stacked layers white. `gx_hybrid.c` adds a base of 4/31 to the additive palettes and vertex colours, and
+to each additive primitive's vertex colours the light earlier additive primitives of the scene put under it (per
+channel, per 16-pixel cell whose centre it covers, the texture's brightest colour times the vertex hue), capped at
+8/31 and only for primitives within 24 cells: a single amount per primitive shows a large primitive's shape where
+the light under it varies (Necron's flash at 12/31 and 48 cells). Against the host's frames: Tiamat's beam and Lani's
+sphere much closer to the PS1's white, Maliris's streaks whiter (its fireball still orange: an orange texture under
+white vertices, which only the shared palette could whiten), the other bosses and the fields unchanged. Costs 1.1 KB
+of code and 1 KB of tables; no measurable time.

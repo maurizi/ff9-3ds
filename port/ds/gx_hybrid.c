@@ -362,6 +362,7 @@ static int allocate_units(int units) {
 /* The additive copies' palettes (ADD_SLOT): users per palette; one made from a 4- or 8-bit CLUT serves every copy
  * through that CLUT (a 15-bit copy's is its own: the texels' colours) */
 static u16 cpal_users[64];
+static u16 cpal_hue[64]; /* each additive palette's brightest colour (light_under) */
 static struct { u16 x, y; u8 depth; } cpal_clut[64];
 
 static int cpal_take(int depth, int cx, int cy) {
@@ -421,6 +422,82 @@ static Region *place_region(int depth, int conv, int cx, int cy, int x, int y, i
  * colours (A5I3); the others take CLUTs. */
 #define PAL_SLOTS 62
 #define ADD_SLOT 62
+/* The 3D engine draws additive light as dst x (1 - a) + hue x a (a the source's brightness), the PS1 as dst + source.
+ * Over a uniform background d the two agree with d added to the hue (clamped): that's what turns the PS1's stacked
+ * light white, where the plain hue stays coloured. The background is taken as ADD_WHITEN / 31 (the user's "whiter
+ * approximation" of 2026-10-25; FF9's battle backgrounds behind effects are mostly about a quarter bright). */
+#ifndef ADD_WHITEN
+#define ADD_WHITEN 4
+#endif
+/* c + w per channel, clamped (w: 15-bit, a background per channel) */
+static __attribute__((noinline)) u32 whiten_by(u32 c, u32 w) {
+    u32 r = (c & 31) + (w & 31), g = (c >> 5 & 31) + (w >> 5 & 31), b = (c >> 10 & 31) + (w >> 10 & 31);
+    return (r > 31 ? 31 : r) | (g > 31 ? 31 : g) << 5 | (b > 31 ? 31 : b) << 10;
+}
+#define ADD_BASE (ADD_WHITEN * 0x421u)
+/* at most this much from the light under a primitive: where the earlier layers fell short of the PS1's brightness,
+ * whitening toward its estimate shows the primitive's shape */
+/* and none for primitives over this many cells: screen-sized layers (flashes, fades), not stacked glows */
+#define ADD_STACK_CELLS 24
+#ifndef ADD_STACK_MAX
+#define ADD_STACK_MAX 8
+#endif
+static inline u32 whiten(u32 c) { return whiten_by(c, ADD_BASE); }
+/* Stacked light: on the PS1 each additive layer's background is the light already added there, so the background
+ * that whitens a primitive's vertex colours is the base plus what earlier additive primitives of the scene put under
+ * it, per channel (blue light on blue saturates blue, it doesn't whiten), kept per 16-pixel cell: a primitive adds
+ * its light (hue x brightness) to every cell whose centre it covers. The texture palettes (shared) take the base only. */
+enum { LIGHT_W = 20, LIGHT_H = 15 };
+static u8 light_cells[LIGHT_H][LIGHT_W][3];
+static u32 add_white = ADD_BASE; /* this primitive's, for rgb_for */
+/* whether (x, y) is inside triangle a b c (either winding) */
+static inline int inside(int x, int y, int ax, int ay, int bx, int by, int cx, int cy) {
+    int e0 = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+    int e1 = (cx - bx) * (y - by) - (cy - by) * (x - bx);
+    int e2 = (ax - cx) * (y - cy) - (ay - cy) * (x - cx);
+    return (e0 >= 0 && e1 >= 0 && e2 >= 0) || (e0 <= 0 && e1 <= 0 && e2 <= 0);
+}
+static u32 light_under(const Prim *p, int alpha, u32 hue) {
+    int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
+    for (int j = 1; j < p->n; ++j) {
+        if (p->x[j] < x0) x0 = p->x[j]; else if (p->x[j] > x1) x1 = p->x[j];
+        if (p->y[j] < y0) y0 = p->y[j]; else if (p->y[j] > y1) y1 = p->y[j];
+    }
+    x0 = x0 < 0 ? 0 : x0 >> 4; y0 = y0 < 0 ? 0 : y0 >> 4;
+    x1 = x1 < 0 ? -1 : x1 >> 4; y1 = y1 < 0 ? -1 : y1 >> 4;
+    if (x1 >= LIGHT_W) x1 = LIGHT_W - 1;
+    if (y1 >= LIGHT_H) y1 = LIGHT_H - 1;
+    u32 add[3] = {(hue & 31) * (u32)alpha / 31, (hue >> 5 & 31) * (u32)alpha / 31, (hue >> 10 & 31) * (u32)alpha / 31};
+    u32 sum[3] = {0, 0, 0}, cells = 0;
+    int rect = (p->flags & P_RECT) != 0;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) {
+            /* the cells whose centre the primitive covers (a primitive inside one cell: that cell) */
+            int cx = x * 16 + 8, cy = y * 16 + 8;
+            int in = rect || (x0 == x1 && y0 == y1) ||
+                     inside(cx, cy, p->x[0], p->y[0], p->x[1], p->y[1], p->x[2], p->y[2]) ||
+                     (p->n == 4 && inside(cx, cy, p->x[1], p->y[1], p->x[2], p->y[2], p->x[3], p->y[3]));
+            if (!in) continue;
+            u8 *l = light_cells[y][x];
+            for (int c = 0; c < 3; ++c) {
+                sum[c] += l[c];
+                u32 v = l[c] + add[c];
+                l[c] = (u8)(v > 255 ? 255 : v);
+            }
+            ++cells;
+        }
+    u32 w = 0;
+    for (int c = 0; c < 3; ++c) {
+        u32 under = cells && cells <= ADD_STACK_CELLS ? sum[c] / cells : 0;
+        u32 v = ADD_WHITEN + (under > ADD_STACK_MAX ? ADD_STACK_MAX : under);
+        w |= (v > 31 ? 31 : v) << (5 * c);
+    }
+    return w;
+}
+/* two 15-bit colours multiplied (31 = 1) */
+static __attribute__((noinline)) u32 modulate(u32 a, u32 b) {
+    return ((a & 31) * (b & 31) / 31) | ((a >> 5 & 31) * (b >> 5 & 31) / 31) << 5 | ((a >> 10 & 31) * (b >> 10 & 31) / 31) << 10;
+}
 typedef struct { int used, x, y, count, dirty, wanted; } Palette;
 static Palette palettes[PAL_SLOTS];
 
@@ -916,7 +993,8 @@ static __attribute__((noinline)) int conv_choose(int depth, int x, int y, int wh
     }
     if (!nreps) reps[nreps++] = 0x7FFF;
     u16 *pal = (u16 *)VRAM_F + ADD_SLOT * 256 + cpal * 8;
-    for (int k = 0; k < 8; ++k) pal[k] = k < nreps ? reps[k] : 0;
+    for (int k = 0; k < 8; ++k) pal[k] = k < nreps ? (u16)whiten(reps[k]) : 0;
+    cpal_hue[cpal & 63] = reps[0];
     if (depth < 2)
         for (int i = 0; i < count; ++i) {
             int best = 0, best_d = 1 << 30;
@@ -1091,6 +1169,10 @@ static inline u32 div31(u32 c, u32 d) {
     if (!recip24[1]) for (u32 k = 1; k < 256; ++k) recip24[k] = (u32)(((1ull << 24) + k - 1) / k);
     return (u32)(((unsigned long long)(c * 31) * recip24[d]) >> 24);
 }
+/* vertex i's colour at full brightness: each channel x 31 / m (m its brightest channel or more) */
+static __attribute__((noinline)) u32 hue_of(const Prim *p, int i, u32 m) {
+    return div31(p->r[i], m) | div31(p->g[i], m) << 5 | div31(p->b[i], m) << 10;
+}
 
 /* additive: the polygon's brightest vertex channel, which went into its alpha (conv_upload); the vertex colours
  * keep the hue and the shading relative to it. */
@@ -1099,9 +1181,8 @@ static inline u32 rgb_for(const Prim *p, int i, int additive) {
     if (additive && p->abr == 2) {
         r = g = b = 0; /* subtraction: black over the destination at the source's brightness */
     } else if (additive) {
-        r = (p->flags & P_RAW) ? 31 : (int)div31(p->r[i], (u32)additive);
-        g = (p->flags & P_RAW) ? 31 : (int)div31(p->g[i], (u32)additive);
-        b = (p->flags & P_RAW) ? 31 : (int)div31(p->b[i], (u32)additive);
+        if (p->flags & P_RAW) return 0x7FFF;
+        return whiten_by(hue_of(p, i, (u32)additive), add_white);
     } else if ((p->flags & P_SEMI) && p->abr == 2) {
         r = g = b = 0;
     } else if ((p->flags & (P_TEXTURED | P_RAW)) == (P_TEXTURED | P_RAW)) {
@@ -1223,6 +1304,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     fifo(CMD_TEXIMAGE, 0);
     int polys = 0, vertices = 0, z = 0;
     plan_drops(b);
+    memset(light_cells, 0, sizeof light_cells);
     for (int k = 0; k < b->count; ++k) {
         const Prim *src = &b->prims[k];
         if (!in_scene(src, k)) continue;
@@ -1237,6 +1319,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         const Prim *p = &local.p;
         int tu = 0, tv = 0, additive = 0;
         u32 want_image = 0, set_palette = ~0u; /* state to send with the primitive's BEGIN (~0: unchanged) */
+        u32 tex_hue = 0x7FFF; /* an additive texture's colour, for light_under */
         if (p->flags & P_TEXTURED) {
             int conv, cpal, unit;
             u32 size_bits;
@@ -1258,6 +1341,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             if (p->depth < 2 && !conv && prim_palette[k] == 0xFF) { gxh_stats_palette_fail++; continue; }
             want_image = (u32)(unit * TEX_UNIT / 8) | size_bits | (u32)(conv ? 6 : p->depth == 2 ? 7 : p->depth == 0 ? 3 : 4) << 26;
             if (conv) {
+                tex_hue = cpal_hue[cpal & 63];
                 u32 want_palette = (u32)(ADD_SLOT * 512 + cpal * 16) / 16;
                 if (want_palette != palette) set_palette = want_palette;
                 additive = 1;
@@ -1278,6 +1362,17 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         int alpha = 31, id = 0;
         if (glow) {
             id = translucent_id(src, polys);
+            if (p->abr != 2) { /* its brightness: the brightest vertex channel, as the ramp's U */
+                int m = 0;
+                for (int j = 0; j < p->n; ++j) {
+                    int v = p->r[j] > p->g[j] ? (p->r[j] > p->b[j] ? p->r[j] : p->b[j]) : (p->g[j] > p->b[j] ? p->g[j] : p->b[j]);
+                    if (v > m) m = v;
+                }
+                u32 hue = m ? hue_of(p, 0, (u32)m) : 0;
+                add_white = light_under(p, m * 31 >> (p->abr == 3 ? 9 : 7) > 31 ? 31 : m * 31 >> (p->abr == 3 ? 9 : 7), hue);
+                /* a flat glow is as bright to its edges: whitening past the base would show its shape */
+                if (!(p->flags & P_GOURAUD)) add_white = ADD_BASE;
+            }
         } else if (additive) {
             /* the source's brightness (PS1 128 = x1; mode 3 adds a quarter), at most opaque */
             int m = 0;
@@ -1292,6 +1387,8 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             if (!alpha) continue; /* adds nothing (alpha 0 would be wireframe) */
             additive = m;
             id = translucent_id(src, polys);
+            if (p->abr != 2)
+                add_white = light_under(p, alpha, modulate(tex_hue, (p->flags & P_RAW) ? 0x7FFF : hue_of(p, 0, (u32)m)));
         } else if (p->flags & P_SEMI) {
             alpha = p->abr == 3 ? 8 : p->abr == 1 ? 24 : 16; /* additive: a brighter blend than 50% */
             if (p->abr == 2) {
@@ -1318,7 +1415,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 int m = p->r[i] > p->g[i] ? (p->r[i] > p->b[i] ? p->r[i] : p->b[i]) : (p->g[i] > p->b[i] ? p->g[i] : p->b[i]);
                 int k = p->flags & P_GOURAUD ? i : 0;
                 if (k != i) m = p->r[k] > p->g[k] ? (p->r[k] > p->b[k] ? p->r[k] : p->b[k]) : (p->g[k] > p->b[k] ? p->g[k] : p->b[k]);
-                u32 colour = m && p->abr != 2 ? div31(p->r[k], (u32)m) | div31(p->g[k], (u32)m) << 5 | div31(p->b[k], (u32)m) << 10 : 0;
+                u32 colour = m && p->abr != 2 ? whiten_by(hue_of(p, k, (u32)m), add_white) : 0;
                 /* subtraction (dst - s, clamped) as dst x (1 - 2s): equal at mid grey, black where the PS1 is */
                 int a = glow_alpha[p->abr][m];
                 pack(CMD_COLOR); put(colour);
