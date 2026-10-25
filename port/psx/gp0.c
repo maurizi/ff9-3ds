@@ -271,6 +271,18 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
     return 1;
 }
 
+/* The commands from w on that are drawing primitives (polygons, lines, rectangles) or drawing state (E0 up), up to
+ * the first other one: their words used. One loop for a packet's run of them (gpu.c draw_packet). */
+unsigned int gp0_run_plain(const unsigned int *w, unsigned int len) {
+    unsigned int i = 0;
+    while (i < len) {
+        unsigned int cmd = w[i] >> 24;
+        if (!((cmd >= 0x20 && cmd < 0x80) || cmd >= 0xE0)) break;
+        i += command(w + i, len - i);
+    }
+    return i;
+}
+
 void gp0_run(const unsigned int *w, unsigned int len) {
     BB(0x47500001, w);
     unsigned int profile_start=port_profile_begin();

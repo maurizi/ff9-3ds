@@ -513,6 +513,8 @@ static void draw_packet(u32 *p) {
     psx_gpu_packets++;
     psx_gpu_words += len;
     for (unsigned int i = 0; i < len;) {
+        i += gp0_run_plain(w + i, len - i); /* (primitives and drawing state: nearly all of them) */
+        if (i >= len) break;
         u32 cmd = w[i] >> 24;
         unsigned int n = psx_gp0_len(w + i, len - i);
         if (cmd == 0x02 && n == 3) { /* fill rectangle */
