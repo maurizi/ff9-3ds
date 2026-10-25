@@ -67,6 +67,17 @@ __attribute__((weak)) void psx_vram_filled(int x, int y, int w, int h, unsigned 
     (void)x; (void)y; (void)w; (void)h; (void)rgb15;
 }
 
+#if defined(__arm__)
+/* `groups` (> 0) runs of four words of v from q, as STMIA bursts; returns the word after them. Its own ARM function
+ * with the registers named: as inline asm in vram_fill's loop the compiler lost track of the count (fills ran past
+ * their span: the battle HP panel's cached digits turned into black boxes). */
+__attribute__((target("arm"), noinline)) static u32 *fill_bursts(u32 *q, u32 v, unsigned groups) {
+    __asm__ volatile("mov r4, %2\n\tmov r5, %2\n\tmov r6, %2\n\tmov r7, %2\n"
+                     "1:\tstmia %0!, {r4-r7}\n\tsubs %1, %1, #1\n\tbne 1b"
+                     : "+r"(q), "+r"(groups) : "r"(v) : "r4", "r5", "r6", "r7", "memory", "cc");
+    return q;
+}
+#endif
 static void vram_fill(int x, int y, int w, int h, u16 c) {
     if (!psx_vram) {
         return;
@@ -90,9 +101,9 @@ static void vram_fill(int x, int y, int w, int h, u16 c) {
 #if defined(__arm__)
             /* burst stores (STMIA of four words): faster on the DS's main RAM than single ones */
             if (n >= 8) {
-                register u32 r0 asm("r4") = pair, r1 asm("r5") = pair, r2 asm("r6") = pair, r3 asm("r7") = pair;
-                for (; n >= 8; n -= 8)
-                    __asm__ volatile("stmia %0!, {%1, %2, %3, %4}" : "+l"(q) : "l"(r0), "l"(r1), "l"(r2), "l"(r3) : "memory");
+                unsigned groups = (unsigned)n / 8;
+                q = fill_bursts(q, pair, groups);
+                n -= (int)groups * 8;
             }
 #endif
             for (; n >= 2; n -= 2) *q++ = pair;
