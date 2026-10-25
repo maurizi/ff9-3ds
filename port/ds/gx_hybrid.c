@@ -148,13 +148,14 @@ static void note_buffer(int x, int y, int w, int h) {
 }
 
 /* Field: b's PS1 VRAM all the key colour */
-static void key_fill(Buffer *b) {
+static void fill_buffer(Buffer *b, u32 colour) {
     int w = b->x + b->w <= 1024 ? b->w : 1024 - b->x;
     for (int row = 0; row < b->h; ++row) {
         u32 *p = (u32 *)(psx_vram + ((b->y + row) & 511) * 1024 + b->x);
-        for (int k = 0; k < w / 2; ++k) p[k] = FIELD_KEY | (u32)FIELD_KEY << 16;
+        for (int k = 0; k < w / 2; ++k) p[k] = colour | colour << 16;
     }
 }
+static void key_fill(Buffer *b) { fill_buffer(b, FIELD_KEY); }
 
 static void start_scene(Buffer *b, int filled /* the game's fill is about to cover it */) {
     b->shown = 0;
@@ -666,7 +667,7 @@ static u8 group_hash[256], palette_hash[256];
 
 /* Which layer each primitive goes to: the 3D engine (all of a battle's), or in a field the software background layer
  * or the 2D layer (field_layers). */
-enum { L_3D, L_UI };
+enum { L_3D, L_UI, L_ADD /* field: an additive primitive, drawn exactly in software into the added layer */ };
 static u8 prim_layer[MAX_PRIMS];
 static inline int in_scene(const Prim *p, int k) { (void)p; return prim_layer[k] == L_3D; }
 
@@ -1787,6 +1788,7 @@ static int layer_bg = -1;
 /* Field: a software frame's bitmap BG (BG3, 16-bit, bank A when bank_a_bg) behind the transparent 3D layer */
 static int back_bg = -1;
 static int bank_a_bg;     /* field: bank A is the software frame's bitmap, not textures */
+static int bank_a_add;    /* field: and that bitmap is the scene's additive primitives, added over the 3D layer */
 /* a scaled block, stride 256 (psx_spare_alloc): the 2D layer's and the background layer's */
 static u16 *scaled_block(void) {
     static u16 *block;
@@ -1885,6 +1887,7 @@ void gxh_enable(int on) {
         videoSetMode(MODE_5_3D);
         vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_TEXTURE, VRAM_C_TEXTURE, VRAM_D_TEXTURE);
         bank_a_bg = 0;
+        bank_a_add = 0; REG_BLDCNT = 0; REG_BLDALPHA = 0;
         soft_hold = 0;
         direct_soft = 0;
         vramSetBankE(VRAM_E_MAIN_BG);
@@ -1929,11 +1932,15 @@ void gxh_enable(int on) {
 }
 
 /* Field: the background layer (bank A, 16-bit with bit 15 set) from b's PS1 VRAM, scaled like the software display */
-static void scale_back(Buffer *b, int display_h) {
+static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1);
+static void scale_back(Buffer *b, int display_h) { scale_back_rows(b, display_h, 0, 1 << 30); }
+/* output rows [oy0, oy1) only (in 32-row bands) */
+static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1) {
     int h = display_h > 0 ? display_h : 224;
     int out_h = h * 4 / 5, top = (192 - out_h) / 2;
     u16 *band = scaled_block(), *bitmap = (u16 *)BG_BMP_RAM(8);
-    for (int oy = 0; oy < out_h; oy += BLOCK) {
+    if (oy1 > out_h) oy1 = out_h;
+    for (int oy = oy0 & ~(BLOCK - 1); oy < oy1; oy += BLOCK) {
         int rows = out_h - oy < BLOCK ? out_h - oy : BLOCK, sy = b->y + oy * 5 / 4;
         scale_fn(band, b->x, sy, 320, rows * 5 / 4);
         /* opaque (bit 15) in cached RAM, then DMA: the ARM9's own stores to VRAM are slow */
@@ -1949,6 +1956,7 @@ static void scale_back(Buffer *b, int display_h) {
  * textures don't fit, the frame is the software renderer's: the whole scene in PS1 VRAM, scaled into bank A as a 16-bit
  * bitmap BG (the 3D layer transparent, the 2D layer hidden); bank A's textures are given up until a 3D frame takes it
  * back. After textures didn't fit, the next scenes stay software for a while (a field's textures stay as big). */
+static void back_mode(int add);
 static void bank_a_as_bg(int bg) {
     if (bg == bank_a_bg) return;
     bank_a_bg = bg;
@@ -1963,24 +1971,84 @@ static void bank_a_as_bg(int bg) {
         bgShow(back_bg);
     } else {
         bgHide(back_bg);
+        back_mode(0);
         vramSetBankA(VRAM_A_TEXTURE_SLOT0);
         for (int u = 0; u < 64; ++u) unit_used[u] = 0;
     }
 }
 
+/* Bank A's bitmap behind a transparent 3D layer (a software frame) or in front of it, added (BLDCNT with both
+ * coefficients 16: A + B, saturating, as the PS1 adds) */
+static void back_mode(int add) {
+    if (add == bank_a_add) return;
+    bank_a_add = add;
+    bgSetPriority(back_bg, add ? 0 : 3); /* (in front of the 3D layer, behind the 2D layer: BG2 wins a tie) */
+    REG_BLDCNT = add ? BLEND_ALPHA | BLEND_SRC_BG3 | BLEND_DST_BG0 : 0;
+    REG_BLDALPHA = add ? 16 | 16 << 8 : 0;
+}
+
 static void field_frame(Buffer *b, int display_h) {
     if (!b->soft && !soft_hold) {
-        if (bank_a_bg) bank_a_as_bg(0);
-        int polys = 0, vertices = 0;
+        int polys = 0, vertices = 0, adds = 0, add_area2 = 0;
         for (int k = 0; k < b->count; ++k) {
-            prim_layer[k] = b->prims[k].flags & P_UI ? L_UI : L_3D;
-            if (prim_layer[k] == L_3D) { polys++; vertices += b->prims[k].n; }
+            const Prim *p = &b->prims[k];
+            prim_layer[k] = p->flags & P_UI ? L_UI : (p->flags & P_SEMI) && (p->abr == 1 || p->abr == 3) ? L_ADD : L_3D;
+            if (prim_layer[k] == L_3D) { polys++; vertices += p->n; }
+            if (prim_layer[k] == L_ADD) { adds++; add_area2 += prim_area2(p); }
+        }
+        /* the exact layer costs software drawing in proportion to the additive primitives' area (a sixth of the
+         * screen: field 2162's lamp glows took it from 27 to 40 ms on DSi): beyond that, the 3D approximation */
+        if (adds && add_area2 > 2 * 320 * 224 / 6) {
+            for (int k = 0; k < b->count; ++k) if (prim_layer[k] == L_ADD) { prim_layer[k] = L_3D; polys++; vertices += b->prims[k].n; }
+            adds = 0;
         }
         /* the 3D engine's polygon and vertex RAM (2048, 6144 a frame): a scene past them stays exact in software */
-        if (polys > MAX_POLYS || vertices > MAX_VERTICES) {
+        if (polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) {
             gxh_stats_soft |= 8;
         } else {
+            /* additive primitives (PS1 modes 1 and 3): exact in software onto black in bank A, added over the 3D
+             * layer by the 2D compositor, if the textures fit in banks B-D; else approximated in 3D (conv_upload) */
+            if (adds) bank_a_as_bg(1);
+            else if (bank_a_bg) bank_a_as_bg(0);
             plan_textures(b);
+            if (adds && gxh_stats_unplaced) {
+                for (int k = 0; k < b->count; ++k) if (prim_layer[k] == L_ADD) prim_layer[k] = L_3D;
+                adds = 0;
+                bank_a_as_bg(0);
+                plan_textures(b);
+            }
+            if (!gxh_stats_unplaced && adds) {
+                /* only the rows the additive primitives cover (and those the last scene's covered, cleared) */
+                int y0 = b->h, y1 = 0;
+                for (int k = 0; k < b->count; ++k) {
+                    if (prim_layer[k] != L_ADD) continue;
+                    const Prim *p = &b->prims[k];
+                    for (int i = 0; i < p->n; ++i) {
+                        if (p->y[i] < y0) y0 = p->y[i];
+                        if (p->y[i] > y1) y1 = p->y[i];
+                    }
+                }
+                if (y0 < 0) y0 = 0;
+                if (y1 >= b->h) y1 = b->h - 1;
+                if (y0 > y1) y0 = y1 = 0;
+                int h = display_h > 0 ? display_h : 224, top = (192 - h * 4 / 5) / 2;
+                int oy0 = y0 * 4 / 5 & ~(BLOCK - 1), oy1 = ((y1 + 1) * 4 / 5 + BLOCK) & ~(BLOCK - 1);
+                static int last_oy0, last_oy1;
+                for (int oy = last_oy0; oy < last_oy1; ++oy) /* the last scene's band outside this one: clear */
+                    if ((oy < oy0 || oy >= oy1) && top + oy < 192)
+                        dmaFillWords(0, (u16 *)BG_BMP_RAM(8) + (top + oy) * 256, 512);
+                last_oy0 = oy0; last_oy1 = oy1;
+                int ry0 = oy0 * 5 / 4, ry1 = oy1 * 5 / 4 + 2; /* the buffer rows those bands sample */
+                if (ry1 > b->h) ry1 = b->h;
+                Buffer band = *b;
+                band.y = b->y + ry0; band.h = ry1 - ry0;
+                fill_buffer(&band, 0);
+                replay(b, 0, b->count, L_ADD);
+                scale_back_rows(b, display_h, oy0, oy1);
+                fill_buffer(&band, b->clear); /* as it was: the key, or the game's clear (the 2D layer's "nothing") */
+                back_mode(1);
+                gxh_stats_soft |= 512;
+            }
             if (!gxh_stats_unplaced) {
                 replay(b, 0, b->count, L_UI);
                 for (int k = 0; k < b->count; ++k) { /* where the UI landed: the 2D layer's other cells are clear */
@@ -2006,6 +2074,7 @@ static void field_frame(Buffer *b, int display_h) {
     direct_soft = 1;
     gp0_backend = &psx_softgpu;
     bank_a_as_bg(1);
+    back_mode(0);
     scale_back(b, display_h);
     memset(prim_layer, L_UI, b->count); /* (none left: the scene is all in PS1 VRAM) */
     plan_textures(b);
@@ -2044,7 +2113,7 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     glOrthof32(0, 320, h, 0, -4096, 4096);
     glMatrixMode(GL_MODELVIEW);
     unsigned int c = b->clear;
-    glClearColor(c & 31, (c >> 5) & 31, (c >> 10) & 31, place->field && bank_a_bg ? 0 : 31); /* a software frame shows */
+    glClearColor(c & 31, (c >> 5) & 31, (c >> 10) & 31, place->field && bank_a_bg && !bank_a_add ? 0 : 31); /* a software frame shows */
     emit_scene(b);
     flush_chunk();
     b->submitted = 1;
@@ -2155,6 +2224,7 @@ static void present_direct(const PsxDisplayInfo *d) {
     Buffer *b = buffer_at(d->x, d->y);
     if (!b) return;
     bank_a_as_bg(1);
+    back_mode(0);
     scale_back(b, d->h);
     if (soft_hold && --soft_hold) return;
     direct_soft = 0; /* the hybrid again: the buffers' next draws start scenes */

@@ -7,7 +7,7 @@
  * Usage: ff9ds [--data DIR] [--frames N] [--status EVERY_N_FRAMES (0: off)] [--press BUTTON@FRAME[+FRAMES]]...
  *              [--watch ADDR:SIZE]... [--render] [--dump EVERY_N_FRAMES]
  * --render runs the software reference GPU (port/psx/softgpu.c); --dump also writes the displayed area as
- * build/frames/frame_NNNNNN.ppm.
+ * build/frames/frame_NNNNNN.ppm (--dump-dir DIR: in DIR).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,6 +64,7 @@ static void spu_replay_close(void) {
 static long frames;
 static long status_every = 60;
 static long dump_every; /* --dump N: write the displayed area every N frames to build/frames/ */
+static const char *dump_dir = "build/frames"; /* --dump-dir DIR: elsewhere (parallel runs) */
 static long vram_at = -1; /* --vram FRAME: also write all of VRAM at that frame */
 int plat_spu_trace_open(const char *path);
 static FILE *audio_file;
@@ -113,7 +114,7 @@ extern unsigned short *psx_vram;
 /* A VRAM area as a binary PPM (15-bit BGR expanded to 24-bit RGB): the displayed one, or all of it. */
 static void dump_area(const char *name, int x0, int y0, int w, int h, int rgb24) {
     char path[256];
-    snprintf(path, sizeof path, "build/frames/%s_%06ld.ppm", name, frames);
+    snprintf(path, sizeof path, "%s/%s_%06ld.ppm", dump_dir, name, frames);
     FILE *f = fopen(path, "wb");
     if (!f) {
         return;
@@ -270,6 +271,8 @@ int main(int argc, char **argv) {
             n_watches++;
         } else if (!strcmp(argv[i], "--render")) {
             psx_softgpu_enable(1);
+        } else if (!strcmp(argv[i], "--dump-dir") && i + 1 < argc) {
+            dump_dir = argv[++i];
         } else if (!strcmp(argv[i], "--dump") && i + 1 < argc) {
             dump_every = atol(argv[++i]);
             psx_softgpu_enable(1);

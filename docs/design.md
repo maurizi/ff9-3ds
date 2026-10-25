@@ -461,6 +461,12 @@ regions, 334 KB of runs and polygon regions). A sprite's texels are consecutive 
 of sprites stays one quad. Fields that fit keep regions: runs cost a texture switch per sprite, 2-3%.
 Lines (Burmecia's rain, field 767) are 3D too: a triangle with two equal vertices, which the DS draws as a one-pixel
 line, clipped to the drawing area; on the 2D layer they had blended with the buffer's key and covered the scene.
+Additive primitives (PS1 modes 1 and 3) covering up to a sixth of the screen are exact: drawn in software onto black
+in bank A and added over the 3D layer by the 2D compositor (BLDCNT, both coefficients 16, saturating as the PS1),
+in the rows they cover; textures for the rest then use banks B-D (else the approximation below). Field 2910's window
+light turned white as on the PS1 (it was blue); 1425's tunnel exit and 1203's lamps match. The layer lies over the
+whole 3D layer, so something drawn after a glow would be brightened too. Larger additive areas (2162's lamps: 27 ->
+40 ms on DSi) keep the approximation.
 Subtractive and additive blends drawn by the 3D engine are approximated as in battle (a subtractive shadow over a
 character, the commonest case, is in nearly every scene; additive mist over a dark tile can show as a lighter
 square). Scenes hold up to 2774 primitives (median 1012, 90% 1681, 10 of 563 fields over the 3D engine's 2048:
