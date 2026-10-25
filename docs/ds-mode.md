@@ -288,3 +288,36 @@ software) and the large 3D scenes (955, 2110 66 ms, 1508 62 ms). Speed is now th
 | d4_f0351 | 50.6 |
 | d4_f2110 | 66.5 |
 | d4_f2162 | 53.4 |
+
+## 24 boss battles as an original DS (2026-10-25)
+
+The boss fixtures (`build/validation/boss_sweep_fixtures`, each the encounter entered directly) through the same
+script: all 24 ran their 1500 frames, none stalled. None reaches the PS1's 33 ms yet (42-99 ms); the effect-heavy
+late bosses are slowest (Ozma 99, Lich 90, Nova Dragon 88, Trance Kuja 85, Earth Guardian 83, Hades 80).
+
+| boss battle | ms/frame |
+|---|---|
+| d1 beatrix | 46.4 |
+| d1 black_waltz | 42.0 |
+| d1 garuda | 53.1 |
+| d1 gizamaluke | 45.8 |
+| d1 plant_brain | 54.7 |
+| d2 antlion | 59.3 |
+| d2 hilgigars | 55.0 |
+| d2 lani | 56.6 |
+| d2 ralvuimago | 55.8 |
+| d2 soulcage | 52.5 |
+| d2 tantarian | 43.8 |
+| d2 zorn | 58.2 |
+| d3 earth_guardian | 82.6 |
+| d3 silver_dragon | 56.7 |
+| d4 deathguise | 50.2 |
+| d4 hades | 79.5 |
+| d4 kraken | 51.2 |
+| d4 lich | 90.4 |
+| d4 maliris | 51.8 |
+| d4 necron | 54.6 |
+| d4 nova_dragon | 88.1 |
+| d4 ozma | 99.3 |
+| d4 tiamat | 53.8 |
+| d4 trance_kuja | 85.0 |
