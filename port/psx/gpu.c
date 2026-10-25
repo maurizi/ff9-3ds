@@ -631,9 +631,13 @@ s32 BreakDraw(void) {
     return 0;
 }
 
+/* The platform may draw the list the game inserts at VBlank less often than every VBlank (DS: display.c). */
+__attribute__((weak)) int psx_skip_vblank_list(void) { return 0; }
+
 void ContinueDraw(u32 *insaddr, s32 contaddr) {
     /* Even when BreakDraw returns zero, the inserted list must execute. FF9
      * uses this at VBlank for battle commands, status bars and text. */
+    if (!contaddr && psx_skip_vblank_list()) return;
     if (insaddr) DrawOTag(insaddr);
     if (contaddr && ((u32)contaddr & 0xFFFFFF) != OT_END)
         DrawOTag(link_ptr((u32)contaddr & 0xFFFFFF));

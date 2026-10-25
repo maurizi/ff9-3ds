@@ -393,3 +393,11 @@ exact code over 2 million random RTPT+RTPS with FF9-like ranges (matrix entries 
 translations within 32000): no output register differs; with full-range random matrices and vertices 0.19% do.
 Screenshots at frame 1500 are identical. 1.5-2.7% faster: d2_b0098 68.4 -> 67.3 ms, d1_b0186 58.3 -> 57.3, d4_f2110
 63.8 -> 62.0.
+
+### Battle UI drawn once a game frame (2026-10-25, the user's choice of renderer shortcuts)
+
+The battle's window layer is drawn by the game at every VBlank (`btlui_vsync` -> `btlui_submitOt`, through
+`ContinueDraw`), four times a 15 fps game frame, over the shown buffer. `psx_skip_vblank_list` (display.c) lets
+`ContinueDraw` draw it at every `UI_RATE`-th VBlank (4) and whenever the shown buffer changes; the UI's logic (input,
+gauges, counters) still runs at every VBlank. It looks the same (gauges and the cursor move at 15 fps). Every 2nd
+VBlank: d2_b0098 67.3 -> 63.7 ms, d1_b0186 57.3 -> 53.7; every 4th: 60.0 and 50.7 (11%).

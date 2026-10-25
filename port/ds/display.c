@@ -107,6 +107,26 @@ void plat_vsync_begin(unsigned int frames) {
     if ((int)(real_vblanks - frames - virtual_frames) > 0) virtual_frames = real_vblanks - frames;
 }
 
+/* Battle's window layer is drawn by the game at every VBlank (btlui_vsync), four times a 15 fps game frame, over the
+ * shown buffer: drawing it at every UI_RATE-th VBlank (and whenever the shown buffer changes) leaves it as it was in
+ * between, so only its animation (gauges, cursor) is less smooth (the user's choice of 2026-10-25: renderer shortcuts
+ * that look the same for speed). */
+#ifndef UI_RATE
+#define UI_RATE 4
+#endif
+int psx_skip_vblank_list(void) {
+    if (UI_RATE <= 1 || !g_gameState || g_gameState[8] != 2) return 0;
+    static int shown_x = -1, shown_y = -1;
+    static unsigned int count;
+    PsxDisplayInfo d;
+    psx_gpu_display_info(&d);
+    if (d.x != shown_x || d.y != shown_y) {
+        shown_x = d.x; shown_y = d.y; count = 0;
+        return 0;
+    }
+    return ++count % UI_RATE != 0;
+}
+
 static void pace(void) {
     unsigned int profile_wait = port_profile_wait_begin();
     ++virtual_frames;
