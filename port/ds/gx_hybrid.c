@@ -2265,6 +2265,21 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     fifo(CMD_POLYATTR, attr);
     fifo(CMD_TEXIMAGE, 0);
     int polys = 0, vertices = 0, z = 0;
+    if (b->slots) { /* the world map: its clear colour as a quad behind everything (the 3D engine's own clear, black,
+                      * covers the letterbox rows outside the viewport, black on the PS1 too) */
+        pack_begin();
+        pack(CMD_COLOR); put(b->clear & 0x7FFF);
+        pack(CMD_BEGIN); put(1);
+        pack_end();
+        static const s16 corner[4][2] = {{0, 0}, {320, 0}, {320, 256}, {0, 256}};
+        for (int k = 0; k < 4; ++k) {
+            pack_begin();
+            pack(CMD_VTX16); put((u32)(u16)corner[k][0] | (u32)(u16)corner[k][1] << 16); put((u32)(u16)-32000);
+            pack_end();
+        }
+        polys++;
+        vertices += 4;
+    }
     plan_drops(b);
     memset(light_cells, 0, sizeof light_cells);
     /* the recorded primitives at depth 2 (k + 1) (k + 1 without meshes), then the native meshes' polygons, each
@@ -3479,6 +3494,7 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     terrain_fog_setup(b);
     glMatrixMode(GL_MODELVIEW);
     unsigned int c = b->clear;
+    if (place->world) c = 0; /* (emit_scene draws its clear colour inside the viewport) */
     glClearColor(c & 31, (c >> 5) & 31, (c >> 10) & 31, place->field && bank_a_bg && !bank_a_add ? 0 : 31); /* a software frame shows */
     emit_scene(b);
     flush_chunk();
