@@ -87,6 +87,14 @@ static void vram_fill(int x, int y, int w, int h, u16 c) {
             int n = span;
             if (((uintptr_t)p & 2) && n) *p++ = c, n--;
             u32 *q = (u32 *)p;
+#if defined(__arm__)
+            /* burst stores (STMIA of four words): faster on the DS's main RAM than single ones */
+            if (n >= 8) {
+                register u32 r0 asm("r4") = pair, r1 asm("r5") = pair, r2 asm("r6") = pair, r3 asm("r7") = pair;
+                for (; n >= 8; n -= 8)
+                    __asm__ volatile("stmia %0!, {%1, %2, %3, %4}" : "+l"(q) : "l"(r0), "l"(r1), "l"(r2), "l"(r3) : "memory");
+            }
+#endif
             for (; n >= 2; n -= 2) *q++ = pair;
             if (n) *(u16 *)q = c;
             left -= span;
