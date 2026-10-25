@@ -17,6 +17,7 @@
  * Layout while active: VRAM A-D textures (512 KB), F-G texture palettes (32 KB), E main OBJ (the 2D layer).
  */
 #if defined(PORT_GX_HYBRID)
+#include "blackbox.h"
 #include <nds.h>
 #include <string.h>
 #include <stdlib.h>
@@ -1955,6 +1956,7 @@ static void field_frame(Buffer *b, int display_h) {
 
 /* Send a buffer's scene to the 3D engine; it is shown from the next frame on. */
 static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
+    BB(0x47580001, b->count);
     unsigned int profile = port_profile_begin();
     while (dmaBusy(0)) {} /* the previous scene's list */
     if (place->field) field_frame(b, display_h);
@@ -1968,7 +1970,9 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     else saved = vramSetPrimaryBanks(VRAM_A_LCD, VRAM_B_LCD, VRAM_C_LCD, VRAM_D_LCD);
     vramSetBankF(VRAM_F_LCD);
     vramSetBankG(VRAM_G_LCD);
+    BB(0x47580002, 0);
     upload();
+    BB(0x47580003, 0);
     if (place->field && bank_a_bg) {
         vramSetBankB(VRAM_B_TEXTURE_SLOT1); vramSetBankC(VRAM_C_TEXTURE_SLOT2); vramSetBankD(VRAM_D_TEXTURE_SLOT3);
     } else vramRestorePrimaryBanks(saved);

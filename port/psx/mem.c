@@ -54,10 +54,14 @@ extern unsigned char *psx_spu_ram_mid, *psx_spu_ram_hi;
 
 /* The VRAM and SPU RAM shadows (1.5 MB): allocated, so a 4 MB DS can still run the game logic without them. */
 #ifdef PORT_CANARY
-/* CANARY=1: a patterned 32 KiB tail after each shadow, checked by port_canary */
+/* CANARY=1: a patterned tail after each shadow (32 KiB, DS mode 8), checked by port_canary */
 unsigned short *psx_vram_tail;
 unsigned char *psx_spu_ram_tail;
+#ifdef PORT_DS_MODE
+#define SHADOW_TAIL 0x2000 /* (DS mode's heap has 26 KB past the shadows) */
+#else
 #define SHADOW_TAIL 0x8000
+#endif
 #else
 #define SHADOW_TAIL 0
 #endif
@@ -66,7 +70,9 @@ unsigned char *psx_spu_ram_tail;
 #include <unistd.h>
 extern char *fake_heap_end; /* where libnds's sbrk stops (set at start-up) */
 /* what the heap can still give: the arena's free blocks and the room before its end */
-static unsigned int heap_free(void) { return mallinfo().fordblks + (unsigned int)(fake_heap_end - (char *)sbrk(0)); }
+unsigned int psx_heap_free(void);
+#define heap_free psx_heap_free
+unsigned int psx_heap_free(void) { return mallinfo().fordblks + (unsigned int)(fake_heap_end - (char *)sbrk(0)); }
 #endif
 /* The DS calls it first thing (port/ds/platform.c), before anything else takes heap: the shadows are most of it */
 void psx_mem_init(void) {

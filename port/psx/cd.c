@@ -15,6 +15,7 @@
  *
  * Disc layout: Mode 2 Form 1, user data at offset 24 of each raw sector. Disc swaps: TODO (M4).
  */
+#include "blackbox.h"
 #include "psyq_port.h"
 
 #include <stdio.h>
@@ -140,7 +141,7 @@ extern u8 D_80068268[4];   /* last position (CdlLOC) */
 #define last_pos D_80068268
 static unsigned int loc, read_lba; /* Setloc target, next sector to deliver */
 static int reading;
-static u8 sector[RAW_SECTOR];
+static u8 sector[RAW_SECTOR] __attribute__((aligned(32)));
 static unsigned int sector_lba; /* LBA of `sector` */
 static unsigned int sector_pos; /* bytes of `sector`'s user data already taken by CdGetSector */
 
@@ -171,13 +172,16 @@ static int open_disc(void) {
 
 static void read_raw(unsigned int lba, u8 *buf) {
     open_disc();
+    BB(0x43440001, lba); BB(0x43440002, buf);
     if (fseek(disc, (long)lba * RAW_SECTOR, SEEK_SET) != 0 || fread(buf, 1, RAW_SECTOR, disc) != RAW_SECTOR) {
         port_fatal("disc %d: can't read sector %u", disc_no, lba);
     }
 }
 
 static void read_user(unsigned int lba, u8 *buf2048) {
-    u8 raw[RAW_SECTOR];
+    /* not on the stack: the DS's stack is in DTCM, which DMA can't reach, and a card driver may read by DMA (onto
+     * main RAM at the same address: on a 4 MB DS, the top of the heap) */
+    static u8 raw[RAW_SECTOR] __attribute__((aligned(32)));
     read_raw(lba, raw);
     __builtin_memcpy(buf2048, raw + USER_OFFSET, 2048);
 }

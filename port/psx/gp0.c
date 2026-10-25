@@ -1,5 +1,6 @@
 /* PS1 GPU command decoding (gp0.h), following psx-spx "GPU Render Polygon/Line/Rectangle Commands" and
  * "GPU Rendering Attributes". */
+#include "blackbox.h"
 #include "gp0.h"
 #include "profile.h"
 #include "psx_display.h"
@@ -271,6 +272,7 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
 }
 
 void gp0_run(const unsigned int *w, unsigned int len) {
+    BB(0x47500001, w);
     unsigned int profile_start=port_profile_begin();
 #ifdef PORT_CANARY
     port_canary("before GP0 commands");

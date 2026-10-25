@@ -1,4 +1,5 @@
 /* DS platform: entry point, console, frame pacing. */
+#include "blackbox.h"
 #include <fat.h>
 #include <nds.h>
 #include "audio.h"
@@ -62,7 +63,11 @@ extern unsigned char *psx_spu_ram_tail;
 static int tail_intact(const void *tail) {
     const unsigned int *p = tail;
     if (!p) return 1;
+#ifdef PORT_DS_MODE
+    for (unsigned int i = 0; i < 0x2000 / 4; ++i) /* (mem.c SHADOW_TAIL) */
+#else
     for (unsigned int i = 0; i < 0x8000 / 4; ++i)
+#endif
         if (p[i] != 0xA5A5A5A5u) {
             printf("\ntail %p word %u: %08x\n", tail, i, p[i]);
             return 0;
@@ -87,7 +92,14 @@ void port_canary(const char *where) {
 #include "audio_hw.h"
 #endif
 
+#ifdef PORT_BLACKBOX
+volatile unsigned int port_blackbox[2 + 64 * 2] DTCM_BSS;
+#endif
 void plat_wait_frame(void) {
+#ifdef PORT_BLACKBOX
+    port_blackbox[0] = 0x42424F58u;
+#endif
+    BB(0x46520001, frames);
 #ifdef PORT_HW_SOUND
     port_hw_sound_frame();
 #endif
@@ -132,7 +144,11 @@ void plat_wait_frame(void) {
                        gxh_stats_upload_palettes);
             extern int gxh_stats_ui_drawn, gxh_stats_ui_skipped;
             extern unsigned int gxh_debug[4];
-            status_row(9, "dbg %x %x %x %x", gxh_debug[0], gxh_debug[1], gxh_debug[2], gxh_debug[3]);
+            extern unsigned int psx_heap_free(void);
+            static unsigned int heap_min = ~0u;
+            unsigned int heap = psx_heap_free();
+            if (heap < heap_min) heap_min = heap;
+            status_row(9, "heap %u (min %u) dbg %x %x", heap, heap_min, gxh_debug[0], gxh_debug[1]);
             status_row(21, "rg %d u%d/%d np%d col %d ui %d/%d", gxh_stats_regions, gxh_stats_units, gxh_stats_units_peak,
                        gxh_stats_unplaced,
                        gxh_stats_blocks, gxh_stats_ui_drawn, gxh_stats_ui_skipped);
@@ -204,10 +220,21 @@ const char *plat_data_dir(void) {
     return data_dir;
 }
 
+#ifdef PORT_DS_MODE
+/* (CP15 writes need ARM code; this file is Thumb) */
+__attribute__((target("arm"), noinline)) static void shared_wram_region(void) {
+    __asm__ volatile("mcr p15, 0, %0, c6, c3, 0" : : "r"(0x03000000u | 14u << 1 | 1u)); /* 32 KB at 0x03000000 */
+}
+#endif
+
 int main(void) {
     defaultExceptionHandler();
 #ifdef PORT_DS_MODE
     WRAM_CR = 0; /* both shared WRAM banks to the ARM9, at 0x03000000: its ARM7 doesn't use them (port/arm7/main.c) */
+    /* and readable: in DS mode BlocksDS's protection regions don't cover 0x03000000 (main RAM's ends at 0x02FFFFFF),
+     * so the first access to the SPU RAM piece there (psx_mem_init) was a data abort, a minute into a field when a
+     * sound first used it. Region 3 (the Slot-2 cartridge space, unused) becomes the 32 KB of shared WRAM. */
+    shared_wram_region();
     /* BlocksDS's crt0 keeps the top 48 KB of main RAM from the heap, for a loader's return-to-loader stub; the game
      * never exits, so the heap goes up to the system area (__eheap_end) */
     extern char *fake_heap_end, __eheap_end[];

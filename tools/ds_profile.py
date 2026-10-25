@@ -69,6 +69,7 @@ def main():
     p.add_argument('--sd-image', type=Path, help='SD image for --sd-folder; a new path makes melonDS size it to fit')
     p.add_argument('--ds-mode', action='store_true', help='run as an original DS (4 MB, 67 MHz): the --sd-folder is '
                    'given through DLDI (the game sees fat:/), --sd-image is the DLDI image')
+    p.add_argument('--gdb', action='store_true', help="melonDS's GDB stub on (ARM9 port 3333; the JIT off)")
     p.add_argument('--screenshot', type=Path, help='new PNG under build/: the emulator window at the capture frame '
                    '(the only view of GX output, which is not in RAM)')
     a = p.parse_args()
@@ -82,6 +83,12 @@ def main():
         p.error('ELF has no frames counter')
     backup = out.with_suffix('.melonDS.toml')
     shutil.copy(CONFIG, backup)
+    if a.gdb:
+        import re
+        text = CONFIG.read_text()
+        text = re.sub(r'(\[Instance0\.Gdb\]\nEnabled = )\w+', r'\1true', text)
+        text = re.sub(r'(\[JIT\]\nEnable = )\w+', r'\1false', text)
+        CONFIG.write_text(text)
     if a.ds_mode:
         import re
         text = CONFIG.read_text()
@@ -139,20 +146,27 @@ def main():
                 if 'melondsfastmem' in row and parts[1].startswith('rw') and int(parts[2], 16) == 0 \
                         and hi - lo >= 16 * 1024 * 1024:
                     bases.append(lo)
-        frame = 0
+        frame, last_frame, last_change = 0, -1, time.monotonic()
         with open(f'/proc/{pid}/mem', 'rb', buffering=0) as memory:
             while frame < a.frame:
-                if time.monotonic() > deadline:
+                if frame != last_frame:
+                    last_frame, last_change = frame, time.monotonic()
+                stalled = not a.gdb and frame > 0 and time.monotonic() - last_change > 90  # stopped (a crash, a hang)
+                if time.monotonic() > deadline or stalled:
                     win = window(a.display)
                     if a.screenshot and win:  # what stopped it (a fatal error shows on the bottom screen)
                         subprocess.run(['import', '-window', win, str(a.screenshot.resolve())], env=env)
-                    sys.exit(f'timed out at frame {frame}')
+                    if win:  # the state as it stopped (registers, RAM), for a crash's post-mortem
+                        subprocess.run([sys.executable, str(ROOT / 'tools/save_ds_state.py'), '--window', win, '--rom',
+                                        str(rom), '--elf', str(elf), '--out', str(out.with_suffix('.timeout.ml8'))],
+                                       env=env)
+                    sys.exit(f'{"stalled" if stalled else "timed out"} at frame {frame}')
                 time.sleep(0.25)
                 for base in bases:
                     memory.seek(base + sym['frames'] - 0x02000000)
                     value = int.from_bytes(memory.read(4), 'little')
-                    if value < 10 ** 7:
-                        frame = max(frame, value)
+                    if frame < value <= frame + 400:  # (a wiped RAM reads as a jump: that's a stall)
+                        frame = value
         time.sleep(1)
         win = window(a.display)
         if not win:
