@@ -464,6 +464,20 @@ Tried and not kept:
 
 Kept: background tiles' lean path (2-4%), batched model projection (4-7%), all with identical frames.
 
+## World maps (2026-10-25)
+
+`build/validation/wmsweep/cfg`: world maps 9000-9012 on each disc (discs 1-2 without a story counter; disc 3 with
+`story=10000`, without which its encounters reach for battle data the disc doesn't have; disc 4 with `story=11100`,
+whose world data is the late one). Host, 3000 frames with `tools/walk_presses.py` input from frame 300: 52/52 after
+one fix (43 run to the end; 9 walk into a field another disc holds, which the scenario layer reports). The fix: a
+battle's Item command confirmed on an empty list reads the NULL entry before `btlui_selectItem`'s own check (world
+9011, disc 4): a counted `PSX_NZ` patch. Original DS, 20 of them (9000, 9003, 9006, 9009, 9012 on each disc), walking
+from frame 300 to 1500: all pass after a second fix: the software rasteriser's palette cache (32 KB, allocated the
+first time it's needed) didn't fit in the spare PS1 RAM once a battle had allocated everything else (battle 46's
+menus, disc 4); it has 16 slots now (16 KB), with no change in time or frames on d3_f2205 and d2_b0098.
+
+World maps are drawn in software (gx_hybrid has no place for them): 140-216 ms per VBlank, about 10x the PS1.
+
 ## 54 battles after the architecture levers (2026-10-25)
 
 The 24 bosses and the 30 random battles again on 0f71760 (UI drawn once a game frame, GTE register file in DTCM,

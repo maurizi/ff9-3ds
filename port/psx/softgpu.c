@@ -141,8 +141,9 @@ static __attribute__((noinline)) void prepare_palette(const Gp0Mode *m, const Gp
     u32 *out = large_palette;
     if (small) {
         /* tinted sprites and polygons: background tiles reuse a few CLUT rows in one colour */
-        /* 32 KB, in PS1 RAM the port never uses (main's MIPS code range: psx_spare_alloc) */
-        enum { SLOTS = 32 };
+        /* 16 KB, in PS1 RAM the port never uses (main's MIPS code range: psx_spare_alloc, which has no room left
+         * for 32 slots in a battle with every lazily allocated buffer: battle 46's item menu, disc 4) */
+        enum { SLOTS = 16 };
         static struct { u32 writes, used; u16 x, y; u8 depth, r, g, b; } key[SLOTS];
         static u32 (*cached)[256], clock;
         if (!cached) cached = psx_spare_alloc(SLOTS * 256 * sizeof(u32));

@@ -90,6 +90,10 @@ src/main/akao_voice.c | g_akaoSubSeq->unk3C, | PSX_NZ(g_akaoSubSeq)->unk3C, | 1
 src/main/akao_voice.c | g_akaoSubSeq->unk40, | PSX_NZ(g_akaoSubSeq)->unk40, | 1
 src/main/akao_voice.c | g_akaoSubSeq->unk44, | PSX_NZ(g_akaoSubSeq)->unk44, | 1
 
+# Battle Item command confirmed on an empty item list: btlui_getItemListEntry returns NULL, and btlui_selectItem
+# reads p->unk0 for its item-table entry before its own NULL check (world map 9011, disc 4, walking input)
+src/ovl_0b/btlui.c | Unk8006A774 *e = &D_8006A774[p->unk0]; | Unk8006A774 *e = &D_8006A774[PSX_NZ(p)->unk0]; | 1
+
 # field object tables: db_lookupRegistered(8, id, 0x120000) can be NULL (the field has no type-8 table) and the code
 # reads t->unk1 / t->unk4 regardless (ovl_0a func_800AAF5C and its two siblings)
 src/ovl_0a/fld_movie.c | db_lookupRegistered(8, arg0, DB_MODEL_INFO) | PSX_NZ(db_lookupRegistered(8, arg0, DB_MODEL_INFO)) | 3
