@@ -20,23 +20,23 @@
 #endif
 #define ITCM_LO 0x01000000u   /* (BlocksDS links ITCM here, __itcm_start) */
 #ifdef PORT_PC_LO
-#define ITCM_SHIFT 5  /* 32 bytes in a window build: the interrupt dispatcher apart from its neighbours */
+#define ITCM_SHIFT 6  /* 64 bytes in a window build (2 KB of 32-bit counts): the interrupt dispatcher apart from its neighbours */
 #else
 #define ITCM_SHIFT SHIFT
 #endif
 #define ITCM_BUCKETS (0x8000u >> ITCM_SHIFT)
 /* header: magic, main base, main buckets, ITCM base, ITCM buckets, samples, outside (BIOS waits, other memory),
  * main bucket shift, ITCM bucket shift */
-volatile u32 port_pc_header[9] = {0x53504331, MAIN_LO, MAIN_BUCKETS, ITCM_LO, ITCM_BUCKETS, 0, 0, SHIFT, ITCM_SHIFT};
+volatile u32 port_pc_header[9] = {0x53504332, /* 2: ITCM counts are 32-bit */ MAIN_LO, MAIN_BUCKETS, ITCM_LO, ITCM_BUCKETS, 0, 0, SHIFT, ITCM_SHIFT};
 u16 port_pc_main[MAIN_BUCKETS];
-u16 port_pc_itcm[ITCM_BUCKETS];
+u32 port_pc_itcm[ITCM_BUCKETS]; /* 32-bit: the VBlank wait and the interrupt dispatcher share a few buckets */
 extern u32 __sp_irq[];
 
 static void sample(void) {
     u32 pc = __sp_irq[-1] - 4;
     port_pc_header[5]++;
     if (pc - MAIN_LO < (MAIN_BUCKETS << SHIFT)) { u16 *c = &port_pc_main[(pc - MAIN_LO) >> SHIFT]; if (*c != 0xFFFF) ++*c; }
-    else if (pc - ITCM_LO < (ITCM_BUCKETS << ITCM_SHIFT)) { u16 *c = &port_pc_itcm[(pc - ITCM_LO) >> ITCM_SHIFT]; if (*c != 0xFFFF) ++*c; }
+    else if (pc - ITCM_LO < (ITCM_BUCKETS << ITCM_SHIFT)) ++port_pc_itcm[(pc - ITCM_LO) >> ITCM_SHIFT];
     else port_pc_header[6]++;
 }
 
@@ -58,6 +58,34 @@ void *__wrap_memset(void *p, int c, size_t n) {
             }
     }
     return __real_memset(p, c, n);
+}
+
+/* Who waits (linked with --wrap=swiIntrWait,--wrap=swiWaitForVBlank): caller, calls, timer 2/3 ticks waited */
+#define WAIT_CALLERS 16
+volatile u32 port_pc_wait[WAIT_CALLERS][3];
+static u32 wait_clock(void) {
+    u32 high, low;
+    do { high = TIMER_DATA(3); low = TIMER_DATA(2); } while (high != TIMER_DATA(3));
+    return high << 16 | low;
+}
+static void wait_note(u32 caller, u32 ticks) {
+    for (u32 i = (caller >> 1) % WAIT_CALLERS, tries = 0; tries < WAIT_CALLERS; ++tries, i = (i + 1) % WAIT_CALLERS)
+        if (port_pc_wait[i][0] == caller || !port_pc_wait[i][0]) {
+            port_pc_wait[i][0] = caller; port_pc_wait[i][1]++; port_pc_wait[i][2] += ticks;
+            return;
+        }
+}
+void __real_swiIntrWait(u32 wait, u32 flags);
+void __wrap_swiIntrWait(u32 wait, u32 flags) {
+    u32 caller = (u32)__builtin_return_address(0), t = wait_clock();
+    __real_swiIntrWait(wait, flags);
+    wait_note(caller, wait_clock() - t);
+}
+void __real_swiWaitForVBlank(void);
+void __wrap_swiWaitForVBlank(void) {
+    u32 caller = (u32)__builtin_return_address(0), t = wait_clock();
+    __real_swiWaitForVBlank();
+    wait_note(caller | 1u << 31, wait_clock() - t); /* bit 31: through swiWaitForVBlank */
 }
 
 void port_pc_sampler_init(void) {

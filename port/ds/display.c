@@ -103,8 +103,11 @@ static void vblank_irq(void) {
  * between: virtual time catches up to within the call's own frames of real time, so they wait only for what's left
  * (a battle frame working 10 VBlanks then runs VSync(3) at once and VSync(0) to the next VBlank, as on the PS1,
  * rather than giving up the debt past MAX_LAG and waiting three more). */
+/* One VBlank of slack beyond that: VSync(0), which waits for the next VBlank (the battle's btlui_waitFrame ends with
+ * one), doesn't wait again after a frame that has already run late. The PS1 only lines its swap up with the beam
+ * there; the DS swaps in its VBlank interrupt. A game that runs ahead is still held to the PS1's pace. */
 void plat_vsync_begin(unsigned int frames) {
-    if ((int)(real_vblanks - frames - virtual_frames) > 0) virtual_frames = real_vblanks - frames;
+    if ((int)(real_vblanks - frames - 1 - virtual_frames) > 0) virtual_frames = real_vblanks - frames - 1;
 }
 
 /* Battle's window layer is drawn by the game at every VBlank (btlui_vsync), four times a 15 fps game frame, over the

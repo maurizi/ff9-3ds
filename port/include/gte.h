@@ -35,7 +35,40 @@ static inline __attribute__((always_inline)) void gte_ctc2_inline(int reg, gte_u
     if (__builtin_constant_p(reg) && reg != 31) psx_gte.c[reg] = value;
     else gte_ctc2(reg, value);
 }
+/* NCLIP and AVSZ3/AVSZ4 in place, as gte.c computes them (MAC0's flags, OTZ's saturation): about half of a
+ * battle's commands, each a few multiplies behind a call and a dispatch otherwise. */
+void gte_cmd(gte_u32 op);
+/* RTPT's projection over many vertices (gte.c) */
+void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *sz);
+static inline __attribute__((always_inline)) void gte_mac0_flags(long long m, gte_u32 flag) {
+    if (m > 0x7FFFFFFFLL) flag |= 1u << 16;
+    else if (m < -0x80000000LL) flag |= 1u << 15;
+    psx_gte.d[24] = (gte_u32)(int)m;
+    psx_gte.c[31] = flag & 0x7F87E000 ? flag | 0x80000000u : flag;
+}
+static inline __attribute__((always_inline)) void gte_cmd_inline(gte_u32 op) {
+    if (__builtin_constant_p(op) && (op & 0x3F) == 0x06) { /* NCLIP */
+        const gte_u32 *d = psx_gte.d;
+        long long x0 = (short)d[12], y0 = (short)(d[12] >> 16), x1 = (short)d[13], y1 = (short)(d[13] >> 16);
+        long long x2 = (short)d[14], y2 = (short)(d[14] >> 16);
+        gte_mac0_flags(x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1, 0);
+    } else if (__builtin_constant_p(op) && ((op & 0x3F) == 0x2D || (op & 0x3F) == 0x2E)) { /* AVSZ3, AVSZ4 */
+        const gte_u32 *d = psx_gte.d;
+        unsigned int sum = (unsigned short)d[17] + (unsigned short)d[18] + (unsigned short)d[19];
+        short zsf = (short)psx_gte.c[29];
+        if ((op & 0x3F) == 0x2E) { sum += (unsigned short)d[16]; zsf = (short)psx_gte.c[30]; }
+        long long m = (long long)zsf * sum, z = m >> 12;
+        gte_u32 flag = 0;
+        if (z > 0xFFFF) { z = 0xFFFF; flag = 1u << 18; } else if (z < 0) { z = 0; flag = 1u << 18; }
+        psx_gte.d[7] = (gte_u32)z;
+        gte_mac0_flags(m, flag);
+    } else {
+        gte_cmd(op);
+    }
+}
+
 #ifndef PORT_GTE_IMPL
+#define gte_cmd(op) gte_cmd_inline(op)
 #define gte_mtc2(reg, value) gte_mtc2_inline((reg), (value))
 #define gte_mfc2(reg) gte_mfc2_inline(reg)
 #define gte_ctc2(reg, value) gte_ctc2_inline((reg), (value))

@@ -401,3 +401,21 @@ The battle's window layer is drawn by the game at every VBlank (`btlui_vsync` ->
 `ContinueDraw` draw it at every `UI_RATE`-th VBlank (4) and whenever the shown buffer changes; the UI's logic (input,
 gauges, counters) still runs at every VBlank. It looks the same (gauges and the cursor move at 15 fps). Every 2nd
 VBlank: d2_b0098 67.3 -> 63.7 ms, d1_b0186 57.3 -> 53.7; every 4th: 60.0 and 50.7 (11%).
+
+### Measuring a whole battle (2026-10-25)
+
+The default timing block is the last 128 virtual frames before the capture frame, which in the battle fixtures is
+often the heaviest effect of the fight (d2_b0098 57.5 ms there, 36.3 over the last 1024 frames). `PROFWIN=1024`
+times the last 1024 frames instead (most of the battle), and changes now get compared with it. The sampling profiler
+(PROFILE=3) keeps counting while the capture frame waits for the state to be saved, about 20% of a run's samples
+in `swiIntrWait` from `plat_wait_frame` (now visible: its waits are counted per caller, `--wrap=swiIntrWait`, and
+the ITCM buckets are 32-bit, which had saturated). The real pacing waits came to 1.8 s of a 77 s run.
+
+### GTE: NCLIP and AVSZ in place, model vertices projected in a batch (2026-10-25)
+
+NCLIP and AVSZ3/AVSZ4 (half the battle's GTE commands, from meshNclip and meshAvsz3) are computed inline from
+`gte.h` when the opcode is a constant, exactly (3 million random register files: identical). `btl_projectMesh` is
+overridden (port/game/mesh_native.c): each bone's matrix still goes through the GTE; its vertices go through
+`gte_rtpt_batch` (32-bit, the matrix in registers), and the last group through the GTE again so the registers end
+as before. With one VBlank of pacing slack (a late frame's `VSync(0)` doesn't wait again), over 1024 frames:
+d2_b0098 37.3 -> 36.3 ms, d1_b0186 34.5 -> 33.6 (2.7%); fields d1_f0110 33.7 -> 32.5, d4_f2110 62.0 -> 60.0.

@@ -25,7 +25,7 @@ if len(matches)!=1:p.error('matching ELF must be built with PROFILE=1')
 address=matches[0]
 if not 0x02000000<=address<0x03000000:p.error('profile block outside main RAM')
 words=struct.unpack_from('<16I',data,36+address-0x02000000)
-if words[0]!=128 or words[15]!=0x50524631:p.error('no complete 128-frame timing block yet')
+if not words[0] or words[15]!=0x50524631:p.error('no complete timing block yet')
 frames,hz,frame,mode,total=words[:5]
 if not hz or not total:p.error('invalid timing clock or elapsed interval')
 phases={name:{'ms_per_frame':round(words[5+i]*1000/(frames*hz),4),

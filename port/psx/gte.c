@@ -380,6 +380,58 @@ static inline __attribute__((always_inline)) void rtp(int v, int sf, int lm, int
     else rtp_sf0(v, lm, last);
 }
 
+/* Project `count` vertices (SVECTORs: an xy word and a z word each) with RT, TR, H and OF as RTPT does (sf 1,
+ * lm 0), writing each one's SXY and SZ the way stsxy3c and stsz3c store them. The GTE's registers are left alone:
+ * a caller that needs the state RTPT leaves runs its last group through the GTE (port/game/mesh_native.c). DS mode:
+ * the 32-bit arithmetic of rtp_sf1 with the matrix in registers; otherwise RTPS itself, exactly. */
+GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *sz) {
+#ifdef PORT_GTE_APPROX
+    const gte_u32 *c = g.c;
+    const i32 r11 = (i16)c[0], r12 = (i32)c[0] >> 16, r13 = (i16)c[1], r21 = (i32)c[1] >> 16, r22 = (i16)c[2];
+    const i32 r23 = (i32)c[2] >> 16, r31 = (i16)c[3], r32 = (i32)c[3] >> 16, r33 = (i16)c[4];
+    const i32 trx = (i32)c[5], try_ = (i32)c[6], trz = (i32)c[7], ofx = (i32)c[24], ofy = (i32)c[25];
+    const u32 h = (u16)c[26];
+    if (unr_table[0] == 0) init_unr();
+    for (int i = 0; i < count; ++i, v += 2) {
+        i32 x = (i16)v[0], y = (i32)v[0] >> 16, z = (i16)v[1];
+        i32 ir1 = trx + ((r11 * x + r12 * y + r13 * z) >> 12);
+        i32 ir2 = try_ + ((r21 * x + r22 * y + r23 * z) >> 12);
+        i32 mac3 = trz + ((r31 * x + r32 * y + r33 * z) >> 12);
+        if (ir1 > 0x7FFF) ir1 = 0x7FFF; else if (ir1 < -0x8000) ir1 = -0x8000;
+        if (ir2 > 0x7FFF) ir2 = 0x7FFF; else if (ir2 < -0x8000) ir2 = -0x8000;
+        u32 sz3 = mac3 > 0xFFFF ? 0xFFFF : mac3 < 0 ? 0 : (u32)mac3;
+        u32 div;
+        if (h >= sz3 * 2) {
+            div = 0x1FFFF;
+        } else {
+            int sh = __builtin_clz(sz3) - 16;
+            u32 n = h << sh, d = sz3 << sh;
+            u32 u = unr_table[(d - 0x7FC0) >> 7] + 0x101;
+            d = (0x2000080 - d * u) >> 8;
+            d = (0x0000080 + d * u) >> 8;
+            uint64_t q = ((uint64_t)n * d + 0x8000) >> 16;
+            div = q > 0x1FFFF ? 0x1FFFF : (u32)q;
+        }
+        i32 sx = (i32)(((i64)ir1 * div + ofx) >> 16), sy = (i32)(((i64)ir2 * div + ofy) >> 16);
+        if (sx > 0x3FF) sx = 0x3FF; else if (sx < -0x400) sx = -0x400;
+        if (sy > 0x3FF) sy = 0x3FF; else if (sy < -0x400) sy = -0x400;
+        sxy[i] = (u32)sy << 16 | ((u32)sx & 0xFFFF);
+        sz[i] = sz3;
+    }
+#else
+    gte_u32 saved[32], flag = FLAG;
+    for (int k = 0; k < 32; ++k) saved[k] = g.d[k];
+    for (int i = 0; i < count; ++i, v += 2) {
+        g.d[0] = v[0]; g.d[1] = v[1];
+        rtp_sf1(0, 0, 1);
+        sxy[i] = g.d[14];
+        sz[i] = g.d[19] & 0xFFFF;
+    }
+    for (int k = 0; k < 32; ++k) g.d[k] = saved[k];
+    FLAG = flag;
+#endif
+}
+
 /* [MAC1..3] = (T << 12 + M * V) >> shift, IR = MAC (MVMVA and the lighting steps) */
 GTE_HOT static void mat_mul(int mbase, i64 vx, i64 vy, i64 vz, i64 tx, i64 ty, i64 tz, int sf, int lm) {
     int shift = sf * 12;

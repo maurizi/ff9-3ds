@@ -34,7 +34,7 @@ for line in subprocess.check_output(['objdump', '-t', str(a.elf)], text=True).sp
     if not m:
         continue
     addr, flags, section, size, name = int(m[1], 16), m[2], m[3], int(m[4], 16), m[5]
-    if name in ('port_pc_header', 'port_pc_main', 'port_pc_itcm', 'port_pc_memset'):
+    if name in ('port_pc_header', 'port_pc_main', 'port_pc_itcm', 'port_pc_memset', 'port_pc_wait'):
         symbols[name] = addr
         sizes[name] = size
     if 'F' not in flags:
@@ -56,7 +56,7 @@ def ram(addr, size):
 
 nhead = 9 if sizes.get('port_pc_header', 32) >= 36 else 8  # older builds: one shift for both tables
 head = struct.unpack('<%dI' % nhead, ram(symbols['port_pc_header'], 4 * nhead)) + (0,) * (9 - nhead)
-if head[0] != 0x53504331:
+if head[0] not in (0x53504331, 0x53504332):
     p.error('no sampler header in the state')
 _, main_lo, main_n, itcm_lo, itcm_n, total, outside, shift, itcm_shift = head
 shift = shift or 6
@@ -69,10 +69,10 @@ detail = []
 funcs = [(s, size or ((funcs[i + 1][0] - s) if i + 1 < len(funcs) else 64), name) for i, (s, size, name) in enumerate(funcs)]
 
 
-def attribute(base, n, table, shift):
+def attribute(base, n, table, shift, wide=False):
     """each bucket's samples split over the functions it overlaps, by bytes"""
     bucket = 1 << shift
-    words = struct.unpack('<%dH' % n, ram(symbols[table], 2 * n))
+    words = struct.unpack('<%d%s' % (n, 'I' if wide else 'H'), ram(symbols[table], (4 if wide else 2) * n))
     for i, c in enumerate(words):
         if not c:
             continue
@@ -96,7 +96,7 @@ def attribute(base, n, table, shift):
 
 
 attribute(main_lo, main_n, 'port_pc_main', shift)
-attribute(itcm_lo, itcm_n, 'port_pc_itcm', itcm_shift)
+attribute(itcm_lo, itcm_n, 'port_pc_itcm', itcm_shift, head[0] == 0x53504332)
 print(f'{total} samples ({total / 8000:.1f} s), {outside} outside main RAM and ITCM (BIOS waits for VBlank and the like)')
 for name, c in counts.most_common(a.top):
     print(f'{100 * c / total:6.2f}%  {c:9.0f}  {name}')
@@ -118,3 +118,13 @@ if a.detail:
     print('hottest buckets of', a.detail)
     for (c, lo), line in zip(detail[:20], lines):
         print(f'{100 * c / total:6.2f}%  {lo:08X}  {line.split("/")[-1]}')
+
+if 'port_pc_wait' in symbols:
+    rows = struct.unpack('<48I', ram(symbols['port_pc_wait'], 192))
+    print('waits (swiIntrWait; * through swiWaitForVBlank): seconds, calls, caller')
+    for i in sorted(range(16), key=lambda i: -rows[3 * i + 2]):
+        caller, calls, ticks = rows[3 * i:3 * i + 3]
+        if not caller:
+            continue
+        where = subprocess.check_output(['addr2line', '-f', '-e', str(a.elf), '%x' % ((caller & 0x7FFFFFFF) - 2)], text=True).split()[0]
+        print(f"{ticks / 33513982 * 64:10.2f} {calls:8d}  {'*' if caller >> 31 else ' '}{where}+{caller & 0x7FFFFFFF:x}")

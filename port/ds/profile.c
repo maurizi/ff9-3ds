@@ -11,6 +11,10 @@ static unsigned int ticks[PORT_PROFILE_CATEGORIES],calls[PORT_PROFILE_CATEGORIES
 static unsigned int draw_ticks[3],draw_calls[3];
 static unsigned int detail_ticks[PORT_PROFILE_DETAIL_CATEGORIES],detail_calls[PORT_PROFILE_DETAIL_CATEGORIES];
 static unsigned int elapsed,last_clock,samples,last_mode=~0u;
+/* frames per published block (PROFWIN=N): 128 by default, longer to average over a whole battle */
+#ifndef PORT_PROFILE_WINDOW
+#define PORT_PROFILE_WINDOW 128
+#endif
 static unsigned int clock_now(void) {
     unsigned int high,low;
     do {high=TIMER_DATA(3);low=TIMER_DATA(2);} while(high!=TIMER_DATA(3));
@@ -43,7 +47,7 @@ void port_profile_frame(unsigned int mode,unsigned int frame) {
     if(mode!=last_mode) {elapsed=0;samples=0;last_mode=mode;}
     else {elapsed+=now-last_clock;samples++;}
     last_clock=now;
-    if(samples==128) {
+    if(samples==PORT_PROFILE_WINDOW) {
         port_profile_stats[0]=0; /* Publish validity after the complete block. */
         port_profile_draw_stats[0]=0;
         port_profile_detail_stats[0]=0;

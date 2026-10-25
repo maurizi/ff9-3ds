@@ -21,3 +21,6 @@ akao_setVoiceRelease
 akao_writeVoice
 akao_applyCdVolume
 akao_initState
+
+# Model vertex projection: the per-vertex loop in port code (port/game/mesh_native.c).
+o0b_btl_projectMesh
