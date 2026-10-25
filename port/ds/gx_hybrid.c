@@ -606,22 +606,32 @@ static inline MeshInst *mesh_at(Buffer *b, int m) { return (MeshInst *)(b->pool 
  * fog follows each pixel's depth. */
 #define TB_MAX 24     /* blocks a frame (the game draws at most 17) */
 #define TV_MAX 1700   /* projected vertices */
-#define TF_MAX 1750   /* faces drawn */
+#define TF_MAX 2048   /* faces drawn (the 3D engine takes 2048 polygons) */
 #define TU_MAX 32     /* texture page and CLUT pairs */
 typedef struct { const u32 *faces; u16 vbase; u8 variant, pad; u32 alt[3]; } TBlock;
 typedef struct { u32 xy; s16 z; u16 colour; } TVert;     /* screen position, depth (world_depth), RGB15 */
-typedef struct { u32 ref; u8 use, pad[3]; } TFace;       /* ref: block << 27 | face << 15 | otz << 2 | fog << 1 | lit */
-typedef struct { u16 tpage, clut; u8 u0, v0, u1, v1, group, palette, pad[2]; } TUse;
+/* A vertex all fog (its lit colour weighs nothing there): the face's lit polygon takes another vertex's colour, so its
+ * texture fades only by the fog across the face, linearly as the PS1's lit + fog colours do (emit_scene) */
+#define TV_ALL_FOG 0xFFFF
+typedef struct __attribute__((packed, aligned(2))) { u32 ref; u8 use, tier; } TFace; /* ref: block << 27 | face << 15 | otz << 2 | fog << 1 | lit;
+                                                          * tier: the order it goes in when the 3D engine's RAM is
+                                                          * short: fog-only faces first (the fog behind them is much
+                                                          * the same), then lit ones, smallest first in each
+                                                          * (drop_bounds, by twice its area) */
+#define TERRAIN_TIERS (2 * DROP_TIERS)
+typedef struct { u16 tpage, clut; u8 u0, v0, u1, v1, group, palette, scale, pad; } TUse; /* scale: plan_scale */
 struct Terrain {
     unsigned gen;                    /* psx_ot_generation of the frame the blocks were drawn for */
     int buffer;                      /* the buffer they were drawn into */
     int nblocks, nverts, nfaces, nuses;
     int fog_mode;                    /* 0 none, 1 fog (wm_blockVertsFog), 2 far blocks' (wm_blockVertsFar) */
     u32 fog_colour, fog_offset;      /* the first fog entry's colour and fog offset */
+    u32 backdrop_fog;                /* the backdrop's fog colour (g_worldBackdropFog) */
     TBlock blocks[TB_MAX];
     TUse uses[TU_MAX];
     TVert verts[TV_MAX];
     TFace faces[TF_MAX];
+    u16 tier_polys[TERRAIN_TIERS];   /* the polygons the faces of each tier make (the backdrop's: up to two a face) */
 };
 _Static_assert(sizeof(struct Terrain) <= OVL0C_TERRAIN_BYTES, "the terrain overruns its place in ovl_0c");
 _Static_assert(OVL0C_TERRAIN_AT + 3 * OVL0C_TERRAIN_BYTES <= OVL0C_CODE_END, "the world's tables overrun ovl_0c's code");
@@ -636,7 +646,10 @@ static struct Terrain *scene_terrain(const Buffer *b) {
 }
 int gxh_stats_terrain;
 
-static void terrain_reset(struct Terrain *t) { t->gen = ~0u; t->nblocks = t->nverts = t->nfaces = t->nuses = 0; }
+static void terrain_reset(struct Terrain *t) {
+    t->gen = ~0u; t->nblocks = t->nverts = t->nfaces = t->nuses = 0;
+    memset(t->tier_polys, 0, sizeof t->tier_polys);
+}
 
 
 /* the fog amount d (0-4096) at depth sz: the vertex pass's (world_verts.c wv_depth) */
@@ -687,10 +700,18 @@ int port_native_world_block(const NativeWorldBlock *n) {
     const u8 *blk = n->block;
     int nv = blk[0], nf = *(const u16 *)(blk + 2);
     nv = (nv + 2) / 3 * 3; /* (the vertex pass does whole groups of three) */
-    if (!nf || t->nblocks == TB_MAX || t->nverts + nv > TV_MAX || t->nfaces + nf > TF_MAX) return 0;
-    int fog = n->variant != WORLD_FACES_NEAR, shift = n->variant == WORLD_FACES_FAR ? 1 : 2;
+    if (!nf || t->nblocks == TB_MAX || t->nverts + nv > TV_MAX || t->nfaces == TF_MAX) return 0;
+    int backdrop = n->variant == WORLD_BACKDROP;
+    int fog = n->variant != WORLD_FACES_NEAR && !backdrop, shift = n->variant == WORLD_FACES_FAR ? 1 : 2;
     u32 fog_offset = n->fog_params[1] & 0xFFFF;
     if (fog) { t->fog_mode = n->variant == WORLD_FACES_FAR ? 2 : 1; t->fog_colour = n->fog_params[0]; t->fog_offset = fog_offset; }
+    u32 bf = n->fog_params[0] & 0xFFFFFF, bf_max = 1;
+    if (backdrop) { /* (its fog is added by translucent polygons: a vertex's fog colour is bf x d) */
+        t->backdrop_fog = bf;
+        u32 r = bf & 0xFF, g = bf >> 8 & 0xFF, bl = bf >> 16 & 0xFF;
+        bf_max = r > g ? (r > bl ? r : bl) : (g > bl ? g : bl);
+        if (!bf_max) bf_max = 1;
+    }
     /* the vertices: depth on the scene's scale, colour lit / (1 - d) */
     int vbase = t->nverts;
     for (int i = 0; i < nv; ++i) {
@@ -699,33 +720,60 @@ int port_native_world_block(const NativeWorldBlock *n) {
         if (z < -32000) z = -32000;
         if (z > 32000) z = 32000;
         u32 r = lit & 0xFF, g = (lit >> 8) & 0xFF, bl = (lit >> 16) & 0xFF;
-        if (fog) {
-            int d = terrain_fog(sz, fog_offset, shift);
-            if (d >= 0x1000) r = g = bl = 0;
+        int d = -1;
+        if (backdrop) { /* the fog amount from the fog colour; the depth field holds it as an alpha (0-31) */
+            u32 f = n->fog[i], fr = f & 0xFF, fg = f >> 8 & 0xFF, fb = f >> 16 & 0xFF;
+            u32 fm = fr > fg ? (fr > fb ? fr : fb) : (fg > fb ? fg : fb);
+            d = (int)(fm * 0x1000 / bf_max);
+            if (d > 0x1000) d = 0x1000;
+            z = (d * 31 + 0x800) >> 12;
+        } else if (fog) d = terrain_fog(sz, fog_offset, shift);
+        int all_fog = 0;
+        if (d >= 0) {
+            if (d >= 0x1000) all_fog = 1;
             else { u32 k = (0x1000u << 12) / (u32)(0x1000 - d); r = r * k >> 12; g = g * k >> 12; bl = bl * k >> 12; }
         }
-        r = r >> 2 > 31 ? 31 : r >> 2; g = g >> 2 > 31 ? 31 : g >> 2; bl = bl >> 2 > 31 ? 31 : bl >> 2; /* 128 = x1 */
-        t->verts[vbase + i] = (TVert){n->sxy[i], (s16)z, (u16)(r | g << 5 | bl << 10)};
+        /* 128 = x1, in 32 steps; over x1 (TUse.scale) in 16 up to x2, with bit 15 set */
+        u32 c;
+        if (r > 124 || g > 124 || bl > 124) {
+            r = r >> 3 > 31 ? 31 : r >> 3; g = g >> 3 > 31 ? 31 : g >> 3; bl = bl >> 3 > 31 ? 31 : bl >> 3;
+            c = 0x8000 | r | g << 5 | bl << 10;
+        } else {
+            c = r >> 2 | (g >> 2) << 5 | (bl >> 2) << 10;
+        }
+        if (all_fog) c = TV_ALL_FOG;
+        t->verts[vbase + i] = (TVert){n->sxy[i], (s16)z, (u16)c};
     }
     /* the faces wf_face would draw */
     int ti = t->nblocks;
     TBlock *tb = &t->blocks[ti];
     tb->faces = *(const u32 *const *)(blk + 8); tb->vbase = (u16)vbase; tb->variant = (u8)n->variant;
-    tb->alt[0] = n->alt[0]; tb->alt[1] = n->alt[1]; tb->alt[2] = n->alt[2];
+    if (n->alt) { tb->alt[0] = n->alt[0]; tb->alt[1] = n->alt[1]; tb->alt[2] = n->alt[2]; }
     int cull = n->variant == WORLD_FACES_NEAR, grid = n->variant == WORLD_FACES_FAR;
     int limit = n->variant == WORLD_FACES_NEAR ? 0xF6A : 0xFFE, need_lit = n->variant != WORLD_FACES_NEAR;
     int drawn = 0;
-    for (int f = 0; f < nf; ++f) {
+    for (int f = 0; f < nf && t->nfaces + drawn < TF_MAX; ++f) { /* (past TF_MAX the 3D engine has no room anyway) */
         const u32 *face = tb->faces + 4 * f;
         u32 w = face[0];
         int i0 = w & 0xFF, i1 = (w >> 8) & 0xFF, i2 = (w >> 16) & 0xFF;
         u32 s0 = n->sxy[i0], s1 = n->sxy[i1], s2 = n->sxy[i2];
         if (cull && (s0 & s1 & s2 & 0xFF008000)) continue;
         int x0 = (s16)s0, y0 = (s16)(s0 >> 16), x1 = (s16)s1, y1 = (s16)(s1 >> 16), x2 = (s16)s2, y2 = (s16)(s2 >> 16);
-        if (x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1 <= 0) continue;
+        int area2 = x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1;
+        if (area2 <= 0) continue;
+        { /* the GPU draws no polygon 1024+ wide or 512+ high (the GTE clamps vertices off to the sides at +-1024) */
+            int xa = x0 < x1 ? x0 : x1, xb = x0 < x1 ? x1 : x0, ya = y0 < y1 ? y0 : y1, yb = y0 < y1 ? y1 : y0;
+            if (x2 < xa) xa = x2;
+            if (x2 > xb) xb = x2;
+            if (y2 < ya) ya = y2;
+            if (y2 > yb) yb = y2;
+            if (xb - xa >= 1024 || yb - ya >= 512) continue;
+        }
         u32 bias = (w & 0x1000000) >> 15, z[3] = {n->sz[i0] + bias, n->sz[i1] + bias, n->sz[i2] + bias};
         int otz;
-        if (grid) {
+        if (backdrop) {
+            otz = 0xFA0; /* (wm_backdropFaces: every face in one OT entry) */
+        } else if (grid) {
             u32 zg[3] = {(z[0] >> 3) & ~0xFu, (z[1] >> 3) & ~0xFu, (z[2] >> 3) & ~0xFu};
             int k = max3_index(zg[0], zg[1], zg[2]);
             if ((s32)zg[k] <= 0 || (s32)zg[k] >= limit) continue;
@@ -736,20 +784,32 @@ int port_native_world_block(const NativeWorldBlock *n) {
         }
         u32 lit_or = (n->lit[i0] | n->lit[i1] | n->lit[i2]) & 0xFFFFFF, fog_or = (n->fog[i0] | n->fog[i1] | n->fog[i2]) & 0xFFFFFF;
         int has_fog = fog && fog_or, has_lit = !(need_lit && !lit_or);
+        if (backdrop) { /* a POLY_GT3 always, under its fog POLY_G3; that one opaque where the lit colours are black */
+            has_fog = fog_or != 0;
+            has_lit = !(has_fog && !lit_or);
+        }
         if (!has_fog && !has_lit) continue;
         u8 use = 0xFF;
         if (has_lit) { /* its texture page and CLUT, and its texels' bounds */
             u32 uv0, uv1, uv2;
-            terrain_uvs(face, tb->alt, 1, otz, &uv0, &uv1, &uv2);
+            terrain_uvs(face, tb->alt, !backdrop, otz, &uv0, &uv1, &uv2);
             u16 tpage = (u16)(uv1 >> 16), clut = (u16)(uv0 >> 16);
             int u;
             for (u = 0; u < t->nuses; ++u) if (t->uses[u].tpage == tpage && t->uses[u].clut == clut) break;
             if (u == t->nuses) {
                 if (u == TU_MAX) { gxh_stats_mesh_fallback++; continue; }
-                t->uses[u] = (TUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF, {0, 0}};
+                t->uses[u] = (TUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF, 16, 0};
                 t->nuses++;
             }
             TUse *tu = &t->uses[u];
+            for (int k = 0; k < 3; ++k) { /* its brightest channel over x1: the palette's scale */
+                u32 c = t->verts[vbase + (k == 0 ? i0 : k == 1 ? i1 : i2)].colour;
+                if (!(c & 0x8000) || c == TV_ALL_FOG) continue;
+                u32 m = c & 31;
+                if ((c >> 5 & 31) > m) m = c >> 5 & 31;
+                if ((c >> 10 & 31) > m) m = c >> 10 & 31;
+                if (m > tu->scale) tu->scale = (u8)(m > 32 ? 32 : m); /* (16ths: m is 8-bit / 8, 128 = 16) */
+            }
             u8 us[3] = {(u8)uv0, (u8)uv1, (u8)uv2}, vs[3] = {(u8)(uv0 >> 8), (u8)(uv1 >> 8), (u8)(uv2 >> 8)};
             for (int k = 0; k < 3; ++k) {
                 if (us[k] < tu->u0) tu->u0 = us[k];
@@ -759,8 +819,12 @@ int port_native_world_block(const NativeWorldBlock *n) {
             }
             use = (u8)u;
         }
+        int tier = 0;
+        while (tier < DROP_TIERS - 1 && area2 >= drop_bounds[tier]) ++tier;
+        if (has_lit) tier += DROP_TIERS;
+        t->tier_polys[tier] += (u16)(backdrop ? has_lit + has_fog : 1);
         t->faces[t->nfaces + drawn] =
-            (TFace){(u32)ti << 27 | (u32)f << 15 | (u32)(otz & 0x1FFF) << 2 | (u32)has_fog << 1 | (u32)has_lit, use, {0, 0, 0}};
+            (TFace){(u32)ti << 27 | (u32)f << 15 | (u32)(otz & 0x1FFF) << 2 | (u32)has_fog << 1 | (u32)has_lit, use, (u8)tier};
         drawn++;
     }
     t->nfaces += drawn;
@@ -1070,7 +1134,12 @@ static u32 light_under(const Prim *p, int alpha, u32 hue) {
 static __attribute__((noinline)) u32 modulate(u32 a, u32 b) {
     return ((a & 31) * (b & 31) / 31) | ((a >> 5 & 31) * (b >> 5 & 31) / 31) << 5 | ((a >> 10 & 31) * (b >> 10 & 31) / 31) << 10;
 }
-typedef struct { int used, x, y, count, dirty, wanted, index0; } Palette; /* index0: TEXIMAGE bit 29 (emit_scene) */
+typedef struct { int used, x, y, count, dirty, wanted, index0, scale; } Palette; /* index0: TEXIMAGE bit 29 (emit_scene);
+                                                                               * scale: colours x scale / 16 (plan_scale) */
+/* The scale plan_prim's palettes get (16: as they are). The PS1 modulates textures by up to twice (vertex colour 255
+ * is x2), the DS by up to once: a world map use brighter than x1 gets its palette pre-scaled by its brightest channel
+ * and its vertex colours divided by as much (TUse.scale), exact unless a scaled colour saturates. */
+static int plan_scale = 16;
 static Palette palettes[PAL_SLOTS];
 
 static void regions_touch(int x, int y, int w, int h);
@@ -1450,15 +1519,16 @@ palette:
     if (p->depth < 2) {
         int count = p->depth ? 256 : 16, s = *last_palette, empty = -1;
         Palette *lq = &palettes[s];
-        if (!(lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count)) {
+        if (!(lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count && lq->scale == plan_scale)) {
             /* then the slot this CLUT last had, then a search (which also finds the first free slot) */
             unsigned h = (p->clut_x >> 4 ^ p->clut_y * 13) & 255;
             s = palette_hash[h];
             lq = &palettes[s];
-            if (!(s < PAL_SLOTS && lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count)) {
+            if (!(s < PAL_SLOTS && lq->used && lq->x == p->clut_x && lq->y == p->clut_y && lq->count >= count &&
+                  lq->scale == plan_scale)) {
                 for (s = 0; s < PAL_SLOTS; ++s) {
                     Palette *q = &palettes[s];
-                    if (q->used && q->x == p->clut_x && q->y == p->clut_y && q->count >= count) break;
+                    if (q->used && q->x == p->clut_x && q->y == p->clut_y && q->count >= count && q->scale == plan_scale) break;
                     if (!q->used && empty < 0) empty = s;
                 }
                 if (s < PAL_SLOTS) palette_hash[h] = (u8)s;
@@ -1469,7 +1539,7 @@ palette:
                 for (int t = 0; t < PAL_SLOTS; ++t) if (!palettes[t].wanted) { empty = t; break; }
             if (empty < 0) return;
             s = empty;
-            palettes[s] = (Palette){1, p->clut_x, p->clut_y, count, 1, 0, 0};
+            palettes[s] = (Palette){1, p->clut_x, p->clut_y, count, 1, 0, 0, plan_scale};
         }
         palettes[s].wanted = 1;
         *palette_out = (u8)s;
@@ -1505,7 +1575,9 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
             q.n = 4; q.flags = P_TEXTURED;
             use_page(&mu, &q);
             q.u[0] = q.u[2] = u->u0; q.u[1] = q.u[3] = u->u1; q.v[0] = q.v[1] = u->v0; q.v[2] = q.v[3] = u->v1;
+            plan_scale = u->scale;
             plan_prim(&q, 0, &last_group, &last_palette, &u->group, &u->palette);
+            plan_scale = 16;
         }
     /* the native meshes' textures: each use as a primitive covering its texels */
     if (b->meshes && b->mesh_gen == b->scene_gen)
@@ -1792,7 +1864,15 @@ static __attribute__((noinline)) void upload(void) {
         p->dirty = 0;
         gxh_stats_upload_palettes++;
         const u16 *src = psx_vram + (p->y & 511) * 1024;
-        for (int k = 0; k < p->count; ++k) pal[i * 256 + k] = src[(p->x + k) & 1023];
+        if (p->scale == 16) {
+            for (int k = 0; k < p->count; ++k) pal[i * 256 + k] = src[(p->x + k) & 1023];
+        } else {
+            for (int k = 0; k < p->count; ++k) {
+                u32 c = src[(p->x + k) & 1023], r = (c & 31) * p->scale >> 4, g = (c >> 5 & 31) * p->scale >> 4,
+                    bl = (c >> 10 & 31) * p->scale >> 4;
+                pal[i * 256 + k] = (u16)((r > 31 ? 31 : r) | (g > 31 ? 31 : g) << 5 | (bl > 31 ? 31 : bl) << 10 | (c & 0x8000));
+            }
+        }
     }
 }
 
@@ -2421,54 +2501,106 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         vertices += p->n;
     }
     struct Terrain *tr = scene_terrain(b);
-    if (tr) /* the world map's terrain, after the primitives (depth tested: any order) */
+    int drop_below = 0, drop_quota = 0; /* the world: its smallest faces go first when the 3D engine's RAM is short */
+    if (tr) {
+        int over = 0, need = 0;
+        for (int t = 0; t < TERRAIN_TIERS; ++t) need += tr->tier_polys[t];
+        int room_p = MAX_POLYS - polys, room_v = (MAX_VERTICES - vertices) / 3;
+        over = need - (room_p < room_v ? room_p : room_v);
+        for (int t = 0; t < TERRAIN_TIERS && over > 0; ++t) {
+            if (tr->tier_polys[t] <= over) { drop_below = t + 1; over -= tr->tier_polys[t]; }
+            else { drop_quota = over; over = 0; }
+        }
+        gxh_stats_dropped += need - (room_p < room_v ? room_p : room_v) > 0 ? need - (room_p < room_v ? room_p : room_v) : 0;
+    }
+    if (tr) /* the world map's terrain and backdrop, after the primitives (depth tested: any order) */
         for (int f = 0; f < tr->nfaces; ++f) {
-            reserve();
-            if (polys >= MAX_POLYS || vertices + 3 > MAX_VERTICES) { gxh_stats_dropped += tr->nfaces - f; break; }
             const TFace tf = tr->faces[f];
+            if (tf.tier < drop_below) continue;
+            if (tf.tier == drop_below && drop_quota > 0) { drop_quota--; continue; }
             const TBlock *tb = &tr->blocks[tf.ref >> 27];
             const u32 *face = tb->faces + 4 * ((tf.ref >> 15) & 0xFFF);
             int otz = (int)((tf.ref >> 2) & 0x1FFF), has_fog = (int)(tf.ref >> 1) & 1, has_lit = (int)(tf.ref & 1);
-            u32 w = face[0], uvw[3] = {0, 0, 0}, want_image = 0, set_palette = ~0u;
-            int tu = 0, tv = 0;
-            if (has_lit) {
-                const TUse *u = &tr->uses[tf.use];
-                const Region *r = u->group == 0xFF ? NULL : groups[u->group].region;
-                if (!r) { gxh_stats_texture_fail++; continue; }
-                int depth = (u->tpage >> 7) & 3;
-                if (depth == 3) depth = 2;
-                if (depth < 2 && u->palette == 0xFF) { gxh_stats_palette_fail++; continue; }
-                tu = (r->x - (u->tpage & 15) * 64) * texels_per_halfword(depth);
-                tv = r->y - ((u->tpage >> 4) & 1) * 256;
-                want_image = (u32)(r->unit * TEX_UNIT / 8) | r->size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
-                if (depth < 2) {
-                    want_image |= index0_transparent(u->palette);
-                    u32 want_palette = (u32)u->palette * 512 / 16;
+            int backdrop = tb->variant == WORLD_BACKDROP, zb = world_entry_depth(0xFA0 + 8);
+            u32 w = face[0];
+            /* pass 0: the lit polygon (textured; black where only fog shows), fogged by the 3D engine unless it's the
+             * backdrop's; pass 1, the backdrop's: its fog, added as the ramp's alpha over the lit one (translucent,
+             * one polygon ID: shared edges blend once), or opaque where the lit one is black */
+            for (int pass = backdrop && has_lit ? 0 : backdrop ? 1 : 0; pass < (backdrop && has_fog ? 2 : 1); ++pass) {
+                reserve();
+                if (polys >= MAX_POLYS || vertices + 3 > MAX_VERTICES) break;
+                u32 uvw[3] = {0, 0, 0}, want_image = 0, set_palette = ~0u, want_attr;
+                int tu = 0, tv = 0, textured = pass == 0 && has_lit, ramp = pass == 1 && has_lit;
+                if (textured) {
+                    const TUse *u = &tr->uses[tf.use];
+                    const Region *r = u->group == 0xFF ? NULL : groups[u->group].region;
+                    if (!r) { gxh_stats_texture_fail++; continue; }
+                    int depth = (u->tpage >> 7) & 3;
+                    if (depth == 3) depth = 2;
+                    if (depth < 2 && u->palette == 0xFF) { gxh_stats_palette_fail++; continue; }
+                    tu = (r->x - (u->tpage & 15) * 64) * texels_per_halfword(depth);
+                    tv = r->y - ((u->tpage >> 4) & 1) * 256;
+                    want_image = (u32)(r->unit * TEX_UNIT / 8) | r->size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
+                    if (depth < 2) {
+                        want_image |= index0_transparent(u->palette);
+                        u32 want_palette = (u32)u->palette * 512 / 16;
+                        if (want_palette != palette) set_palette = want_palette;
+                    }
+                    terrain_uvs(face, tb->alt, !backdrop, otz, &uvw[0], &uvw[1], &uvw[2]);
+                } else if (ramp) {
+                    want_image = (u32)(RAMP_UNIT * TEX_UNIT / 8) | 2u << 20 | 0u << 23 | 6u << 26; /* 32x8 A5I3 */
+                    u32 want_palette = (u32)(ADD_SLOT * 512 + RAMP_PALETTE * 16) / 16;
                     if (want_palette != palette) set_palette = want_palette;
                 }
-                terrain_uvs(face, tb->alt, 1, otz, &uvw[0], &uvw[1], &uvw[2]);
-            }
-            u32 want_attr = 3u << 6 | 31u << 16 | (has_fog ? 1u << 15 : 0);
-            pack_begin();
-            if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); palette = set_palette; }
-            if (want_image != image) { pack(CMD_TEXIMAGE); put(want_image); image = want_image; }
-            if (want_attr != attr) { pack(CMD_POLYATTR); put(want_attr); attr = want_attr; }
-            pack(CMD_BEGIN); put(0);
-            pack_end();
-            for (int k = 0; k < 3; ++k) {
-                const TVert *tv3 = &tr->verts[tb->vbase + ((w >> (8 * k)) & 0xFF)];
-                int x = (s16)tv3->xy + b->ofs_x, y = (s16)(tv3->xy >> 16) + b->ofs_y;
+                want_attr = 3u << 6 | 31u << 16 | (ramp ? 48u << 24 : 0) | (has_fog && !backdrop ? 1u << 15 : 0);
                 pack_begin();
-                pack(CMD_COLOR); put(has_lit ? tv3->colour : 0);
-                if (has_lit) {
-                    int u = (int)(uvw[k] & 0xFF) - tu, v = (int)((uvw[k] >> 8) & 0xFF) - tv;
-                    pack(CMD_TEXCOORD); put((u32)(u16)(u * 16) | (u32)(u16)(v * 16) << 16);
-                }
-                pack(CMD_VTX16); put((u32)(u16)x | (u32)(u16)y << 16); put((u32)(u16)tv3->z);
+                if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); palette = set_palette; }
+                if (want_image != image) { pack(CMD_TEXIMAGE); put(want_image); image = want_image; }
+                if (want_attr != attr) { pack(CMD_POLYATTR); put(want_attr); attr = want_attr; }
+                pack(CMD_BEGIN); put(0);
                 pack_end();
+                u32 bf = tr->backdrop_fog, lit_of[3], inv_scale = textured ? (16u << 10) / tr->uses[tf.use].scale : 0;
+                if (textured) { /* (TV_ALL_FOG: another vertex's colour) */
+                    u32 other = 0;
+                    for (int k = 0; k < 3; ++k) {
+                        lit_of[k] = tr->verts[tb->vbase + ((w >> (8 * k)) & 0xFF)].colour;
+                        if (lit_of[k] != TV_ALL_FOG) other = lit_of[k];
+                    }
+                    for (int k = 0; k < 3; ++k) if (lit_of[k] == TV_ALL_FOG) lit_of[k] = other;
+                }
+                u32 bf15 = (bf & 0xFF) >> 3 | ((bf >> 8 & 0xFF) >> 3) << 5 | ((bf >> 16 & 0xFF) >> 3) << 10;
+                for (int k = 0; k < 3; ++k) {
+                    const TVert *tv3 = &tr->verts[tb->vbase + ((w >> (8 * k)) & 0xFF)];
+                    int x = (s16)tv3->xy + b->ofs_x, y = (s16)(tv3->xy >> 16) + b->ofs_y, z = tv3->z;
+                    u32 colour = 0;
+                    if (textured) { /* the vertex colour over the palette's scale */
+                        u32 c = lit_of[k], sh = c & 0x8000 ? 3 : 2;
+                        u32 r = ((c & 31) << sh) * inv_scale >> 12, g = ((c >> 5 & 31) << sh) * inv_scale >> 12,
+                            bl = ((c >> 10 & 31) << sh) * inv_scale >> 12;
+                        colour = (r > 31 ? 31 : r) | (g > 31 ? 31 : g) << 5 | (bl > 31 ? 31 : bl) << 10;
+                    }
+                    if (!backdrop && otz >= 0xFA0 && z >= zb) z = zb - 1; /* (the PS1 draws it before the backdrop) */
+                    if (backdrop) { /* (its vertices' depth field holds their fog as an alpha) */
+                        if (pass == 1) {
+                            int a = tv3->z;
+                            colour = ramp ? bf15 : ((bf15 & 31) * a / 31) | ((bf15 >> 5 & 31) * a / 31) << 5 | ((bf15 >> 10) * a / 31) << 10;
+                        }
+                        z = zb + pass;
+                    }
+                    pack_begin();
+                    pack(CMD_COLOR); put(colour);
+                    if (textured) {
+                        int u = (int)(uvw[k] & 0xFF) - tu, v = (int)((uvw[k] >> 8) & 0xFF) - tv;
+                        pack(CMD_TEXCOORD); put((u32)(u16)(u * 16) | (u32)(u16)(v * 16) << 16);
+                    } else if (ramp) {
+                        pack(CMD_TEXCOORD); put((u32)(u16)(tv3->z * 16 + 8) | (u32)(u16)(4 * 16) << 16);
+                    }
+                    pack(CMD_VTX16); put((u32)(u16)x | (u32)(u16)y << 16); put((u32)(u16)z);
+                    pack_end();
+                }
+                ++polys;
+                vertices += 3;
             }
-            ++polys;
-            vertices += 3;
         }
     reserve();
     fifo(0x50, GL_TRANS_MANUALSORT); /* SWAP_BUFFERS: shown from the next VBlank */

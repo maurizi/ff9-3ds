@@ -35,7 +35,7 @@ int port_native_bg(const NativeBg *r);
 
 /* A world map block (wm_drawBlock, ovl_0c) after the game's vertex pass (src_equiv/ovl_0c/world_verts.c): its faces
  * (world_faces.c) drawn by the renderer from the projected vertices instead of as PS1 packets. */
-enum { WORLD_FACES_FOG, WORLD_FACES_NEAR, WORLD_FACES_FAR }; /* wm_blockFaces{Fog,Near,Far} */
+enum { WORLD_FACES_FOG, WORLD_FACES_NEAR, WORLD_FACES_FAR, WORLD_BACKDROP }; /* wm_blockFaces{Fog,Near,Far}, wm_backdropFaces */
 typedef struct {
     const unsigned char *block;    /* WmBlock: vertex count (low byte of word 0), faces (16 bytes each) at +8 */
     const unsigned int *sxy;       /* the vertices' screen positions (the scratchpad) */
@@ -43,7 +43,8 @@ typedef struct {
     const unsigned int *lit;       /* their lit colours (D_800D23F0) */
     const unsigned int *fog;       /* their fog colours (D_800D1FF0) */
     const unsigned int *alt;       /* the block's alternate texture page entry (*g_worldCurTexArea, 3 words) */
-    const unsigned int *fog_params;/* g_worldFogParams: two { colour, fog offset | lit offset << 16 } */
+    const unsigned int *fog_params;/* g_worldFogParams: two { colour, fog offset | lit offset << 16 }; the backdrop's:
+                                    * g_worldBackdropFog */
     int variant;                   /* WORLD_FACES_* */
     int draw_x, draw_y;            /* the frame's drawing area */
 } NativeWorldBlock;
