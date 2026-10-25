@@ -92,7 +92,13 @@ def main():
         if a.sd_folder:
             block += f'FolderPath = "{a.sd_folder.resolve()}"\n'
         if a.sd_image:
-            block += f'ImagePath = "{a.sd_image.resolve()}"\nImageSize = 0\n'
+            # melonDS's sizes: 0 fits the folder (with too little room for FAT and the disc image beside the other
+            # files: 740 MB of disc 1 didn't make it), 1-5 256 MB to 4 GB
+            size = 0
+            if a.sd_folder and not a.sd_image.exists():
+                need = sum(f.stat().st_size for f in a.sd_folder.resolve().rglob('*') if f.is_file()) * 1.05 + (32 << 20)
+                size = next((k for k in range(1, 6) if (128 << 20 << k) >= need), 5)
+            block += f'ImagePath = "{a.sd_image.resolve()}"\nImageSize = {size}\n'
         CONFIG.write_text(text[:start] + block + text[end:])
     elif a.sd_folder:
         import re
