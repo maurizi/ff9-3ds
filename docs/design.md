@@ -545,3 +545,16 @@ for replay when the scene is sent, as a field's UI is. 4 bosses matched; 8 more 
 text (Garuda, Plant Brain, Nova Dragon) and slowdowns up to 60% (Antlion 59 -> 91 ms): reverted. Scenes over the
 budget are rarer than first read (Ozma: 42 primitives over), so dropping stays until the battle UI's replay is
 understood.
+
+## Additive light in battles (2026-10-25)
+
+Battle spell effects (Maliris, Tiamat, Necron in the boss sweep) are many overlapping additive sprites that saturate
+toward white on the PS1. The DS's 3D engine only alpha-blends, and its 2D compositor adds two layers at most:
+- a capture pass (the additive primitives rendered by the 3D engine onto black, captured, added over the scene by the
+  compositor) adds the effect to the scene exactly, but the effect's own layers still stack by alpha, so explosion
+  cores stay coloured (and texture memory halves while it runs);
+- the fields' software layer (exact, stacking included) costs in proportion to area, and battle effects cover much of
+  the screen: far too slow on a DS, borderline on a DSi;
+- a whiter approximation (biasing bright texels' colours toward white) helps stacked cores but over-whitens single
+  glows over dark backgrounds.
+Exact battle effects therefore trade speed (software) or exactness (approximations); a decision for the user.
