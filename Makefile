@@ -170,7 +170,7 @@ SPUARM ?= 1
 SPUITCM ?= $(if $(filter 1,$(HWSOUND)),0,1)
 # ARM9 timing probe verifies these pixel loops in instruction TCM; keep O2.
 PORT_ARCH_ds_psx/softgpu := -marm -DPORT_RASTER_ITCM
-PORT_ARCH_ds_ds/display_scale := -marm -DPORT_SCALE_ITCM
+PORT_ARCH_ds_ds/display_scale := -marm -DPORT_SCALE_ITCM -DPORT_SCALE_SPARE
 PORT_ARCH_ds_ds/itcm_guard := -marm
 # Movie decoding: Thumb has no long multiply (SMLAL), which the IDCT's 64-bit fallback and VLC shifts use.
 PORT_ARCH_ds_psx/mdec_decode := -marm

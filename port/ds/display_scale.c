@@ -45,7 +45,12 @@ static inline uint32_t spread(uint16_t c) {
                    | ((uint32_t)(c & 0x7c00) << 10);
 }
 
+#ifdef PORT_SCALE_SPARE /* the game's DS build: in PS1 RAM the port keeps spare (psx_spare_alloc), not bss */
+void *psx_spare_alloc(unsigned int size);
+static uint32_t (*text_mask)[8];
+#else
 static uint32_t text_mask[192][8];
+#endif
 
 #ifdef PORT_SCALE_ITCM
 __attribute__((section(".itcm"), long_call))
@@ -77,6 +82,9 @@ void ds_scale_display_text_pair(uint16_t *dst, const uint16_t *vram,
         for(;ox<out_w;++ox) out[ox]=src[(base_x+ox*5/4)&1023]|0x8000;
     }
     if (!count && !previous_count) return;
+#ifdef PORT_SCALE_SPARE
+    if (!text_mask) text_mask = psx_spare_alloc(192 * sizeof *text_mask);
+#endif
     /* only the rows and 32-pixel groups this area covers (the hybrid scales 32x32 blocks) */
     const int groups=(out_w+31)>>5;
     for(int oy=0;oy<out_h;++oy) for(int group=0;group<groups;++group) text_mask[oy][group]=0;

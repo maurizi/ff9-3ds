@@ -115,9 +115,12 @@ void psx_mem_init(void) {
 #endif
     port_log("vram %p..%p spu %p\n", (void *)psx_vram, (void *)(psx_vram + 1024 * 512), (void *)psx_spu_ram);
 #endif
-    if (!psx_vram || !psx_spu_ram) {
-        port_log("no room for the VRAM/SPU shadows: running without graphics and sound memory\n");
-    }
+    if (!psx_vram || !psx_spu_ram) /* (nothing can draw or play without them: a clear stop, not a crash later) */
+#ifdef __arm__
+        port_fatal("no room for the VRAM/SPU shadows (%u KB free)", heap_free() >> 10);
+#else
+        port_fatal("no room for the VRAM/SPU shadows");
+#endif
     if (psx_vram) {
         memset(psx_vram, 0, 1024 * 512 * 2);
     }
