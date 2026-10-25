@@ -346,3 +346,13 @@ ARM9 means cutting all of these, the exact GTE included.
 Fields drawn at random (seed 25, `build/validation/dsmode_rand30.list`) beyond the 28 samples: 29 ran their 1500
 frames; 2101 died with "psx_spare_alloc: 32768 bytes over the spare range" (the block runs' tables had filled the
 spare range; moved after the first field buffer) and then ran too (99 ms). Frame times 16.7-130 ms: d1_f0111 36.9296, d1_f0259 83.7146, d1_f0312 24.2382, d1_f0573 46.6887, d1_f0600 38.7511, d1_f0762 28.5198, d1_f0767 129.8035, d1_f1256 25.0598, d2_f0706 36.1133, d2_f1012 38.3618, d2_f1211 37.7321, d2_f1250 54.3212, d2_f1309 44.5343, d2_f1407 39.6985, d2_f1800 47.3714, d3_f1600 19.1103, d3_f1602 35.9376, d3_f1810 54.3261, d3_f2111 37.4821, d3_f2152 63.5959, d3_f2159 42.3015, d3_f2255 16.7151, d3_f2655 48.7039, d3_f2713 25.0808, d4_f1700 27.4269, d4_f1913 40.1966, d4_f2910 26.0675, d4_f2913 41.7072, d4_f2951 52.72 ms.
+
+### Boss battles against the host's frames (2026-10-25)
+
+The 24 boss screenshots beside the host renderer's frame 1500 showed: black boxes behind every battle's HP and MP
+numbers (a fill running past its span after the STMIA change: fixed, `fill_bursts`); spell effects whose additive
+light saturates toward white on the PS1 come out coloured with the 3D engine's approximation (Maliris's explosion
+orange instead of white, Tiamat's beam purplish, Necron's glow bluish, Kraken's glow missing): battles have no exact
+additive layer (their glows are too large to draw in software affordably), so this needs the capture pass; text at
+the 0.8 scale is heavier ("Meteor"). The fields' 58 screenshots matched apart from field 767's rain (fixed) and
+additive lights (2910: fixed by the exact layer).
