@@ -5,6 +5,11 @@
 #ifdef PORT_PC_SAMPLER
 #include <nds.h>
 
+#ifdef PORT_PC_LO  /* PCLO=ADDR PCSHIFT=N: a window of 2560 fine buckets from ADDR (one function's lines) */
+#define MAIN_LO PORT_PC_LO
+#define SHIFT PORT_PC_SHIFT
+#define MAIN_BUCKETS 2560u
+#else
 #define MAIN_LO 0x02000000u
 #ifdef PORT_DS_MODE
 #define SHIFT 10  /* 1 KB buckets: 5 KB, what DS mode's heap can spare */
@@ -12,10 +17,17 @@
 #define SHIFT 6
 #endif
 #define MAIN_BUCKETS ((0x022A0000u - MAIN_LO) >> SHIFT)
+#endif
 #define ITCM_LO 0x01000000u   /* (BlocksDS links ITCM here, __itcm_start) */
-#define ITCM_BUCKETS (0x8000u >> SHIFT)
-/* header: magic, main base, main buckets, ITCM base, ITCM buckets, samples, outside (BIOS waits, other memory) */
-volatile u32 port_pc_header[8] = {0x53504331, MAIN_LO, MAIN_BUCKETS, ITCM_LO, ITCM_BUCKETS, 0, 0, SHIFT};
+#ifdef PORT_PC_LO
+#define ITCM_SHIFT 5  /* 32 bytes in a window build: the interrupt dispatcher apart from its neighbours */
+#else
+#define ITCM_SHIFT SHIFT
+#endif
+#define ITCM_BUCKETS (0x8000u >> ITCM_SHIFT)
+/* header: magic, main base, main buckets, ITCM base, ITCM buckets, samples, outside (BIOS waits, other memory),
+ * main bucket shift, ITCM bucket shift */
+volatile u32 port_pc_header[9] = {0x53504331, MAIN_LO, MAIN_BUCKETS, ITCM_LO, ITCM_BUCKETS, 0, 0, SHIFT, ITCM_SHIFT};
 u16 port_pc_main[MAIN_BUCKETS];
 u16 port_pc_itcm[ITCM_BUCKETS];
 extern u32 __sp_irq[];
@@ -24,7 +36,7 @@ static void sample(void) {
     u32 pc = __sp_irq[-1] - 4;
     port_pc_header[5]++;
     if (pc - MAIN_LO < (MAIN_BUCKETS << SHIFT)) { u16 *c = &port_pc_main[(pc - MAIN_LO) >> SHIFT]; if (*c != 0xFFFF) ++*c; }
-    else if (pc - ITCM_LO < (ITCM_BUCKETS << SHIFT)) { u16 *c = &port_pc_itcm[(pc - ITCM_LO) >> SHIFT]; if (*c != 0xFFFF) ++*c; }
+    else if (pc - ITCM_LO < (ITCM_BUCKETS << ITCM_SHIFT)) { u16 *c = &port_pc_itcm[(pc - ITCM_LO) >> ITCM_SHIFT]; if (*c != 0xFFFF) ++*c; }
     else port_pc_header[6]++;
 }
 

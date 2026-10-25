@@ -477,7 +477,8 @@ host census, 2500 frames of random walking with `--render`).
 44.8 -> 39.7, 2162 42.1 -> 36.5, 1508 47.3 -> 42.3), and looking the same apart from the 3D engine's sampling at
 the 0.8 scale and the additive approximation. 931 and 1812 are over the 3D engine's limits at that frame (2300 and
 2200 primitives): software there, as fast. Before block runs and the larger buffers, 8 of the 28 were software.
-Frame times without timers (PROFILE=2, ms; 16.7 is 60 fps, the PS1 field is 30 fps, 33.3 ms), after the profiling
+Frame times without timers (PROFILE=2, real ms per PS1 VBlank, the port's virtual frame: 16.7 is the PS1's speed, since
+the game paces itself in VBlanks (fields `VSync(2)`, 30 fps; battles `vsyncMode` 4, 15 fps); 33.3 is half), after the profiling
 pass of 2026-10-24 (PROFILE=3 sampling profiler: no memset per GP0 command, the 2D layer skipping cells nothing drew
 in, GP0 vertices decoded in place, GX commands written in main RAM, gp0.c and gx_hybrid.c as ARM):
 
@@ -512,7 +513,8 @@ in, GP0 vertices decoded in place, GX commands written in main RAM, gp0.c and gx
 | d4_f2110 | 47.6403 | 33.8488 |
 | d4_f2162 | 36.1143 | 27.2725 |
 
-24 of 28 at or under the PS1's 33 ms. 931 and 1812 are over the 3D engine's limits for many scenes (1812 is 2.5 ms
+9 of 28 at the PS1's speed (16.7 ms), 13 within 8% of it, 24 of 28 at or under half of it (33.3 ms; an earlier reading of these
+numbers as per 30 fps game frame took 33 ms for the PS1's speed: it is 16.7). 931 and 1812 are over the 3D engine's limits for many scenes (1812 is 2.5 ms
 slower than the software path: its software frames go through bank A, `scale_back`); 955 and 2110 are within 1 ms.
 
 Tried for scenes over the limits: split frames, the back part (the primitives before the last ones that fit, or a

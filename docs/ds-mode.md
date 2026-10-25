@@ -254,8 +254,9 @@ last 64 phases in DTCM; `CANARY=1` fits DS mode (8 KB tails); the status screen'
 ## The 28 sample fields as an original DS (2026-10-25)
 
 `build/validation/dsmode_bench.sh` (DSMODE=1 HYBRID=1 HWSOUND=1 FIELDGX=1, melonDS as a DS at 67 MHz with 4 MB, a
-DLDI card per disc, PROFILE=2 frame times at frame 1500): all 28 ran their 1500 frames, none stalled. 10 are at or
-under the PS1's 33.3 ms; the slowest are the scenes over the 3D engine's limits (931 83 ms, 1812 118 ms, drawn in
+DLDI card per disc, PROFILE=2 frame times at frame 1500): all 28 ran their 1500 frames, none stalled. The times are
+real ms per PS1 VBlank (the virtual frame), so the PS1's speed is 16.7 ms (fields wait `VSync(2)`, battles 4 VBlanks a
+game frame): none is there (the fastest is 1811 at 19.7), 10 are at or under half of it (33.3 ms); the slowest are the scenes over the 3D engine's limits (931 83 ms, 1812 118 ms, drawn in
 software) and the large 3D scenes (955, 2110 66 ms, 1508 62 ms). Speed is now the original DS's gap.
 
 | field | ms/frame |
@@ -292,7 +293,7 @@ software) and the large 3D scenes (955, 2110 66 ms, 1508 62 ms). Speed is now th
 ## 24 boss battles as an original DS (2026-10-25)
 
 The boss fixtures (`build/validation/boss_sweep_fixtures`, each the encounter entered directly) through the same
-script: all 24 ran their 1500 frames, none stalled. None reaches the PS1's 33 ms yet (42-99 ms); the effect-heavy
+script: all 24 ran their 1500 frames, none stalled. None reaches even half the PS1's speed (33.3 ms per PS1 VBlank; the PS1's is 16.7) yet (42-99 ms); the effect-heavy
 late bosses are slowest (Ozma 99, Lich 90, Nova Dragon 88, Trance Kuja 85, Earth Guardian 83, Hades 80).
 
 | boss battle | ms/frame |
@@ -360,8 +361,19 @@ additive lights (2910: fixed by the exact layer).
 ## 30 random battles as an original DS (2026-10-25)
 
 Ordinary encounters drawn at random (seed 26, `build/validation/dsmode_battle30.list`), each to game frame 1500: all
-30 ran without a crash or stall. Frame times 46.2-68.8 ms, mean 54.2 (the PS1 runs battles at 33 ms): d1_b0032 48.9,
+30 ran without a crash or stall. Frame times 46.2-68.8 ms, mean 54.2 per PS1 VBlank (the PS1's speed is 16.7: these battles run at about 31% of it, a 15 fps game
+frame taking about 217 ms instead of 67): d1_b0032 48.9,
 d1_b0182 47.5, d1_b0186 58.5, d1_b0187 53.9, d1_b0230 54.2, d1_b0238 60.8, d1_b0296 46.2, d2_b0091 57.8, d2_b0098 68.8,
 d2_b0102 51.7, d2_b0140 62.7, d2_b0229 54.4, d2_b0331 50.3, d2_b0342 59.7, d2_b0355 51.7, d2_b0647 48.1, d2_b0678 50.9,
 d2_b0840 50.2, d2_b0844 53.1, d3_b0216 50.0, d3_b0837 65.1, d3_b0905 54.3, d4_b0137 59.3, d4_b0215 54.1, d4_b0223 58.8,
 d4_b0586 53.6, d4_b0664 50.4, d4_b0686 46.7, d4_b0839 53.7, d4_b0919 49.1 ms.
+
+### Where an ordinary battle's time goes (d2_b0098, PROFILE=3 in DS mode, 2026-10-25)
+
+By object file (1 KB buckets; `PCLO=0x... PCSHIFT=4` samples a 40 KB window in 16-byte buckets and ITCM in 32-byte
+ones, which separates neighbours the 1 KB buckets mix: the "9% in the text scaler" was the VBlank wait beside it in
+ITCM): the renderer `gx_hybrid` 29% (`emit_scene` 6.8, `gxh_present` 4.9, `plan_textures` 4.1, `hybrid_poly` 2,
+`regions_touch` 1.6), the GTE 14% (`rtp_sf1` 7.2, `gte_cmd` 4.2, `mat_mul` 2), the software rasteriser (the 2D layer's
+primitives) 7%, GP0 decoding 7% (about 3 us a primitive), the text scaler 2.3%, `gpu.c` 3.4%, the game's own code
+8%, idle in the VBlank wait about 9%. The port's layers are about 70% of the time. Compiling `emit_scene`,
+`plan_textures` and `gxh_present` as ARM (3 KB more) changed nothing measurable (68.79 ms both ways): reverted.

@@ -54,12 +54,13 @@ def ram(addr, size):
     return data[off:off + size]
 
 
-head = struct.unpack('<8I', ram(symbols['port_pc_header'], 32))
+nhead = 9 if sizes.get('port_pc_header', 32) >= 36 else 8  # older builds: one shift for both tables
+head = struct.unpack('<%dI' % nhead, ram(symbols['port_pc_header'], 4 * nhead)) + (0,) * (9 - nhead)
 if head[0] != 0x53504331:
     p.error('no sampler header in the state')
-_, main_lo, main_n, itcm_lo, itcm_n, total, outside, shift = head
+_, main_lo, main_n, itcm_lo, itcm_n, total, outside, shift, itcm_shift = head
 shift = shift or 6
-bucket = 1 << shift
+itcm_shift = itcm_shift or shift
 counts = collections.Counter()
 detail = []
 
@@ -68,8 +69,9 @@ detail = []
 funcs = [(s, size or ((funcs[i + 1][0] - s) if i + 1 < len(funcs) else 64), name) for i, (s, size, name) in enumerate(funcs)]
 
 
-def attribute(base, n, table):
+def attribute(base, n, table, shift):
     """each bucket's samples split over the functions it overlaps, by bytes"""
+    bucket = 1 << shift
     words = struct.unpack('<%dH' % n, ram(symbols[table], 2 * n))
     for i, c in enumerate(words):
         if not c:
@@ -93,8 +95,8 @@ def attribute(base, n, table):
             counts[fname] += c * o / total_overlap
 
 
-attribute(main_lo, main_n, 'port_pc_main')
-attribute(itcm_lo, itcm_n, 'port_pc_itcm')
+attribute(main_lo, main_n, 'port_pc_main', shift)
+attribute(itcm_lo, itcm_n, 'port_pc_itcm', itcm_shift)
 print(f'{total} samples ({total / 8000:.1f} s), {outside} outside main RAM and ITCM (BIOS waits for VBlank and the like)')
 for name, c in counts.most_common(a.top):
     print(f'{100 * c / total:6.2f}%  {c:9.0f}  {name}')
@@ -111,7 +113,7 @@ if 'port_pc_memset' in symbols:
 
 if a.detail:
     detail.sort(reverse=True)
-    lines = subprocess.check_output(['addr2line', '-e', str(a.elf)] + ['%x' % (lo + bucket // 2) for _, lo in detail[:20]],
+    lines = subprocess.check_output(['addr2line', '-e', str(a.elf)] + ['%x' % (lo + 2) for _, lo in detail[:20]],
                                     text=True).splitlines()
     print('hottest buckets of', a.detail)
     for (c, lo), line in zip(detail[:20], lines):
