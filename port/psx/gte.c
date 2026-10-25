@@ -152,6 +152,9 @@ static inline void finish_flag(void) {
 
 /* ---- UNR division (H / SZ3) ----------------------------------------------------------------------------- */
 
+#if defined(PORT_GTE_ITCM) && defined(__arm__)
+__attribute__((section(".dtcm")))
+#endif
 static u16 unr_table[0x101];
 
 static void init_unr(void) {

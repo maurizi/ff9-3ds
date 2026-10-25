@@ -8,6 +8,9 @@
 
 unsigned int psx_gpu_scene_prims; /* primitives drawn since the display last moved (gpu.c PutDispEnv) */
 
+#if defined(PORT_GTE_ITCM) && defined(__arm__)
+__attribute__((section(".dtcm"))) /* read for every primitive (DS: beside the GTE's registers) */
+#endif
 Gp0State gp0_state = {0, 0, 1023, 511, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 const Gp0Backend *gp0_backend;
 /* psx_display.h; weak here and in gpu.c, since unit tests link either file alone */
