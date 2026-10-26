@@ -662,3 +662,38 @@ ms per VBlank, before -> after:
 - The 8-field walking set: 1-4.7 ms faster each, no crash.
 
 The intro's movie now has 10.6 ms of its 16.7 free.
+
+### Battles and the heavy fields (2026-10-26, later)
+
+Measured with the PC sampler windows (PROFILE=3 with PCLO/PCSHIFT): the full-RAM profile's 2 KB buckets misplace
+whole functions (port_native_mesh showed 7%; in fact the code around it). To read an overlay area's lines, map the
+bucket through the object's own section: `arm-none-eabi-addr2line -j .psxovl_0a.port -e
+build/ds/port/ds/gx_hybrid.o <address - the section's start in build/ds/ff9ds.map>`.
+
+What a heavy battle (d1_b0071) spends, about: the native meshes' collection and emission 20%, the GTE 12%, the UI
+(software rows, the 2D layer) 15%, the GP0 decoding and recording 10%, the game's own code under 10%. Removing the
+3D emission entirely saves 4.1 of 32.8 ms, and writing the command lists to DTCM without DMA 0.55 ms: the emission
+costs its computation, not its stores.
+
+Changes, each with identical frames:
+- emit_scene finds the OT entries with native polygons through a bitmap.
+- Opaque textured native polygons (most of a battle's) are emitted straight from their meshes (native_run, ARM in
+  ovl_0b's area), without a Prim record.
+- port_native_mesh in ARM in ovl_0b's area; NCLIP factored; texel bounds gathered per use in registers.
+- regions_touch passes over writes away from every region and palette (a 32x32 cell bitmap).
+- dirty_cells sets a cell row's bits at once.
+- The GTE's MVMVA (and lighting steps) and GPF in 32 bits where that is exact (checked against the 64-bit formula on
+  2,000,000 random cases).
+- The overlays' code is built with PORT_GTE_APPROX (decomp-config tracks DSMODE), and the fast rtir/rtv0tr/rtv0 and
+  gpf12 paths are calls rather than inline bodies: smaller overlays (heap +2.4 KB) and faster.
+- MoveImage, LoadImage and StoreImage copy whole rows when no mask bit or wrap applies; ClearOTagR links four
+  entries a step.
+- Fields: the model snapshot in ARM with register-gathered bounds; each group's screen bounds kept with its
+  snapshot for bgc_use (in a table beside the stores: growing FGroup took from the stores' vertex room, and
+  d4_f2110's groups then fell back to packets).
+
+Tried without gain: the native polygons emitted in mesh order after the walk (cache-friendlier, no faster, and the
+frames differ); the battle's clearing fill limited to touched cells (0.07 ms); the batched RTPT in two passes (slower).
+
+ms per VBlank, before -> after: d1_b0071 34.5 -> 31.4, d2_b0300 35.8 -> 30.6, d1_b0254 36.6 -> 33.8, d4_b0325
+31.0 -> 27.8, d2_b0128 34.5 -> 30.2; d4_f2110 30.3 -> 27.4, d2_f1102 23.5 -> 23.1, d1_f0110 16.9 -> 16.7.
