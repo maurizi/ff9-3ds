@@ -76,6 +76,8 @@ typedef struct {
     s16 x[4], y[4];
     u8 r[4], g[4], b[4], u[4], v[4];
 } Prim;
+/* a field's background sprite: an opaque textured sprite, not a UI page's (the composite's, bgc_use) */
+static inline int bg_prim(const Prim *p) { return (p->flags & (P_RECT | P_TEXTURED | P_SEMI | P_UI | P_TWIN)) == (P_RECT | P_TEXTURED); }
 
 typedef struct {
     int x, y, w, h, valid;
@@ -110,6 +112,7 @@ typedef struct {
 } Buffer;
 
 static Buffer buffers[2];
+static struct { int valid; u32 hash; unsigned tex; } bgc; /* a field's background composite in bank A (bgc_use) */
 
 /* field models (port_native_field_mesh) */
 #define FM_GROUPS 32       /* groups a scene */
@@ -118,7 +121,7 @@ static Buffer buffers[2];
 #define FM_POLYS 4096       /* polygons a scene (its culling bits) */
 /* (src, polys and verts as taken: the game may have freed or reused the group by the time the scene is sent, two
  * frames later; fm_live checks) */
-typedef struct { const u8 *group, *packets, *src; u16 vert0, poly0, polys, verts; s32 depth0; } FGroup;
+typedef struct { const u8 *group, *packets, *src; u16 vert0, poly0, polys, verts; s32 depth0, depth_far; } FGroup;
 typedef struct { u16 tpage, clut; u8 u0, v0, u1, v1, group, palette; } FUse;
 typedef struct {
     unsigned gen; int ngroups, nverts, nuses;
@@ -892,7 +895,7 @@ static inline void use_page(const MeshUse *u, Prim *p) {
  * (scenes with those go software when they appear). */
 static u8 *prim_layer;
 /* clip: VRAM x0, y0, x1, y1 inclusive to draw within (NULL: the whole buffer) */
-static void replay_clip(Buffer *b, int from, int to, int layer /* -1: all */, const int *clip) {
+static void replay_clip(Buffer *b, int from, int to, int layer /* -1: all, -2: the background sprites */, const int *clip) {
     Gp0State saved = gp0_state;
     gp0_state.area_x0 = b->x; gp0_state.area_y0 = b->y;
     gp0_state.area_x1 = b->x + b->w - 1; gp0_state.area_y1 = b->y + b->h - 1;
@@ -906,7 +909,7 @@ static void replay_clip(Buffer *b, int from, int to, int layer /* -1: all */, co
     gp0_state.set_mask = gp0_state.check_mask = 0;
     for (int k = from; k < to; ++k) {
         const Prim *p = &b->prims[k];
-        if (layer >= 0 && prim_layer[k] != layer) continue;
+        if (layer >= 0 ? prim_layer[k] != layer : layer == -2 && !bg_prim(p)) continue;
         if (clip) { /* (most miss a small area: their bounds first) */
             int px0 = p->x[0], px1 = px0, py0 = p->y[0], py1 = py0;
             for (int i = 1; i < p->n; ++i) {
@@ -1290,10 +1293,18 @@ void psx_vram_read(int x, int y, int w, int h) {
 }
 
 /* gpu.c: LoadImage, MoveImage, fills are about to write this rectangle. */
+static unsigned bgc_tex;   /* VRAM writes outside the scene buffers (texture pages, CLUTs): the composite's */
 void psx_vram_touch(int x, int y, int w, int h) {
     if (!active) return;
     ui_flush();
-    if (place->field) over_note(x, y, w, h);
+    if (place->field) {
+        over_note(x, y, w, h);
+        int in_buffer = 0;
+        for (int i = 0; i < 2; ++i)
+            if (buffers[i].valid && x >= buffers[i].x && y >= buffers[i].y && x + w <= buffers[i].x + buffers[i].w &&
+                y + h <= buffers[i].y + buffers[i].h) in_buffer = 1;
+        if (!in_buffer) bgc_tex++;
+    }
     ui_note_write(x, y, w, h);
     ui_dirty_rect(x, y, x + w - 1, y + h - 1);
     dirty_cells(x, y, x + w - 1, y + h - 1);
@@ -1508,7 +1519,8 @@ static u8 group_hash[256], palette_hash[256];
 
 /* Which layer each primitive goes to: the 3D engine (all of a battle's), or in a field the software background layer
  * or the 2D layer (field_layers). */
-enum { L_3D, L_UI, L_ADD /* field: an additive primitive, drawn exactly in software into the added layer */ };
+enum { L_3D, L_UI, L_ADD /* field: an additive primitive, drawn exactly in software into the added layer */,
+       L_BACK /* field: a background sprite behind every 3D primitive: only in the composite (bgc) */ };
 static inline int in_scene(const Prim *p, int k) { (void)p; return prim_layer[k] == L_3D; }
 
 /* One textured primitive's texture group and palette slot (0xFF: none) for plan_textures. */
@@ -3250,7 +3262,7 @@ int port_ovl_native_extent(unsigned int id, uintptr_t *at, unsigned int *size);
  * scale, and each polygon takes its prebuilt packet's colours and texture words (still those of the frame but for
  * texture animations; the user's choice of 2026-10-25: native drawing, per pixel depths). The PS1's culling is kept
  * (NCLIP <= 0 unless double-sided). Groups with translucent polygons, and scenes in software, keep their packets. */
-int gxh_stats_fm;
+int gxh_stats_fm, gxh_stats_bgc;
 
 PORT_OVERLAY_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
     /* (not the GPU's backend: a scene gone software keeps the software renderer until it's shown, after this) */
@@ -3304,11 +3316,14 @@ PORT_OVERLAY_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
     for (int i = 0; i < nv; ++i) if ((u32)n->sz[i] < nearest) nearest = (u32)n->sz[i];
     nearest >>= 2;
     fg->depth0 = world_entry_depth(base + (int)nearest);
-    u32 *vw = st->verts + st->nverts;
+    u32 *vw = st->verts + st->nverts, far = 0;
     for (int i = 0; i < nv; ++i) {
         u32 xy = (u32)n->sxy[i], rel = ((u32)n->sz[i] >> 2) - nearest;
-        vw[i] = (xy & 0x7FF) | (xy >> 16 & 0x7FF) << 11 | (rel > 1023 ? 1023 : rel) << 22;
+        if (rel > 1023) rel = 1023;
+        if (rel > far) far = rel;
+        vw[i] = (xy & 0x7FF) | (xy >> 16 & 0x7FF) << 11 | rel << 22;
     }
+    fg->depth_far = fg->depth0 - (s32)far * 4;
     st->nverts += nv;
     gxh_stats_fm = st->ngroups;
     return opaque == np ? 1 : 2;
@@ -3657,7 +3672,9 @@ void gxh_enable(int on) {
         videoSetMode(MODE_5_3D);
         vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_TEXTURE, VRAM_C_TEXTURE, VRAM_D_TEXTURE);
         bank_a_bg = 0;
-        bank_a_add = 0; REG_BLDCNT = 0; REG_BLDALPHA = 0;
+        bank_a_add = 0; /* (back_mode 0) */
+        REG_BLDCNT = place->field ? BLEND_ALPHA | BLEND_SRC_BG0 | BLEND_DST_BG3 : 0;
+        REG_BLDALPHA = place->field ? 16 : 0;
         soft_hold = 0;
         direct_soft = 0;
         vramSetBankE(VRAM_E_MAIN_BG);
@@ -3706,6 +3723,7 @@ static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1);
 static void scale_back(Buffer *b, int display_h) { scale_back_rows(b, display_h, 0, 1 << 30); }
 /* output rows [oy0, oy1) only (in 32-row bands) */
 static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1) {
+    bgc.valid = 0; /* (bank A's bitmap is now the software frame's) */
     int h = display_h > 0 ? display_h : 224;
     int out_h = h * 4 / 5, top = (192 - out_h) / 2;
     u16 *band = scaled_block(), *bitmap = (u16 *)BG_BMP_RAM(8);
@@ -3730,6 +3748,7 @@ static void back_mode(int add);
 static void bank_a_as_bg(int bg) {
     if (bg == bank_a_bg) return;
     bank_a_bg = bg;
+    bgc.valid = 0;
     if (bg) {
         for (int i = 0; i < MAX_REGIONS; ++i)
             if (regions[i].used && regions[i].unit < 64) free_region(&regions[i]);
@@ -3753,8 +3772,135 @@ static void back_mode(int add) {
     if (add == bank_a_add) return;
     bank_a_add = add;
     bgSetPriority(back_bg, add ? 0 : 3); /* (in front of the 3D layer, behind the 2D layer: BG2 wins a tie) */
-    REG_BLDCNT = add ? BLEND_ALPHA | BLEND_SRC_BG3 | BLEND_DST_BG0 : 0;
-    REG_BLDALPHA = add ? 16 | 16 << 8 : 0;
+    /* behind: the 3D layer's translucent pixels over the bitmap by their own alpha (the background composite; a
+     * software frame's 3D layer is all transparent) */
+    REG_BLDCNT = add ? BLEND_ALPHA | BLEND_SRC_BG3 | BLEND_DST_BG0 : BLEND_ALPHA | BLEND_SRC_BG0 | BLEND_DST_BG3;
+    REG_BLDALPHA = add ? 16 | 16 << 8 : 16;
+}
+
+/* ---- the field's background composite ------------------------------------------------------------------------
+ * A field's opaque background sprites (most of a scene's primitives) drawn in software, in the PS1's order, into bank
+ * A's bitmap behind the transparent 3D layer, again only when they or the texture pages under them change. Those
+ * farther than every other 3D primitive and model vertex leave the 3D scene (L_BACK); the rest are drawn there too,
+ * over the same pixels, so they still cover what goes behind them (per pixel, as the 3D scene's depths do). */
+
+static u32 bgc_hash(const Buffer *b, int display_h) {
+    u32 h = 2166136261u ^ (u32)display_h ^ b->clear << 12; /* (not the buffer's place: the sprites are relative) */
+    for (int k = 0; k < b->count; ++k) {
+        const Prim *p = &b->prims[k];
+        if (!bg_prim(p)) continue;
+        const u32 *w = (const u32 *)p;
+        h = (h ^ w[0]) * 16777619u; h = (h ^ w[1]) * 16777619u; h = (h ^ w[2]) * 16777619u;
+        h = (h ^ w[3]) * 16777619u; h = (h ^ w[5]) * 16777619u; h = (h ^ w[7]) * 16777619u;
+        h = (h ^ w[10]) * 16777619u; h = (h ^ w[11]) * 16777619u;
+    }
+    return h;
+}
+
+/* the scene's PS1 frame buffer into bank A, a PS1 pixel per DS pixel at x * 5 / 4 (as the 3D scene samples them) */
+PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void bgc_scale(const Buffer *b, int display_h) {
+    int h = display_h > 0 ? display_h : 224, out_h = h * 4 / 5, top = (192 - out_h) / 2;
+    u16 *band = scaled_block(), *bitmap = (u16 *)BG_BMP_RAM(8);
+    for (int oy = 0; oy < out_h; oy += BLOCK) {
+        int rows = out_h - oy < BLOCK ? out_h - oy : BLOCK;
+        for (int r = 0; r < rows; ++r) {
+            const u16 *src = psx_vram + ((b->y + ((5 * (oy + r)) >> 2)) & 511) * 1024 + b->x;
+            u32 *out = (u32 *)(band + r * 256);
+            for (int dx = 0; dx < 256; dx += 4, src += 5) { /* (x * 5 / 4: 0, 1, 2, 3 of each 5) */
+                out[0] = (src[0] | (u32)src[1] << 16) | 0x80008000u;
+                out[1] = (src[2] | (u32)src[3] << 16) | 0x80008000u;
+                out += 2;
+            }
+        }
+        DC_FlushRange(band, rows * 512);
+        dmaCopyWords(3, band, bitmap + (top + oy) * 256, rows * 512);
+    }
+}
+
+/* every background sprite drawn by the software renderer into the scene's frame buffer (the PS1's own drawing, in its
+ * order), scaled into bank A; the frame buffer then its clear value again */
+static void bgc_compose(Buffer *b, int display_h) {
+    fill_buffer(b, b->clear == FIELD_KEY ? 0 : b->clear);
+    replay(b, 0, b->count, -2);
+    bgc_scale(b, display_h);
+    fill_buffer(b, b->clear); /* (the key, or the game's clear: the 2D layer's "nothing") */
+    dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
+}
+
+/* The composite for this scene (0: the background stays in the 3D scene): drawn again when it changed; the far
+ * sprites marked L_BACK, *polys and *vertices less theirs */
+static int bgc_use(Buffer *b, const FStore *fst, int display_h, int *polys, int *vertices) {
+    if (!ovl0a_resident() || !b->slots) return 0;
+    /* per 16-pixel cell, the farthest 3D primitive or model group over it (the larger the depth, the nearer): a
+     * background sprite farther than all of them in its cells covers none (the buffer's coordinates) */
+    static u16 cell_far[16][24];
+    memset(cell_far, 0xFF, sizeof cell_far);
+    int any = 0;
+#define BGC_MARK(X0, Y0, X1, Y1, D) do { \
+        int cx0 = (X0) < 0 ? 0 : (X0) >> 4, cy0 = (Y0) < 0 ? 0 : (Y0) >> 4, cx1 = (X1) >> 4, cy1 = (Y1) >> 4; \
+        if (cx1 > 23) cx1 = 23; \
+        if (cy1 > 15) cy1 = 15; \
+        for (int cy = cy0; cy <= cy1; ++cy) for (int cx = cx0; cx <= cx1; ++cx) if ((D) < cell_far[cy][cx]) cell_far[cy][cx] = (u16)(D); \
+    } while (0)
+    for (int k = 0; k < b->count; ++k)
+        if (prim_layer[k] == L_3D) {
+            const Prim *p = &b->prims[k];
+            if (bg_prim(p)) { any = 1; continue; }
+            int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
+            for (int i = 1; i < p->n; ++i) {
+                if (p->x[i] < x0) x0 = p->x[i];
+                if (p->x[i] > x1) x1 = p->x[i];
+                if (p->y[i] < y0) y0 = p->y[i];
+                if (p->y[i] > y1) y1 = p->y[i];
+            }
+            if (x1 < 0 || y1 < 0) continue;
+            BGC_MARK(x0, y0, x1, y1, b->slots[k]);
+        }
+    if (!any) return 0;
+    if (fst)
+        for (int gi = 0; gi < fst->ngroups; ++gi) { /* (each group's screen bounds from its vertices) */
+            const FGroup *fg = &fst->groups[gi];
+            const u32 *vw = fst->verts + fg->vert0;
+            int d = fg->depth_far < 0 ? 0 : fg->depth_far, x0 = 0x7FFF, y0 = 0x7FFF, x1 = -0x8000, y1 = -0x8000;
+            for (int i = 0; i < fg->verts; ++i) {
+                int x = (s32)(vw[i] << 21) >> 21, y = (s32)(vw[i] << 10) >> 21;
+                if (x < x0) x0 = x;
+                if (x > x1) x1 = x;
+                if (y < y0) y0 = y;
+                if (y > y1) y1 = y;
+            }
+            x0 += b->ofs_x; x1 += b->ofs_x; y0 += b->ofs_y; y1 += b->ofs_y;
+            if (x1 < 0 || y1 < 0) continue;
+            BGC_MARK(x0, y0, x1, y1, d);
+        }
+#undef BGC_MARK
+    /* the sprites behind everything in their cells: only worth it if the rest then fits the 3D engine */
+    int back_polys = 0, back_vertices = 0;
+    for (int k = 0; k < b->count; ++k) {
+        const Prim *p = &b->prims[k];
+        if (prim_layer[k] != L_3D || !bg_prim(p)) continue;
+        int x0 = p->x[0] < 0 ? 0 : p->x[0] >> 4, x1 = (p->x[1] - 1) >> 4, y0 = p->y[0] < 0 ? 0 : p->y[0] >> 4;
+        int y1 = (p->y[2] - 1) >> 4, far = 0xFFFF;
+        if (x1 > 23) x1 = 23;
+        if (y1 > 15) y1 = 15;
+        for (int cy = y0; cy <= y1; ++cy) for (int cx = x0; cx <= x1; ++cx) if (cell_far[cy][cx] < far) far = cell_far[cy][cx];
+        if (b->slots[k] < far) { prim_layer[k] = L_BACK; back_polys++; back_vertices += p->n; }
+    }
+    if (*polys - back_polys > MAX_POLYS || *vertices - back_vertices > MAX_VERTICES) {
+        for (int k = 0; k < b->count; ++k) if (prim_layer[k] == L_BACK) prim_layer[k] = L_3D;
+        return 0;
+    }
+    *polys -= back_polys;
+    *vertices -= back_vertices;
+    u32 hash = bgc_hash(b, display_h);
+    bank_a_as_bg(1);
+    back_mode(0);
+    if (!bgc.valid || bgc.hash != hash || bgc.tex != bgc_tex) {
+        bgc_compose(b, display_h);
+        bgc.valid = 1; bgc.hash = hash; bgc.tex = bgc_tex;
+        gxh_stats_bgc++;
+    }
+    return 1;
 }
 
 static void field_frame(Buffer *b, int display_h) {
@@ -3774,6 +3920,13 @@ static void field_frame(Buffer *b, int display_h) {
             for (int k = 0; k < b->count; ++k) if (prim_layer[k] == L_ADD) { prim_layer[k] = L_3D; polys++; vertices += b->prims[k].n; }
             adds = 0;
         }
+        /* the background composite in bank A for a scene past the 3D engine's polygons or vertices (it would go
+         * software), when the additive layer doesn't need bank A; kept a while (a scene near the limit would flip
+         * bank A between textures and the bitmap) */
+        static int bgc_keep;
+        if (polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) bgc_keep = 60;
+        else if (bgc_keep) --bgc_keep;
+        int composite = !adds && bgc_keep && bgc_use(b, fst, display_h, &polys, &vertices);
         /* the 3D engine's polygon and vertex RAM (2048, 6144 a frame): a scene past them stays exact in software */
         if (polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) {
             gxh_stats_soft |= 8;
@@ -3781,7 +3934,7 @@ static void field_frame(Buffer *b, int display_h) {
             /* additive primitives (PS1 modes 1 and 3): exact in software onto black in bank A, added over the 3D
              * layer by the 2D compositor, if the textures fit in banks B-D; else approximated in 3D (conv_upload) */
             if (adds) bank_a_as_bg(1);
-            else if (bank_a_bg) bank_a_as_bg(0);
+            else if (bank_a_bg && !composite) bank_a_as_bg(0);
             plan_textures(b);
             if (adds && gxh_stats_unplaced) {
                 for (int k = 0; k < b->count; ++k) if (prim_layer[k] == L_ADD) prim_layer[k] = L_3D;
