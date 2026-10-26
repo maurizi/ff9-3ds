@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Transcode a disc's full-screen movies (STR) to FastVideoDS files for the DS (docs/movie-validation.md).
+"""Transcode a disc's movies (STR, and MBG: fields show some full-screen too) to FastVideoDS files for the DS
+(docs/movie-validation.md).
 
 Each movie: build/movie_export decodes it with the port's own MDEC path to 320x224 RGB24, FFmpeg scales it to
 256x179 (the movies have square pixels) and crops it to 256x176 (a multiple of 8; padding rows instead would leave
@@ -45,7 +46,7 @@ def main():
     dest.mkdir(exist_ok=True)
     for movie in movie_catalog.movie_extents(image):
         name = movie['name'].removesuffix(';1')
-        if not name.endswith('.STR') or (a.only and a.only not in name):
+        if not name.endswith(('.STR', '.MBG')) or (a.only and a.only not in name):
             continue
         fv = dest / f"{movie['lba']}.fv"
         if fv.exists() and not a.force:

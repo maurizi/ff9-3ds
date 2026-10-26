@@ -406,6 +406,43 @@ chain from one frame's finish to the next's within four VBlanks: the capture is 
 is written mid-frame (it starts at the next line 0, after the swap), and the swap waits for its triangles' DMA
 instead of retrying later.
 
+## Movies in fields: survey (2026-10-26)
+
+Fields start movies through event opcode 0x28 (`fld_movieCommand` 0: `fld_movieStart(list, entry, rgb24)`), which
+names an entry of ovl_64's `g_mbgMovieLists` (5 lists, one per disc's movies plus the SPARE/TEST list). The flag
+comes from the script, not the file. MBG files are shown full-screen as well as behind fields, so all 17 are
+transcoded too (`fmv_transcode.py` takes `.MBG`: 4,832 frames). The player logs each movie's LBA and mode.
+
+Entering every field fixture on the host (`build/validation/fieldsweep/cfg`, 3000 frames) starts ten movies:
+
+| fixture | movie | mode |
+|---|---|---|
+| d1_f0061 | LBA 179678 | 24-bit |
+| d1_f0070 | LBA 286280 (FMV001, the opening) | 24-bit |
+| d1_f0100 | MBG101 | 24-bit |
+| d1_f0209 | MBG102 | 24-bit |
+| d2_f1001 | MBG106 (the Iifa Tree) | 24-bit, then the field |
+| d2_f1464 | MBG108 (the forest before the Black Mage Village) | 15-bit, behind the field |
+| d2_f1661 | MBG110 | 24-bit |
+| d4_f2752 | FMV055A | 24-bit |
+| d4_f2929 | MBG115 | 24-bit |
+| d4_f2933 | FMV056 | 24-bit |
+
+On the DS (original DS, transcodes staged) d2_f1001 plays MBG106 from its transcode and hands over to the field.
+d2_f1464's 15-bit MBG still goes through the VLC and the MDEC: it shows correctly behind the characters, at 106 ms
+per VBlank (VLC 11, MDEC 67; PS1 16.7).
+
+The MBGs are full camera moves (a crane over Alexandria, the approach to the Iifa Tree), so they need a real video
+codec, and FastVideoDS's 3D motion compensation can't share the 3D engine and VRAM with a field. Plan (the user's
+choice of 2026-10-26: closest fidelity at full speed):
+
+1. Motion compensation on the CPU, as the encoder models the 3D engine's prediction (its two blended passes and
+   their rounding), checked against the 3D path on the full-screen movies.
+2. 15-bit MBG frames from the transcode straight into the field's background bitmap (the area-scaled 256 wide
+   frame in place of the nearest-scaled 320 wide one), skipping the VLC, the MDEC and the PS1 VRAM upload.
+3. The mask (which background pixels cover the characters): the field draws its models with the GPU's mask
+   check. Native field models don't apply it yet; to check against the PS1 on d2_f1464.
+
 ## Still incomplete
 
 Not yet compared frame-by-frame with a PSX capture of the same movie (timing,

@@ -34,6 +34,7 @@ extern int psx_load_image_skip;
 static u32 fv_frame_of[2];
 static int fv_unavailable; /* this movie has no transcode (or decoder) */
 static int fv_now;         /* the frame being decoded comes from the transcode */
+static int fv_logged;      /* (the movie's start reported) */
 
 static int in_buffer(const void *p) {
     return (const u8 *)PSX_PTR(p) == (const u8 *)PSX_PTR(g_mbgPlayer.mdecIn1);
@@ -54,6 +55,8 @@ static u32 slot_frame(const u8 *bs) {
 static int fv_take(u8 *bs, u32 *out) {
     u8 *in0 = PSX_PTR(g_mbgPlayer.mdecIn0), *in1 = PSX_PTR(g_mbgPlayer.mdecIn1);
     int idx = in_buffer(out);
+    if (!fv_logged++)
+        port_log("movie: LBA %d, %s\n", (int)g_mbgStream.baseSector, g_mbgRgb24 == 1 ? "24-bit" : "15-bit");
     fv_frame_of[idx] = 0;
     if (g_mbgRgb24 != 1 || in1 != in0 + 0x10000) {
         movie_fv_stop(); /* (a movie going on behind a field: the MDEC from here) */
@@ -315,6 +318,7 @@ static int decode_request(u32 *dst, u32 words) {
 int o64_DecDCTReset(int mode) {
     if (mode == 0) {
         movie_fv_stop(); /* (a new movie) */
+        fv_logged = 0;
         fv_unavailable = 0;
         fv_frame_of[0] = fv_frame_of[1] = 0;
         fv_now = 0;
