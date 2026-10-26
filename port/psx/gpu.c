@@ -180,6 +180,10 @@ int LoadImage(RECT *r, u32 *p) {
     psx_display_written(r->x, r->y, r->w, r->h);
     /* the PS1 moves these by DMA, which ignores an address's low two bits (FF9 passes odd ones: field 1403) */
     const u16 *src = (const u16 *)((uintptr_t)p & ~(uintptr_t)3);
+    if (!check_mask && !set_mask && r->w > 0 && (r->x & 1023) + r->w <= VRAM_W) { /* (rows within the edge) */
+        for (int j = 0; j < r->h; j++, src += r->w) __builtin_memcpy(vram_at(r->x, r->y + j), src, (unsigned)r->w * 2);
+        return 0;
+    }
     for (int j = 0; j < r->h; j++) {
         for (int i = 0; i < r->w; i++) {
             u16 *dst=vram_at(r->x+i,r->y+j);
@@ -202,11 +206,14 @@ int StoreImage(RECT *r, u32 *p) {
     /* by DMA, word-aligned: FF9 stores a single pixel to an odd address (Fossil Roo, field 1403): unaligned, the
      * pixel and the transfer's padding halfword landed two bytes past the PS1's word, over a pointer */
     u16 *dst = (u16 *)((uintptr_t)p & ~(uintptr_t)3);
-    for (int j = 0; j < r->h; j++) {
-        for (int i = 0; i < r->w; i++) {
-            *dst++ = *vram_at(r->x + i, r->y + j);
+    if (r->w > 0 && (r->x & 1023) + r->w <= VRAM_W) /* (rows within the edge) */
+        for (int j = 0; j < r->h; j++, dst += r->w) __builtin_memcpy(dst, vram_at(r->x, r->y + j), (unsigned)r->w * 2);
+    else
+        for (int j = 0; j < r->h; j++) {
+            for (int i = 0; i < r->w; i++) {
+                *dst++ = *vram_at(r->x + i, r->y + j);
+            }
         }
-    }
     /* The PSX transfer is word-sized: ceil(w*h/2) GPUREAD words. An odd
      * final pixel has a zero high halfword, not the caller's previous data. */
     if (r->w > 0 && r->h > 0 && ((r->w * r->h) & 1)) *dst = 0;
