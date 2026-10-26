@@ -746,12 +746,19 @@ static inline void terrain_uvs(const u32 *face, const u32 *alt, int lod, int otz
     *o0 = uv0; *o1 = uv1; *o2 = uv2;
 }
 
+static inline void tuse_bounds(TUse *tu, int u0, int v0, int u1, int v1) {
+    if (u0 < tu->u0) tu->u0 = (u8)u0;
+    if (u1 > tu->u1) tu->u1 = (u8)u1;
+    if (v0 < tu->v0) tu->v0 = (u8)v0;
+    if (v1 > tu->v1) tu->v1 = (u8)v1;
+}
+
 static inline int max3_index(u32 a, u32 b, u32 c) {
     if ((s32)(a - b) > 0) return (s32)(a - c) > 0 ? 0 : 2;
     return (s32)(b - c) > 0 ? 1 : 2;
 }
 
-PORT_OVERLAY_CODE(0c) int port_native_world_block(const NativeWorldBlock *n) {
+PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) int port_native_world_block(const NativeWorldBlock *n) {
     if (!active || !place->world) return 0;
     Buffer *b = buffer_at(n->draw_x, n->draw_y);
     if (!b || !b->slots) return 0;
@@ -817,6 +824,7 @@ PORT_OVERLAY_CODE(0c) int port_native_world_block(const NativeWorldBlock *n) {
     int cull = n->variant == WORLD_FACES_NEAR, grid = n->variant == WORLD_FACES_FAR;
     int limit = n->variant == WORLD_FACES_NEAR ? 0xF6A : 0xFFE, need_lit = n->variant != WORLD_FACES_NEAR;
     int drawn = 0;
+    int cu = -1, lu0 = 255, lv0 = 255, lu1 = 0, lv1 = 0; /* the last use, its bounds gathered in registers */
     for (int f = 0; f < nf && t->nfaces + drawn < TF_MAX; ++f) { /* (past TF_MAX the 3D engine has no room anyway) */
         const u32 *face = tb->faces + 4 * f;
         u32 w = face[0];
@@ -859,12 +867,18 @@ PORT_OVERLAY_CODE(0c) int port_native_world_block(const NativeWorldBlock *n) {
             u32 uv0, uv1, uv2;
             terrain_uvs(face, tb->alt, !backdrop, otz, &uv0, &uv1, &uv2);
             u16 tpage = (u16)(uv1 >> 16), clut = (u16)(uv0 >> 16);
-            int u;
-            for (u = 0; u < t->nuses; ++u) if (t->uses[u].tpage == tpage && t->uses[u].clut == clut) break;
-            if (u == t->nuses) {
-                if (u == TU_MAX) { gxh_stats_mesh_fallback++; continue; }
-                t->uses[u] = (TUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF, 16, 0};
-                t->nuses++;
+            int u = cu;
+            if (u < 0 || t->uses[u].tpage != tpage || t->uses[u].clut != clut) {
+                if (u >= 0) tuse_bounds(&t->uses[u], lu0, lv0, lu1, lv1);
+                cu = -1;
+                for (u = 0; u < t->nuses; ++u) if (t->uses[u].tpage == tpage && t->uses[u].clut == clut) break;
+                if (u == t->nuses) {
+                    if (u == TU_MAX) { gxh_stats_mesh_fallback++; continue; }
+                    t->uses[u] = (TUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF, 16, 0};
+                    t->nuses++;
+                }
+                cu = u;
+                lu0 = lv0 = 255; lu1 = lv1 = 0;
             }
             TUse *tu = &t->uses[u];
             for (int k = 0; k < 3; ++k) { /* its brightest channel over x1: the palette's scale */
@@ -875,12 +889,13 @@ PORT_OVERLAY_CODE(0c) int port_native_world_block(const NativeWorldBlock *n) {
                 if ((c >> 10 & 31) > m) m = c >> 10 & 31;
                 if (m > tu->scale) tu->scale = (u8)(m > 32 ? 32 : m); /* (16ths: m is 8-bit / 8, 128 = 16) */
             }
-            u8 us[3] = {(u8)uv0, (u8)uv1, (u8)uv2}, vs[3] = {(u8)(uv0 >> 8), (u8)(uv1 >> 8), (u8)(uv2 >> 8)};
+            const u32 uvw[3] = {uv0, uv1, uv2};
             for (int k = 0; k < 3; ++k) {
-                if (us[k] < tu->u0) tu->u0 = us[k];
-                if (us[k] > tu->u1) tu->u1 = us[k];
-                if (vs[k] < tu->v0) tu->v0 = vs[k];
-                if (vs[k] > tu->v1) tu->v1 = vs[k];
+                int cu8 = uvw[k] & 0xFF, cv8 = uvw[k] >> 8 & 0xFF;
+                if (cu8 < lu0) lu0 = cu8;
+                if (cu8 > lu1) lu1 = cu8;
+                if (cv8 < lv0) lv0 = cv8;
+                if (cv8 > lv1) lv1 = cv8;
             }
             use = (u8)u;
         }
@@ -892,6 +907,7 @@ PORT_OVERLAY_CODE(0c) int port_native_world_block(const NativeWorldBlock *n) {
             (TFace){(u32)ti << 27 | (u32)f << 15 | (u32)(otz & 0x1FFF) << 2 | (u32)has_fog << 1 | (u32)has_lit, use, (u8)tier};
         drawn++;
     }
+    if (cu >= 0) tuse_bounds(&t->uses[cu], lu0, lv0, lu1, lv1);
     t->nfaces += drawn;
     t->nverts += nv;
     t->nblocks++;
