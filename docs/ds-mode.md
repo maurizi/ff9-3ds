@@ -603,3 +603,28 @@ The 24 bosses and the 30 random battles again on 0f71760 (UI drawn once a game f
 frames without a crash or stall. Last 128 frames, ms per PS1 VBlank: random battles 54.2 -> 36.7 on average (32 per
 cent), bosses 61.1 -> 44.3 (27 per cent); the frames match the earlier runs apart from small differences in additive
 effects. d1_boss_beatrix 31.2, d1_boss_black_waltz 29.0, d1_boss_garuda 36.4, d1_boss_gizamaluke 32.9, d1_boss_plant_brain 36.6, d2_boss_antlion 40.1, d2_boss_hilgigars 37.2, d2_boss_lani 36.9, d2_boss_ralvuimago 39.9, d2_boss_soulcage 36.6, d2_boss_tantarian 29.0, d2_boss_zorn 35.1, d3_boss_earth_guardian 69.1, d3_boss_silver_dragon 37.5, d4_boss_deathguise 36.4, d4_boss_hades 58.6, d4_boss_kraken 35.3, d4_boss_lich 68.8, d4_boss_maliris 32.4, d4_boss_necron 38.9, d4_boss_nova_dragon 72.1, d4_boss_ozma 86.0, d4_boss_tiamat 34.4, d4_boss_trance_kuja 72.5, d1_b0032 32.0, d1_b0182 28.3, d1_b0186 44.7, d1_b0187 37.1, d1_b0230 37.8, d1_b0238 43.9, d1_b0296 31.9, d2_b0091 40.8, d2_b0098 43.0, d2_b0102 32.9, d2_b0140 47.9, d2_b0229 37.0, d2_b0331 35.1, d2_b0342 34.7, d2_b0355 35.1, d2_b0647 32.5, d2_b0678 35.3, d2_b0840 34.4, d2_b0844 36.2, d3_b0216 33.5, d3_b0837 44.4, d3_b0905 36.6, d4_b0137 36.1, d4_b0215 36.1, d4_b0223 40.1, d4_b0586 37.1, d4_b0664 34.5, d4_b0686 30.8, d4_b0839 36.9, d4_b0919 33.3.
+
+## Where a field's time goes now (2026-10-26)
+
+Original DS, `dsmode_bench_w.sh` fixtures, ms per PS1 VBlank (PS1: 16.7): d1_f0110 21.7, d3_f2205 31.0,
+d4_f2110 34.9. The sampler, grouped by module (d1_f0110), puts about 63% of the frame in rendering:
+- gx_hybrid.c: 33%.
+- The field models' emit (`fm_emit`, ovl_0a's area): 9.5%.
+- `field_frame`: 3.5%.
+- GP0 decoding and the GPU layer: 12%.
+- The models' snapshot (field_mesh.c): 3.6%.
+
+The rest is the GTE (~7%), the SPU's voice stepping (~7.5%) and the game's own field code (a few %). The earlier
+"game logic alone is ~16 ms" no longer holds for the light fields.
+
+Per field frame (two VBlanks) these scenes draw 370-470 background tiles (16x16 sprites, the game re-linking the same
+packets every frame) and 12-63 GP0 polygons; the models (about 1,000-1,600 polygons) go through the native path. No
+single hot spot: `emit_scene` is 3.6% with fine buckets (reading each recorded primitive), `fm_emit`'s time is
+spread over its per-polygon loop, the scattered projected vertices and the stores. The geometry engine never makes
+the CPU wait (the chunk DMA wait is under 0.1 ms per VBlank). Two experiments without effect: keeping the command
+chunks in the data cache (clean without invalidating), and the residual checks in the tile path.
+
+Halving the rendering needs work that isn't redone every frame: the background tiles (the same packets, scrolled)
+recorded, planned and emitted once and replayed while unchanged, as the models' native path does for meshes. A
+second lever outside rendering is the SPU's voice stepping on the ARM7 (about 3 ms per VBlank everywhere), at the
+cost of up to a frame's latency on the values AKAO reads back (a decision for the user).
