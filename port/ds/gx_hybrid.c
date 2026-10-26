@@ -2331,6 +2331,124 @@ static int native_poly(Buffer *b, const NativeRef *r, Prim *p, u8 *group, u8 *pa
     return 1;
 }
 
+/* The native polygons' walk: the next entry far to near with polygons (ne), its list (ri) and rank (erank). */
+typedef struct { int ne, ri, erank, zc; } NativeWalk;
+
+static inline void native_next(const Buffer *b, NativeWalk *w) {
+    while (w->ri == NO_REF && w->ne >= 0) {
+        int ne = w->ne;
+        u32 bits = native_bits[ne >> 5] & ((2u << (ne & 31)) - 1); /* (bits ne and below) */
+        if (!bits) { w->ne = (ne & ~31) - 1; continue; }
+        ne = (ne & ~31) + 31 - __builtin_clz(bits);
+        w->ri = native_heads[ne];
+        w->erank = entry_rank(b, ne);
+        w->ne = ne - 1;
+    }
+}
+
+/* Battle: the native polygons due before recorded primitive k, opaque and textured ones straight from their meshes
+ * (the general path's words for them, without their Prim records). Returns at one the general path draws (w->ri),
+ * or when none is due. */
+PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buffer *b, EmitState *es, NativeWalk *w, int k) {
+    u32 *wp = es->wp, *pack_header, pack_ids;
+    int pack_shift;
+    for (;;) {
+        native_next(b, w);
+        if (w->ri == NO_REF || (k < b->count && w->erank > k)) break;
+        const NativeRef *r = &native_refs[w->ri];
+        const MeshInst *mi = mesh_at(b, r->m);
+        int pi = r->pi, n, t = 0, gouraud;
+        u8 inf = mi->info[pi];
+        const u8 *s = NULL, *ix = NULL, *uw = NULL;
+        u32 col[4], xy[4];
+        u16 uv[4];
+        if (mi->kind == MESH_BG) {
+            u32 c = mi->colors[pi];
+            if (c & 0x20000000) break; /* translucent */
+            int nquad = mi->count[0], quad = pi < nquad;
+            n = quad ? 4 : 3;
+            const u8 *rec = mi->src;
+            ix = rec + MH(rec, 8) + (quad ? pi * 8 : nquad * 8 + (pi - nquad) * 6);
+            uw = rec + MH(rec, 0xA) + (quad ? pi * 8 : nquad * 8 + (pi - nquad) * 6);
+            u32 rr = c & 0xFF, g = (c >> 8) & 0xFF, bl = (c >> 16) & 0xFF;
+            if (mi->bright != 0x80) {
+                u32 br = mi->bright;
+                rr = rr * br > 0x7FFF ? 0x7FFF >> 7 : rr * br >> 7;
+                g = g * br > 0x7FFF ? 0x7FFF >> 7 : g * br >> 7;
+                bl = bl * br > 0x7FFF ? 0x7FFF >> 7 : bl * br >> 7;
+            }
+            col[0] = rr | g << 8 | bl << 16;
+            gouraud = 0;
+        } else {
+            s = model_poly(mi, pi, &t);
+            if (t >= 4 || (MB(s, mesh_flags_at[t]) & 1)) break; /* untextured; translucent */
+            n = t & 1 ? 3 : 4;
+            gouraud = t >= 2;
+        }
+        const MeshUse *u = &mi->uses[(inf >> 3) & 15];
+        int grp = u->group, pal = u->palette;
+        const Region *rg = grp == 0xFF || grp == RUN_GROUP ? NULL : groups[grp].region;
+        u32 tp = (u->page & 0xFFFF) | u->orbits;
+        int depth = (tp >> 7) & 3;
+        if (depth == 3) depth = 2;
+        if (!rg || rg->conv || (depth < 2 && pal == 0xFF)) break; /* (the general path counts the failures) */
+        w->ri = r->next;
+        if (mesh_dropped(b, inf & 7)) { gxh_stats_dropped++; continue; }
+        int z = Z_STEP * ++w->zc;
+        reserve();
+        if (es->polys >= MAX_POLYS || es->vertices + n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
+        if (mi->kind == MESH_BG) {
+            for (int i = 0; i < n; ++i) {
+                xy[i] = mi->xy[MH(ix, 2 * i) / 4];
+                uv[i] = MH(uw, 2 * i);
+            }
+        } else {
+            xy[0] = mi->xy[MW(s, 0) & 0xFFFF]; xy[1] = mi->xy[MW(s, 0) >> 16];
+            if (n == 4) { xy[2] = mi->xy[MW(s, 4) & 0xFFFF]; xy[3] = mi->xy[MW(s, 4) >> 16]; } else xy[2] = mi->xy[MH(s, 4)];
+            mesh_uvs(mi, t, s, uv);
+            if (t < 2) col[0] = MW(s, t == 0 ? 0x10 : 8);
+            else {
+                col[0] = mi->colors[MW(s, 0x10) & 0xFFFF]; col[1] = mi->colors[MW(s, 0x10) >> 16];
+                if (t == 2) { col[2] = mi->colors[MW(s, 0x14) & 0xFFFF]; col[3] = mi->colors[MW(s, 0x14) >> 16]; }
+                else col[2] = mi->colors[MH(s, 0x14)];
+            }
+        }
+        int tu = (rg->x - (int)(tp & 15) * 64) * texels_per_halfword(depth), tv = rg->y - (int)((tp >> 4) & 1) * 256;
+        u32 want_image = (u32)(rg->unit * TEX_UNIT / 8) | rg->size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
+        u32 set_palette = ~0u;
+        if (depth < 2) {
+            want_image |= index0_transparent(pal);
+            u32 want_palette = (u32)pal * 512 / 16;
+            if (want_palette != es->palette) set_palette = want_palette;
+        }
+        pack_begin();
+        if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); es->palette = set_palette; }
+        if (want_image != es->image) { pack(CMD_TEXIMAGE); put(want_image); es->image = want_image; }
+        if (es->attr != INITIAL_ATTR) { pack(CMD_POLYATTR); put(INITIAL_ATTR); es->attr = INITIAL_ATTR; }
+        pack(CMD_BEGIN); put(n == 4 ? 1 : 0);
+        pack_end();
+        static const u8 quad_order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
+        for (int j = 0; j < n; ++j) {
+            int i = n == 4 ? quad_order[j] : j;
+            u32 pos = (u32)(u16)(sext11i(xy[i]) + b->ofs_x) | (u32)(u16)(sext11i(xy[i] >> 16) + b->ofs_y) << 16;
+            u32 tc = (u32)(u16)(((uv[i] & 0xFF) - tu) * 16) | (u32)(u16)(((uv[i] >> 8) - tv) * 16) << 16;
+            if (j == 0 || gouraud) {
+                u32 c = col[gouraud ? i : 0];
+                u32 cr = (c & 0xFF) >> 2, cg = (c >> 8 & 0xFF) >> 2, cb = (c >> 16 & 0xFF) >> 2;
+                put(j == 0 ? CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTX16 << 16 : CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTXXY << 16);
+                put((cr > 31 ? 31 : cr) | (cg > 31 ? 31 : cg) << 5 | (cb > 31 ? 31 : cb) << 10);
+            } else {
+                put(CMD_TEXCOORD | CMD_VTXXY << 8);
+            }
+            put(tc); put(pos);
+            if (j == 0) put((u32)(u16)z);
+        }
+        ++es->polys;
+        es->vertices += n;
+    }
+    es->wp = wp;
+}
+
 /* an untextured additive glow's alpha by mode and brightness: m * 31 / 255 (subtraction twice that, mode 3 a quarter),
  * at most 31 */
 static u8 glow_alpha[4][256];
@@ -2380,8 +2498,9 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
      * vertex at 2 rank + 1: between the primitives recorded before and after the walk reached its OT entry */
     int with_meshes = b->meshes && b->mesh_gen == b->scene_gen;
     static PrimCopy mesh_ring[RECENT]; /* translucent_id keeps pointers to the last RECENT */
-    int ring_at = 0, zc = 0, ne = -1, ri = NO_REF, erank = 0;
-    if (with_meshes && collect_native(b)) ne = 0x100F;
+    int ring_at = 0;
+    NativeWalk nw = {-1, NO_REF, 0, 0};
+    if (with_meshes && collect_native(b)) nw.ne = 0x100F;
     for (int k = 0;;) {
         const Prim *src;
         int native = 0;
@@ -2389,20 +2508,18 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         /* a copy the command words can't alias (with -fno-strict-aliasing every store through wp would reload the
          * primitive's fields); translucent_id keeps pointers to the buffer's */
         PrimCopy local;
-        while (ri == NO_REF && ne >= 0) { /* the next entry, far to near, with native polygons */
-            u32 w = native_bits[ne >> 5] & (2u << (ne & 31)) - 1; /* (bits ne and below) */
-            if (!w) { ne = (ne & ~31) - 1; continue; }
-            ne = (ne & ~31) + 31 - __builtin_clz(w);
-            ri = native_heads[ne];
-            erank = entry_rank(b, ne);
-            ne--;
+        native_next(b, &nw);
+        if (nw.ri != NO_REF && (k >= b->count || nw.erank <= k)) { /* native polygons due (native_run leaves some below) */
+            EmitState es = {wp, attr, image, palette, polys, vertices};
+            native_run(b, &es, &nw, k);
+            wp = es.wp; attr = es.attr; image = es.image; palette = es.palette; polys = es.polys; vertices = es.vertices;
         }
-        if (ri != NO_REF && (k >= b->count || erank <= k)) {
-            const NativeRef *r = &native_refs[ri];
-            ri = r->next;
+        if (nw.ri != NO_REF && (k >= b->count || nw.erank <= k)) {
+            const NativeRef *r = &native_refs[nw.ri];
+            nw.ri = r->next;
             if (!native_poly(b, r, &local.p, &grp, &pal)) continue; /* a native polygon, in OT order */
             native = 1;
-            z = Z_STEP * ++zc;
+            z = Z_STEP * ++nw.zc;
         } else if (k < (b->slots ? 2 * b->count : b->count)) {
             int kk = k++;
             if (b->slots) {
@@ -2420,7 +2537,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             reserve();
             if (polys >= MAX_POLYS || vertices + src->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
             /* (a field's buffers hold more than 2047; the world map's at their OT entries' depths) */
-            z = b->slots ? b->slots[kk] + (src->flags & P_SEMI ? 2 : 0) : with_meshes ? Z_STEP * ++zc : kk + 1;
+            z = b->slots ? b->slots[kk] + (src->flags & P_SEMI ? 2 : 0) : with_meshes ? Z_STEP * ++nw.zc : kk + 1;
             grp = prim_group[kk]; pal = prim_palette[kk];
             if ((src->flags & (P_RECT | P_TEXTURED | P_SEMI | P_GOURAUD | P_UI | P_TWIN)) == (P_RECT | P_TEXTURED) && src->n == 4) {
                 /* An opaque textured sprite (a field's background tiles): the general path's words, without its
