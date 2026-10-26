@@ -557,6 +557,19 @@ heap. `ds_profile.py` calls a frame-0 stall after 300 s (a fatal stop at boot us
 In d4_f2110 skipping the background tiles' planning and emission saves only 3.5 ms (44.6 -> 41.1): the rear plane
 would buy less than its cost suggested.
 
+### What the field background costs, and the plan (2026-10-25)
+
+- Dropping every opaque SPRT_16 in fields at GP0's decoder (experiment, the picture without its background): d4_f2110
+  36.3 -> 28.8 ms, d3_f2205 33.9 -> 24.5, d1_f0110 24.2 -> 17.3. The background's tiles cost 7-9 ms a VBlank across
+  the walk, recording, planning and emission (skipping only planning and emission saved 3.5).
+- Fields over the 3D engine's budget go software (91-122 ms: d1_f0504, d1_f0563, d1_f0574 of the 20 swept). Vertices
+  are the limit (6144): d1_f0504 6864 with 607 background sprites (2428 vertices), d1_f0563 6705 with 425, d1_f0574
+  9656 with 455 (1602 model polygons with 4997 vertices: over the budget even without its background).
+- Plan: the opaque background sprites go to a list during the walk instead of the primitives; it is composited in
+  software, in the PS1's order, into bank A as the bitmap behind the transparent 3D layer, again only when the list
+  or the texture pages under it change; the tiles at or nearer than the farthest 3D primitive are also drawn as 3D
+  quads (they can cover a model). The rear plane (banks C and D) can't be rewritten while the 3D engine reads it.
+
 ## 54 battles after the architecture levers (2026-10-25)
 
 The 24 bosses and the 30 random battles again on 0f71760 (UI drawn once a game frame, GTE register file in DTCM,
