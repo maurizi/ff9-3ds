@@ -23,6 +23,3 @@ void movie_fv_stop(void) {
 int movie_fv_active(void) {
     return 0;
 }
-
-void movie_fv_idle(void) {
-}

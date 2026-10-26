@@ -281,12 +281,16 @@ void psx_spu_voice_output(unsigned i, PsxSpuVoiceOutput *out) {
 /* Hardware mixing: the voices' observable state over `frames` samples, without producing them. */
 static void hw_step(unsigned frames) {
     uint16_t control = psx_spu_regs[0x1aa / 2];
+    unsigned t = port_profile_begin();
     for (unsigned i = 0; i < PSX_SPU_VOICES; ++i)
         psx_spu_step_voice(&voices[i], i, psx_spu_ram, frames, !!(control & 0x40), &ended, hw_sink->block,
                            hw_sink->user);
+    port_profile_detail_end(PORT_PROFILE_SPU_VOICES, t);
+    t = port_profile_begin();
     for (unsigned c = 0; c < 2; ++c)
         for (unsigned k = 0; k < frames && main_volume[c].active; ++k) psx_spu_volume_tick(&main_volume[c]);
-    for (unsigned k = 0; k < frames; ++k) psx_spu_noise_tick(&noise, (control >> 8) & 63);
+    /* (no noise generator: nothing reads its state, and the DS's PSG channels play noise voices) */
+    port_profile_detail_end(PORT_PROFILE_SPU_OUTPUT, t);
 }
 
 static void hw_advance(unsigned frames) {
@@ -315,7 +319,9 @@ SPU_HOT void psx_spu_advance(unsigned ticks) {
         sample_fraction %= 96;
         unsigned profile_spu = port_profile_begin();
         if (frames) hw_advance(frames);
+        unsigned t = port_profile_begin();
         sync_readbacks();
+        port_profile_detail_end(PORT_PROFILE_SPU_EVENT, t);
         port_profile_detail_end(PORT_PROFILE_SPU, profile_spu);
         return;
     }

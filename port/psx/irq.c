@@ -193,6 +193,10 @@ static void rcnt_frame(void) {
     }
 }
 
+/* (port/ds/movie_fv.c; nothing elsewhere) */
+__attribute__((weak)) void movie_fv_idle(void) {
+}
+
 void psx_frame(void) {
     port_canary("game code before psx_frame");
     polls = 0;

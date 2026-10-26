@@ -297,16 +297,30 @@ MOVIE_CODE static int free_bank(int p) {
     return -1;
 }
 
+/* the frame whose residual is decoded into the residual buffer, waiting for its prediction (-1: the buffer's free) */
+static int res_frame = -1;
+
+/* Decode frame k's residual (the coefficients after its vectors) into the residual buffer: it needs neither the
+ * prediction nor the reference, so it runs while the 3D engine swaps and captures. */
+MOVIE_CODE static void residual(int k, const u16 *rest) {
+    unsigned int t = port_profile_begin();
+    fv->dcts(dec, rest, RESIDUAL);
+    res_frame = k;
+    port_profile_detail_end(PORT_PROFILE_MOVIE_MDEC, t); /* (the residual decoding alone) */
+    port_profile_detail_end(PORT_PROFILE_MOVIE_FV, t);
+}
+
 /* The P-frame captured: add its residual; it becomes the reference. */
 MOVIE_CODE static void finish_frame(void) {
     while (phase != CAPTURED) {
         movie_fv_waits[1]++;
         wait_vblank();
     }
+    if (res_frame != target_frame) residual(target_frame, target_rest);
     unsigned int t = port_profile_begin();
-    fv->dcts(dec, target_rest, RESIDUAL);
     DC_FlushAll(); /* (the capture wrote the prediction behind the cache) */
     fv->finish(dec, RESIDUAL, BANK_LCD(target));
+    res_frame = -1;
     movie_fv_stats[1]++;
     DC_FlushAll();
     port_profile_detail_end(PORT_PROFILE_MOVIE_FV, t);
@@ -347,7 +361,9 @@ MOVIE_CODE static int start_frame(int n) {
     int ok = 0;
     if (*src >> 15) {
         if (ref >= 0 || pending) {
+            unsigned int ta = port_profile_begin();
             geo_rest = fv->vectors(dec, src);
+            port_profile_detail_end(PORT_PROFILE_MOVIE_VLC, ta); /* (the vectors alone) */
             DC_FlushRange(fv->list, list_bytes);
             DMA_SRC(1) = (u32)fv->list;
             DMA_DEST(1) = (u32)&GFX_FIFO;
@@ -408,6 +424,12 @@ MOVIE_CODE static void advance(int block) {
         }
         show(show_want);
         progress |= swap_frame();
+        /* (the residual of the frame to finish next, while the engine works on it) */
+        if (res_frame < 0 && (target >= 0 || geo_frame >= 0)) {
+            if (target >= 0) residual(target_frame, target_rest);
+            else residual(geo_frame, geo_rest);
+            progress = 1;
+        }
         int next = (geo_frame >= 0 ? geo_frame : target >= 0 ? target_frame : latest) + 1;
         int want = show_want + 2 < last ? show_want + 2 : last;
         if (next <= want) progress |= start_frame(next);
@@ -451,6 +473,7 @@ MOVIE_CODE static void settle(void) {
     if (geo_frame >= 0) { /* (its triangles swapped in and dropped) */
         GFX_FLUSH = 0;
         geo_frame = -1;
+        if (res_frame >= 0 && target < 0) res_frame = -1;
     }
     if (target >= 0) {
         while (phase == LISTED) wait_vblank();
@@ -545,7 +568,7 @@ MOVIE_CODE int movie_fv_start(void *work, unsigned int size, unsigned int lba) {
         memset(BANK_LCD(b), 0, 0x20000);
         bank_frame[b] = -1;
     }
-    shown = flip_to = ref = latest = target = show_want = geo_frame = -1;
+    shown = flip_to = ref = latest = target = show_want = geo_frame = res_frame = -1;
     phase = IDLE;
     vram_cache(1);
     setup_3d();

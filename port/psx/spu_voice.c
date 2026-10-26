@@ -314,8 +314,10 @@ SPU_HW_ONLY_HOT void psx_spu_step_voice(PsxSpuVoice *voice, unsigned index, cons
     for (unsigned s = 0; s < n;) {
         if (voice->adsr.phase == PSX_SPU_ADSR_OFF && !fetch_off) return;
         if (!src->fetched) {
+            unsigned t = port_profile_begin();
             psx_spu_source_fetch(src, ram, &voice->registers[7]);
             block(index, src->samples + 3, user);
+            port_profile_detail_end(PORT_PROFILE_SPU_STEADY, t);
         }
         PsxSpuAdsr *adsr = &voice->adsr;
         int steady = adsr->phase == PSX_SPU_ADSR_OFF ||

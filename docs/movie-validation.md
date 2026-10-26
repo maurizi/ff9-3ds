@@ -391,10 +391,14 @@ and 2398):
 | + no software GPU, no busy-wait for the swap | 20.3 | 32.4 |
 | + stream looks as polls | 21.3 | 20.0 |
 | + swap deferred, decoding between the game's work, 176 rows | 19.9 | 18.6 |
+| + residual decoded while the engine swaps and captures; ADPCM word decoding | 16.7 | 16.65 |
 
-The PS1 takes 16.7. At 2398: decoding 7.9 ms, waiting for the 3D engine 3.6, SPU 4.2, disc sectors 1.1. The
-decoder runs from main RAM; from ITCM it was 15% faster in the benchmark, but ITCM holds the SPU and the software
-GPU.
+The PS1 takes 16.7: the intro now plays in real time. A P-frame's residual decoding (`dcts`, 2.9 ms per VBlank)
+needs neither the prediction nor the reference, so it runs as soon as the previous frame is finished; only adding
+it to the captured prediction (`finish`) waits for the capture. At 2398: residual decoding 2.9 ms, the rest of the
+decoder 4.9, SPU 3.5 (its ADPCM blocks now decoded a word of nibbles at a time; the unused noise generator no
+longer ticks in hardware mode), disc sectors 1.0. The display mostly runs one movie frame behind the decoder's
+newest, since a frame can't be shown while it is the next one's reference.
 
 ## Still incomplete
 

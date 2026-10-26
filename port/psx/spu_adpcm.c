@@ -26,20 +26,25 @@ SPU_HW_HOT uint8_t psx_spu_decode_block(const uint8_t block[PSX_SPU_BLOCK_BYTES]
             return block[1];
         }
     }
-    for (unsigned i = 0; i < PSX_SPU_BLOCK_SAMPLES; ++i) {
-        int nibble = (block[2 + i / 2] >> ((i & 1) * 4)) & 15;
-        if (nibble & 8) nibble -= 16;
-        /* Multiplication avoids left-shifting a negative signed value. The
-         * supported ARM/x86 targets implement arithmetic signed right shift.
-         * Round BOTH predictor terms down before summing: no XA-style +32. */
-        int sample = (nibble * 4096) >> shift;
-        sample += (previous * c1) >> 6;
-        sample += (older * c2) >> 6;
-        if (sample > 32767) sample = 32767;
-        if (sample < -32768) sample = -32768;
-        output[i] = (int16_t)sample;
-        older = previous;
-        previous = sample;
+    /* The nibbles a word at a time (blocks start 16-byte aligned): each one moved to the top bits and shifted down
+     * arithmetically, (n << 28) >> (16 + shift), which is n * 4096 >> shift exactly for the shifts up to 12.
+     * Round BOTH predictor terms down before summing: no XA-style +32. (The supported ARM/x86 targets implement
+     * arithmetic signed right shift.) */
+    typedef uint32_t __attribute__((may_alias)) word;
+    const word *w = (const word *)__builtin_assume_aligned(block, 4);
+    const unsigned down = 16 + shift;
+    int16_t *out = output;
+    for (unsigned k = 0; k < 4; ++k) {
+        uint32_t bits = k ? w[k] : w[0] >> 16;
+        for (unsigned j = k ? 8 : 4; j; --j, bits >>= 4) {
+            int sample = (int32_t)(bits << 28) >> down;
+            sample += (previous * c1) >> 6;
+            sample += (older * c2) >> 6;
+            if ((unsigned)(sample + 32768) > 65535u) sample = (sample >> 31) ^ 32767;
+            *out++ = (int16_t)sample;
+            older = previous;
+            previous = sample;
+        }
     }
     history->previous = (int16_t)previous;
     history->older = (int16_t)older;

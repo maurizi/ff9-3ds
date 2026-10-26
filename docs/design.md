@@ -405,7 +405,8 @@ detail below 1/60 s, voices beyond 16, and exact reverb.
   modules as ARM instructions in ITCM. The normal link currently uses 17,984 of
   32,768 ITCM bytes including raster/scaler and SDK code/data. Diagnostic switches
   permit Thumb/main-RAM comparisons without changing sound arithmetic.
-- FMV audio must preserve its original stream timing; the planned FastVideoDS integration is not implemented.
+- FMV audio keeps its original stream timing: full-screen movies show FastVideoDS transcodes on the DS while the
+  STR still streams for audio (movie-validation.md).
 
 ## 8. Memory budget
 
