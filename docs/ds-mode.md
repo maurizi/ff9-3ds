@@ -575,6 +575,17 @@ would buy less than its cost suggested.
 - What's left of the background's 7-9 ms is the walk (GP0 decoding and recording each sprite), which only a hook in
   `fldbg_drawOverlay` could skip. The rear plane (banks C and D) can't be rewritten while the 3D engine reads it.
 
+## The walking sweep resumed (2026-10-26)
+
+`build/validation/dsmode_walk200_rest.list` with walking input (`tools/walk_presses.py 300 1500 7`), on the native
+field models and the composite: its first 60 fields reach frame 1500 without a crash (d1_f0652 walks into field 659,
+which its fixture doesn't have; a few end inside a battle or a notice screen, without a whole timing block). Found on
+the way:
+- d1_f0456 crashed at frame 368 (a field change: a scene's model groups freed before it was sent; d19d01c).
+- Software frames showed black, or the last 3D frame's models (the world map's clear quad drawn for fields; f9903d4).
+- A battle after a field encounter ran with the field's place, all in software (97 ms -> 35.8; b480e41).
+- The field background's merged tile packets missed the short path (1.3-1.7 ms a field; 87951ba).
+
 ## 54 battles after the architecture levers (2026-10-25)
 
 The 24 bosses and the 30 random battles again on 0f71760 (UI drawn once a game frame, GTE register file in DTCM,
