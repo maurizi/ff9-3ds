@@ -565,10 +565,15 @@ would buy less than its cost suggested.
 - Fields over the 3D engine's budget go software (91-122 ms: d1_f0504, d1_f0563, d1_f0574 of the 20 swept). Vertices
   are the limit (6144): d1_f0504 6864 with 607 background sprites (2428 vertices), d1_f0563 6705 with 425, d1_f0574
   9656 with 455 (1602 model polygons with 4997 vertices: over the budget even without its background).
-- Plan: the opaque background sprites go to a list during the walk instead of the primitives; it is composited in
-  software, in the PS1's order, into bank A as the bitmap behind the transparent 3D layer, again only when the list
-  or the texture pages under it change; the tiles at or nearer than the farthest 3D primitive are also drawn as 3D
-  quads (they can cover a model). The rear plane (banks C and D) can't be rewritten while the 3D engine reads it.
+- The composite (9bd7a96): the background sprites drawn by the software renderer into the scene's frame buffer,
+  sampled into bank A's bitmap behind the transparent 3D layer; those covering no 3D primitive or model group in
+  their 16-pixel cells leave the 3D scene. Only for scenes past the 3D engine's budget (60 scenes after one was):
+  d1_f0504 89.4 -> 64.2 ms, d1_f0563 93.7 -> 47.2. For scenes within it, it doesn't pay: planning and emission saved
+  about 1.3 ms in d4_f2110 against the hashing, and backgrounds change often (cells changed per scene with walking
+  input: d1_f0504 about 190 of 280, all scrolling; d3_f2205 136 large and 179 small changes in 551 scenes; d1_f0563
+  536 of 695 static), each change a redraw (a full one about 15 ms; drawing per pixel in C took 130).
+- What's left of the background's 7-9 ms is the walk (GP0 decoding and recording each sprite), which only a hook in
+  `fldbg_drawOverlay` could skip. The rear plane (banks C and D) can't be rewritten while the 3D engine reads it.
 
 ## 54 battles after the architecture levers (2026-10-25)
 
