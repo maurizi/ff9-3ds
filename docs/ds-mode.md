@@ -586,6 +586,11 @@ the way:
 - A battle after a field encounter ran with the field's place, all in software (97 ms -> 35.8; b480e41).
 - The field background's merged tile packets missed the short path (1.3-1.7 ms a field; 87951ba).
 
+Fields 61-100: no crash of the port's. d3_f0455 and d3_f0855 stopped in `btlbg_init` with a NULL battle background:
+disc 3's encounters without a story counter reach for battle data the disc doesn't have (as the world maps above);
+the disc 3 field fixtures now have `story=10000` (but d3_f2205, whose host reference was made without), and both
+reach frame 2000. Others stopped on fields their fixture doesn't have (617, 761, 1422).
+
 ## 54 battles after the architecture levers (2026-10-25)
 
 The 24 bosses and the 30 random battles again on 0f71760 (UI drawn once a game frame, GTE register file in DTCM,
