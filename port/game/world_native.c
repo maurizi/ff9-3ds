@@ -24,7 +24,7 @@ extern u16 D_800D29F8[]; /* per-vertex depths (SZ, u32, for the world blocks) */
 /* Without the hybrid renderer (PC, the DS's software paths) every block writes its packets. */
 __attribute__((weak)) int port_native_world_block(const NativeWorldBlock *b) { (void)b; return 0; }
 
-void o0c_wm_drawBlock(u8 *arg0, s32 arg1, s32 arg2) {
+PORT_OVERLAY_CODE(0c) void o0c_wm_drawBlock(u8 *arg0, s32 arg1, s32 arg2) {
     s32 t = g_worldOt[*g_worldBufIndex];
     (void)arg1;
     g_worldCurTexArea = &g_worldTexAreas[arg0[1]];
@@ -50,7 +50,7 @@ void o0c_wm_drawBlock(u8 *arg0, s32 arg1, s32 arg2) {
 }
 
 /* wm_drawBackdrop (w_memoryman.c), the sky and horizon mesh: the same, with the backdrop's face routine. */
-void o0c_wm_drawBackdrop(s32 arg0, s32 arg1) {
+PORT_OVERLAY_CODE(0c) void o0c_wm_drawBackdrop(s32 arg0, s32 arg1) {
     s32 ot = g_worldOt[*g_worldBufIndex];
     (void)arg1;
     o0c_wm_backdropVerts(arg0);

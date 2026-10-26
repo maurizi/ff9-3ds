@@ -6,10 +6,11 @@
 #include "psyq_port.h"
 #include "ovl_0a.h"
 #include "port_hw.h"
+#include "native_mesh.h"
 
 void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1);
 
-void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1) {
+PORT_OVERLAY_CODE(0a) void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1) {
     MATRIX m;
     WmModelGroup *g = &arg0->model->groups[arg1];
     gte_SetGeomScreen(g_gameState->gameData->unkA);
@@ -53,4 +54,31 @@ void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1) {
         gte_stsxy3c(&g_vtxScreenXY[last_k]);
         gte_stsz3c(&g_vtxScreenZ[last_k]);
     }
+}
+
+/* fldmdl_drawMesh (decomp src_equiv/ovl_0a/model_link.c, renamed by config/renames.txt): the renderer may take the
+ * group (gx_hybrid.c port_native_field_mesh) instead of the game linking its prebuilt primitives into the OT. */
+void o0a_fldmdl_drawMesh_link(ModelObj *model, u8 group);
+void o0a_fldmdl_drawMesh(ModelObj *model, u8 group);
+
+__attribute__((weak)) int port_native_field_mesh(const NativeFieldMesh *m) { (void)m; return 0; }
+
+PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
+    GameData *gd = g_gameState->gameData;
+    u8 *grp = (u8 *)&model->model->groups[group];
+    u8 *pkt = *(u8 **)((u8 *)model->groupOut + group * 12 + 4);
+    if (gd->unk8 != 0) pkt += *(u16 *)grp;
+    NativeFieldMesh n;
+    n.model = model;
+    n.group = grp;
+    n.packets = pkt;
+    n.ot = (const unsigned int *)(gd->unk10[gd->unk8] - (s8)grp[0x13]);
+    n.bones = model->boneMatrices;
+    n.camera = &gd->unk18;
+    n.bone_count = model->model->boneCount;
+    n.geom_screen = gd->unkA;
+    n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
+    n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
+    if (port_native_field_mesh(&n)) return;
+    o0a_fldmdl_drawMesh_link(model, group);
 }

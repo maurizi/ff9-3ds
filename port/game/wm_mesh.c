@@ -7,10 +7,11 @@
 #include "psyq_port.h"
 #include "ovl_0c.h"
 #include "port_hw.h"
+#include "native_mesh.h"
 
 void o0c_wm_projectMesh(ModelObj *arg0, u8 arg1);
 
-void o0c_wm_projectMesh(ModelObj *arg0, u8 arg1) {
+PORT_OVERLAY_CODE(0c) void o0c_wm_projectMesh(ModelObj *arg0, u8 arg1) {
     MATRIX m;
     WmModelGroup *g = &arg0->model->groups[arg1];
     gte_SetGeomScreen(g_gameState->gameData->unkA);

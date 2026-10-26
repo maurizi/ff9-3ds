@@ -151,7 +151,8 @@ def main():
             while frame < a.frame:
                 if frame != last_frame:
                     last_frame, last_change = frame, time.monotonic()
-                stalled = not a.gdb and frame > 0 and time.monotonic() - last_change > 90  # stopped (a crash, a hang)
+                # stopped (a crash, a hang; at frame 0 a boot failure such as a fatal stop, after boot's own time)
+                stalled = not a.gdb and time.monotonic() - last_change > (90 if frame > 0 else 300)
                 if time.monotonic() > deadline or stalled:
                     win = window(a.display)
                     if a.screenshot and win:  # what stopped it (a fatal error shows on the bottom screen)

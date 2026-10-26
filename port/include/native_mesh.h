@@ -3,6 +3,14 @@
 #ifndef NATIVE_MESH_H
 #define NATIVE_MESH_H
 
+/* Port code only an overlay's own code calls, linked into that overlay's native area (DS: gen_link.py's slot 0, read
+ * from ovls.bin with the overlay; it takes no resident memory while the slot's largest overlay sets its size) */
+#ifdef __arm__
+#define PORT_OVERLAY_CODE(id) __attribute__((section(".psxovl_" #id ".port"), noinline))
+#else
+#define PORT_OVERLAY_CODE(id)
+#endif
+
 typedef struct {
     const unsigned char *src;      /* BtlMesh.prims: the eight source lists one after the other (mesh_packets.c) */
     unsigned short count[8];       /* nFT4, nFT3, nGT4, nGT3, nG4, nG3, nF4, nF3 */
@@ -51,5 +59,23 @@ typedef struct {
 
 /* 1: the renderer took the block's faces (no packets); 0: the game's face routine writes them */
 int port_native_world_block(const NativeWorldBlock *b);
+
+/* A field model group (fldmdl_drawMesh, ovl_0a): its polygons drawn by the renderer from the model's vertices,
+ * re-projected with the frame's bone matrices, and its prebuilt packets' colours and texture words, instead of the
+ * packets linked into the OT. */
+typedef struct {
+    const void *model;             /* ModelObj */
+    const unsigned char *group;    /* WmModelGroup: counts (+2 up), OT bias (+0x13), bone vertex counts (+0x14),
+                                    * vertices (+0x18), polygon sources (+0x1C) */
+    const unsigned char *packets;  /* this buffer's packets of the group */
+    const unsigned int *ot;        /* the OT entry its depths count from (the frame's OT less its bias) */
+    const void *bones;             /* the model's bone matrices (MATRIX each) */
+    const void *camera;            /* the camera matrix (GameData.unk18) */
+    int bone_count, geom_screen;   /* (H: GameData.unkA) */
+    int draw_x, draw_y;            /* the frame's drawing area */
+} NativeFieldMesh;
+
+/* 1: the renderer took the group (nothing to link); 0: link its packets */
+int port_native_field_mesh(const NativeFieldMesh *m);
 
 #endif
