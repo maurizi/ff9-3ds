@@ -506,6 +506,44 @@ static SG_HOT __attribute__((noinline)) void poly_row_dither_semi(const Gp0Mode 
 #endif
 
 #ifndef PORT_SOFTGPU_REFERENCE
+/* poly_row_dither_semi for a small polygon in a colour other than the tables' (plot's arithmetic per pixel, no
+ * tables; in main RAM: ITCM is full) */
+static __attribute__((noinline)) void poly_row_semi_small(const Gp0Mode *m, u16 *dst, int width, int u, int v,
+        int dudx, int dvdx, u16 mask, int x, int y, int r, int g, int b, int dither) {
+    static const signed char offsets[16]={-4,0,-3,1,2,-2,3,-1,-3,1,-4,0,3,-1,2,-2};
+    const signed char *phase = offsets + ((y & 3) << 2);
+    const u16 *const vram = psx_vram;
+    const u16 *clut = vram + (m->clut_y & 511) * 1024 + m->clut_x;
+    const unsigned tx = m->tx, ty = m->ty, depth = m->depth, raw = m->raw;
+    const int abr = m->abr;
+    for (; width > 0; --width, ++dst, ++x, u = step_attribute(u, dudx), v = step_attribute(v, dvdx)) {
+        unsigned uu = (unsigned)(u >> 16) & 0xFF, vv = (unsigned)(v >> 16) & 0xFF;
+        const u16 *row = vram + ((ty + vv) & 511) * 1024;
+        u16 t, c;
+        if (depth == 2) t = row[(tx + uu) & 1023];
+        else if (depth == 1) t = clut[(row[(tx + (uu >> 1)) & 1023] >> ((uu & 1) * 8)) & 255];
+        else t = clut[(row[(tx + (uu >> 2)) & 1023] >> ((uu & 3) * 4)) & 15];
+        if (!t) continue;
+        if (raw) c = t;
+        else if (dither) {
+            int bias = phase[x & 3];
+            int cr = ((t & 31) * r >> 4) + bias, cg = (((t >> 5) & 31) * g >> 4) + bias,
+                cb = (((t >> 10) & 31) * b >> 4) + bias;
+            cr = cr < 0 ? 0 : cr > 255 ? 255 : cr;
+            cg = cg < 0 ? 0 : cg > 255 ? 255 : cg;
+            cb = cb < 0 ? 0 : cb > 255 ? 255 : cb;
+            c = (u16)((cr >> 3) | (cg >> 3) << 5 | (cb >> 3) << 10 | (t & 0x8000));
+        } else {
+            int tr = (t & 31) * r >> 7, tg = ((t >> 5) & 31) * g >> 7, tb = ((t >> 10) & 31) * b >> 7;
+            c = (u16)((tr > 31 ? 31 : tr) | (tg > 31 ? 31 : tg) << 5 | (tb > 31 ? 31 : tb) << 10 | (t & 0x8000));
+        }
+        if (t & 0x8000) c = blend(*dst, c, abr) | 0x8000;
+        *dst = c | mask;
+    }
+}
+#endif
+
+#ifndef PORT_SOFTGPU_REFERENCE
 /* num / area for area > 0 and |num| < 2^31, with inv = 0xFFFFFFFF / area: the estimate is at most 2 low */
 static inline int div_by_area(int num, u32 area, u32 inv) {
     u32 n = num < 0 ? 0u - (u32)num : (u32)num;
@@ -664,10 +702,11 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     const int untextured = !m->textured && !gp0_state.check_mask && !target.pixels; /* marks: whole spans */
     /* Rebuilding the tables (1536 entries) costs more than a small polygon's pixels: a small one in a colour
      * other than the tables' takes the per-pixel paths instead (field characters: each polygon its own light). */
+    int semi_small = 0;
     if (area < 128) {
         if (dither_indexed && dither_key(flat_r, flat_g, flat_b, 1) != dtab_key) dither_indexed = 0;
         if (dither_semi && dither_key(m->raw ? 128 : flat_r, m->raw ? 128 : flat_g, m->raw ? 128 : flat_b, dither) !=
-                               dtab_key) dither_semi = 0;
+                               dtab_key) dither_semi = 0, semi_small = !palette_ready;
     }
     if (dither_indexed) dither_tables(flat_r, flat_g, flat_b, 1);
     if (dither_semi) dither_tables(m->raw ? 128 : flat_r, m->raw ? 128 : flat_g, m->raw ? 128 : flat_b, dither);
@@ -710,6 +749,10 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
             if (right > left)
                 poly_row_dither_semi(m, psx_vram + (y & 511) * 1024 + left, right - left, u, v, dudx, dvdx,
                                      gp0_state.set_mask ? 0x8000 : 0, left, y);
+        } else if (semi_small && right <= VRAM_W) {
+            if (right > left)
+                poly_row_semi_small(m, psx_vram + (y & 511) * 1024 + left, right - left, u, v, dudx, dvdx,
+                                    gp0_state.set_mask ? 0x8000 : 0, left, y, flat_r, flat_g, flat_b, dither);
         } else if (untextured && right <= VRAM_W) {
             if (right > left) {
                 if (m->gouraud)
