@@ -176,11 +176,14 @@ void display_present(void) {
 #ifdef PORT_WORLD_GX
     hybrid |= mode == 3;
 #endif
-    static int hybrid_mode = -1;
-    if (hybrid != gxh_active() || (hybrid && mode != hybrid_mode)) {
+    static int hybrid_mode = -1, hybrid_ovl = -1;
+    /* (and when slot 0's overlay changed: a mode can change before its overlay is loaded, the place then the last
+     * mode's, which the battle after a field encounter kept, drawn as a field in software) */
+    if (hybrid != gxh_active() || (hybrid && (mode != hybrid_mode || psx_ovl_resident[0] != hybrid_ovl))) {
         if (gxh_active()) gxh_enable(0);
         gxh_enable(hybrid);
         hybrid_mode = gxh_active() ? mode : -1;
+        hybrid_ovl = psx_ovl_resident[0];
         if (!gxh_active()) { /* off, or its overlay isn't resident yet */
             videoSetMode(MODE_5_2D);
             vramSetBankA(VRAM_A_MAIN_BG_0x06000000);

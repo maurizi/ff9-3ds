@@ -3784,7 +3784,7 @@ static void back_mode(int add) {
  * farther than every other 3D primitive and model vertex leave the 3D scene (L_BACK); the rest are drawn there too,
  * over the same pixels, so they still cover what goes behind them (per pixel, as the 3D scene's depths do). */
 
-static u32 bgc_hash(const Buffer *b, int display_h) {
+PORT_OVERLAY_CODE(0a) static u32 bgc_hash(const Buffer *b, int display_h) {
     u32 h = 2166136261u ^ (u32)display_h ^ b->clear << 12; /* (not the buffer's place: the sprites are relative) */
     for (int k = 0; k < b->count; ++k) {
         const Prim *p = &b->prims[k];
@@ -3819,7 +3819,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void bgc_scale(const
 
 /* every background sprite drawn by the software renderer into the scene's frame buffer (the PS1's own drawing, in its
  * order), scaled into bank A; the frame buffer then its clear value again */
-static void bgc_compose(Buffer *b, int display_h) {
+PORT_OVERLAY_CODE(0a) static void bgc_compose(Buffer *b, int display_h) {
     fill_buffer(b, b->clear == FIELD_KEY ? 0 : b->clear);
     replay(b, 0, b->count, -2);
     bgc_scale(b, display_h);
@@ -3829,7 +3829,7 @@ static void bgc_compose(Buffer *b, int display_h) {
 
 /* The composite for this scene (0: the background stays in the 3D scene): drawn again when it changed; the far
  * sprites marked L_BACK, *polys and *vertices less theirs */
-static int bgc_use(Buffer *b, const FStore *fst, int display_h, int *polys, int *vertices) {
+PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int display_h, int *polys, int *vertices) {
     if (!ovl0a_resident() || !b->slots) return 0;
     /* per 16-pixel cell, the farthest 3D primitive or model group over it (the larger the depth, the nearer): a
      * background sprite farther than all of them in its cells covers none (the buffer's coordinates) */
@@ -3903,7 +3903,7 @@ static int bgc_use(Buffer *b, const FStore *fst, int display_h, int *polys, int 
     return 1;
 }
 
-static void field_frame(Buffer *b, int display_h) {
+PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
     if (!b->soft && !soft_hold) {
         int polys = 0, vertices = 0, adds = 0, add_area2 = 0;
         for (int k = 0; k < b->count; ++k) {
@@ -4031,7 +4031,7 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     BB(0x47580001, b->count);
     unsigned int profile = port_profile_begin();
     while (dmaBusy(0)) {} /* the previous scene's list */
-    if (place->field) field_frame(b, display_h);
+    if (place->field && ovl0a_resident()) field_frame(b, display_h); /* (ovl_0a's: see ovl0a_resident) */
     else { memset(prim_layer, L_3D, b->count); plan_textures(b); }
     gxh_stats_regions = gxh_stats_units = 0;
     for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) { gxh_stats_regions++; gxh_stats_units += regions[i].units; }
