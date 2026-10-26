@@ -34,6 +34,9 @@
 #define PORT_NARROW_ARG(p) ((void)0)
 #endif
 
+/* Fixed PS1 RAM addresses the decomp uses as memory (ff9.h's PSX_RAM): into psx_ram */
+#include "psx_mem.h"
+#define PSX_RAM(type, addr) ((type)PSX_ADDR(addr))
 #include PORT_HEADER
 #include "port_hw.h"
 #ifdef BTLFX_EXPORTS
@@ -44,47 +47,8 @@
 #undef BTLFX_EXPORTS
 #define BTLFX_EXPORTS(env) ((void)(env), (BtlfxExports *)PSX_ADDR(0x800F7510))
 #endif
-/* Buffers the decomp's headers name by their PS1 address: into psx_ram (docs/decomp-requests.md R-raw-addresses) */
-#include "psx_mem.h"
-#ifdef TITLE_PACK_BUF
-#undef TITLE_PACK_BUF
-#define TITLE_PACK_BUF ((void *)PSX_ADDR(0x801CDF00))
-#endif
-#ifdef DISC_PICTURE_BUF
-#undef DISC_PICTURE_BUF
-#define DISC_PICTURE_BUF ((u32 *)PSX_ADDR(0x801CDF00))
-#endif
-#ifdef CARD_VRAM_SAVE_BUF
-#undef CARD_VRAM_SAVE_BUF
-#define CARD_VRAM_SAVE_BUF ((u8 *)PSX_ADDR(0x801F6D30))
-#endif
-#ifdef SAVE_BUF
-#undef SAVE_BUF
-#define SAVE_BUF ((SaveBuf *)PSX_ADDR(0x801FCB00))
-#endif
-#ifdef g_tmCardData
-#undef g_tmCardData
-#define g_tmCardData ((TmCardData *)PSX_ADDR(0x80103800))
-#endif
-#ifdef g_tmDecks
-#undef g_tmDecks
-#define g_tmDecks ((TmDeck *)PSX_ADDR(0x80103C00))
-#endif
-#ifdef g_tmOpponents
-#undef g_tmOpponents
-#define g_tmOpponents ((TmOpponent *)PSX_ADDR(0x80104000))
-#endif
-#ifdef TM_IMAGE_FILE /* (used as numbers: casts, and the primitive buffers' offsets) */
-#undef TM_IMAGE_FILE
-#define TM_IMAGE_FILE PSX_ADDR(0x80104A00)
-#endif
-#ifdef TM_PRIM_BUF
-#undef TM_PRIM_BUF
-#define TM_PRIM_BUF PSX_ADDR(0x80104A00)
-#endif
 #include "psx_runtime.h"
 #include "effect_bridge.h"
-void port_measure_text_into(void *out, const void *text);
 void battleEnd_main(void);
 void port_draw_ot_buffer(unsigned int *head, const void *buffer, unsigned int size);
 

@@ -118,12 +118,6 @@ src/main/tu_80021640.c | DB_ANIM, 0))[1] | DB_ANIM, 0)))[1] | 1
 # 80052640..54 reads its position at physical +14/+1C without a NULL guard.
 src_equiv/main/script_text.c | q = (Unk8004AB64 *)SCRIPT_PTR_RESTORE(evt_popValue()); | q = PSX_NZ((Unk8004AB64 *)SCRIPT_PTR_RESTORE(evt_popValue())); | 1
 
-# TEMPORARY until the decomp fixes it (reported 2026-10-11): defined void in ovl_0a but declared s32 in ff9.h and
-# used by script opcode 0x8F (retry while non-zero); $v0 carries func_800B31B8's result on MIPS. Without it the
-# opening scene's script retries forever.
-src/ovl_0a/tu_800B0124.c | void fld_setObjectColor(s32 arg0, s32 arg1, s32 arg2, s32 arg3) { | s32 fld_setObjectColor(s32 arg0, s32 arg1, s32 arg2, s32 arg3) { | 1
-src/ovl_0a/tu_800B0124.c | fld_setSlotColor((FieldEvtCtx *)game_getModel(arg0), arg1, arg2, arg3); | return fld_setSlotColor((FieldEvtCtx *)game_getModel(arg0), arg1, arg2, arg3); | 1
-
 # Field movement collision query can return NULL. The PS1 still reads byte 0x0F (assembly 0x800478D8)
 # before checking the pointer at 0x800478FC. Preserve that low-RAM read without faulting on ARM/PC.
 src/main/event.c | ((o->unkF >> 4) ^ 1) & 1 | ((PSX_NZ(o)->unkF >> 4) ^ 1) & 1 | 1
@@ -161,8 +155,6 @@ src/ovl_0b/btl_cmd.c | && (!(arg0->flags & 1) || (s32)m->motion != arg0->motions
 # pointers. Natively the struct's third word lies past the callers' arguments, in the caller's frame, and the
 # definition stores to it: define it as the callers see it, with the struct a local.
 src/ovl_0b/btlfx_op.c | Pool6CEntry *func_800E4A3C_def(s32 arg0, s32 arg1, Unk800E4A3CArgs arg2) { | Pool6CEntry *func_800E4A3C(s32 arg0, s32 arg1, s16 *arg2_a, s16 *arg2_b) { Unk800E4A3CArgs arg2 = {arg2_a, arg2_b, NULL}; | 1
-# Battle help-text measurement explicitly passes the PS1 hidden structure-return pointer.
-src/ovl_0b/btlui_frame.c | text_measure(&v.unk0, (s32)&g_btlBanner); | port_measure_text_into(&v.unk0, &g_btlBanner); | 1
 # Effect setup can submit a native local packet/OT buffer; preserve its exact bounds.
 src/ovl_0b/btlfx.c | DrawOTag(ot); | port_draw_ot_buffer(ot, p, sizeof(*p)); | 1
 # Game Over owns both display buffers and their packet lists on the native stack.
@@ -172,11 +164,6 @@ src/ovl_65/gameover.c | DrawOTagEnv(cur->ot, &cur->draw); | PutDrawEnv(&cur->dra
 # extension. Signed fine=-1 reaches the ARM callee as ffffffff instead of ff.
 # Use the real u16-return/u8-argument prototype at all three call sites.
 src/main/akao.c | ((s32 (*)())akao_calcPitch) | akao_calcPitch | 3
-
-# Argument evaluation order is unspecified in C. The PS1 resolves the target object before reading the key byte
-# from the same script stream; x86 GCC read the key first (wrong object, field 259 diverged at frame 319).
-# tools/arg_order.py lists calls with competing side effects.
-src/main/event.c | evt_callObjectFunc(evt_getObjectArg(), a, *g_evtCurObj->unk0++, 0); | { Unk8004AB64 *port_target = evt_getObjectArg(); evt_callObjectFunc(port_target, a, *g_evtCurObj->unk0++, 0); } | 1
 
 # The world map's CD image table: disc 1 has no image 0x3F3 (nor disc 4 0x3F6) in directory 12, so file_find returns
 # NULL and the PS1 reads its sector from kernel RAM at 4. Slot 0 is then unused on that disc.
@@ -202,3 +189,8 @@ src/ovl_0b/btlfx_op.c | u->model->texAnims | PSX_NZ(u->model->texAnims) | 7
 src/ovl_0b/btlseq.c | arg1->model->texAnims | PSX_NZ(arg1->model->texAnims) | 6
 src/ovl_0b/btl_status.c | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != g_gameState->gameData->unk8E4.battle->curCmd->caster | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != PSX_NZ(g_gameState->gameData->unk8E4.battle->curCmd)->caster | 1
 src/ovl_0b/btl_unit.c | unk34.b.unk4 == 2 && cmd->cmdNo == BTL_CMD_SWD_MAG | unk34.b.unk4 == 2 && PSX_NZ(cmd)->cmdNo == BTL_CMD_SWD_MAG | 1
+# The decomp's src_equiv/main/script_text.c defines three functions with other types than ff9.h now declares
+# (reported to the decomp 2026-10-26): the header's types, the body's names through a local.
+src_equiv/main/script_text.c | void func_8005309C(SVECTOR *v, s32 rx, s32 ry, s32 len) { | void func_8005309C(s16 *port_v, s32 rx, s32 ry, s32 len) { SVECTOR *v = (SVECTOR *)port_v; | 1
+src_equiv/main/script_text.c | s32 evt_isInRegion(u8 *p, s32 x, s32 z) { | s32 evt_isInRegion(Unk8004AB64 *port_p, s32 x, s32 z) { u8 *p = (u8 *)port_p; | 1
+src_equiv/main/script_text.c | void func_80064C24(u8 n) { | void func_80064C24(s32 port_n) { u8 n = (u8)port_n; | 1

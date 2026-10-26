@@ -58,6 +58,7 @@ PAD = re.compile(r'__asm__\("(?:\.section \.rodata|\.rdata)[^"]*"\);')
 HW = re.compile(r'(?<!PSX_HW\()\b0x1F80[0-9A-Fa-f]{4}\b')
 CAST_RAM = re.compile(r'(\(\s*[A-Za-z_][\w\s]*\*+\s*\)\s*\(?\s*)(0x80[0-9A-Fa-f]{6})\b')
 RAM = re.compile(r'\b0x80[0-9A-Fa-f]{6}\b')
+PSX_RAM_ARG = re.compile(r'PSX_RAM\s*\([^()]*(?:\([^()]*\)[^()]*)*,\s*$')  # the address argument of PSX_RAM(type, ...
 
 
 NARROW_TYPE = r"(?:unsigned\s+char|signed\s+char|unsigned\s+short(?:\s+int)?|signed\s+short(?:\s+int)?|short(?:\s+int)?|char|u8|s8|u16|s16)"
@@ -166,6 +167,8 @@ def main():
         where = f"{args.src.removeprefix('decomp/')}:{line}"
         if not 0x80010000 <= v < 0x80200000 or code[max(0, m.start() - 9) : m.start()].endswith("PSX_ADDR("):
             return m.group(0)
+        if PSX_RAM_ARG.search(code[max(0, m.start() - 120) : m.start()]):
+            return m.group(0)  # (ff9.h's PSX_RAM(type, addr): the port's definition maps it)
         if (where, m.group(0).upper()) in plain:
             return m.group(0)
         report.append(f"{where}: {m.group(0)}: {text.splitlines()[line - 1].strip()}")
