@@ -74,7 +74,8 @@ typedef struct {
     int draw_x, draw_y;            /* the frame's drawing area */
 } NativeFieldMesh;
 
-/* 1: the renderer took the group (nothing to link); 0: link its packets */
+/* 1: the renderer took the group (nothing to link); 2: its opaque polygons (link the translucent ones); 0: link its
+ * packets */
 int port_native_field_mesh(const NativeFieldMesh *m);
 
 #endif

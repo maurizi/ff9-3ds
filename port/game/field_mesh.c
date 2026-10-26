@@ -63,6 +63,50 @@ void o0a_fldmdl_drawMesh(ModelObj *model, u8 group);
 
 __attribute__((weak)) int port_native_field_mesh(const NativeFieldMesh *m) { (void)m; return 0; }
 
+/* fldmdl_drawMesh's linking (model_link.c) for the group's translucent polygons only (code bit 1 in the packet):
+ * the renderer drew the opaque ones */
+static const u8 kind_size[8] = {0x28, 0x20, 0x34, 0x28, 0x24, 0x1C, 0x18, 0x14};
+static const u8 kind_src[8] = {0x18, 0x14, 0x20, 0x18, 0x18, 0x14, 0x10, 0x0C};
+static const u8 kind_flags[8] = {0x15, 0x12, 0x1C, 0x0F, 0x14, 0x13, 0x0D, 0x0B};
+static const u8 kind_len[8] = {9, 7, 12, 9, 8, 6, 5, 4};
+static const u8 kind_xy[8][4] = {{0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18}, {0x08, 0x14, 0x20, 0x2C},
+                                 {0x08, 0x14, 0x20}, {0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18},
+                                 {0x08, 0x0C, 0x10, 0x14}, {0x08, 0x0C, 0x10}};
+PORT_OVERLAY_CODE(0a) static void link_translucent(u8 *grp, u8 *pkt, u32 *ot) {
+    u8 *poly = *(u8 **)(grp + 0x1C);
+    for (int k = 0; k < 8; k++) {
+        const int quad = !(k & 1);
+        for (s32 n = *(u16 *)(grp + 2 + 2 * k); n > 0; n--, poly += kind_src[k], pkt += kind_size[k]) {
+            if (!(pkt[7] & 2)) continue;
+            u32 i0 = *(u16 *)(poly + 0), i1 = *(u16 *)(poly + 2), i2 = *(u16 *)(poly + 4);
+            u32 i3 = quad ? *(u16 *)(poly + 6) : 0;
+            u32 xy0 = g_vtxScreenXY[i0], xy1 = g_vtxScreenXY[i1], xy2 = g_vtxScreenXY[i2], z;
+            if (!(poly[kind_flags[k]] & 2)) {
+                s32 nclip;
+                gte_ldsxy3(xy0, xy1, xy2);
+                *(u32 *)pkt = (u32)kind_len[k] << 24;
+                gte_nclip();
+                gte_stopz(&nclip);
+                if (nclip <= 0) continue;
+            }
+            *(u32 *)(pkt + kind_xy[k][0]) = xy0;
+            *(u32 *)(pkt + kind_xy[k][1]) = xy1;
+            *(u32 *)(pkt + kind_xy[k][2]) = xy2;
+            if (quad) {
+                *(u32 *)(pkt + kind_xy[k][3]) = g_vtxScreenXY[i3];
+                z = ((u32)g_vtxScreenZ[i0] + g_vtxScreenZ[i1] + g_vtxScreenZ[i2] + g_vtxScreenZ[i3]) >> 4;
+            } else {
+                gte_ldsz3(g_vtxScreenZ[i0], g_vtxScreenZ[i1], g_vtxScreenZ[i2]);
+                gte_avsz3();
+                gte_stotz(&z);
+            }
+            u32 *slot = &ot[z];
+            *(u32 *)pkt = *slot | ((u32)kind_len[k] << 24);
+            *slot = (u32)pkt & 0xFFFFFF;
+        }
+    }
+}
+
 PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     GameData *gd = g_gameState->gameData;
     u8 *grp = (u8 *)&model->model->groups[group];
@@ -79,6 +123,8 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     for (u32 i = 0; i < model->model->boneCount; ++i) n.nverts += ((u16 *)((WmModelGroup *)grp)->boneVertexCounts)[i];
     n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
     n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
-    if (port_native_field_mesh(&n)) return;
+    int taken = port_native_field_mesh(&n);
+    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot);
+    if (taken) return;
     o0a_fldmdl_drawMesh_link(model, group);
 }
