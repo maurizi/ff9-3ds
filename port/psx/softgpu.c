@@ -1174,6 +1174,48 @@ static __attribute__((noinline)) void sprite_rows_effects(const Gp0Mode *m, int 
 }
 #endif
 
+#ifndef PORT_SOFTGPU_REFERENCE
+/* blend() on two pixels at once (bit 15 of each clear): no carry crosses into the other half (each half's sum stays
+ * under 0x10000, and the carry corrections stay within their fields) */
+static inline u32 sat_add15x2(u32 a, u32 b) {
+    u32 sum = a + b, carry = (sum - ((a ^ b) & 0x04210421u)) & 0x84208420u;
+    return ((sum - carry) | (carry - (carry >> 5))) & 0x7FFF7FFFu;
+}
+static inline u32 blend2(u32 b, u32 f, int abr) {
+    switch (abr) {
+    case 0: return (((b & 0x7BDE7BDEu) + (f & 0x7BDE7BDEu)) >> 1) + (b & f & 0x04210421u);
+    case 1: return sat_add15x2(b, f);
+    case 2: return sat_add15x2(b ^ 0x7FFF7FFFu, f) ^ 0x7FFF7FFFu;
+    default: return sat_add15x2(b, (f >> 2) & 0x1CE71CE7u);
+    }
+}
+
+/* A semi-transparent tile (the fades): plot's blend, two pixels a word (in main RAM: ITCM is full) */
+static __attribute__((noinline)) void tile_semi(const Gp0Mode *m, const Gp0Vtx *v, int x0, int y0, int x1, int y1) {
+    int r = v->r < 0 ? 0 : v->r > 255 ? 255 : v->r;
+    int g = v->g < 0 ? 0 : v->g > 255 ? 255 : v->g;
+    int b = v->b < 0 ? 0 : v->b > 255 ? 255 : v->b;
+    const u16 c = (u16)((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10)), setm = gp0_state.set_mask ? 0x8000 : 0;
+    const u32 c2 = c | (u32)c << 16, setm2 = setm | (u32)setm << 16;
+    const int abr = m->abr, check = gp0_state.check_mask;
+    for (int y = y0; y < y1; ++y) {
+        u16 *row = px(x0, y);
+        int x = x0;
+        if (!check) {
+            if ((x & 1) && x < x1) { *row = (u16)(blend(*row, c, abr) | setm); ++row; ++x; }
+            u32 *w = (u32 *)row;
+            for (; x + 2 <= x1; x += 2, ++w) *w = blend2(*w & 0x7FFF7FFFu, c2, abr) | setm2;
+            row = (u16 *)w;
+        }
+        for (; x < x1; ++x, ++row) {
+            if (check && (*row & 0x8000)) continue;
+            *row = (u16)(blend(*row, c, abr) | setm);
+        }
+        if (marks) mark_span(y, x0, x1);
+    }
+}
+#endif
+
 static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (!psx_vram) {
         return;
@@ -1202,6 +1244,12 @@ static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
             u16 *row = px(x0,y);
             for (int x=x0; x<x1; ++x) *row++ = c;
         }
+        port_profile_draw_end(1,profile_start);
+        return;
+    }
+    if (!m->textured && m->semi && !target.pixels && !(marks && gp0_state.check_mask)
+        && x0 >= 0 && y0 >= 0 && x1 <= VRAM_W && y1 <= VRAM_H) {
+        tile_semi(m, v, x0, y0, x1, y1);
         port_profile_draw_end(1,profile_start);
         return;
     }

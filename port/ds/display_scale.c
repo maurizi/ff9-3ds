@@ -6,7 +6,7 @@ static inline uint32_t rgb24_to_ds(uint32_t rgb) {
     return 0x8000 | ((rgb >> 3) & 31) | ((rgb >> 6) & 0x3e0) | ((rgb >> 9) & 0x7c00);
 }
 
-#ifdef PORT_SCALE_ITCM
+#if 0 /* (not in ITCM: 24-bit movies play from their transcodes; the MDEC's are the fallback) */
 __attribute__((section(".itcm"), long_call))
 #endif
 void ds_scale_display_rgb24(uint16_t *dst, const uint16_t *vram,

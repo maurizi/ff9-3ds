@@ -54,7 +54,11 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"level")) scenario.level=number(eq,1,99);
         else if(!__builtin_strcmp(s,"story")) scenario.story=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"gil")) scenario.gil=number(eq,0,9999999);
-        else if(!__builtin_strcmp(s,"tetra")) scenario.tetra=number(eq,0,1); /* kind=field: then a card game */
+        else if(!__builtin_strcmp(s,"tetra")) scenario.tetra=number(eq,0,1)?9:0; /* kind=field: then a card game */
+        else if(!__builtin_strcmp(s,"field_exit")) { /* kind=field: then this exit: 4 the ending, 7 game over, 9 cards */
+            scenario.tetra=number(eq,4,9);
+            if(scenario.tetra!=4 && scenario.tetra!=7 && scenario.tetra!=9) port_fatal("scenario: field_exit must be 4, 7 or 9");
+        }
         else if(!__builtin_strcmp(s,"summons_seen")) scenario.summons_seen=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"seed")) scenario.seed=(unsigned)number(eq,0,0x7fffffff);
         else if(!__builtin_strcmp(s,"party")) {
@@ -166,14 +170,14 @@ void port_scenario_field_entering(int field) {
     port_fatal("scenario: unavailable field %d in current archive (initial fixture disc %d, field %d); supply appropriate story/event state",
                field,scenario.disc,scenario.field);
 }
-void port_scenario_tetra_exit(void); /* (scenario_field.c, ovl_0a's) */
+void port_scenario_field_exit(int reason); /* (scenario_field.c, ovl_0a's) */
 void port_scenario_field_ready(int field) {
     if(scenario.enabled && scenario.consumed) {
         port_log("scenario field ready: %d\n",field);
-        if(scenario.tetra==1 && scenario.kind==1) { /* (once: the card game returns to the field) */
-            scenario.tetra=2;
-            port_scenario_tetra_exit();
-            port_log("scenario: Tetra Master\n");
+        if(scenario.tetra>0 && scenario.kind==1) { /* (once: the card game returns to the field) */
+            port_scenario_field_exit(scenario.tetra);
+            port_log("scenario: field exit %d\n",scenario.tetra);
+            scenario.tetra=-1;
         }
     }
 }
