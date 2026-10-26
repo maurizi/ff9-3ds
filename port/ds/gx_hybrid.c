@@ -112,24 +112,24 @@ typedef struct {
 static Buffer buffers[2];
 
 /* field models (port_native_field_mesh) */
-#define FM_GROUPS 32       /* groups a frame */
-#define FM_BONES 160       /* bone matrices a frame */
-#define FM_VERTS 1023      /* a group's vertices (the projection's scratch) */
+#define FM_GROUPS 32       /* groups a scene */
+#define FIELD_PRIMS_NATIVE 1700 /* a field buffer's primitives at most (use_place) */
 #define FM_USES 32         /* texture pages and CLUTs a scene */
-typedef struct { s16 m[9], pad; s32 t[3]; } FBone;
-typedef struct { const u8 *group, *packets; s16 base; u16 bone0, bone_count; u16 h; s32 ofx, ofy; } FGroup;
+#define FM_POLYS 2048       /* polygons a scene (its culling bits) */
+typedef struct { const u8 *group, *packets; u16 vert0, poly0; s32 depth0; } FGroup;
 typedef struct { u16 tpage, clut; u8 u0, v0, u1, v1, group, palette; } FUse;
 typedef struct {
-    unsigned gen; int ngroups, nbones, nuses, polys;
+    unsigned gen; int ngroups, nverts, nuses, polys;
+    int npolys, front_polys, front_verts; /* its polygons, those facing the camera and their vertices */
     FGroup groups[FM_GROUPS];
-    FBone bones[FM_BONES];
+    u32 front[FM_POLYS / 32]; /* a bit a polygon: drawn (NCLIP > 0, or double-sided) */
     FUse uses[FM_USES];
+    /* the groups' vertices (fm_cap): x, y (11 bits each: the GTE saturates them so) and 10 bits of depth, in OT
+     * entries from the group's nearest (FGroup.depth0, on the OT entries' scale) */
+    u32 *verts;
 } FStore;
-static FStore *fm_store[2];        /* each buffer's scene's (use_place: after the field's depths) */
-static u32 *fm_sxy, *fm_sz;        /* the projection's scratch (FM_VERTS + 3 each) */
-/* the frame's groups, from fldmdl_drawMesh to the end of the walk (FM_GROUPS, after the stores) */
-typedef struct { NativeFieldMesh m; int ofx, ofy; } FPending;
-static FPending *fm_pending;
+static FStore *fm_ring[3];         /* by generation (use_place: after the field's depths) */
+static int fm_cap;                 /* vertices a scene */
 /* packet sizes and xy offsets per source type (FT4, FT3, GT4, GT3, G4, G3, F4, F3: model_link.c's kinds) */
 static const u8 fm_size[8] = {0x28, 0x20, 0x34, 0x28, 0x24, 0x1C, 0x18, 0x14};
 static const u8 fm_xy_at[8][4] = {{0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18}, {0x08, 0x14, 0x20, 0x2C},
@@ -138,7 +138,6 @@ static const u8 fm_xy_at[8][4] = {{0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18}, 
 
 static FStore *scene_models(const Buffer *b);
 static void fm_uses(FStore *st);
-static void fm_project(const FStore *st, const FGroup *fg);
 
 /* A primitive copied word by word (a struct assignment is a memcpy call) */
 typedef union { Prim p; u32 w[12]; } PrimCopy;
@@ -2330,28 +2329,46 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     memset(light_cells, 0, sizeof light_cells);
     FStore *fst = scene_models(b);
     if (fst) { /* the field models first (depth tested: any order; their polygons before the rest's budget) */
-        struct psx_gte_regs saved_gte = psx_gte;
         static const int quad_order_fm[4] = {0, 1, 3, 2};
+        /* each texture use's words, once a scene (0: not drawable) */
+        u32 use_image[FM_USES], use_palette[FM_USES];
+        s16 use_tu[FM_USES], use_tv[FM_USES];
+        for (int u = 0; u < fst->nuses; ++u) {
+            const FUse *fu = &fst->uses[u];
+            const Region *r = fu->group == 0xFF ? NULL : groups[fu->group].region;
+            int depth = (fu->tpage >> 7) & 3;
+            if (depth == 3) depth = 2;
+            use_image[u] = 0;
+            if (!r || (depth < 2 && fu->palette == 0xFF)) continue;
+            use_tu[u] = (s16)((r->x - (fu->tpage & 15) * 64) * texels_per_halfword(depth));
+            use_tv[u] = (s16)(r->y - ((fu->tpage >> 4) & 1) * 256);
+            use_image[u] = (u32)(r->unit * TEX_UNIT / 8) | r->size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
+            use_palette[u] = ~0u;
+            if (depth < 2) {
+                use_image[u] |= index0_transparent(fu->palette);
+                use_palette[u] = (u32)fu->palette * 512 / 16;
+            }
+        }
+        const int ofs_x = b->ofs_x, ofs_y = b->ofs_y;
         int last_use = 0;
         for (int gi = 0; gi < fst->ngroups; ++gi) {
             const FGroup *fg = &fst->groups[gi];
-            fm_project(fst, fg);
+            const u32 *vw = fst->verts + fg->vert0;
+            const int depth0 = fg->depth0;
             const u8 *g = fg->group, *src = *(const u8 *const *)(g + 0x1C), *pk = fg->packets;
-            for (int t = 0; t < 8; ++t)
+            int pi = fg->poly0;
+            for (int t = 0; t < 8; ++t) {
+                const int quad = !(t & 1), nv = quad ? 4 : 3, textured = t < 4, gouraud = t >= 2 && t <= 5;
                 for (int k = *(const u16 *)(g + 2 + 2 * t); k > 0; --k, src += mesh_size[t], pk += fm_size[t]) {
-                    int quad = !(t & 1), nv = quad ? 4 : 3, textured = t < 4, gouraud = t >= 2 && t <= 5;
                     u32 vi[4] = {*(const u16 *)src, *(const u16 *)(src + 2), *(const u16 *)(src + 4),
                                  quad ? *(const u16 *)(src + 6) : 0};
-                    u32 s0 = fm_sxy[vi[0]], s1 = fm_sxy[vi[1]], s2 = fm_sxy[vi[2]];
-                    if (!(src[mesh_flags_at[t]] & 2)) { /* NCLIP > 0 (model_link) */
-                        int x0 = (s16)s0, y0 = (s16)(s0 >> 16), x1 = (s16)s1, y1 = (s16)(s1 >> 16);
-                        int x2 = (s16)s2, y2 = (s16)(s2 >> 16);
-                        if (x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1 <= 0) continue;
-                    }
+                    if (!(fst->front[pi >> 5] >> (pi & 31) & 1)) { ++pi; continue; } /* (culled at the snapshot) */
+                    ++pi;
                     reserve();
                     if (polys >= MAX_POLYS || vertices + nv > MAX_VERTICES) { gxh_stats_dropped++; continue; }
-                    u32 code = pk[7], want_image = 0, set_palette = ~0u, uv[4] = {0, 0, 0, 0};
+                    u32 code = pk[7], uv[4] = {0, 0, 0, 0};
                     int tu = 0, tv = 0;
+                    pack_begin();
                     if (textured) {
                         for (int i = 0; i < nv; ++i) uv[i] = *(const u32 *)(pk + fm_xy_at[t][i] + 4);
                         u16 clut = (u16)(uv[0] >> 16), tpage = (u16)(uv[1] >> 16);
@@ -2359,56 +2376,46 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                         if (u >= fst->nuses || fst->uses[u].tpage != tpage || fst->uses[u].clut != clut)
                             for (u = 0; u < fst->nuses; ++u)
                                 if (fst->uses[u].tpage == tpage && fst->uses[u].clut == clut) break;
-                        if (u == fst->nuses) { gxh_stats_texture_fail++; continue; }
+                        if (u == fst->nuses || !use_image[u]) { wp = pack_header; gxh_stats_texture_fail++; continue; }
                         last_use = u;
-                        const FUse *fu = &fst->uses[u];
-                        const Region *r = fu->group == 0xFF ? NULL : groups[fu->group].region;
-                        if (!r) { gxh_stats_texture_fail++; continue; }
-                        int depth = (tpage >> 7) & 3;
-                        if (depth == 3) depth = 2;
-                        if (depth < 2 && fu->palette == 0xFF) { gxh_stats_palette_fail++; continue; }
-                        tu = (r->x - (tpage & 15) * 64) * texels_per_halfword(depth);
-                        tv = r->y - ((tpage >> 4) & 1) * 256;
-                        want_image = (u32)(r->unit * TEX_UNIT / 8) | r->size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
-                        if (depth < 2) {
-                            want_image |= index0_transparent(fu->palette);
-                            u32 want_palette = (u32)fu->palette * 512 / 16;
-                            if (want_palette != palette) set_palette = want_palette;
+                        tu = use_tu[u]; tv = use_tv[u];
+                        if (use_palette[u] != ~0u && use_palette[u] != palette) {
+                            pack(CMD_PLTTBASE); put(use_palette[u]); palette = use_palette[u];
                         }
+                        if (use_image[u] != image) { pack(CMD_TEXIMAGE); put(use_image[u]); image = use_image[u]; }
                     }
-                    pack_begin();
-                    if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); palette = set_palette; }
-                    if (want_image != image) { pack(CMD_TEXIMAGE); put(want_image); image = want_image; }
                     if (attr != INITIAL_ATTR) { pack(CMD_POLYATTR); put(INITIAL_ATTR); attr = INITIAL_ATTR; }
                     pack(CMD_BEGIN); put(quad ? 1 : 0);
                     pack_end();
                     for (int j = 0; j < nv; ++j) {
                         int i = quad ? quad_order_fm[j] : j;
-                        u32 xy = fm_sxy[vi[i]], c = *(const u32 *)(pk + (gouraud ? fm_xy_at[t][i] - 4 : 4));
-                        u32 colour;
-                        if (textured && (code & 1)) colour = 0x7FFF;
-                        else if (textured) {
-                            u32 r = (c & 0xFF) >> 2, gg = (c >> 8 & 0xFF) >> 2, bl = (c >> 16 & 0xFF) >> 2;
-                            colour = (r > 31 ? 31 : r) | (gg > 31 ? 31 : gg) << 5 | (bl > 31 ? 31 : bl) << 10;
-                        } else colour = (c & 0xFF) >> 3 | ((c >> 8 & 0xFF) >> 3) << 5 | ((c >> 16 & 0xFF) >> 3) << 10;
-                        int z = world_entry_depth(fg->base + (int)(fm_sz[vi[i]] >> 2));
-                        if (z < -32000) z = -32000;
-                        if (z > 32000) z = 32000;
                         pack_begin();
-                        pack(CMD_COLOR); put(colour);
+                        if (gouraud || j == 0) { /* (a flat polygon's colour holds for its vertices) */
+                            u32 c = *(const u32 *)(pk + (gouraud ? fm_xy_at[t][i] - 4 : 4)), colour;
+                            if (textured && (code & 1)) colour = 0x7FFF;
+                            else if (textured) {
+                                u32 r = (c & 0xFF) >> 2, gg = (c >> 8 & 0xFF) >> 2, bl = (c >> 16 & 0xFF) >> 2;
+                                colour = (r > 31 ? 31 : r) | (gg > 31 ? 31 : gg) << 5 | (bl > 31 ? 31 : bl) << 10;
+                            } else colour = (c & 0xFF) >> 3 | ((c >> 8 & 0xFF) >> 3) << 5 | ((c >> 16 & 0xFF) >> 3) << 10;
+                            pack(CMD_COLOR); put(colour);
+                        }
                         if (textured) {
                             int u = (int)(uv[i] & 0xFF) - tu, v = (int)((uv[i] >> 8) & 0xFF) - tv;
                             pack(CMD_TEXCOORD); put((u32)(u16)(u * 16) | (u32)(u16)(v * 16) << 16);
                         }
-                        pack(CMD_VTX16); put((u32)(u16)((s16)xy + b->ofs_x) | (u32)(u16)((s16)(xy >> 16) + b->ofs_y) << 16);
+                        u32 w = vw[vi[i]];
+                        int x = (s32)(w << 21) >> 21, y = (s32)(w << 10) >> 21, z = depth0 - (int)(w >> 22) * 4;
+                        if (z < -32000) z = -32000;
+                        if (z > 32000) z = 32000;
+                        pack(CMD_VTX16); put((u32)(u16)(x + ofs_x) | (u32)(u16)(y + ofs_y) << 16);
                         put((u32)(u16)z);
                         pack_end();
                     }
                     ++polys;
                     vertices += nv;
                 }
+            }
         }
-        psx_gte = saved_gte;
     }
     /* the recorded primitives at depth 2 (k + 1) (k + 1 without meshes), then the native meshes' polygons, each
      * vertex at 2 rank + 1: between the primitives recorded before and after the walk reached its OT entry */
@@ -3288,103 +3295,73 @@ extern char __psxovl_slot0_end[];
 int port_ovl_native_extent(unsigned int id, uintptr_t *at, unsigned int *size);
 /* ---- field models ----------------------------------------------------------------------------------------- */
 
-/* fldmdl_drawMesh's groups (port/game/field_mesh.c) are drawn from the model: the frame's bone matrices (RT x bone,
- * as fldmdl_projectMesh makes them) are kept at the end of the frame's walk, while the model still has them (the
- * scene is sent two frames later, after the game has animated it again); its vertices are projected again then
- * (gte_rtpt_batch), and each polygon takes its prebuilt packet's colours and texture words (still those of the
- * frame but for texture animations) and its vertices' own depths on the OT entries' scale (the user's choice of
- * 2026-10-25: native drawing, per pixel depths). The PS1's culling is kept (NCLIP <= 0 unless double-sided). Groups
- * with translucent polygons, and scenes in software, keep their packets. */
-static int fm_npending;
-static Buffer *fm_buffer;
+/* fldmdl_drawMesh's groups (port/game/field_mesh.c) are drawn from the model: when the game would link a group's
+ * packets, its vertices as fldmdl_projectMesh projected them are kept for the frame's walk (a ring of three by
+ * generation, as the world's terrain: the scene is sent two frames later), each with its depth on the OT entries'
+ * scale, and each polygon takes its prebuilt packet's colours and texture words (still those of the frame but for
+ * texture animations; the user's choice of 2026-10-25: native drawing, per pixel depths). The PS1's culling is kept
+ * (NCLIP <= 0 unless double-sided). Groups with translucent polygons, and scenes in software, keep their packets. */
 int gxh_stats_fm;
 
 PORT_OVERLAY_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
-    if (!active || !place->field || !fm_store[0] || gp0_backend != &hybrid_backend || soft_hold) return 0;
+    if (!active || !place->field || !fm_ring[0] || gp0_backend != &hybrid_backend || soft_hold) return 0;
     Buffer *b = buffer_at(n->draw_x, n->draw_y);
-    if (!b || !b->slots || b->soft || fm_npending == FM_GROUPS || (fm_npending && b != fm_buffer)) return 0;
-    const u8 *g = n->group;
-    int nv = 0;
-    for (int i = 0; i < n->bone_count; ++i) nv += *(const u16 *)(*(const u8 *const *)(g + 0x14) + 2 * i);
-    if (nv > FM_VERTS) return 0;
+    if (!b || !b->slots || b->soft) return 0;
+    FStore *st = fm_ring[psx_ot_generation % 3];
+    if (st->gen != psx_ot_generation) {
+        st->gen = psx_ot_generation; st->ngroups = 0; st->nverts = 0; st->npolys = 0;
+        st->front_polys = 0; st->front_verts = 0;
+    }
+    int nv = n->nverts, np = 0;
+    const u8 *g = n->group, *pk = n->packets;
+    for (int t = 0; t < 8; ++t) np += *(const u16 *)(g + 2 + 2 * t);
+    if (st->ngroups == FM_GROUPS || st->nverts + nv > fm_cap || st->npolys + np > FM_POLYS) return 0;
     /* opaque polygons only (code bit 1 in the packets) */
-    const u8 *pk = n->packets;
     for (int t = 0; t < 8; ++t)
         for (int k = *(const u16 *)(g + 2 + 2 * t); k > 0; --k, pk += fm_size[t])
             if (pk[7] & 2) return 0;
-    fm_pending[fm_npending].m = *n;
-    fm_pending[fm_npending].ofx = (s32)psx_gte.c[24];
-    fm_pending[fm_npending].ofy = (s32)psx_gte.c[25];
-    fm_npending++;
-    fm_buffer = b;
+    FGroup *fg = &st->groups[st->ngroups++];
+    fg->group = g; fg->packets = n->packets; fg->vert0 = (u16)st->nverts; fg->poly0 = (u16)st->npolys;
+    /* the PS1's culling (model_link: NCLIP <= 0 unless double-sided), now: the budget counts what's drawn */
+    const u8 *src = *(const u8 *const *)(g + 0x1C);
+    int pi = st->npolys;
+    for (int t = 0; t < 8; ++t) {
+        const int quad = !(t & 1), flags_at = mesh_flags_at[t];
+        for (int k = *(const u16 *)(g + 2 + 2 * t); k > 0; --k, src += mesh_size[t], ++pi) {
+            u32 bit = 1u << (pi & 31);
+            st->front[pi >> 5] &= ~bit;
+            if (!(src[flags_at] & 2)) {
+                u32 s0 = (u32)n->sxy[*(const u16 *)src], s1 = (u32)n->sxy[*(const u16 *)(src + 2)];
+                u32 s2 = (u32)n->sxy[*(const u16 *)(src + 4)];
+                int x0 = (s16)s0, y0 = (s16)(s0 >> 16);
+                if (((s16)s1 - x0) * ((s16)(s2 >> 16) - y0) - ((s16)s2 - x0) * ((s16)(s1 >> 16) - y0) <= 0) continue;
+            }
+            st->front[pi >> 5] |= bit;
+            st->front_polys++;
+            st->front_verts += quad ? 4 : 3;
+        }
+    }
+    st->npolys = pi;
+    /* xy as projected; a vertex's OT entry: the group's (its bias from the frame's OT) plus SZ / 4 */
+    int base = (int)((const u32 *)n->ot - (const u32 *)psx_main_ot);
+    u32 nearest = ~0u;
+    for (int i = 0; i < nv; ++i) if ((u32)n->sz[i] < nearest) nearest = (u32)n->sz[i];
+    nearest >>= 2;
+    fg->depth0 = world_entry_depth(base + (int)nearest);
+    u32 *vw = st->verts + st->nverts;
+    for (int i = 0; i < nv; ++i) {
+        u32 xy = (u32)n->sxy[i], rel = ((u32)n->sz[i] >> 2) - nearest;
+        vw[i] = (xy & 0x7FF) | (xy >> 16 & 0x7FF) << 11 | (rel > 1023 ? 1023 : rel) << 22;
+    }
+    st->nverts += nv;
+    gxh_stats_fm = st->ngroups;
     return 1;
 }
 
-static inline s16 fm_sat16(s32 v) { return (s16)(v > 0x7FFF ? 0x7FFF : v < -0x8000 ? -0x8000 : v); }
-
-/* The end of the frame's walk: its groups' bone matrices into the scene's buffer */
-void psx_main_walk_end(void) {
-    if (!fm_npending) return;
-    Buffer *b = fm_buffer;
-    int bi = (int)(b - buffers);
-    FStore *st = fm_store[bi];
-    if (!st || b->soft || !place->field) { /* (the scene went software: its models are lost; rare) */
-        gxh_stats_fm |= 0x10000;
-        fm_npending = 0;
-        return;
-    }
-    st->gen = b->scene_gen; st->ngroups = 0; st->nbones = 0; st->nuses = 0; st->polys = 0;
-    for (int i = 0; i < fm_npending; ++i) {
-        const NativeFieldMesh *n = &fm_pending[i].m;
-        if (st->nbones + n->bone_count > FM_BONES) break;
-        const s16 *rt = (const s16 *)n->camera; /* MATRIX: m[3][3] s16, pad, t[3] s32 */
-        const s32 *rtt = (const s32 *)((const u8 *)n->camera + 20);
-        FGroup *fg = &st->groups[st->ngroups++];
-        fg->group = n->group; fg->packets = n->packets;
-        fg->base = (s16)((const u32 *)n->ot - (const u32 *)psx_main_ot);
-        fg->bone0 = (u16)st->nbones; fg->bone_count = (u16)n->bone_count; fg->h = (u16)n->geom_screen;
-        fg->ofx = fm_pending[i].ofx; fg->ofy = fm_pending[i].ofy;
-        const u16 *counts = *(const u16 *const *)(n->group + 0x14);
-        for (int k = 0; k < n->bone_count; ++k) {
-            FBone *fb = &st->bones[st->nbones++];
-            if (!counts[k]) continue;
-            const s16 *bm = (const s16 *)((const u8 *)n->bones + 32 * k);
-            const s32 *bt = (const s32 *)((const u8 *)n->bones + 32 * k + 20);
-            for (int r = 0; r < 3; ++r) {
-                for (int c = 0; c < 3; ++c)
-                    fb->m[r * 3 + c] = fm_sat16((rt[r * 3] * bm[c] + rt[r * 3 + 1] * bm[3 + c] + rt[r * 3 + 2] * bm[6 + c]) >> 12);
-                fb->t[r] = rtt[r] + ((rt[r * 3] * (s16)bt[0] + rt[r * 3 + 1] * (s16)bt[1] + rt[r * 3 + 2] * (s16)bt[2]) >> 12);
-            }
-        }
-    }
-    gxh_stats_fm = st->ngroups;
-    fm_npending = 0;
-}
-
 static FStore *scene_models(const Buffer *b) {
-    if (!b->slots || !fm_store[0]) return NULL;
-    FStore *st = fm_store[b - buffers];
+    if (!b->slots || !fm_ring[0]) return NULL;
+    FStore *st = fm_ring[b->scene_gen % 3];
     return st->ngroups && st->gen == b->scene_gen ? st : NULL;
-}
-
-/* A group's vertices projected with its bones' matrices into fm_sxy, fm_sz (the GTE's registers are the caller's
- * to keep) */
-static void fm_project(const FStore *st, const FGroup *fg) {
-    const u16 *counts = *(const u16 *const *)(fg->group + 0x14);
-    const u32 *v = *(const u32 *const *)(fg->group + 0x18);
-    psx_gte.c[24] = (u32)fg->ofx; psx_gte.c[25] = (u32)fg->ofy; psx_gte.c[26] = fg->h;
-    int k = 0;
-    for (int i = 0; i < fg->bone_count; ++i) {
-        int n = counts[i];
-        if (!n) continue;
-        const FBone *fb = &st->bones[fg->bone0 + i];
-        psx_gte.c[0] = (u16)fb->m[0] | (u32)fb->m[1] << 16; psx_gte.c[1] = (u16)fb->m[2] | (u32)fb->m[3] << 16;
-        psx_gte.c[2] = (u16)fb->m[4] | (u32)fb->m[5] << 16; psx_gte.c[3] = (u16)fb->m[6] | (u32)fb->m[7] << 16;
-        psx_gte.c[4] = (u16)fb->m[8];
-        psx_gte.c[5] = (u32)fb->t[0]; psx_gte.c[6] = (u32)fb->t[1]; psx_gte.c[7] = (u32)fb->t[2];
-        gte_rtpt_batch((const gte_u32 *)(v + 2 * k), n, (gte_u32 *)(fm_sxy + k), (gte_u32 *)(fm_sz + k));
-        k += n;
-    }
 }
 
 /* the scene's models' texture pages and CLUTs with their texels' bounds (plan_textures plans each) */
@@ -3433,6 +3410,8 @@ static void use_place(const Place *p) {
         int fit = ((uintptr_t)__psxovl_slot0_end - tail) / sizeof(Prim), first = (OVL0A_CODE_END - p->prims_at[0]) / sizeof(Prim);
         if (fit > first) fit = first;
         if (fit > MAX_PRIMS) fit = MAX_PRIMS;
+        /* (with the models native a scene records about half as many: the rest of the range holds their vertices) */
+        if (fit > FIELD_PRIMS_NATIVE) fit = FIELD_PRIMS_NATIVE;
         /* the first buffer leaves room for the block runs' tables after it */
         int room = (int)((OVL0A_CODE_END - p->prims_at[0] - RUN_TABLES) / (sizeof(Prim) + PRIM_TABLES));
         if (fit > room) fit = room;
@@ -3476,19 +3455,24 @@ static void use_place(const Place *p) {
 #ifdef PORT_FIELD_GX
     /* fields: the primitives' depths (note_depth) after the tables, where ovl_0a's code range has room (when the
      * second buffer is at slot 0's free end); else the scenes stay in drawing order */
-    fm_store[0] = fm_store[1] = NULL; fm_npending = 0;
+    for (int i = 0; i < 3; ++i) fm_ring[i] = NULL;
     if (p->field) {
         u8 *x = (u8 *)(((uintptr_t)(tables + PRIM_TABLES * prims_max) + 3) & ~(uintptr_t)3);
         u8 *end = psx_ram + p->at + OVL0A_CODE_END;
         if (x + 2u * prims_max * sizeof(u16) <= end) {
             for (int i = 0; i < 2; ++i) buffers[i].slots = (u16 *)x + i * prims_max;
-            /* and the native models' stores and projection scratch after them */
+            /* and the native models' ring with the room left (4 bytes a vertex) */
             u8 *m = (u8 *)(((uintptr_t)(x + 2u * prims_max * sizeof(u16)) + 3) & ~(uintptr_t)3);
-            if (m + 2 * sizeof(FStore) + 2 * (FM_VERTS + 3) * sizeof(u32) + FM_GROUPS * sizeof(FPending) <= end) {
-                fm_store[0] = (FStore *)m; fm_store[1] = fm_store[0] + 1;
-                fm_store[0]->ngroups = fm_store[1]->ngroups = 0;
-                fm_sxy = (u32 *)(fm_store[1] + 1); fm_sz = fm_sxy + FM_VERTS + 3;
-                fm_pending = (FPending *)(fm_sz + FM_VERTS + 3);
+            int cap = end > m + 3 * sizeof(FStore) ? (int)((end - m - 3 * sizeof(FStore)) / (3 * 4)) : 0;
+            if (cap >= 256) {
+                fm_cap = cap;
+                u32 *v = (u32 *)(m + 3 * sizeof(FStore));
+                for (int i = 0; i < 3; ++i) {
+                    fm_ring[i] = (FStore *)m + i;
+                    fm_ring[i]->gen = ~0u; fm_ring[i]->ngroups = 0;
+                    fm_ring[i]->verts = v;
+                    v += cap;
+                }
             }
         }
     }
@@ -3642,8 +3626,8 @@ static void field_frame(Buffer *b, int display_h) {
             if (prim_layer[k] == L_3D) { polys++; vertices += p->n; }
             if (prim_layer[k] == L_ADD) { adds++; add_area2 += prim_area2(p); }
         }
-        FStore *fst = scene_models(b); /* the native models (about half of their polygons face away) */
-        if (fst) { fm_uses(fst); polys += fst->polys / 2; vertices += fst->polys * 2; }
+        FStore *fst = scene_models(b); /* the native models (those facing the camera) */
+        if (fst) { fm_uses(fst); polys += fst->front_polys; vertices += fst->front_verts; }
         /* the exact layer costs software drawing in proportion to the additive primitives' area (a sixth of the
          * screen: field 2162's lamp glows took it from 27 to 40 ms on DSi): beyond that, the 3D approximation */
         if (adds && add_area2 > 2 * 320 * 224 / 6) {

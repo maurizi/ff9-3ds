@@ -69,9 +69,8 @@ typedef struct {
                                     * vertices (+0x18), polygon sources (+0x1C) */
     const unsigned char *packets;  /* this buffer's packets of the group */
     const unsigned int *ot;        /* the OT entry its depths count from (the frame's OT less its bias) */
-    const void *bones;             /* the model's bone matrices (MATRIX each) */
-    const void *camera;            /* the camera matrix (GameData.unk18) */
-    int bone_count, geom_screen;   /* (H: GameData.unkA) */
+    const int *sxy, *sz;           /* its vertices as fldmdl_projectMesh left them (g_vtxScreenXY, g_vtxScreenZ) */
+    int nverts;
     int draw_x, draw_y;            /* the frame's drawing area */
 } NativeFieldMesh;
 

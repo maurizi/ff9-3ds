@@ -73,10 +73,10 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     n.group = grp;
     n.packets = pkt;
     n.ot = (const unsigned int *)(gd->unk10[gd->unk8] - (s8)grp[0x13]);
-    n.bones = model->boneMatrices;
-    n.camera = &gd->unk18;
-    n.bone_count = model->model->boneCount;
-    n.geom_screen = gd->unkA;
+    n.sxy = g_vtxScreenXY;
+    n.sz = g_vtxScreenZ;
+    n.nverts = 0;
+    for (u32 i = 0; i < model->model->boneCount; ++i) n.nverts += ((u16 *)((WmModelGroup *)grp)->boneVertexCounts)[i];
     n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
     n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
     if (port_native_field_mesh(&n)) return;

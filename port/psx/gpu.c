@@ -571,9 +571,6 @@ void DrawPrim(void *p) {
     draw_packet(p);
 }
 
-/* the end of a walk of the main ordering table (gx_hybrid.c: the frame's native field models) */
-__attribute__((weak)) void psx_main_walk_end(void) {}
-
 static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
     unsigned int profile_start = port_profile_begin();
     /* Explicit bounds disambiguate stack links whose low 24 bits alias arena RAM. */
@@ -582,14 +579,10 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     /* ClearOTagR's empty entries each link to the word before: a run of them is stepped over by comparison
      * (both branches below would go to p - 1 for these) */
     const int ram_window = head_window == ((u32)psx_ram & 0xFF000000);
-    int main_walk = 0; /* (it passed the main ordering table's entries) */
     while (((u32)p & 0xFFFFFF) != OT_END) {
         if (ram_window && (unsigned char *)p > psx_ram && (unsigned char *)p < psx_ram + PSX_RAM_SIZE)
             while ((unsigned char *)p > psx_ram && *p == (((u32)(p - 1)) & 0xFFFFFF)) --p;
-        if ((unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n) {
-            psx_ot_slot = (unsigned int)((unsigned int *)p - psx_main_ot);
-            main_walk = 1;
-        }
+        if ((unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n) psx_ot_slot = (unsigned int)((unsigned int *)p - psx_main_ot);
         u32 addr = *p & 0xFFFFFF;
         if (((P_TAG *)p)->len) {
             draw_packet(p);
@@ -612,7 +605,6 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     if (drawsync_cb) {
         drawsync_owed = 1;
     }
-    if (main_walk) psx_main_walk_end();
     port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
 }
 void DrawOTag(u32 *p) { draw_ot(p, NULL, 0); }

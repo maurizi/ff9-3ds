@@ -15,6 +15,9 @@
 unsigned char psx_ram[PSX_RAM_SIZE] __attribute__((aligned(32)));
 
 static long frames;
+#ifdef PORT_PC_SAMPLER
+volatile u32 port_pc_frame; /* (pc_sampler.c counts from a frame) */
+#endif
 
 /* Keep each status row inside 31 columns: writing the final column wraps and scrolls the console. */
 static void status_row(int row, const char *fmt, ...) {
@@ -108,6 +111,9 @@ void plat_wait_frame(void) {
 #endif
     display_present();
     frames++;
+#ifdef PORT_PC_SAMPLER
+    port_pc_frame = (u32)frames;
+#endif
     port_profile_frame(g_gameState ? g_gameState[8] : ~0u,(unsigned int)frames);
 #ifdef PORT_CAPTURE_FRAME
     if(frames==PORT_CAPTURE_FRAME) {
@@ -120,6 +126,9 @@ void plat_wait_frame(void) {
         /* Diagnostic checkpoints freeze game time. Stop hardware playback too,
          * so waiting to save a state cannot inflate starvation counters. */
         port_audio_stop();
+#ifdef PORT_PC_SAMPLER
+        { extern volatile u32 port_pc_from_frame; port_pc_from_frame = ~0u; } /* (the wait for the state isn't the scene) */
+#endif
         status_row(19,"capture frame %ld",frames);
         for(;;) swiWaitForVBlank();
     }

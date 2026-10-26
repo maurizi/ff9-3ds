@@ -8,7 +8,11 @@
 #ifdef PORT_PC_LO  /* PCLO=ADDR PCSHIFT=N: a window of 2560 fine buckets from ADDR (one function's lines) */
 #define MAIN_LO PORT_PC_LO
 #define SHIFT PORT_PC_SHIFT
+#ifdef PORT_DS_MODE
+#define MAIN_BUCKETS 1280u /* (what DS mode's heap can spare: PCSHIFT=6 covers 80 KB) */
+#else
 #define MAIN_BUCKETS 2560u
+#endif
 #else
 #define MAIN_LO 0x02000000u
 #ifdef PORT_DS_MODE
@@ -19,7 +23,9 @@
 #define MAIN_BUCKETS ((0x022A0000u - MAIN_LO) >> SHIFT)
 #endif
 #define ITCM_LO 0x01000000u   /* (BlocksDS links ITCM here, __itcm_start) */
-#ifdef PORT_PC_LO
+#if defined(PORT_PC_LO) && defined(PORT_DS_MODE)
+#define ITCM_SHIFT 9
+#elif defined(PORT_PC_LO)
 #define ITCM_SHIFT 6  /* 64 bytes in a window build (2 KB of 32-bit counts): the interrupt dispatcher apart from its neighbours */
 #else
 #define ITCM_SHIFT SHIFT
@@ -32,7 +38,11 @@ u16 port_pc_main[MAIN_BUCKETS];
 u32 port_pc_itcm[ITCM_BUCKETS]; /* 32-bit: the VBlank wait and the interrupt dispatcher share a few buckets */
 extern u32 __sp_irq[];
 
+/* counting from this many frames (platform.c): CAPTURE_FRAME's second half, the scene without its loading */
+volatile u32 port_pc_from_frame;
+extern volatile u32 port_pc_frame;
 static void sample(void) {
+    if (port_pc_frame < port_pc_from_frame) return;
     u32 pc = __sp_irq[-1] - 4;
     port_pc_header[5]++;
     if (pc - MAIN_LO < (MAIN_BUCKETS << SHIFT)) { u16 *c = &port_pc_main[(pc - MAIN_LO) >> SHIFT]; if (*c != 0xFFFF) ++*c; }
@@ -89,6 +99,9 @@ void __wrap_swiWaitForVBlank(void) {
 }
 
 void port_pc_sampler_init(void) {
+#ifdef PORT_CAPTURE_FRAME
+    port_pc_from_frame = PORT_CAPTURE_FRAME / 2;
+#endif
     timerStart(1, ClockDivider_64, TIMER_FREQ_64(8000), sample);
 }
 #endif
