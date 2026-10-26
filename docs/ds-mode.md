@@ -591,6 +591,11 @@ disc 3's encounters without a story counter reach for battle data the disc doesn
 the disc 3 field fixtures now have `story=10000` (but d3_f2205, whose host reference was made without), and both
 reach frame 2000. Others stopped on fields their fixture doesn't have (617, 761, 1422).
 
+Fields 101-179 (the end of the list): 74 timed, 4 more reach frame 1500 inside a battle. d4_f3100 walked onto the
+world map without a story counter and its NULL writes reached the ITCM mirrored at address 0 (a jump to 4 from the
+IRQ handler); the disc 4 field fixtures now have `story=11100` (but d4_f2110), and it reaches frame 1500. So all 200
+fields of the walking sweep run on an original DS without a crash of the port's.
+
 ## 54 battles after the architecture levers (2026-10-25)
 
 The 24 bosses and the 30 random battles again on 0f71760 (UI drawn once a game frame, GTE register file in DTCM,
