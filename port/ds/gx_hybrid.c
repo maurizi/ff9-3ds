@@ -3302,6 +3302,8 @@ PORT_OVERLAY_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
             u32 bit = 1u << (pi & 31);
             st->front[pi >> 5] &= ~bit;
             if (pk[7] & 2) continue;
+            if (*(const u16 *)src >= nv || *(const u16 *)(src + 2) >= nv || *(const u16 *)(src + 4) >= nv ||
+                (quad && *(const u16 *)(src + 6) >= nv)) continue; /* (a vertex past the group's: not drawn) */
             if (!(src[flags_at] & 2)) {
                 u32 s0 = (u32)n->sxy[*(const u16 *)src], s1 = (u32)n->sxy[*(const u16 *)(src + 2)];
                 u32 s2 = (u32)n->sxy[*(const u16 *)(src + 4)];
