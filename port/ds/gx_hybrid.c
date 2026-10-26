@@ -1083,8 +1083,12 @@ static int log2_at_least(int v) {
 }
 
 static int movie_banks; /* banks B-D are a movie's (gxh_movie_banks): textures in bank A only */
+/* field: the background composite is a texture in bank C (the additive layer has bank A), drawn as one quad */
+static int bgc_texmode, bgc_quad, bgc_quad_h; /* (bgc_quad_h: the scene's display height) */
+#define BGC_UNIT0 128 /* bank C */
 static int allocate_units(int units) {
     for (int start = 0; start + units <= (movie_banks ? 64 : TEX_UNITS); start += units) {
+        if (bgc_texmode && start < BGC_UNIT0 + 64 && start + units > BGC_UNIT0) continue;
         int free = 1;
         for (int i = 0; i < units && free; ++i) if (unit_used[start + i]) free = 0;
         if (free) {
@@ -2667,6 +2671,25 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         polys++;
         vertices += 4;
     }
+    if (bgc_quad && place->field) { /* the background composite (bank C), behind everything */
+        const u32 tex = (u32)(BGC_UNIT0 * TEX_UNIT / 8) | 5u << 20 | 5u << 23 | 7u << 26; /* 256 x 256, direct */
+        const int qh = bgc_quad_h, th = qh * 4 / 5 * 16, qz = b->slots ? -32000 : -4000;
+        pack_begin();
+        pack(CMD_TEXIMAGE); put(tex); image = tex;
+        pack(CMD_COLOR); put(0x7FFF);
+        pack(CMD_BEGIN); put(1);
+        pack_end();
+        const s16 corner[4][2] = {{0, 0}, {320, 0}, {320, (s16)qh}, {0, (s16)qh}};
+        const u32 uv[4] = {0, 256 * 16, 256 * 16 | (u32)th << 16, (u32)th << 16};
+        for (int k = 0; k < 4; ++k) {
+            pack_begin();
+            pack(CMD_TEXCOORD); put(uv[k]);
+            pack(CMD_VTX16); put((u32)(u16)corner[k][0] | (u32)(u16)corner[k][1] << 16); put((u32)(u16)qz);
+            pack_end();
+        }
+        polys++;
+        vertices += 4;
+    }
     plan_drops(b);
     memset(light_cells, 0, sizeof light_cells);
     FStore *fst = scene_models(b);
@@ -4047,9 +4070,15 @@ PORT_OVERLAY_CODE(0a) static u32 bgc_hash(const Buffer *b, int display_h) {
 }
 
 /* the scene's PS1 frame buffer into bank A, a PS1 pixel per DS pixel at x * 5 / 4 (as the 3D scene samples them) */
+/* where the composite's rows go: bank A's bitmap (letterboxed), or bank C's texture (LCD while composing) */
+static inline u16 *bgc_target(int out_h, int *top) {
+    if (bgc_texmode) { *top = 0; return (u16 *)0x06840000; }
+    *top = (192 - out_h) / 2;
+    return (u16 *)BG_BMP_RAM(8);
+}
 PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void bgc_scale(const Buffer *b, int display_h) {
-    int h = display_h > 0 ? display_h : 224, out_h = h * 4 / 5, top = (192 - out_h) / 2;
-    u16 *band = scaled_block(), *bitmap = (u16 *)BG_BMP_RAM(8);
+    int h = display_h > 0 ? display_h : 224, out_h = h * 4 / 5, top;
+    u16 *band = scaled_block(), *bitmap = bgc_target(out_h, &top);
     for (int oy = 0; oy < out_h; oy += BLOCK) {
         int rows = out_h - oy < BLOCK ? out_h - oy : BLOCK;
         for (int r = 0; r < rows; ++r) {
@@ -4069,7 +4098,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void bgc_scale(const
 /* Rows [ry0, ry1] of the buffer only: the sprites over them drawn (clipped to them), the output rows that sample
  * only them scaled (the others keep theirs), the rows their clear value again. */
 PORT_OVERLAY_CODE(0a) static void bgc_compose_rows(Buffer *b, int display_h, int ry0, int ry1) {
-    int h = display_h > 0 ? display_h : 224, out_h = h * 4 / 5, top = (192 - out_h) / 2;
+    int h = display_h > 0 ? display_h : 224, out_h = h * 4 / 5, top;
     if (ry1 > b->h - 1) ry1 = b->h - 1;
     if (ry0 > ry1) return;
     Buffer rows = *b;
@@ -4080,7 +4109,7 @@ PORT_OVERLAY_CODE(0a) static void bgc_compose_rows(Buffer *b, int display_h, int
     int oy0 = (4 * ry0 + 4) / 5, oy1 = (4 * ry1 + 3) / 5; /* (output row oy samples row 5 oy / 4) */
     if (ry0 == 0) oy0 = 0;
     if (oy1 > out_h - 1) oy1 = out_h - 1;
-    u16 *band = scaled_block(), *bitmap = (u16 *)BG_BMP_RAM(8);
+    u16 *band = scaled_block(), *bitmap = bgc_target(out_h, &top);
     for (int oy = oy0; oy <= oy1; oy += BLOCK) {
         int n = oy1 + 1 - oy < BLOCK ? oy1 + 1 - oy : BLOCK;
         for (int r = 0; r < n; ++r) {
@@ -4169,8 +4198,12 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
     *polys -= back_polys;
     *vertices -= back_vertices;
     u32 hash = bgc_frame_hash; /* (field_frame's, this scene's) */
-    bank_a_as_bg(1);
-    back_mode(0);
+    if (!bgc_texmode) {
+        bank_a_as_bg(1);
+        back_mode(0);
+    } else {
+        vramSetBankC(VRAM_C_LCD); /* (as the uploads map it: before the 3D engine's next frame) */
+    }
     u32 key = (u32)display_h ^ b->clear << 12;
     if (!bgc.valid || bgc.tex != bgc_tex || bgc.key != key) {
         bgc_compose(b, display_h);
@@ -4185,10 +4218,17 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
     }
     bgc.valid = 1; bgc.hash = hash; bgc.tex = bgc_tex; bgc.key = key;
     memcpy(bgc.bands, bgc_bands_now, sizeof bgc.bands);
+    if (bgc_texmode) {
+        DC_FlushAll();
+        vramSetBankC(VRAM_C_TEXTURE_SLOT2);
+        *polys += 1; *vertices += 4; /* (its quad) */
+    }
     return 1;
 }
 
 PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
+    bgc_quad = 0;
+    bgc_quad_h = display_h > 0 ? display_h : 224;
     if (!b->soft && !soft_hold) {
         int polys = 0, vertices = 0, adds = 0, add_area2 = 0;
         for (int k = 0; k < b->count; ++k) {
@@ -4220,7 +4260,26 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         else if (bg_still >= 4) bgc_keep = bgc_keep > 1 ? bgc_keep : 1;
         else if (!bg_still) bgc_keep = bgc_keep > 1 ? bgc_keep - 1 : 0;
         else if (bgc_keep) --bgc_keep;
-        int composite = !adds && bgc_keep && bgc_use(b, fst, display_h, &polys, &vertices);
+        /* with an additive layer (bank A's), the composite goes to bank C as a texture, drawn as one quad: only for a
+         * scene past the 3D engine's limits (else all of it software), not for a still background (a scene whose
+         * additive primitives come and go would flip between the two and compose each time) */
+        int over = polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES;
+        if ((adds && over) != bgc_texmode) {
+            bgc_texmode = adds && over;
+            bgc.valid = 0;
+            if (bgc_texmode) {
+                for (int i = 0; i < MAX_REGIONS; ++i)
+                    if (regions[i].used && regions[i].unit < BGC_UNIT0 + 64 && regions[i].unit + regions[i].units > BGC_UNIT0)
+                        free_region(&regions[i]);
+                if (runs)
+                    for (int i = 0; i < MAX_RUNS; ++i)
+                        if (runs[i].flags && rows[runs[i].row].unit < BGC_UNIT0 + 64 &&
+                            rows[runs[i].row].unit + (rows[runs[i].row].fmt_units & 15) > BGC_UNIT0)
+                            free_run(i);
+            }
+        }
+        int composite = bgc_keep && (!adds || bgc_texmode) && bgc_use(b, fst, display_h, &polys, &vertices);
+        bgc_quad = composite && bgc_texmode;
         /* the 3D engine's polygon and vertex RAM (2048, 6144 a frame): a scene past them stays exact in software */
         if (polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) {
             gxh_stats_soft |= 8;
