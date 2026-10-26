@@ -2259,6 +2259,7 @@ typedef struct { u8 m, pad; u16 pi, next; } NativeRef; /* instance, polygon, the
 #define NO_REF 0xFFFF
 static u16 *native_heads; /* per main-OT entry: its newest native polygon (NO_REF: none), in ovl_0b's dead code */
 static NativeRef *native_refs;
+static u32 native_bits[(0x1010 + 31) / 32]; /* the entries with native polygons (the walk skips the rest at once) */
 
 /* a model's polygon pi: its type and source */
 static const u8 *model_poly(const MeshInst *mi, int pi, int *type) {
@@ -2280,6 +2281,7 @@ static int collect_native(Buffer *b) {
     int cap = at < POOL_BYTES ? (int)((POOL_BYTES - at) / sizeof(NativeRef)) : 0, n = 0;
     if (cap > NO_REF) cap = NO_REF;
     memset(native_heads, 0xFF, 0x1010 * sizeof *native_heads);
+    memset(native_bits, 0, sizeof native_bits);
     for (int m = 0; m < b->meshes; ++m) {
         const MeshInst *mi = mesh_at(b, m);
         int np = mi->kind == MESH_BG ? mi->count[0] + mi->count[1] : 0;
@@ -2306,6 +2308,7 @@ static int collect_native(Buffer *b) {
             if (n == cap) { gxh_stats_dropped++; continue; }
             native_refs[n] = (NativeRef){(u8)m, 0, (u16)pi, native_heads[e]}; /* (an entry's list starts at its newest) */
             native_heads[e] = (u16)n++;
+            native_bits[e >> 5] |= 1u << (e & 31);
         }
     }
     return n;
@@ -2387,8 +2390,11 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
          * primitive's fields); translucent_id keeps pointers to the buffer's */
         PrimCopy local;
         while (ri == NO_REF && ne >= 0) { /* the next entry, far to near, with native polygons */
+            u32 w = native_bits[ne >> 5] & (2u << (ne & 31)) - 1; /* (bits ne and below) */
+            if (!w) { ne = (ne & ~31) - 1; continue; }
+            ne = (ne & ~31) + 31 - __builtin_clz(w);
             ri = native_heads[ne];
-            erank = ri == NO_REF ? 0 : entry_rank(b, ne);
+            erank = entry_rank(b, ne);
             ne--;
         }
         if (ri != NO_REF && (k >= b->count || erank <= k)) {
