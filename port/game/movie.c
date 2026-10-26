@@ -35,6 +35,10 @@ static u32 fv_frame_of[2];
 static int fv_unavailable; /* this movie has no transcode (or decoder) */
 static int fv_now;         /* the frame being decoded comes from the transcode */
 static int fv_logged;      /* (the movie's start reported) */
+static int fv_mbg_unavailable; /* this movie has no transcode to play behind the field */
+static int fv_mbg;         /* the frame being decoded is a movie behind the field's (slices filled from the transcode) */
+static int fv_col;         /* its next slice's first column */
+static unsigned int fv_stp; /* its pixels' bit 15 (DecDCTin's mode) */
 
 static int in_buffer(const void *p) {
     return (const u8 *)PSX_PTR(p) == (const u8 *)PSX_PTR(g_mbgPlayer.mdecIn1);
@@ -58,10 +62,21 @@ static int fv_take(u8 *bs, u32 *out) {
     if (!fv_logged++)
         port_log("movie: LBA %d, %s\n", (int)g_mbgStream.baseSector, g_mbgRgb24 == 1 ? "24-bit" : "15-bit");
     fv_frame_of[idx] = 0;
-    if (g_mbgRgb24 != 1 || in1 != in0 + 0x10000) {
-        movie_fv_stop(); /* (a movie going on behind a field: the MDEC from here) */
+    if (in1 != in0 + 0x10000) {
+        movie_fv_stop();
+        movie_fv_mbg_stop();
         return 0;
     }
+    if (g_mbgRgb24 != 1) { /* behind the field: the CPU decodes it into the MDEC's slices */
+        movie_fv_stop();
+        if (!movie_fv_mbg_active() && !fv_mbg_unavailable &&
+            !movie_fv_mbg_start(in0, 0x20000, (unsigned int)g_mbgStream.baseSector))
+            fv_mbg_unavailable = 1;
+        if (!movie_fv_mbg_active()) return 0;
+        fv_frame_of[idx] = slot_frame(bs);
+        return fv_frame_of[idx] != 0;
+    }
+    movie_fv_mbg_stop();
     if (!movie_fv_active() && !fv_unavailable &&
         !movie_fv_start(in0, 0x20000, (unsigned int)g_mbgStream.baseSector)) {
         fv_unavailable = 1;
@@ -318,8 +333,10 @@ static int decode_request(u32 *dst, u32 words) {
 int o64_DecDCTReset(int mode) {
     if (mode == 0) {
         movie_fv_stop(); /* (a new movie) */
+        movie_fv_mbg_stop();
         fv_logged = 0;
         fv_unavailable = 0;
+        fv_mbg_unavailable = 0;
         fv_frame_of[0] = fv_frame_of[1] = 0;
         fv_now = 0;
         psx_mdec_env_init(&env, D_8019DEC8, D_8019DF4C);
@@ -334,9 +351,18 @@ int o64_DecDCTReset(int mode) {
 int o64_DecDCTin(u32 *buf, int mode) {
     buf = PSX_PTR(buf);
     u32 frame = fv_frame_of[in_buffer(buf)];
-    fv_now = frame && movie_fv_active();
+    fv_mbg = frame && movie_fv_mbg_active();
+    fv_now = frame && (movie_fv_active() || fv_mbg);
     if (fv_now) { /* busy until the player's slices are done, without data */
-        movie_fv_frame(frame);
+        if (fv_mbg) {
+            unsigned int t = port_profile_begin();
+            movie_fv_mbg_frame(frame); /* (one it can't decode shows the last again) */
+            port_profile_detail_end(PORT_PROFILE_MOVIE_MDEC, t);
+            fv_col = 0;
+            fv_stp = mode & 2 ? 0x8000u : 0;
+        } else {
+            movie_fv_frame(frame);
+        }
         in_rl = NULL;
         in_left = 0;
         in_busy = 1;
@@ -368,10 +394,17 @@ int o64_DecDCTout(u32 *buf, int words) {
         return 0; /* from the out callback: the loop below runs it */
     }
     out_running = 1;
-    psx_load_image_skip = fv_now;
+    psx_load_image_skip = fv_now && !fv_mbg;
     while (out_queued) {
         out_queued = 0;
-        if (fv_now) { /* the transcode's frame: only the slice chain */
+        if (fv_now) { /* the transcode's frame: only the slice chain (behind a field, its slices from it) */
+            if (fv_mbg) {
+                int w = g_mbgDecode.slice.w > 0 ? g_mbgDecode.slice.w : 16, h = (int)(out_words * 2) / w;
+                unsigned int t = port_profile_begin();
+                movie_fv_mbg_slice((u16 *)out_buf, fv_col, w, h, fv_stp);
+                port_profile_detail_end(PORT_PROFILE_MOVIE_FV, t);
+                fv_col += w;
+            }
             out_busy = 0;
             if (out_cb) out_cb();
             continue;
@@ -402,7 +435,7 @@ s32 o64_DecDCToutSync(s32 mode) {
 
 void o64_DecDCToutCallback(void (*func)()) {
     out_cb = (void (*)(void))func;
-    if (!func) movie_fv_stop(); /* (mbg_stop) */
+    if (!func) { movie_fv_stop(); movie_fv_mbg_stop(); } /* (mbg_stop) */
 }
 
 void o64_DecDCTinCallback(void (*func)()) {

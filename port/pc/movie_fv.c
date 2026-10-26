@@ -23,3 +23,26 @@ void movie_fv_stop(void) {
 int movie_fv_active(void) {
     return 0;
 }
+
+int movie_fv_mbg_start(void *work, unsigned int size, unsigned int lba) {
+    (void)work;
+    (void)size;
+    (void)lba;
+    return 0;
+}
+
+int movie_fv_mbg_frame(unsigned int frame) {
+    (void)frame;
+    return 0;
+}
+
+void movie_fv_mbg_slice(unsigned short *dst, int x, int w, int h, unsigned int stp) {
+    (void)dst; (void)x; (void)w; (void)h; (void)stp;
+}
+
+void movie_fv_mbg_stop(void) {
+}
+
+int movie_fv_mbg_active(void) {
+    return 0;
+}

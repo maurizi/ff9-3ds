@@ -1080,8 +1080,9 @@ static int log2_at_least(int v) {
     return n;
 }
 
+static int movie_banks; /* banks B-D are a movie's (gxh_movie_banks): textures in bank A only */
 static int allocate_units(int units) {
-    for (int start = 0; start + units <= TEX_UNITS; start += units) {
+    for (int start = 0; start + units <= (movie_banks ? 64 : TEX_UNITS); start += units) {
         int free = 1;
         for (int i = 0; i < units && free; ++i) if (unit_used[start + i]) free = 0;
         if (free) {
@@ -3910,6 +3911,7 @@ void gxh_enable(int on) {
         last_shown = NULL;
         videoSetMode(MODE_5_3D);
         vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_TEXTURE, VRAM_C_TEXTURE, VRAM_D_TEXTURE);
+        if (movie_banks) { vramSetBankB(VRAM_B_LCD); vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); }
         bank_a_bg = 0;
         bank_a_add = 0; /* (back_mode 0) */
         REG_BLDCNT = place->field ? BLEND_ALPHA | BLEND_SRC_BG0 | BLEND_DST_BG3 : 0;
@@ -4281,16 +4283,17 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     if (runs) for (int i = 0; i < RUN_ROWS; ++i) gxh_stats_units += rows[i].fmt_units & 15;
     if (gxh_stats_units > gxh_stats_units_peak) gxh_stats_units_peak = gxh_stats_units;
     u32 saved = 0;
-    if (place->field && bank_a_bg) { vramSetBankB(VRAM_B_LCD); vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); }
-    else saved = vramSetPrimaryBanks(VRAM_A_LCD, VRAM_B_LCD, VRAM_C_LCD, VRAM_D_LCD);
+    if (place->field && bank_a_bg) {
+        if (!movie_banks) { vramSetBankB(VRAM_B_LCD); vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); }
+    } else saved = vramSetPrimaryBanks(VRAM_A_LCD, VRAM_B_LCD, VRAM_C_LCD, VRAM_D_LCD);
     vramSetBankF(VRAM_F_LCD);
     vramSetBankG(VRAM_G_LCD);
     BB(0x47580002, 0);
     upload();
     BB(0x47580003, 0);
     if (place->field && bank_a_bg) {
-        vramSetBankB(VRAM_B_TEXTURE_SLOT1); vramSetBankC(VRAM_C_TEXTURE_SLOT2); vramSetBankD(VRAM_D_TEXTURE_SLOT3);
-    } else vramRestorePrimaryBanks(saved);
+        if (!movie_banks) { vramSetBankB(VRAM_B_TEXTURE_SLOT1); vramSetBankC(VRAM_C_TEXTURE_SLOT2); vramSetBankD(VRAM_D_TEXTURE_SLOT3); }
+    } else vramRestorePrimaryBanks(saved); /* (B-D as they were: a movie's LCD) */
     vramSetBankF(VRAM_F_TEX_PALETTE_SLOT0);
     vramSetBankG(VRAM_G_TEX_PALETTE_SLOT1);
     int h = display_h > 0 ? display_h : 224;
@@ -4428,6 +4431,26 @@ static int untouched(const Buffer *b, int x, int y, int w, int h) {
 /* FNV-1a's prime, read at run time: as a constant the compiler multiplies by shifts and adds (9 instructions) */
 static volatile const u32 fnv_prime = 16777619u;
 
+/* A movie behind the field (movie_fv.c: a 15-bit MBG, decoded by the CPU) takes banks B-D as LCD for its frames: the
+ * field stays in software meanwhile (its mask bits put it there anyway), its textures in bank A, and the ones in B-D
+ * are given up. The ramp's texels at the end of D are the movie's to leave alone (it uses none of the last 2 KB). */
+int gxh_movie_banks(int take) {
+    if (!active || !place->field) take = 0;
+    if (take == movie_banks) return take;
+    movie_banks = take;
+    if (take) {
+        for (int i = 0; i < MAX_REGIONS; ++i)
+            if (regions[i].used && regions[i].unit >= 64) free_region(&regions[i]);
+        if (runs)
+            for (int i = 0; i < MAX_RUNS; ++i) if (runs[i].flags && rows[runs[i].row].unit >= 64) free_run(i);
+        if (soft_hold < 60) soft_hold = 60;
+        vramSetBankB(VRAM_B_LCD); vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD);
+    } else {
+        vramSetBankB(VRAM_B_TEXTURE_SLOT1); vramSetBankC(VRAM_C_TEXTURE_SLOT2); vramSetBankD(VRAM_D_TEXTURE_SLOT3);
+    }
+    return take;
+}
+
 /* Field, while textures don't fit (soft_hold): the GPU goes straight to the software renderer (the hybrid's per-
  * primitive bookkeeping costs 2 us a primitive), and each new frame shown is scaled into bank A; the hybrid takes the
  * primitives again when the hold ends. */
@@ -4440,6 +4463,7 @@ static void present_direct(const PsxDisplayInfo *d) {
     bank_a_as_bg(1);
     back_mode(0);
     scale_back(b, d->h);
+    if (movie_banks && soft_hold < 2) soft_hold = 2; /* (software while a movie has banks B-D) */
     if (soft_hold && --soft_hold) return;
     direct_soft = 0; /* the hybrid again: the buffers' next draws start scenes */
     gp0_backend = &hybrid_backend;

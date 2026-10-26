@@ -31,6 +31,8 @@ def main():
     p.add_argument('--out', type=Path, default=ROOT / 'build/fmv')
     p.add_argument('--only', help='only movies whose name contains this')
     p.add_argument('--force', action='store_true', help='re-encode existing outputs')
+    p.add_argument('--lambda', dest='lam', type=int, help='the encoder\'s trellis rate weight (its default 200; lower keeps '
+                                         'more detail, larger files): an encoder taking FV_LAMBDA')
     a = p.parse_args()
     out = a.out.resolve()
     if not (out.is_relative_to(ROOT / 'build') or out.is_relative_to(ROOT / 'ff9ds')):
@@ -62,7 +64,8 @@ def main():
         if export.wait() or ' bad 0' not in report:
             sys.exit(f'{name}: {report}')
         tmp = fv.with_suffix('.tmp')
-        subprocess.run(['docker', 'run', '--rm', '-t', '-u', f'{os.getuid()}:{os.getgid()}', '-v', f'{ENCODER}:/enc:ro',
+        subprocess.run(['docker', 'run', '--rm', '-t', '-u', f'{os.getuid()}:{os.getgid()}'] +
+                       (['-e', f'FV_LAMBDA={a.lam}'] if a.lam else []) + ['-v', f'{ENCODER}:/enc:ro',
                         '-v', f'{work}:/w', '-w', '/w', 'fvenc', 'dotnet', '/enc/FastVideoDSEncoder.dll', 'movie.mkv',
                         'movie.fv'], check=True, stdout=subprocess.DEVNULL)
         (work / 'movie.fv').rename(tmp)

@@ -28,6 +28,7 @@
 #include "platform.h"
 #include "psx_runtime.h"
 #include "profile.h"
+#include "fv_mc.h"
 
 int psx_cd_disc(void);
 
@@ -47,6 +48,9 @@ int psx_cd_disc(void);
 #define RESIDUAL ((u8 *)0x06860000)          /* bank D, on into E */
 #define LIST ((u32 *)0x06884000)             /* bank E, after the residual's 138 KB */
 #define LIST_MAX (0x06890000 - 0x06884000)
+/* where load_blob puts the list's head and points the blob's list at (LIST, or a movie behind a field's) */
+static u32 *list_base = LIST;
+static u32 list_room = LIST_MAX;
 #define MAX_KEYS 512
 /* (what only a playing movie runs goes in the player's overlay, ovl_64: the resident part is the VBlank, the idle
  * step and stopping) */
@@ -228,7 +232,7 @@ MOVIE_CODE static u32 load_blob(u8 *work, u32 size) {
     if (!f) return 0;
     BlobHeader h;
     u32 image = 0;
-    if (fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "FVBL", 4) && h.list <= LIST_MAX &&
+    if (fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, "FVBL", 4) && h.list <= list_room &&
         h.image + (h.nrel + h.nlist) * 4 <= size) {
         /* (the relocations and the list's head read in at the end, where frames go later; the head copied to VRAM
          * by words: VRAM ignores byte writes) */
@@ -236,11 +240,11 @@ MOVIE_CODE static u32 load_blob(u8 *work, u32 size) {
         u32 *head = rel - (h.prefix + 3) / 4;
         if ((u8 *)head >= work + h.image && fread(rel, 4, h.nrel + h.nlist, f) == h.nrel + h.nlist &&
             fread(work, 1, h.image, f) == h.image && fread(head, 1, h.prefix, f) == h.prefix) {
-            for (u32 i = 0; i < (h.prefix + 3) / 4; i++) LIST[i] = head[i];
+            for (u32 i = 0; i < (h.prefix + 3) / 4; i++) list_base[i] = head[i];
             for (u32 i = 0; i < h.nrel + h.nlist; i++) {
                 if (rel[i] > h.image - 4) break;
                 u32 *w = (u32 *)(work + rel[i]);
-                *w += i < h.nrel ? (u32)work : (u32)LIST - 0x10000000u;
+                *w += i < h.nrel ? (u32)work : (u32)list_base - 0x10000000u;
             }
             image = h.image;
             list_bytes = h.list;
@@ -558,6 +562,8 @@ MOVIE_CODE int movie_fv_start(void *work, unsigned int size, unsigned int lba) {
     vram_cr[4] = 0x80;
     u8 *w = (u8 *)(((u32)work + 31) & ~31u);
     size -= (u32)(w - (u8 *)work);
+    list_base = LIST;
+    list_room = LIST_MAX;
     u32 image = load_blob(w, size);
     u32 nkeys = header.keys < MAX_KEYS ? header.keys : MAX_KEYS;
     u32 used = (image + 31) & ~31u;
@@ -634,4 +640,174 @@ void movie_fv_stop(void) {
     for (int b = 0; b < 5; b++) vram_cr[b] = saved_cr[b];
     REG_BLDCNT = saved_bldcnt;
     display_movie_release();
+}
+
+/* ---- movies behind a field (a 15-bit MBG) ------------------------------------------------------------------
+ *
+ * The field draws over the movie's frames in PS1 VRAM with the GPU's mask bits, so the scene stays in software: the
+ * player's slice chain runs as with the MDEC (its mask, its uploads), each slice filled from the transcode's frame
+ * scaled back up to the PS1's 320 columns, instead of the VLC and the MDEC. The 3D engine is the field's, so the
+ * prediction is the CPU's (fv_mc.c, as the encoder models the 3D engine's); the decoder takes banks B-D as LCD
+ * (gx_hybrid.c: gxh_movie_banks): two frames, the residual and the display list, which the vectors fill. A frame is
+ * decoded when the player starts it (synchronously: the slices follow at once). */
+#define MBG_FRAME_BYTES (256 * (TOP + MOVIE_H) * 2)                 /* 0x17000 */
+#define MBG_BUF(i) ((u16 *)(0x06820000 + MBG_FRAME_BYTES * (i)))     /* B, into C */
+#define MBG_PIXELS(i) (MBG_BUF(i) + TOP * 256)
+#define MBG_RESIDUAL ((u8 *)(0x06820000 + 2 * MBG_FRAME_BYTES))     /* 132 KB, into D */
+#define MBG_LIST ((u32 *)0x06870000)                                 /* D, before the hybrid's ramp at its end */
+#define MBG_LIST_MAX (0x0687F800 - 0x06870000)
+
+__attribute__((weak)) int gxh_movie_banks(int take) { (void)take; return 0; }
+
+static int mbg_active, mbg_ref = -1, mbg_latest = -1;
+static u16 mbg_col_x[320]; /* PS1 column -> the transcode's */
+static u8 mbg_row_y[256];  /* PS1 row -> the transcode's */
+static int mbg_rows;       /* the PS1 frame's height the rows were made for */
+unsigned int movie_fv_mbg_stats[4]; /* (frames decoded, key frames, jumps, slices) */
+
+/* Decode frame n into the buffer that isn't the reference; it becomes the reference. */
+MOVIE_CODE static int mbg_decode(int n) {
+    const u16 *src = read_frame(n, 0);
+    if (!src) return 0;
+    int t = mbg_ref < 0 ? 0 : mbg_ref ^ 1;
+    unsigned int pt = port_profile_begin();
+    if (*src >> 15) {
+        if (mbg_ref < 0 || mbg_latest != n - 1) { port_profile_detail_end(PORT_PROFILE_MOVIE_FV, pt); return 0; }
+        const u16 *rest = fv->vectors(dec, src);
+        fv_mc_predict(MBG_PIXELS(mbg_ref), MBG_PIXELS(t), fv->list_a + 1, dec->list_b, MOVIE_H, 256 - MOVIE_H - TOP);
+        fv->dcts(dec, rest, MBG_RESIDUAL);
+        DC_FlushAll(); /* (as after the 3D engine's capture: finish reads them behind the cache) */
+        fv->finish(dec, MBG_RESIDUAL, MBG_PIXELS(t));
+    } else {
+        fv->decode_i(dec, src, (u8 *)MBG_PIXELS(t));
+        movie_fv_mbg_stats[1]++;
+    }
+    u32 *buf = (u32 *)MBG_BUF(t); /* (its first row above it: the prediction's top clamp reads it) */
+    for (int r = 0; r < TOP; ++r)
+        for (int i = 0; i < 128; ++i) buf[r * 128 + i] = buf[TOP * 128 + i];
+    port_profile_detail_end(PORT_PROFILE_MOVIE_FV, pt);
+    mbg_ref = t;
+    mbg_latest = n;
+    movie_fv_mbg_stats[0]++;
+    return 1;
+}
+
+/* The player starts STR frame `frame` (1-based): decode up to it (from its key frame when it's behind or far ahead) */
+MOVIE_CODE int movie_fv_mbg_frame(unsigned int frame) {
+    if (!mbg_active) return 0;
+    int n = (int)frame - 1;
+    if (n == mbg_latest) return 1;
+    if (n < mbg_latest || n > mbg_latest + 8 || mbg_ref < 0) {
+        u32 k = 0;
+        for (u32 i = 0; i < header.keys && i < MAX_KEYS; i++)
+            if ((int)keys[i].frame <= n) k = i;
+        mbg_ref = -1;
+        mbg_latest = (int)keys[k].frame - 1;
+        movie_fv_mbg_stats[2]++;
+    }
+    vram_cache(1); /* (only while decoding: the hybrid writes VRAM through LCD too, uncached) */
+    int ok = 1;
+    while (ok && mbg_latest < n) ok = mbg_decode(mbg_latest + 1);
+    vram_cache(0);
+    return ok;
+}
+
+/* Columns [x, x + w) of the PS1 frame, `h` rows of them, row by row into `dst` (an MDEC slice: 15-bit, `stp` its
+ * bit 15), from the current frame: the transcode is the PS1 frame area-scaled to 256 x 179 less its first row and its
+ * last two (tools/fmv_transcode.py), so a PS1 pixel takes the transcode's pixel over its centre. */
+MOVIE_CODE __attribute__((target("arm"))) void movie_fv_mbg_slice(u16 *dst, int x, int w, int h, unsigned int stp) {
+    if (!mbg_active || mbg_ref < 0) return;
+    if (h != mbg_rows) {
+        /* The display scales the PS1 frame back down by taking pixels 0-3 of every 5 (display_scale.c: output pixel
+         * o from source o * 5 / 4), so source c takes the transcode's pixel (4c + 3) / 5: the one the display shows
+         * there (the fifth of each five, which it skips, repeats the fourth). Rows likewise, the transcode's being
+         * the 179 scaled ones less the first (and the last two). */
+        for (int i = 0; i < 320; ++i) mbg_col_x[i] = (u16)((4 * i + 3) / 5);
+        for (int r = 0; r < h && r < 256; ++r) {
+            int y = (h == 224 ? (4 * r + 3) / 5 : (2 * r + 1) * 179 / (2 * h)) - 1;
+            mbg_row_y[r] = (u8)(y < 0 ? 0 : y > MOVIE_H - 1 ? MOVIE_H - 1 : y);
+        }
+        mbg_rows = h;
+    }
+    if (h > 256) h = 256;
+    u16 col[32]; /* (the slice's columns: 16 in the 15-bit mode) */
+    if (w > 32) w = 32;
+    for (int i = 0; i < w; ++i) col[i] = mbg_col_x[x + i < 320 ? x + i : 319];
+    const u16 *frame = MBG_PIXELS(mbg_ref);
+    const u32 bits = stp | stp << 16;
+    vram_cache(1); /* (a slice reads a column of rows: uncached, VRAM's reads cost most of it) */
+    u32 *out = (u32 *)dst; /* (an MDEC slice: word aligned, an even width) */
+    for (int r = 0; r < h; ++r) {
+        const u16 *row = frame + mbg_row_y[r] * 256;
+        for (int i = 0; i < w; i += 2)
+            *out++ = (((u32)row[col[i]] | (u32)row[col[i + 1]] << 16) & 0x7FFF7FFFu) | bits;
+    }
+    vram_cache(0);
+    movie_fv_mbg_stats[3]++;
+}
+
+int movie_fv_mbg_active(void) {
+    return mbg_active;
+}
+
+MOVIE_CODE int movie_fv_mbg_start(void *work, unsigned int size, unsigned int lba) {
+    if (mbg_active) movie_fv_mbg_stop();
+    if (active) movie_fv_stop();
+    char path[64];
+    snprintf(path, sizeof path, "%s/fmv/d%d/%u.fv", plat_data_dir(), psx_cd_disc(), lba);
+    file = fopen(path, "rb");
+    if (!file) return 0;
+    if (fread(&header, sizeof header, 1, file) != 1 || header.signature != 0x53445646 || header.width != MOVIE_W ||
+        header.height != MOVIE_H || !header.keys || !gxh_movie_banks(1)) {
+        fclose(file);
+        file = NULL;
+        return 0;
+    }
+    u8 *w = (u8 *)(((u32)work + 31) & ~31u);
+    size -= (u32)(w - (u8 *)work);
+    list_base = MBG_LIST;
+    list_room = MBG_LIST_MAX;
+    u32 image = load_blob(w, size);
+    u32 nkeys = header.keys < MAX_KEYS ? header.keys : MAX_KEYS;
+    u32 used = (image + 31) & ~31u;
+    if (!image || used + sizeof(Decoder) + nkeys * sizeof(FvKey) + 72 * 1024 > size ||
+        fread(w + used + sizeof(Decoder), sizeof(FvKey), nkeys, file) != nkeys) {
+        port_log("movie: no FastVideoDS decoder for %s\n", path);
+        fclose(file);
+        file = NULL;
+        gxh_movie_banks(0);
+        return 0;
+    }
+    dec = (Decoder *)(w + used);
+    keys = (FvKey *)(w + used + sizeof(Decoder));
+    data = (u8 *)(((u32)(keys + nkeys) + 31) & ~31u);
+    data_max = (u32)(w + size - data);
+    data_half_max = (data_max / 2) & ~31u;
+    data_half[0] = data;
+    data_half[1] = data + data_half_max;
+    file_next = 1 << 30;
+    fv->init(dec);
+    dec->y_blocks = MOVIE_H / 8;
+    dec->tex_y_offset = (256 - MOVIE_H - TOP) << 1;
+    u32 *dl = block_list(fv->list_a, 0);
+    *dl++ = FIFO_COMMAND_PACK(FIFO_END, FIFO_POLY_FORMAT, FIFO_TEX_FORMAT, FIFO_BEGIN);
+    *dl++ = 0;
+    *dl++ = 0;
+    *dl++ = GL_TRIANGLES;
+    dec->list_b = dl + 1;
+    dl = block_list(dl, 0);
+    list_bytes = (u32)dl - (u32)fv->list;
+    mbg_ref = mbg_latest = -1;
+    mbg_rows = 0;
+    mbg_active = 1;
+    port_log("movie: %s behind the field, %u frames\n", path, (unsigned int)header.frames);
+    return 1;
+}
+
+void movie_fv_mbg_stop(void) {
+    if (!mbg_active) return;
+    mbg_active = 0;
+    fclose(file);
+    file = NULL;
+    gxh_movie_banks(0);
 }

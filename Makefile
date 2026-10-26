@@ -848,6 +848,11 @@ $(BUILD)/tests/fv_bench_itcm.elf: tests/fmv/fv_bench.c $(addprefix $(BUILD)/test
 # (the CPU's motion compensation checked against the 3D engine's, frame by frame)
 $(BUILD)/tests/fv_bench_mc.elf: tests/fmv/fv_bench.c port/ds/fv_mc.c port/include/fv_mc.h $(addprefix $(BUILD)/tests/fv/,fvDecoder_asm.o fvConst_asm.o fvConst.o fvMcData.o fvDecoder.o)
 	arm-none-eabi-gcc $(FV_DS_FLAGS) -DFV_BENCH_CPU_MC $^ -L$(BLOCKSDS)/libs/libnds/lib -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+# (P-frames decoded by the CPU alone, the prediction written into the target bank: as movies behind a field)
+$(BUILD)/tests/fv_bench_cpu.elf: tests/fmv/fv_bench.c port/ds/fv_mc.c port/include/fv_mc.h $(addprefix $(BUILD)/tests/fv/,fvDecoder_asm.o fvConst_asm.o fvConst.o fvMcData.o fvDecoder.o)
+	arm-none-eabi-gcc $(FV_DS_FLAGS) -DFV_BENCH_CPU_FULL $^ -L$(BLOCKSDS)/libs/libnds/lib -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/fv_bench_cpu.nds: $(BUILD)/tests/fv_bench_cpu.elf
+	$(NDSTOOL) -c $@ -7 $(BLOCKSDS)/sys/default_arm7/arm7.elf -9 $< -b $(BLOCKSDS)/sys/icon.bmp "FV CPU decode;ARM9;FastVideoDS"
 $(BUILD)/tests/fv_bench_mc.nds: $(BUILD)/tests/fv_bench_mc.elf
 	$(NDSTOOL) -c $@ -7 $(BLOCKSDS)/sys/default_arm7/arm7.elf -9 $< -b $(BLOCKSDS)/sys/icon.bmp "FV MC check;ARM9;FastVideoDS"
 $(BUILD)/tests/fv_bench_itcm.nds: $(BUILD)/tests/fv_bench_itcm.elf

@@ -17,6 +17,7 @@
 #include "fv_mc.h"
 
 static fv_decoder_asm_t dec;
+volatile u32 frames; /* (frames decoded: tools/ds_profile.py waits on it) */
 static fv_header_t header;
 static u8 *data;
 static u32 dl_length;
@@ -160,8 +161,19 @@ int main(void) {
         DC_FlushRange(data, bytes);
         u32 t0 = ticks(), cpu = 0;
         if (fv_frameIsP((const u16 *)data)) {
+            const u16 *p;
+#ifdef FV_BENCH_CPU_FULL
+            /* the whole P-frame by the CPU: its prediction into the target bank (as movies behind a field do) */
+            p = fv_decodePFrameVectors(&dec, (const u16 *)data);
+            fv_mc_predict(bank_lcd(ref) + TOP * 256, bank_lcd(tgt) + TOP * 256, (const u32 *)fv_gMcGxCmdBufA + 1,
+                          dec.dlB, height, 256 - height - TOP);
+            cpu += ticks() - t0;
+            if (0) {
+#else
+            if (1) {
+#endif
             vram_cr[ref] = 0x83; /* the reference as texture slot 0 */
-            const u16 *p = fv_decodePFrameVectors(&dec, (const u16 *)data);
+            p = fv_decodePFrameVectors(&dec, (const u16 *)data);
             cpu += ticks() - t0;
             DC_FlushRange(fv_gMcGxCmdBuf, dl_length);
             /* (from the blocks' polygon setup: the list's head first draws a black strip over the top rows, which the
@@ -201,6 +213,7 @@ int main(void) {
                 }
             if (bad) { mc_bad_frames++; mc_bad_pixels += bad; }
 #endif
+            }
             u32 t1 = ticks();
             fv_decodePFrameDcts(&dec, p, (u8 *)VRAM_D);
             DC_FlushAll();
@@ -219,6 +232,7 @@ int main(void) {
         if (shown >= 0) vram_cr[shown] = 0x80;
         if (ref >= 0) { vram_cr[ref] = 0x81; shown = ref; } /* (one frame behind: the reference is shown now) */
         ref = tgt;
+        frames = n + 1;
         total += cpu;
         if (cpu > worst) worst = cpu;
         if (n % 30 == 29)

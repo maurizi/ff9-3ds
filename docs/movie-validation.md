@@ -468,6 +468,28 @@ On the original DS the CPU prediction takes 14.4 ms a frame. Most of that is cac
 MBG costs about 36 ms a movie frame, about 9 ms per VBlank. MBG scenes also need the field itself faster: d2_f1464's
 field already costs about 28 ms per VBlank without the movie.
 
+### Step 2: MBGs behind a field from their transcodes (2026-10-26)
+
+A 15-bit MBG plays from its transcode now (`movie_fv_mbg_*`, port/ds/movie_fv.c). The field draws over the movie's
+frames in PS1 VRAM with the GPU's mask bits, so the scene stays in software, and the player's slice chain runs as
+with the MDEC (its mask, its LoadImage): only the VLC and the MDEC are replaced, each slice filled from the decoded
+frame. The 3D engine stays the field's, so the decoder is the CPU's (step 1's prediction, then the blob's residual
+and finish), and it takes banks B-D as LCD while the movie plays (`gxh_movie_banks`: the field stays in software,
+its textures in bank A): two frames, the residual and the display list the vectors fill.
+
+The slices scale the 256-wide frame back up to the PS1's 320 columns so that the display's own 5:4 scaling, which
+keeps pixels 0-3 of every five, shows the transcode's pixels exactly: source column c takes transcode pixel
+(4c + 3) / 5, rows likewise (the transcode is the area-scaled 179 rows less the first and the last two). Placed
+at the five's centre instead, the display dropped a transcode pixel and doubled another in every four, both ways:
+the picture turned to blocks.
+
+The transcodes' quality: the encoder's trellis weighs rate against distortion with a fixed 200; `fmv_transcode.py
+--lambda 30` (an encoder build taking `FV_LAMBDA`) keeps visibly more of the trees' detail for 1.7 times the size
+(MBG108 1.1 -> 1.8 MB) and the same decoding time. (Its q is only written into the header.)
+
+d2_f1464 at frame 900 (MBG108 playing), original DS: 90.6 ms per VBlank with the VLC and the MDEC (76 of it), 26.3
+from the transcode: the decoding 7.6 (30 ms a movie frame), the slices 3.8, the field in software the rest.
+
 ## Still incomplete
 
 Not yet compared frame-by-frame with a PSX capture of the same movie (timing,
