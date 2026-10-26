@@ -397,8 +397,14 @@ The PS1 takes 16.7: the intro now plays in real time. A P-frame's residual decod
 needs neither the prediction nor the reference, so it runs as soon as the previous frame is finished; only adding
 it to the captured prediction (`finish`) waits for the capture. At 2398: residual decoding 2.9 ms, the rest of the
 decoder 4.9, SPU 3.5 (its ADPCM blocks now decoded a word of nibbles at a time; the unused noise generator no
-longer ticks in hardware mode), disc sectors 1.0. The display mostly runs one movie frame behind the decoder's
-newest, since a frame can't be shown while it is the next one's reference.
+longer ticks in hardware mode), disc sectors 1.0.
+
+Frames show when the player shows them: a frame can't be shown while it is the next one's reference, so the player's
+frame n needs n+1 decoded. The first frames build that one-frame lead (the player waits for it) and the decoding
+keeps it (frame n+1 already decoded at 519 of 522 frames by 2398, 16.74 ms per VBlank). Keeping it needed the
+chain from one frame's finish to the next's within four VBlanks: the capture is armed with the swap when the swap
+is written mid-frame (it starts at the next line 0, after the swap), and the swap waits for its triangles' DMA
+instead of retrying later.
 
 ## Still incomplete
 

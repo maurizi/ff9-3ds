@@ -114,6 +114,7 @@ static u8 saved_cr[5];
 unsigned int movie_fv_stats[6];
 /* (post-mortems: waits in advance, in finish_frame, for an I-frame's flip; then latest - frame + 4 at each call) */
 unsigned int movie_fv_waits[3], movie_fv_ahead[8];
+
 static u16 saved_bldcnt;
 
 /* ---- MPU region 2 over LCD VRAM (A-I at 0x06800000, 1 MB): cacheable, write-buffered, read/write ------------- */
@@ -334,17 +335,29 @@ MOVIE_CODE static void finish_frame(void) {
 
 /* The held P-frame's swap, once its reference is complete: the reference as the texture, a bank to capture into. */
 MOVIE_CODE static int swap_frame(void) {
-    if (geo_frame < 0 || target >= 0 || latest != geo_frame - 1 || ref < 0 || (DMA_CR(1) & DMA_BUSY)) return 0;
+    if (geo_frame < 0 || target >= 0 || latest != geo_frame - 1 || ref < 0) return 0;
     int b = free_bank(1);
     if (b < 0) return 0;
+    while (DMA_CR(1) & DMA_BUSY) {} /* (the triangles' last words: the swap goes after them) */
     vram_cr[ref] = 0x83; /* texture slot 0 */
     if (b != shown) vram_cr[b] = 0x80;
     target = b;
     target_frame = geo_frame;
     target_rest = geo_rest;
     geo_frame = -1;
-    GFX_FLUSH = 0; /* the swap at the next VBlank; the capture at the first VBlank that finds the engine idle */
-    phase = LISTED;
+    /* The swap comes at the next VBlank. Written well before it (the engine has a few commands left at most), the
+     * capture can be armed now: it starts at the next line 0, after that swap. Otherwise the VBlank interrupt arms
+     * it at the first VBlank that finds the engine idle (swapped). */
+    int irq = enterCriticalSection();
+    GFX_FLUSH = 0;
+    if (REG_VCOUNT < 176) {
+        REG_DISPCAPCNT = DCAP_ENABLE | DCAP_MODE(DCAP_MODE_A) | DCAP_BANK(target) | DCAP_SIZE(DCAP_SIZE_256x192) |
+                         DCAP_SRC_A(DCAP_SRC_A_3DONLY);
+        phase = CAPTURING;
+    } else {
+        phase = LISTED;
+    }
+    leaveCriticalSection(irq);
     return 1;
 }
 
@@ -411,14 +424,15 @@ MOVIE_CODE static void show(int n) {
 }
 
 /* Whatever can be done now: finish the captured P-frame, swap the next one in, show the player's frame, send the
- * triangles of the one after (up to two ahead of the one shown). Waits for the 3D engine only if `block` and the
- * frame to show isn't decoded at all: one decoded but still the reference shows a frame late rather than stopping
- * the game, whose work (sound above all) fills the time the 3D engine takes. */
+ * triangles of the one after (up to two ahead of the one shown). With `block`, waits for the 3D engine until the
+ * frame after the one to show is decoded too (the frame to show can only leave the reference role then): at the
+ * movie's start that builds the one-frame lead the decoding then keeps, so frames show when the player shows them. */
 MOVIE_CODE static void advance(int block) {
     int last = (int)header.frames - 1;
+    int need = show_want + 1 < last ? show_want + 1 : last;
     for (;;) {
         int progress = 0;
-        if (target >= 0 && (phase == CAPTURED || (block && latest < show_want && phase != LISTED))) {
+        if (target >= 0 && (phase == CAPTURED || (block && latest < need && phase != LISTED))) {
             finish_frame();
             progress = 1;
         }
@@ -434,8 +448,8 @@ MOVIE_CODE static void advance(int block) {
         int want = show_want + 2 < last ? show_want + 2 : last;
         if (next <= want) progress |= start_frame(next);
         if (!progress) {
-            /* (blocking: the frame to show isn't decoded; the 3D engine's swap and capture come at VBlanks) */
-            if (!block || latest >= show_want || (target < 0 && geo_frame < 0)) return;
+            /* (blocking: the 3D engine's swap and capture come at VBlanks) */
+            if (!block || latest >= need || (target < 0 && geo_frame < 0)) return;
             movie_fv_waits[0]++;
             wait_vblank();
         }
