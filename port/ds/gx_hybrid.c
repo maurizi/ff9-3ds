@@ -377,7 +377,7 @@ static const u8 mesh_tex_at[4] = {0x13, 0x06, 0x1D, 0x16}, mesh_flags_at[8] = {0
 int gxh_stats_meshes, gxh_stats_mesh_fallback;
 
 /* the uv words of a textured source polygon (type 0-3) into u[4]/v[4] */
-static inline int mesh_uvs(const MeshInst *mi, int type, const u8 *s, u16 *uv) {
+static inline __attribute__((always_inline)) int mesh_uvs(const MeshInst *mi, int type, const u8 *s, u16 *uv) {
     switch (type) {
     case 0: uv[0] = mi->uvs[MW(s, 8) & 0xFFFF]; uv[1] = mi->uvs[MW(s, 8) >> 16];
             uv[2] = mi->uvs[MW(s, 0xC) & 0xFFFF]; uv[3] = mi->uvs[MW(s, 0xC) >> 16]; return 4;
@@ -4312,9 +4312,25 @@ static inline int shows(u16 c, u16 clear, u8 mark) {
     return 1;
 }
 
+/* bits c0..c1 (0..63) of a word */
+static inline u64 bit_span(int c0, int c1) { return (c1 == 63 ? ~0ull : (2ull << c1) - 1) & ~((1ull << c0) - 1); }
+
 static void dirty_cells(int x0, int y0, int x1, int y1) {
-    for (int y = y0 >> 3; y <= y1 >> 3; ++y)
-        for (int x = x0 >> 3; x <= x1 >> 3; ++x) cell_dirty[y & 63][(x & 127) >> 6] |= 1ull << (x & 63);
+    if (x1 >= x0 && y1 >= y0) { /* the cells' columns (wrapping at 128) as two words' bits, then each row */
+        int c0 = x0 >> 3, n = (x1 >> 3) - c0;
+        u64 w[2] = {0, 0};
+        if (n >= 127) w[0] = w[1] = ~0ull;
+        else {
+            c0 &= 127;
+            int c1 = c0 + n;
+            if (c1 > 127) { w[0] |= bit_span(0, c1 - 128); c1 = 127; } /* (the wrapped part) */
+            if (c0 < 64) { w[0] |= bit_span(c0, c1 < 63 ? c1 : 63); if (c1 >= 64) w[1] |= bit_span(0, c1 - 64); }
+            else w[1] |= bit_span(c0 - 64, c1 - 64);
+        }
+        int r0 = y0 >> 3, rows = (y1 >> 3) - r0 + 1;
+        if (rows > 64) rows = 64;
+        for (int r = 0; r < rows; ++r) { cell_dirty[(r0 + r) & 63][0] |= w[0]; cell_dirty[(r0 + r) & 63][1] |= w[1]; }
+    }
     for (int i = 0; i < 2; ++i) { /* buffers start on 8-pixel columns and rows */
         Buffer *b = &buffers[i];
         int bx0 = (x0 - b->x) >> 3, bx1 = (x1 - b->x) >> 3, by0 = (y0 - b->y) >> 3, by1 = (y1 - b->y) >> 3;
