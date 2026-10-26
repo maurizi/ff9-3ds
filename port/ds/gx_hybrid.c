@@ -140,6 +140,13 @@ static const u8 fm_xy_at[8][4] = {{0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18}, 
 
 static FStore *scene_models(const Buffer *b);
 static void fm_uses(FStore *st);
+/* a scene gone software: its native models' polygons through the software renderer, each at its OT entry */
+static int fm_soft_next;           /* the OT entries from here (nearer) aren't drawn yet */
+static void fm_soft_draw(Buffer *b, int e);
+/* (the models' code is ovl_0a's: a field place can outlast it by a frame while another slot-0 overlay loads) */
+static inline int ovl0a_resident(void) { return psx_ovl_resident[0] == 0x0A; }
+static inline void fm_soft_upto(Buffer *b, int e) { if (e < fm_soft_next && ovl0a_resident()) fm_soft_draw(b, e); }
+#define FM_SOFT_ALL (-0x8000)
 
 /* A primitive copied word by word (a struct assignment is a memcpy call) */
 typedef union { Prim p; u32 w[12]; } PrimCopy;
@@ -941,7 +948,17 @@ static void go_software(Buffer *b) {
     /* the next scenes will likely need it too: drawn in software from the start; but not for a buffer that filled
      * (the hold would keep the models' packets, which fill the next: the next scene tries with the models native) */
     if (place->field) soft_hold = b->count >= prims_max ? 0 : 60;
-    replay(b, 0, b->count, -1);
+    if (place->field && b->slots) {
+        /* the native models' polygons among the recorded primitives by OT entry (the walk's order, far to near) */
+        fm_soft_next = 0x7FFF;
+        for (int k = 0; k < b->count;) {
+            int k1 = k + 1;
+            while (k1 < b->count && b->slots[k1] == b->slots[k]) ++k1;
+            fm_soft_upto(b, 0x1010 - b->slots[k] / 4);
+            replay(b, k, k1, -1);
+            k = k1;
+        }
+    } else replay(b, 0, b->count, -1);
     b->count = 0;
     b->soft = 1;
     dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
@@ -2318,7 +2335,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     fifo(CMD_POLYATTR, attr);
     fifo(CMD_TEXIMAGE, 0);
     int polys = 0, vertices = 0, z = 0;
-    if (b->slots) { /* the world map: its clear colour as a quad behind everything (the 3D engine's own clear, black,
+    if (b->slots && place->world) { /* the world map: its clear colour as a quad behind everything (the 3D engine's own clear, black,
                       * covers the letterbox rows outside the viewport, black on the PS1 too) */
         pack_begin();
         pack(CMD_COLOR); put(b->clear & 0x7FFF);
@@ -2952,6 +2969,7 @@ static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         if (place->field && clipped) gxh_stats_soft |= 16;
         if (place->field && (b->soft || clipped || field_unexact(b, m))) {
             if (!b->soft) go_software(b);
+            fm_soft_upto(b, (int)psx_ot_slot);
             psx_softgpu.poly(m, v, n);
             return;
         }
@@ -3031,6 +3049,7 @@ static void hybrid_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b2) {
         if (place->field) b->polys++;
         return;
     }
+    if (place->field && b && b->soft) fm_soft_upto(b, (int)psx_ot_slot);
     psx_softgpu.line(m, a, b2);
     soft_touch(a->x < b2->x ? a->x : b2->x, a->y < b2->y ? a->y : b2->y,
                a->x > b2->x ? a->x : b2->x, a->y > b2->y ? a->y : b2->y);
@@ -3109,6 +3128,7 @@ static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         if (wraps) gxh_stats_soft |= 32;
         if (b->soft || field_unexact(b, m) || wraps) {
             if (!b->soft) go_software(b);
+            fm_soft_upto(b, (int)psx_ot_slot);
             psx_softgpu.rect(m, v, w, h);
             return;
         }
@@ -3295,7 +3315,8 @@ PORT_OVERLAY_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
 }
 
 static FStore *scene_models(const Buffer *b) {
-    if (!b->slots || !fm_ring[0]) return NULL;
+    /* (a soft scene's are drawn in software: fm_soft_upto) */
+    if (!b->slots || !fm_ring[0] || b->soft || !ovl0a_resident()) return NULL;
     FStore *st = fm_ring[b->scene_gen % 3];
     return st->ngroups && st->gen == b->scene_gen ? st : NULL;
 }
@@ -3380,6 +3401,58 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
         es->vertices += nv;
     }
     return wp;
+}
+
+/* A scene gone software: its native models' polygons with OT entries from e up to the last drawn (farther), as the
+ * game's own packets with the vertices it projected, through GP0's decoder into the software renderer (the PS1's
+ * drawing; the walk's order between them and the recorded primitives by OT entry) */
+PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_soft_draw(Buffer *b, int e) {
+    int next = fm_soft_next;
+    fm_soft_next = e;
+    if (!fm_ring[0] || !b->slots) return;
+    const FStore *st = fm_ring[b->scene_gen % 3];
+    if (st->gen != b->scene_gen || !st->ngroups) return;
+    const Gp0State saved = gp0_state;
+    const Gp0Backend *saved_backend = gp0_backend;
+    gp0_backend = &psx_softgpu;
+    gp0_state.ofs_x = b->x + b->ofs_x; gp0_state.ofs_y = b->y + b->ofs_y;
+    gp0_state.area_x0 = b->x; gp0_state.area_y0 = b->y;
+    gp0_state.area_x1 = b->x + b->w - 1; gp0_state.area_y1 = b->y + b->h - 1;
+    gp0_state.twin_mask_x = gp0_state.twin_mask_y = gp0_state.twin_off_x = gp0_state.twin_off_y = 0;
+    gp0_state.set_mask = gp0_state.check_mask = 0;
+    for (int gi = 0; gi < st->ngroups; ++gi) {
+        const FGroup *fg = &st->groups[gi];
+        int e0 = 0x1010 - fg->depth0 / 4; /* its nearest vertex's entry */
+        if (e0 >= next || e0 + 1023 < e || !fm_live(fg)) continue;
+        const u32 *vw = st->verts + fg->vert0;
+        const u8 *g = fg->group, *src = fg->src, *pk = fg->packets;
+        int pi = fg->poly0;
+        for (int t = 0; t < 8; ++t) {
+            const int nv = t & 1 ? 3 : 4, len = fm_size[t] / 4 - 1;
+            for (int k = *(const u16 *)(g + 2 + 2 * t); k > 0; --k, src += mesh_size[t], pk += fm_size[t], ++pi) {
+                if (!(st->front[pi >> 5] >> (pi & 31) & 1)) continue;
+                u32 vi[4], rel = 0;
+                int bad = 0;
+                for (int i = 0; i < nv; ++i) {
+                    vi[i] = *(const u16 *)(src + 2 * i);
+                    bad |= vi[i] >= fg->verts;
+                    if (!bad) rel += vw[vi[i]] >> 22;
+                }
+                int ep = e0 + (int)(rel / (u32)nv); /* (the game's: the vertices' mean depth) */
+                if (bad || ep < e || ep >= next) continue;
+                unsigned int w[12];
+                for (int i = 0; i < len; ++i) w[i] = *(const u32 *)(pk + 4 + 4 * i);
+                for (int i = 0; i < nv; ++i) {
+                    u32 vv = vw[vi[i]];
+                    w[(fm_xy_at[t][i] - 4) / 4] = (vv & 0x7FF) | (vv >> 11 & 0x7FF) << 16 | (vv & 0x400 ? 0xF800 : 0) |
+                                                  (vv & 0x200000 ? 0xF8000000 : 0);
+                }
+                gp0_run_plain(w, (unsigned)len);
+            }
+        }
+    }
+    gp0_backend = saved_backend;
+    gp0_state = saved;
 }
 
 /* the scene's field models, before its primitives (depth tested: any order) */
@@ -3769,9 +3842,13 @@ static void field_frame(Buffer *b, int display_h) {
         soft_hold = 60;
     }
     if (!b->soft) { key_fill(b); go_software(b); }
-    /* hold software: the GPU straight to the software renderer until it ends (present_direct) */
-    direct_soft = 1;
-    gp0_backend = &psx_softgpu;
+    fm_soft_upto(b, FM_SOFT_ALL); /* (the models' polygons nearer than the last primitive) */
+    /* hold software: the GPU straight to the software renderer until it ends (present_direct); not for a scene
+     * that only filled its buffer (soft_hold 0): the next scene's models are already taken, for the hybrid */
+    if (soft_hold) {
+        direct_soft = 1;
+        gp0_backend = &psx_softgpu;
+    }
     bank_a_as_bg(1);
     back_mode(0);
     scale_back(b, display_h);
