@@ -142,7 +142,6 @@ static const u8 fm_xy_at[8][4] = {{0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18}, 
                                   {0x08, 0x0C, 0x10, 0x14}, {0x08, 0x0C, 0x10}};
 
 static FStore *scene_models(const Buffer *b);
-static void fm_uses(FStore *st);
 /* a scene gone software: its native models' polygons through the software renderer, each at its OT entry */
 static int fm_soft_next;           /* the OT entries from here (nearer) aren't drawn yet */
 static void fm_soft_draw(Buffer *b, int e);
@@ -1650,7 +1649,7 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
             plan_prim(&q, 0, &last_group, &last_palette, &u->group, &u->palette);
             plan_scale = 16;
         }
-    FStore *fst = scene_models(b); /* the field models' (fm_uses: field_frame) */
+    FStore *fst = scene_models(b); /* the field models' (their uses: port_native_field_mesh) */
     if (fst)
         for (int i = 0; i < fst->nuses; ++i) {
             FUse *u = &fst->uses[i];
@@ -3275,33 +3274,31 @@ PORT_OVERLAY_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
     Buffer *b = buffer_at(n->draw_x, n->draw_y);
     if (!b || !b->slots) return 0;
     FStore *st = fm_ring[psx_ot_generation % 3];
+    static int last_use;
     if (st->gen != psx_ot_generation) {
         st->gen = psx_ot_generation; st->ngroups = 0; st->nverts = 0; st->npolys = 0;
-        st->front_polys = 0; st->front_verts = 0;
+        st->front_polys = 0; st->front_verts = 0; st->nuses = 0;
+        last_use = 0;
     }
     int nv = n->nverts, np = 0;
     const u8 *g = n->group, *pk = n->packets;
     for (int t = 0; t < 8; ++t) np += *(const u16 *)(g + 2 + 2 * t);
     if (st->ngroups == FM_GROUPS || st->nverts + nv > fm_cap || st->npolys + np > FM_POLYS) return 0;
-    /* the opaque polygons (code bit 1 clear in the packets): the translucent ones keep the PS1's order (their caller
-     * links them) */
-    int opaque = 0;
-    for (int t = 0; t < 8; ++t)
-        for (int k = *(const u16 *)(g + 2 + 2 * t); k > 0; --k, pk += fm_size[t]) opaque += !(pk[7] & 2);
-    if (!opaque) return 0;
-    FGroup *fg = &st->groups[st->ngroups++];
-    fg->group = g; fg->packets = n->packets; fg->vert0 = (u16)st->nverts; fg->poly0 = (u16)st->npolys;
-    fg->src = *(const u8 *const *)(g + 0x1C); fg->polys = (u16)np; fg->verts = (u16)nv;
-    /* the PS1's culling (model_link: NCLIP <= 0 unless double-sided), now: the budget counts what's drawn */
+    /* One pass over the packets (they stream through the data cache: each pass costs as much again): the opaque
+     * polygons (code bit 1 clear: the translucent ones keep the PS1's order, their caller links them), the PS1's
+     * culling of them (model_link: NCLIP <= 0 unless double-sided; the budget counts what's drawn), and the drawn
+     * ones' texture uses (plan_textures plans each). A group with no opaque polygon isn't taken: nothing it marked
+     * counts (its range is the next group's), and it has no use. */
+    int opaque = 0, front_polys = 0, front_verts = 0;
     const u8 *src = *(const u8 *const *)(g + 0x1C);
     int pi = st->npolys;
-    pk = n->packets;
     for (int t = 0; t < 8; ++t) {
-        const int quad = !(t & 1), flags_at = mesh_flags_at[t];
+        const int quad = !(t & 1), flags_at = mesh_flags_at[t], textured = t < 4, nvp = quad ? 4 : 3;
         for (int k = *(const u16 *)(g + 2 + 2 * t); k > 0; --k, src += mesh_size[t], pk += fm_size[t], ++pi) {
             u32 bit = 1u << (pi & 31);
             st->front[pi >> 5] &= ~bit;
             if (pk[7] & 2) continue;
+            ++opaque;
             if (*(const u16 *)src >= nv || *(const u16 *)(src + 2) >= nv || *(const u16 *)(src + 4) >= nv ||
                 (quad && *(const u16 *)(src + 6) >= nv)) continue; /* (a vertex past the group's: not drawn) */
             if (!(src[flags_at] & 2)) {
@@ -3311,10 +3308,37 @@ PORT_OVERLAY_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
                 if (((s16)s1 - x0) * ((s16)(s2 >> 16) - y0) - ((s16)s2 - x0) * ((s16)(s1 >> 16) - y0) <= 0) continue;
             }
             st->front[pi >> 5] |= bit;
-            st->front_polys++;
-            st->front_verts += quad ? 4 : 3;
+            front_polys++;
+            front_verts += nvp;
+            if (!textured) continue;
+            u32 uv[4];
+            for (int i = 0; i < nvp; ++i) uv[i] = *(const u32 *)(pk + fm_xy_at[t][i] + 4);
+            u16 clut = (u16)(uv[0] >> 16), tpage = (u16)(uv[1] >> 16);
+            int u = last_use;
+            if (u >= st->nuses || st->uses[u].tpage != tpage || st->uses[u].clut != clut)
+                for (u = 0; u < st->nuses; ++u) if (st->uses[u].tpage == tpage && st->uses[u].clut == clut) break;
+            if (u == st->nuses) {
+                if (u == FM_USES) continue;
+                st->uses[u] = (FUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF};
+                st->nuses++;
+            }
+            last_use = u;
+            FUse *fu = &st->uses[u];
+            for (int i = 0; i < nvp; ++i) {
+                u8 cu = (u8)uv[i], cv = (u8)(uv[i] >> 8);
+                if (cu < fu->u0) fu->u0 = cu;
+                if (cu > fu->u1) fu->u1 = cu;
+                if (cv < fu->v0) fu->v0 = cv;
+                if (cv > fu->v1) fu->v1 = cv;
+            }
         }
     }
+    if (!opaque) return 0;
+    FGroup *fg = &st->groups[st->ngroups++];
+    fg->group = g; fg->packets = n->packets; fg->vert0 = (u16)st->nverts; fg->poly0 = (u16)st->npolys;
+    fg->src = *(const u8 *const *)(g + 0x1C); fg->polys = (u16)np; fg->verts = (u16)nv;
+    st->front_polys += front_polys;
+    st->front_verts += front_verts;
     st->npolys = pi;
     /* xy as projected; a vertex's OT entry: the group's (its bias from the frame's OT) plus SZ / 4 */
     int base = (int)((const u32 *)n->ot - (const u32 *)psx_main_ot);
@@ -3377,7 +3401,14 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
     const int depth0 = fg->depth0, ofs_x = c->ofs_x, ofs_y = c->ofs_y;
     const u32 nverts = fg->verts;
     for (; count > 0; --count, src += mesh_size[t], pk += fm_size[t], ++pi) {
-        if (!(front[pi >> 5] >> (pi & 31) & 1)) continue; /* (culled when taken) */
+        u32 bits = front[pi >> 5] >> (pi & 31);
+        if (!(bits & 1)) { /* (culled when taken: the run of them skipped at once) */
+            int skip = bits ? __builtin_ctz(bits) : 32 - (pi & 31);
+            if (skip > count) skip = count;
+            --skip; /* (the loop's own step is one of them) */
+            count -= skip; src += skip * mesh_size[t]; pk += skip * fm_size[t]; pi += skip;
+            continue;
+        }
         if ((u32)*(const u16 *)src >= nverts || (u32)*(const u16 *)(src + 2) >= nverts ||
             (u32)*(const u16 *)(src + 4) >= nverts || (quad && (u32)*(const u16 *)(src + 6) >= nverts)) continue;
         if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
@@ -3520,44 +3551,6 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
         }
     }
     es->wp = wp;
-}
-
-/* the scene's models' texture pages and CLUTs with their texels' bounds (plan_textures plans each): the drawn
- * polygons' (those culled when taken aren't) */
-PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_uses(FStore *st) {
-    st->nuses = 0;
-    int last = 0;
-    for (int gi = 0; gi < st->ngroups; ++gi) {
-        if (!fm_live(&st->groups[gi])) continue;
-        const u8 *g = st->groups[gi].group, *pk = st->groups[gi].packets;
-        int pi = st->groups[gi].poly0;
-        for (int t = 0; t < 4; ++t) { /* (the textured kinds come first) */
-            const int nv = t & 1 ? 3 : 4;
-            for (int k = *(const u16 *)(g + 2 + 2 * t); k > 0; --k, pk += fm_size[t], ++pi) {
-                if (!(st->front[pi >> 5] >> (pi & 31) & 1)) continue;
-                u32 uv[4];
-                for (int i = 0; i < nv; ++i) uv[i] = *(const u32 *)(pk + fm_xy_at[t][i] + 4);
-                u16 clut = (u16)(uv[0] >> 16), tpage = (u16)(uv[1] >> 16);
-                int u = last;
-                if (u >= st->nuses || st->uses[u].tpage != tpage || st->uses[u].clut != clut)
-                    for (u = 0; u < st->nuses; ++u) if (st->uses[u].tpage == tpage && st->uses[u].clut == clut) break;
-                if (u == st->nuses) {
-                    if (u == FM_USES) continue;
-                    st->uses[u] = (FUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF};
-                    st->nuses++;
-                }
-                last = u;
-                FUse *fu = &st->uses[u];
-                for (int i = 0; i < nv; ++i) {
-                    u8 cu = (u8)uv[i], cv = (u8)(uv[i] >> 8);
-                    if (cu < fu->u0) fu->u0 = cu;
-                    if (cu > fu->u1) fu->u1 = cu;
-                    if (cv < fu->v0) fu->v0 = cv;
-                    if (cv > fu->v1) fu->v1 = cv;
-                }
-            }
-        }
-    }
 }
 
 static void use_place(const Place *p) {
@@ -3920,7 +3913,7 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
             if (prim_layer[k] == L_ADD) { adds++; add_area2 += prim_area2(p); }
         }
         FStore *fst = scene_models(b); /* the native models (those facing the camera) */
-        if (fst) { fm_uses(fst); polys += fst->front_polys; vertices += fst->front_verts; }
+        if (fst) { polys += fst->front_polys; vertices += fst->front_verts; } /* (its uses: taken with it) */
         /* the exact layer costs software drawing in proportion to the additive primitives' area (a sixth of the
          * screen: field 2162's lamp glows took it from 27 to 40 ms on DSi): beyond that, the 3D approximation */
         if (adds && add_area2 > 2 * 320 * 224 / 6) {
