@@ -697,3 +697,34 @@ frames differ); the battle's clearing fill limited to touched cells (0.07 ms); t
 
 ms per VBlank, before -> after: d1_b0071 34.5 -> 31.4, d2_b0300 35.8 -> 30.6, d1_b0254 36.6 -> 33.8, d4_b0325
 31.0 -> 27.8, d2_b0128 34.5 -> 30.2; d4_f2110 30.3 -> 27.4, d2_f1102 23.5 -> 23.1, d1_f0110 16.9 -> 16.7.
+
+### World maps, the other modes (2026-10-26, later still)
+
+World maps (original DS, ms per VBlank, before -> after): d1_w9009 35.6 -> 31.6, d3_w9006 40.5 -> 34.9, d4_w9006
+36.5 -> 32.0. What did it:
+- The GTE's depth cue (DPCS, DPCT, INTPL, the NCDS/CDP step) in 32 bits where that is exact: about 1,100 a VBlank.
+- The block pass (port_native_world_block) and the terrain's emission (terrain_emit) in ARM in ovl_0c's area; the
+  texture use cached across faces, its bounds gathered in registers; each use's state and colour scale once a frame
+  instead of a division a face.
+- The vertex pass in port code (port/game/world_verts.c): of the two RTPTs a group goes through, the first is read
+  only for its depths (the second overwrites everything else first), so it pushes the depths alone.
+
+The other modes, entered through the scenario layer's new `field_exit=4|7|9` (`tetra=1` for 9): a field left at
+once for the ending, game over or a card game.
+- Tetra Master crashed on entry: its image file buffer is named by its PS1 address and used as a number
+  (TM_IMAGE_FILE, TM_PRIM_BUF; decomp request F34). With walking input a game now returns to the field (host);
+  card selection runs at 61.6 ms per VBlank on an original DS (software).
+- The ending (from disc 4: its data is there) runs on the host for 9,000 frames, and on the DS at 16.7 ms per VBlank
+  while its movie plays.
+- Game over: its picture's fade is a full-screen semi-transparent tile every frame, which went through plot() a
+  pixel at a time: 258 ms per VBlank, now 56.6 (tile_semi, two pixels a word).
+
+Exact additive layer: its triangles skip the rows the 5:4 scaling never samples (every fifth): d3_f1812 61.3 ->
+59.7. Approximating that field's sunlight in 3D instead (a lower area limit) darkened its upper half: not taken.
+The background composite redraws only the 8-row bands whose sprites changed.
+
+ITCM is full: tile_semi, psx_gte_rtpt_depths and the RGB24 display scaler (the MDEC fallback for 24-bit movies)
+live in main RAM to make room.
+
+Crash sweep, 40 more fields (`build/validation/fields40.txt`, walking input from frame 300, original DS): 40/40
+reach frame 1500, 17.0-76.4 ms per VBlank (median about 28); outliers d1_f0107 76.4 and d3_f2401 61.3.
