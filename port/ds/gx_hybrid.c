@@ -2526,6 +2526,26 @@ PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) static void terrain_emit(Bu
                                                                               int drop_below, int drop_quota) {
     u32 *wp = es->wp, *pack_header, pack_ids;
     int pack_shift;
+    /* each texture use's state, once: its region's offsets and words (fail: 1 no region, 2 no palette), and the
+     * vertex colours' scale */
+    s16 use_tu[TU_MAX], use_tv[TU_MAX];
+    u32 use_image[TU_MAX], use_palette[TU_MAX], use_inv[TU_MAX];
+    u8 use_fail[TU_MAX];
+    for (int i = 0; i < tr->nuses; ++i) {
+        const TUse *u = &tr->uses[i];
+        const Region *r = u->group == 0xFF ? NULL : groups[u->group].region;
+        int depth = (u->tpage >> 7) & 3;
+        if (depth == 3) depth = 2;
+        use_inv[i] = (16u << 10) / u->scale;
+        use_fail[i] = !r ? 1 : depth < 2 && u->palette == 0xFF ? 2 : 0;
+        if (use_fail[i]) continue;
+        use_tu[i] = (s16)((r->x - (u->tpage & 15) * 64) * texels_per_halfword(depth));
+        use_tv[i] = (s16)(r->y - ((u->tpage >> 4) & 1) * 256);
+        use_image[i] = (u32)(r->unit * TEX_UNIT / 8) | r->size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
+        use_palette[i] = ~0u;
+        if (depth < 2) { use_image[i] |= index0_transparent(u->palette); use_palette[i] = (u32)u->palette * 512 / 16; }
+    }
+    const int zb = world_entry_depth(0xFA0 + 8);
     for (int f = 0; f < tr->nfaces; ++f) {
         const TFace tf = tr->faces[f];
         if (tf.tier < drop_below) continue;
@@ -2533,7 +2553,7 @@ PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) static void terrain_emit(Bu
         const TBlock *tb = &tr->blocks[tf.ref >> 27];
         const u32 *face = tb->faces + 4 * ((tf.ref >> 15) & 0xFFF);
         int otz = (int)((tf.ref >> 2) & 0x1FFF), has_fog = (int)(tf.ref >> 1) & 1, has_lit = (int)(tf.ref & 1);
-        int backdrop = tb->variant == WORLD_BACKDROP, zb = world_entry_depth(0xFA0 + 8);
+        int backdrop = tb->variant == WORLD_BACKDROP;
         u32 w = face[0];
         /* pass 0: the lit polygon (textured; black where only fog shows), fogged by the 3D engine unless it's the
          * backdrop's; pass 1, the backdrop's: its fog, added as the ramp's alpha over the lit one (translucent,
@@ -2544,20 +2564,10 @@ PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) static void terrain_emit(Bu
             u32 uvw[3] = {0, 0, 0}, want_image = 0, set_palette = ~0u, want_attr;
             int tu = 0, tv = 0, textured = pass == 0 && has_lit, ramp = pass == 1 && has_lit;
             if (textured) {
-                const TUse *u = &tr->uses[tf.use];
-                const Region *r = u->group == 0xFF ? NULL : groups[u->group].region;
-                if (!r) { gxh_stats_texture_fail++; continue; }
-                int depth = (u->tpage >> 7) & 3;
-                if (depth == 3) depth = 2;
-                if (depth < 2 && u->palette == 0xFF) { gxh_stats_palette_fail++; continue; }
-                tu = (r->x - (u->tpage & 15) * 64) * texels_per_halfword(depth);
-                tv = r->y - ((u->tpage >> 4) & 1) * 256;
-                want_image = (u32)(r->unit * TEX_UNIT / 8) | r->size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
-                if (depth < 2) {
-                    want_image |= index0_transparent(u->palette);
-                    u32 want_palette = (u32)u->palette * 512 / 16;
-                    if (want_palette != es->palette) set_palette = want_palette;
-                }
+                const int ui = tf.use;
+                if (use_fail[ui]) { if (use_fail[ui] == 1) gxh_stats_texture_fail++; else gxh_stats_palette_fail++; continue; }
+                tu = use_tu[ui]; tv = use_tv[ui]; want_image = use_image[ui];
+                if (use_palette[ui] != ~0u && use_palette[ui] != es->palette) set_palette = use_palette[ui];
                 terrain_uvs(face, tb->alt, !backdrop, otz, &uvw[0], &uvw[1], &uvw[2]);
             } else if (ramp) {
                 want_image = (u32)(RAMP_UNIT * TEX_UNIT / 8) | 2u << 20 | 0u << 23 | 6u << 26; /* 32x8 A5I3 */
@@ -2571,7 +2581,7 @@ PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) static void terrain_emit(Bu
             if (want_attr != es->attr) { pack(CMD_POLYATTR); put(want_attr); es->attr = want_attr; }
             pack(CMD_BEGIN); put(0);
             pack_end();
-            u32 bf = tr->backdrop_fog, lit_of[3], inv_scale = textured ? (16u << 10) / tr->uses[tf.use].scale : 0;
+            u32 bf = tr->backdrop_fog, lit_of[3], inv_scale = textured ? use_inv[tf.use] : 0;
             if (textured) { /* (TV_ALL_FOG: another vertex's colour) */
                 u32 other = 0;
                 for (int k = 0; k < 3; ++k) {
