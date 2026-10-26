@@ -232,11 +232,14 @@ static void note_buffer(int x, int y, int w, int h) {
 }
 
 /* Field: b's PS1 VRAM all the key colour */
+u32 *fill_bursts(u32 *q, u32 v, unsigned groups); /* (gpu.c: four words a STMIA) */
 static void fill_buffer(Buffer *b, u32 colour) {
     int w = b->x + b->w <= 1024 ? b->w : 1024 - b->x;
+    const u32 pair = colour | colour << 16;
     for (int row = 0; row < b->h; ++row) {
         u32 *p = (u32 *)(psx_vram + ((b->y + row) & 511) * 1024 + b->x);
-        for (int k = 0; k < w / 2; ++k) p[k] = colour | colour << 16;
+        if (w >= 8) p = fill_bursts(p, pair, (unsigned)w / 8);
+        for (int k = 0; k < (w & 7) / 2; ++k) p[k] = pair;
     }
 }
 static void key_fill(Buffer *b) { fill_buffer(b, FIELD_KEY); }
@@ -3990,7 +3993,7 @@ static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1);
 static void scale_back(Buffer *b, int display_h) { scale_back_rows(b, display_h, 0, 1 << 30); }
 /* output rows [oy0, oy1) only (in 32-row bands) */
 static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1) {
-    bgc.valid = 0; /* (bank A's bitmap is now the software frame's) */
+    if (!bgc_texmode) bgc.valid = 0; /* (bank A's bitmap is now the software frame's; bank C's texture stays) */
     int h = display_h > 0 ? display_h : 224;
     int out_h = h * 4 / 5, top = (192 - out_h) / 2;
     u16 *band = scaled_block(), *bitmap = (u16 *)BG_BMP_RAM(8);

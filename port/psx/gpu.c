@@ -75,7 +75,7 @@ __attribute__((weak)) void psx_vram_filled(int x, int y, int w, int h, unsigned 
 /* `groups` (> 0) runs of four words of v from q, as STMIA bursts; returns the word after them. Its own ARM function
  * with the registers named: as inline asm in vram_fill's loop the compiler lost track of the count (fills ran past
  * their span: the battle HP panel's cached digits turned into black boxes). */
-__attribute__((target("arm"), noinline)) static u32 *fill_bursts(u32 *q, u32 v, unsigned groups) {
+__attribute__((target("arm"), noinline)) u32 *fill_bursts(u32 *q, u32 v, unsigned groups) { /* (also gx_hybrid.c's) */
     __asm__ volatile("mov r4, %2\n\tmov r5, %2\n\tmov r6, %2\n\tmov r7, %2\n"
                      "1:\tstmia %0!, {r4-r7}\n\tsubs %1, %1, #1\n\tbne 1b"
                      : "+r"(q), "+r"(groups) : "r"(v) : "r4", "r5", "r6", "r7", "memory", "cc");

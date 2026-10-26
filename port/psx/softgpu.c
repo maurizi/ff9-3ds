@@ -547,6 +547,9 @@ static __attribute__((noinline)) void poly_row_semi_small(const Gp0Mode *m, u16 
 /* The same for a 4-bit dithered texture, set up once per polygon by semi4_setup: Alexandria's lights sample a
  * 32x32 texture of mostly transparent texels, so the loop finds those without the CLUT (`opaque`: the CLUT entries
  * other than 0) and does the colour work for the rest. A 4-bit page never wraps VRAM (tx <= 960, ty 0 or 256). */
+#ifndef SEMI4_AREA
+#define SEMI4_AREA 1024
+#endif
 static struct {
     const u16 *tex, *clut;
     u32 opaque;
@@ -747,9 +750,12 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     /* Rebuilding the tables (1536 entries) costs more than a small polygon's pixels: a small one in a colour
      * other than the tables' takes the per-pixel paths instead (field characters: each polygon its own light). */
     int semi_small = 0;
+    /* (semi4's 4-bit dithered loop costs a table rebuild's 1536 entries only past some 700 pixels) */
     if (area < 128) {
         if (dither_indexed && dither_key(flat_r, flat_g, flat_b, 1) != dtab_key) dither_indexed = 0;
-        if (dither_semi && dither_key(m->raw ? 128 : flat_r, m->raw ? 128 : flat_g, m->raw ? 128 : flat_b, dither) !=
+    }
+    if (dither_semi && (area < 128 || (area < SEMI4_AREA && !m->depth && dither))) {
+        if (dither_key(m->raw ? 128 : flat_r, m->raw ? 128 : flat_g, m->raw ? 128 : flat_b, dither) !=
                                dtab_key) dither_semi = 0, semi_small = !palette_ready;
     }
     if (semi_small && m->depth == 0 && dither && !m->raw && semi4_setup(m, flat_r, flat_g, flat_b, miny, maxy)) semi_small = 2;
