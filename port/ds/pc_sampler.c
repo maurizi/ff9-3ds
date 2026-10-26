@@ -70,6 +70,16 @@ void *__wrap_memset(void *p, int c, size_t n) {
     return __real_memset(p, c, n);
 }
 
+/* free's callers (linked with --wrap=free): caller, calls */
+volatile u32 port_pc_free[16][2];
+void __real_free(void *p);
+void __wrap_free(void *p) {
+    u32 caller = (u32)__builtin_return_address(0);
+    for (u32 i = (caller >> 1) % 16, tries = 0; tries < 16; ++tries, i = (i + 1) % 16)
+        if (port_pc_free[i][0] == caller || !port_pc_free[i][0]) { port_pc_free[i][0] = caller; port_pc_free[i][1]++; break; }
+    __real_free(p);
+}
+
 /* Who waits (linked with --wrap=swiIntrWait,--wrap=swiWaitForVBlank): caller, calls, timer 2/3 ticks waited */
 #define WAIT_CALLERS 16
 volatile u32 port_pc_wait[WAIT_CALLERS][3];

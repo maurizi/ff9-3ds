@@ -539,6 +539,10 @@ static void draw_packet(u32 *p) {
     psx_gpu_packets++;
     psx_gpu_words += len;
     if (len == 4 && w[0] >> 24 == 0xE1 && w[1] >> 26 == 0x7C >> 2 && gp0_tpage_sprite16(w)) return;
+    if (len == 5 && w[0] >> 24 == 0xE1 && !w[1] && w[2] >> 26 == 0x7C >> 2) { /* (MargePrim's: the sprite's tag is a NOP between) */
+        const unsigned int t[4] = {w[0], w[2], w[3], w[4]};
+        if (gp0_tpage_sprite16(t)) return;
+    }
     for (unsigned int i = 0; i < len;) {
         i += gp0_run_plain(w + i, len - i); /* (primitives and drawing state: nearly all of them) */
         if (i >= len) break;
