@@ -138,6 +138,12 @@ static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
     psx_display_written(dx, dy, w, h);
     /* Snapshot each source row. Non-wrapping overlaps match the published
      * ps1-tests reference; cross-boundary overlap behavior remains unverified. */
+    if (!check_mask && !set_mask && (sx & 1023) + w <= VRAM_W && (dx & 1023) + w <= VRAM_W) {
+        /* no mask and no wrap across the edge: each row as one move (the same snapshot-then-write per row) */
+        for (int j = 0; j < h; j++)
+            __builtin_memmove(vram_at(dx, dy + j), vram_at(sx, sy + j), (unsigned)w * 2);
+        return;
+    }
     static u16 row[VRAM_W];
     for (int j = 0; j < h; j++) {
         for (int i = 0; i < w; i++) {
