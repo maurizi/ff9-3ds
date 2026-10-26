@@ -444,6 +444,22 @@ GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *
 
 /* [MAC1..3] = (T << 12 + M * V) >> shift, IR = MAC (MVMVA and the lighting steps) */
 GTE_HOT static void mat_mul(int mbase, i64 vx, i64 vy, i64 vz, i64 tx, i64 ty, i64 tz, int sf, int lm) {
+    i32 x = (i32)vx, y = (i32)vy, z = (i32)vz;
+    if (sf && (u32)((x < 0 ? -x : x) + (y < 0 ? -y : y) + (z < 0 ? -z : z)) < 0x10000 &&
+        (uint64_t)(tx + 0x40000000) < 0x80000000u && (uint64_t)(ty + 0x40000000) < 0x80000000u && (uint64_t)(tz + 0x40000000) < 0x80000000u) {
+        /* (T << 12 + M * V) >> 12 is T + (M * V >> 12) exactly, and M * V fits 32 bits (entries up to 2^15 times
+         * |x| + |y| + |z| under 2^16), T under 2^30 (the 44-bit flags can't be set): the same results in 32 bits */
+        const gte_u32 *c = g.c + mbase;
+        u32 c0 = c[0], c1 = c[1], c2 = c[2], c3 = c[3];
+        i32 s1 = (i16)c0 * x + ((i32)c0 >> 16) * y + (i16)c1 * z;
+        i32 s2 = ((i32)c1 >> 16) * x + (i16)c2 * y + ((i32)c2 >> 16) * z;
+        i32 s3 = (i16)c3 * x + ((i32)c3 >> 16) * y + (i16)c[4] * z;
+        i32 m1 = (i32)((u32)(i32)tx + (u32)(s1 >> 12)), m2 = (i32)((u32)(i32)ty + (u32)(s2 >> 12));
+        i32 m3 = (i32)((u32)(i32)tz + (u32)(s3 >> 12));
+        g.d[25] = (u32)m1; g.d[26] = (u32)m2; g.d[27] = (u32)m3;
+        set_ir(1, m1, lm); set_ir(2, m2, lm); set_ir(3, m3, lm);
+        return;
+    }
     int shift = sf * 12;
     set_ir(1, set_mac(1, (tx * 4096) + mtx(mbase, 0, 0) * vx + mtx(mbase, 0, 1) * vy + mtx(mbase, 0, 2) * vz, shift), lm);
     set_ir(2, set_mac(2, (ty * 4096) + mtx(mbase, 1, 0) * vx + mtx(mbase, 1, 1) * vy + mtx(mbase, 1, 2) * vz, shift), lm);
@@ -552,12 +568,13 @@ GTE_HOT void gte_cmd(gte_u32 op) {
         set_ir(3, set_mac(3, m3, shift), lm);
         break;
     }
-    case 0x3D: /* GPF */
-        set_ir(1, set_mac(1, (i64)IR0 * IR1, shift), lm);
-        set_ir(2, set_mac(2, (i64)IR0 * IR2, shift), lm);
-        set_ir(3, set_mac(3, (i64)IR0 * IR3, shift), lm);
+    case 0x3D: { /* GPF (the products fit 32 bits, never the 44-bit flags) */
+        i32 m1 = (IR0 * IR1) >> shift, m2 = (IR0 * IR2) >> shift, m3 = (IR0 * IR3) >> shift;
+        g.d[25] = (u32)m1; g.d[26] = (u32)m2; g.d[27] = (u32)m3;
+        set_ir(1, m1, lm); set_ir(2, m2, lm); set_ir(3, m3, lm);
         push_color();
         break;
+    }
     case 0x3E: /* GPL */
         set_ir(1, set_mac(1, ((i64)MAC(1) * ((i64)1 << shift)) + (i64)IR0 * IR1, shift), lm);
         set_ir(2, set_mac(2, ((i64)MAC(2) * ((i64)1 << shift)) + (i64)IR0 * IR2, shift), lm);
