@@ -10,6 +10,9 @@
 #include <stdint.h>
 #define PORT_GTE_IMPL /* the real functions, not the inline wrappers */
 #include "gte.h"
+#ifdef __ARM_FEATURE_DSP
+#include <arm_acle.h>
+#endif
 #include "profile.h"
 
 /* With the SPU on the DS's hardware channels (HWSOUND=1) its mixer leaves ITCM, and the GTE takes its place. */
@@ -387,16 +390,23 @@ static inline __attribute__((always_inline)) void rtp(int v, int sf, int lm, int
 GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *sz) {
 #ifdef PORT_GTE_APPROX
     const gte_u32 *c = g.c;
-    const i32 r11 = (i16)c[0], r12 = (i32)c[0] >> 16, r13 = (i16)c[1], r21 = (i32)c[1] >> 16, r22 = (i16)c[2];
-    const i32 r23 = (i32)c[2] >> 16, r31 = (i16)c[3], r32 = (i32)c[3] >> 16, r33 = (i16)c[4];
+    /* the rotation as the GTE keeps it, two coefficients a word (r11 r12, r13 r21, r22 r23, r31 r32, r33): each
+     * product a halfword multiply (SMULxy/SMLAxy), the matrix in five registers instead of nine reloaded */
+    const i32 m0 = (i32)c[0], m1 = (i32)c[1], m2 = (i32)c[2], m3 = (i32)c[3], m4 = (i32)c[4];
     const i32 trx = (i32)c[5], try_ = (i32)c[6], trz = (i32)c[7], ofx = (i32)c[24], ofy = (i32)c[25];
     const u32 h = (u16)c[26];
     if (unr_table[0] == 0) init_unr();
     for (int i = 0; i < count; ++i, v += 2) {
-        i32 x = (i16)v[0], y = (i32)v[0] >> 16, z = (i16)v[1];
-        i32 ir1 = trx + ((r11 * x + r12 * y + r13 * z) >> 12);
-        i32 ir2 = try_ + ((r21 * x + r22 * y + r23 * z) >> 12);
-        i32 mac3 = trz + ((r31 * x + r32 * y + r33 * z) >> 12);
+        const i32 xy = (i32)v[0], zw = (i32)v[1];
+#ifdef __ARM_FEATURE_DSP
+        i32 ir1 = trx + (__smlabb(m1, zw, __smlatt(m0, xy, __smlabb(m0, xy, 0))) >> 12);
+        i32 ir2 = try_ + (__smlatb(m2, zw, __smlabt(m2, xy, __smlatb(m1, xy, 0))) >> 12);
+        i32 mac3 = trz + (__smlabb(m4, zw, __smlatt(m3, xy, __smlabb(m3, xy, 0))) >> 12);
+#else
+        i32 ir1 = trx + (((i16)m0 * (i16)xy + (m0 >> 16) * (xy >> 16) + (i16)m1 * (i16)zw) >> 12);
+        i32 ir2 = try_ + (((m1 >> 16) * (i16)xy + (i16)m2 * (xy >> 16) + (m2 >> 16) * (i16)zw) >> 12);
+        i32 mac3 = trz + (((i16)m3 * (i16)xy + (m3 >> 16) * (xy >> 16) + (i16)m4 * (i16)zw) >> 12);
+#endif
         if (ir1 > 0x7FFF) ir1 = 0x7FFF; else if (ir1 < -0x8000) ir1 = -0x8000;
         if (ir2 > 0x7FFF) ir2 = 0x7FFF; else if (ir2 < -0x8000) ir2 = -0x8000;
         u32 sz3 = mac3 > 0xFFFF ? 0xFFFF : mac3 < 0 ? 0 : (u32)mac3;
