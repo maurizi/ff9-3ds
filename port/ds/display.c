@@ -12,6 +12,7 @@
 #include "psx_display.h"
 #include "psx_runtime.h"
 #include "psx_raster.h"
+#include "movie_fv.h"
 #ifdef PORT_GX_HYBRID
 #include "gx_hybrid.h"
 #endif
@@ -96,6 +97,7 @@ static volatile int queued_buffer = -1, queued_scroll;
 
 static void vblank_irq(void) {
     real_vblanks++;
+    movie_fv_vblank();
     if (queued_buffer >= 0) {
         bgSetMapBase(bg, queued_buffer * 8);
         bgSetScroll(bg, 0, queued_scroll);
@@ -139,7 +141,11 @@ static void pace(void) {
     unsigned int profile_wait = port_profile_wait_begin();
     ++virtual_frames;
     if ((int)(real_vblanks - virtual_frames) > MAX_LAG) virtual_frames = real_vblanks;
-    while ((int)(real_vblanks - virtual_frames) < 0) swiWaitForVBlank();
+    movie_fv_idle();
+    while ((int)(real_vblanks - virtual_frames) < 0) {
+        swiWaitForVBlank();
+        movie_fv_idle();
+    }
     port_profile_wait_end(profile_wait);
 }
 
@@ -150,6 +156,23 @@ static void scale_region(u16 *dst, int x, int y, int w, int h) {
 }
 #endif
 
+/* A movie playing from its transcode has the main engine (movie_fv.c); after it the display is set up again. */
+static int movie_owned, movie_reset;
+void display_movie_take(void) {
+#ifdef PORT_GX_HYBRID
+    if (gxh_active()) gxh_enable(0);
+#endif
+    /* (nothing the game draws shows over a 24-bit movie, on the PS1 either: the software GPU rests) */
+    psx_softgpu_enable(0);
+    movie_owned = 1;
+}
+
+void display_movie_release(void) {
+    psx_softgpu_enable(1); /* (the hybrid takes over again at the next present if the mode has it) */
+    movie_owned = 0;
+    movie_reset = 1;
+}
+
 void display_present(void) {
 #ifndef PORT_SOFT_DISPLAY
     return;
@@ -158,12 +181,29 @@ void display_present(void) {
         swiWaitForVBlank();
         return;
     }
+    if (movie_owned) {
+        drawing = 0;
+        pace();
+        return;
+    }
     PsxDisplayInfo info;
     psx_gpu_display_info(&info);
     const PsxDisplayInfo *d = &info;
     static PsxDisplayInfo shown;
     static unsigned int shown_generation;
     static int shown_valid;
+    const int reset = movie_reset;
+    movie_reset = 0;
+    if (reset) shown_valid = 0;
+#ifndef PORT_GX_HYBRID
+    if (reset) {
+        videoSetMode(MODE_5_2D);
+        vramSetBankA(VRAM_A_MAIN_BG_0x06000000);
+        vramSetBankB(VRAM_B_MAIN_BG_0x06020000);
+        bgShow(bg);
+        bgUpdate();
+    }
+#endif
 #ifdef PORT_GX_HYBRID
     /* Battle (mode 2) uses the hybrid renderer, fields (mode 1) too with FIELDGX=1 and the world map (mode 3) with
      * WORLDGX=1; its 3D scenes and VRAM layout replace the software bitmaps. A mode change re-enables it: its
@@ -179,7 +219,7 @@ void display_present(void) {
     static int hybrid_mode = -1, hybrid_ovl = -1;
     /* (and when slot 0's overlay changed: a mode can change before its overlay is loaded, the place then the last
      * mode's, which the battle after a field encounter kept, drawn as a field in software) */
-    if (hybrid != gxh_active() || (hybrid && (mode != hybrid_mode || psx_ovl_resident[0] != hybrid_ovl))) {
+    if (reset || hybrid != gxh_active() || (hybrid && (mode != hybrid_mode || psx_ovl_resident[0] != hybrid_ovl))) {
         if (gxh_active()) gxh_enable(0);
         gxh_enable(hybrid);
         hybrid_mode = gxh_active() ? mode : -1;

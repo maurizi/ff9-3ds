@@ -827,3 +827,17 @@ $(BUILD)/tests/fv_bench_itcm.elf: tests/fmv/fv_bench.c $(addprefix $(BUILD)/test
 	arm-none-eabi-gcc $(FV_DS_FLAGS) $^ -L$(BLOCKSDS)/libs/libnds/lib -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
 $(BUILD)/tests/fv_bench_itcm.nds: $(BUILD)/tests/fv_bench_itcm.elf
 	$(NDSTOOL) -c $@ -7 $(BLOCKSDS)/sys/default_arm7/arm7.elf -9 $< -b $(BLOCKSDS)/sys/icon.bmp "FV bench;ARM9;FastVideoDS"
+$(BUILD)/movie_export: tools/movie_export.c port/psx/movie_stream.c port/psx/movie_vlc.c port/psx/mdec_decode.c
+	$(CC) -std=gnu17 -O2 -Wall -Wextra -Iport/include $^ -o $@
+# The FastVideoDS decoder blob the DS loads for full-screen movies (port/ds/movie_fv.c): built only from a fastvideo/
+# checkout, copied into the test SD folders like ovls.bin. Movies play through the MDEC without it.
+FV_OBJS := $(addprefix $(BUILD)/tests/fv/,fvDecoder_asm.o fvConst_asm.o fvConst.o fvDecoder.o fvMcData.o)
+.PHONY: fv-blob
+fv-blob: $(BUILD)/fv.bin
+$(BUILD)/fv/fv_blob.elf: port/ds/fv/fv_blob_head.s port/ds/fv/fv_blob.ld $(FV_OBJS)
+	@mkdir -p $(dir $@)
+	arm-none-eabi-as -mcpu=arm946e-s port/ds/fv/fv_blob_head.s -o $(BUILD)/fv/fv_blob_head.o
+	arm-none-eabi-ld -q --no-warn-rwx-segments -T port/ds/fv/fv_blob.ld $(BUILD)/fv/fv_blob_head.o $(FV_OBJS) -o $@
+$(BUILD)/fv.bin: $(BUILD)/fv/fv_blob.elf tools/fv_blob.py
+	python3 tools/fv_blob.py $< $@
+	@for d in $(BUILD)/sdroot*/ff9ds; do [ -d $$d ] && cp $@ $$d/fv.bin; done; true

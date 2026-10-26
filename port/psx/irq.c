@@ -7,6 +7,7 @@
  * Per frame (psx_frame): CD pump, root counter 2 events (AKAO's 240 Hz tick: 4 per frame), DrawSync callback, pad
  * buffers, the VSync callback, then the platform's frame wait.
  */
+#include "movie_fv.h"
 #include "gp0.h"
 #include "platform.h"
 #include "psyq_port.h"
@@ -195,12 +196,14 @@ static void rcnt_frame(void) {
 void psx_frame(void) {
     port_canary("game code before psx_frame");
     polls = 0;
+    movie_fv_idle(); /* (a transcoded movie's decoding goes on between the frame's parts) */
     psx_cd_frame();
     port_canary("CD frame");
     psx_drawsync_pending();
     port_canary("DrawSync callback");
     rcnt_frame();
     port_canary("root counters (SPU/AKAO)");
+    movie_fv_idle();
     vblanks++;
     psx_pad_update();
     if (vsync_cb) {

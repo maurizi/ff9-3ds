@@ -22,6 +22,10 @@ akao_writeVoice
 akao_applyCdVolume
 akao_initState
 
+# Movie stream: looking for a frame not there yet is a poll of the VBlank counter, as time passes on the PS1
+# (port/game/movie.c).
+o64_mbg_streamGetFrame
+
 # Model vertex projection: the per-vertex loop in port code (port/game/mesh_native.c, field_mesh.c, wm_mesh.c).
 o0b_btl_projectMesh
 o0a_fldmdl_projectMesh

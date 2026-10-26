@@ -57,9 +57,15 @@ if len(details)==1:
         names+=('movie_vlc','movie_mdec')
     if size>=96:
         names+=('spu_voices','spu_output_and_reverb')
-    if size==112:
+    if size>=112:
         names+=('spu_steady_runs','spu_event_samples')
-    elif size not in (48,64,80,96):
+    if size>=128:
+        names+=('movie_fv_decode','movie_fv_wait')
+    if size>=136:
+        names+=('movie_fv_read',)
+    if size>=144:
+        names+=('cd_read',)
+    if size not in (48,64,80,96,112,128,136,144):
         p.error('unsupported compatibility timing block size')
     count=len(names)
     detail=struct.unpack_from('<'+str(2*count+2)+'I',data,36+details[0]-0x02000000)

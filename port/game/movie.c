@@ -8,6 +8,10 @@
  *  - libpress (DecDCTReset ... DecDCToutCallback): the MDEC, by port/psx/mdec_decode.c.
  * See docs/movie-validation.md.
  *
+ * On the DS a movie in its 24-bit (full-screen) mode plays from its FastVideoDS transcode when there is one
+ * (movie_fv.h): its frames skip the VLC and the MDEC, the player's slice callbacks still run (their uploads dropped),
+ * and the transcode's frame is shown instead. The decoder takes the player's two VLC buffers.
+ *
  * The MDEC decodes synchronously. DecDCTout completes before it returns and runs the out callback, which queues
  * the next slice with another DecDCTout; that request is run by the outer call's loop rather than by recursion, so
  * the player's slice-by-slice LoadImage chain keeps its original order. DecDCTinSync(1) reports the command busy
@@ -20,6 +24,82 @@
 #include "mdec_decode.h"
 #include "movie_vlc.h"
 #include "profile.h"
+#include "movie_fv.h"
+
+extern int psx_load_image_skip;
+
+/* ---- transcoded frames -------------------------------------------------------------------------------------- */
+
+/* per VLC buffer: the STR frame it stands for when the transcode plays it (0: VLC data) */
+static u32 fv_frame_of[2];
+static int fv_unavailable; /* this movie has no transcode (or decoder) */
+static int fv_now;         /* the frame being decoded comes from the transcode */
+
+static int in_buffer(const void *p) {
+    return (const u8 *)PSX_PTR(p) == (const u8 *)PSX_PTR(g_mbgPlayer.mdecIn1);
+}
+
+/* The STR frame number at `bs` (in its ring slot): the sector header the slot keeps. */
+static u32 slot_frame(const u8 *bs) {
+    u8 *base = g_mbgStream.unk78;
+    u32 slot_bytes = g_mbgStream.unk5C * 0x8F4;
+    if (!slot_bytes || bs < base) return 0;
+    u32 slot = (u32)(bs - base) / slot_bytes;
+    if (slot >= g_mbgStream.slotCount) return 0;
+    const u8 *hdr = (const u8 *)PSX_PTR(g_mbgStream.unk74) + slot * 0x20;
+    return *(const u32 *)(hdr + 8);
+}
+
+/* Whether frame `bs`, about to be expanded into `out`, plays from the transcode. */
+static int fv_take(u8 *bs, u32 *out) {
+    u8 *in0 = PSX_PTR(g_mbgPlayer.mdecIn0), *in1 = PSX_PTR(g_mbgPlayer.mdecIn1);
+    int idx = in_buffer(out);
+    fv_frame_of[idx] = 0;
+    if (g_mbgRgb24 != 1 || in1 != in0 + 0x10000) {
+        movie_fv_stop(); /* (a movie going on behind a field: the MDEC from here) */
+        return 0;
+    }
+    if (!movie_fv_active() && !fv_unavailable &&
+        !movie_fv_start(in0, 0x20000, (unsigned int)g_mbgStream.baseSector)) {
+        fv_unavailable = 1;
+    }
+    if (!movie_fv_active()) return 0;
+    fv_frame_of[idx] = slot_frame(bs);
+    return fv_frame_of[idx] != 0;
+}
+
+/* ---- stream ------------------------------------------------------------------------------------------------- */
+
+/* mbg_streamGetFrame, as the decomp's (ovl_64/mbg_stream.c), except that looking for a frame not there yet is a
+ * poll of the VBlank counter. The player looks 1000 times before it seeks the stream again (dropping the ring); on
+ * the PS1 the drive goes on delivering meanwhile, here virtual time only passes at frames, which polls advance
+ * (VSync(-1)). Without them the player spun through its 1000 looks with the drive standing still, then seeked. */
+s32 o64_mbg_streamGetFrame(u8 **data, Ovl64RingHdr **hdr, Ovl64FrameInfo **arg2, Ovl64Pair **arg3, MbgRumble **arg4) {
+    Ovl64RingHdr *h = &g_mbgStream.unk74[g_mbgStream.readSlot];
+
+    if (!(h->unk0 & 0x8000)) {
+        if (g_mbgStream.unk2 == 0) {
+            VSync(-1);
+            return 3;
+        }
+        return 5;
+    }
+    *hdr = h;
+    *data = g_mbgStream.unk78 + (h->unk4 + g_mbgStream.readSlot * g_mbgStream.unk5C) * 0x8F4;
+    if (g_mbgStream.unk3 != 0) {
+        *arg2 = &g_mbgSlotCameras[g_mbgStream.readSlot];
+        *arg3 = &g_mbgSlotMasks[g_mbgStream.readSlot];
+    } else {
+        *arg2 = NULL;
+        *arg3 = NULL;
+    }
+    *arg4 = &g_mbgSlotRumble[g_mbgStream.readSlot];
+    if (g_mbgStream.readSlot == 0) {
+        g_mbgStream.readSlot = g_mbgStream.slotCount;
+    }
+    g_mbgStream.readSlot--;
+    return 0;
+}
 
 /* ---- VLC ---------------------------------------------------------------------------------------------------- */
 
@@ -28,6 +108,7 @@ void o64_mbg_vlcBuildTable(void *table) {
 
 /* mbg_vlcDecode(bs, out, table): the frame starts at `bs` in its ring slot, which bounds how far it can extend. */
 void o64_mbg_vlcDecode(u8 *bs, u32 *out, void *table) {
+    if (fv_take(bs, out)) return;
     u8 *base = g_mbgStream.unk78;
     u32 slot_bytes = g_mbgStream.unk5C * 0x8F4;
     u32 bytes = slot_bytes;
@@ -233,6 +314,10 @@ static int decode_request(u32 *dst, u32 words) {
 
 int o64_DecDCTReset(int mode) {
     if (mode == 0) {
+        movie_fv_stop(); /* (a new movie) */
+        fv_unavailable = 0;
+        fv_frame_of[0] = fv_frame_of[1] = 0;
+        fv_now = 0;
         psx_mdec_env_init(&env, D_8019DEC8, D_8019DF4C);
     }
     in_busy = 0;
@@ -244,6 +329,15 @@ int o64_DecDCTReset(int mode) {
 
 int o64_DecDCTin(u32 *buf, int mode) {
     buf = PSX_PTR(buf);
+    u32 frame = fv_frame_of[in_buffer(buf)];
+    fv_now = frame && movie_fv_active();
+    if (fv_now) { /* busy until the player's slices are done, without data */
+        movie_fv_frame(frame);
+        in_rl = NULL;
+        in_left = 0;
+        in_busy = 1;
+        return 0;
+    }
     if (mode & 1) {
         buf[0] &= ~0x08000000u;
     } else {
@@ -270,8 +364,14 @@ int o64_DecDCTout(u32 *buf, int words) {
         return 0; /* from the out callback: the loop below runs it */
     }
     out_running = 1;
+    psx_load_image_skip = fv_now;
     while (out_queued) {
         out_queued = 0;
+        if (fv_now) { /* the transcode's frame: only the slice chain */
+            out_busy = 0;
+            if (out_cb) out_cb();
+            continue;
+        }
         unsigned int t = port_profile_begin();
         int filled = decode_request(out_buf, out_words);
         port_profile_detail_end(PORT_PROFILE_MOVIE_MDEC, t);
@@ -283,6 +383,7 @@ int o64_DecDCTout(u32 *buf, int words) {
             out_cb();
         }
     }
+    psx_load_image_skip = 0;
     out_running = 0;
     return 0;
 }
@@ -297,6 +398,7 @@ s32 o64_DecDCToutSync(s32 mode) {
 
 void o64_DecDCToutCallback(void (*func)()) {
     out_cb = (void (*)(void))func;
+    if (!func) movie_fv_stop(); /* (mbg_stop) */
 }
 
 void o64_DecDCTinCallback(void (*func)()) {

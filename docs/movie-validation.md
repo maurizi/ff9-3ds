@@ -349,11 +349,52 @@ Height: a P-frame's residual is 192 bytes per 8x8 block, written from bank D on 
 is 144 KB, which overflows the 128 KB of bank D. The overflow is read back as zero, shows as black blocks, and
 spreads up from the bottom through the motion compensation. Heights up to 170 fit in bank D; mapping bank E as
 LCD as well (contiguous after D) makes 256x192 decode cleanly. The movies have square pixels (320x224 on a 4:3
-screen), so they scale to 256x179. They are encoded as 256x184 (a multiple of 8) with black padding rows.
+screen), so they scale to 256x179. They are encoded as 256x176: three rows cropped (one at the top, two at the
+bottom). Padding to 184 with black rows instead left the encoder's blocks ringing at the edge between the padding
+and the picture.
 
-Not done yet: exporting every movie, and playback in the port. The plan: the game's player keeps streaming the
-STR for its audio and camera data, the VLC/MDEC calls are skipped, and the matching `.fv` frame is decoded
-instead. Movie backgrounds in fields (MBG) stay on MDEC for now.
+## Implemented: transcoded movies on the DS (2026-10-26)
+
+`tools/fmv_transcode.py --disc N` writes `build/fmv/dN/LBA.fv` for every STR on the disc (40 movies, 364 MB),
+video only. `make fv-blob` builds `build/fv.bin` from the `fastvideo` checkout. It contains the decoder's code and
+tables linked at 0, with their relocations (`tools/fv_blob.py`, `port/ds/fv/`). On the SD card the files go in
+`ff9ds/fv.bin` and `ff9ds/fmv/dN/`. Without them, movies play through the MDEC as before. The PC build always
+uses the MDEC.
+
+* `port/game/movie.c`: when the player expands a frame with the movie in 24-bit mode and a transcode exists, it
+  starts the transcode (`port/ds/movie_fv.c`). The frame's VLC is skipped, its MDEC slices complete without data
+  (the player's callbacks still run, and `LoadImage` drops their uploads), and the STR frame number from the ring
+  slot's sector header selects the `.fv` frame. Leaving 24-bit mode (a movie going on behind a field) hands back
+  to the MDEC. `DecDCToutCallback(0)` (`mbg_stop`) stops it.
+* The decoder is loaded into the player's two 64 KB VLC buffers. Banks A-C hold frames, D and E the residual and
+  the display list. MPU region 2 makes LCD VRAM cacheable for the duration. The software GPU and the hybrid
+  renderer rest: nothing drawn shows over a 24-bit movie, on the PS1 either. Afterwards the display is set up
+  again at the next present.
+* A bank can't be both the reference and on screen, so frame n shows once n+1 is decoded. The next frame's
+  triangles go to the geometry engine while the current one is captured and finished, and its swap is written
+  only once its reference is complete. The texture is read only when the engine renders, after the swap.
+  Everything runs from the player's frame and between the game's own work (`movie_fv_idle` in `psx_frame` and
+  `pace`). The game waits only when the frame to show isn't decoded at all.
+* `mbg_streamGetFrame` is overridden (`config/overrides.txt`). A look for a frame not there yet is a `VSync(-1)`
+  poll. The player looks 1000 times and then seeks the stream again, dropping the ring. On the PS1 the drive goes
+  on delivering during those looks; here virtual time only moved between frames. A faster player therefore spun
+  through its looks with the drive standing still, then seeked. This cost about 12 ms per VBlank, and the stream
+  re-read.
+
+melonDS, original DS, intro (FMVD001), ms per PS1 VBlank (`PROFILE=1`, 128-frame windows ending at frames 1758
+and 2398):
+
+| build | 1758 | 2398 |
+|---|---:|---:|
+| MDEC (2026-10-17, DSi mode) | ~81 | |
+| transcode, first working | 20.9 | 32.5 |
+| + no software GPU, no busy-wait for the swap | 20.3 | 32.4 |
+| + stream looks as polls | 21.3 | 20.0 |
+| + swap deferred, decoding between the game's work, 176 rows | 19.9 | 18.6 |
+
+The PS1 takes 16.7. At 2398: decoding 7.9 ms, waiting for the 3D engine 3.6, SPU 4.2, disc sectors 1.1. The
+decoder runs from main RAM; from ITCM it was 15% faster in the benchmark, but ITCM holds the SPU and the software
+GPU.
 
 ## Still incomplete
 

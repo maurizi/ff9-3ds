@@ -154,11 +154,15 @@ static u16 rgb15(int r, int g, int b) {
     return (u16)(((r >> 3) & 0x1F) | (((g >> 3) & 0x1F) << 5) | (((b >> 3) & 0x1F) << 10));
 }
 
+/* set while a movie's frames come from its transcode (port/game/movie.c): the player's uploads of its (unused) MDEC
+ * output are dropped */
+int psx_load_image_skip;
+
 int LoadImage(RECT *r, u32 *p) {
     if (psx_trace_gpu) {
         port_log("gpu: LoadImage %d,%d %dx%d\n", r->x, r->y, r->w, r->h);
     }
-    if (!psx_vram) {
+    if (!psx_vram || psx_load_image_skip) {
         return 0;
     }
     const int check_mask=gp0_state.check_mask;

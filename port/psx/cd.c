@@ -21,6 +21,7 @@
 #include <stdio.h>
 
 #include "platform.h"
+#include "profile.h"
 
 #define RAW_SECTOR 2352
 #define USER_OFFSET 24
@@ -125,6 +126,10 @@ static CdCallback sync_cb, ready_cb, read_cb;
 static FILE *disc;
 static int disc_no = 1;
 
+int psx_cd_disc(void) {
+    return disc_no;
+}
+
 void psx_cd_select_disc(unsigned selected) {
     if(selected<1 || selected>4) port_fatal("invalid disc %u",selected);
     if(disc) port_fatal("disc selection must precede game initialization");
@@ -153,6 +158,7 @@ static struct {
 static int q_head, q_tail, pumping;
 /* debug snapshot for the platform's watchdog */
 unsigned int psx_cd_debug[6];
+unsigned int psx_cd_read_starts; /* (post-mortems: reads started, as by a stream's seeks) */
 static int last_com_done;
 
 /* ---- disc image ----------------------------------------------------------------------------------------- */
@@ -171,11 +177,19 @@ static int open_disc(void) {
 }
 
 static void read_raw(unsigned int lba, u8 *buf) {
+    unsigned int t = port_profile_begin();
     open_disc();
     BB(0x43440001, lba); BB(0x43440002, buf);
-    if (fseek(disc, (long)lba * RAW_SECTOR, SEEK_SET) != 0 || fread(buf, 1, RAW_SECTOR, disc) != RAW_SECTOR) {
+    /* (no seek for the next sector: on the DS a seek behind the file system's read-ahead walks the image's cluster
+     * chain from its start, which costs more the further into the disc) */
+    static unsigned int next_lba = ~0u;
+    if ((lba != next_lba && fseek(disc, (long)lba * RAW_SECTOR, SEEK_SET) != 0) ||
+        fread(buf, 1, RAW_SECTOR, disc) != RAW_SECTOR) {
+        next_lba = ~0u;
         port_fatal("disc %d: can't read sector %u", disc_no, lba);
     }
+    next_lba = lba + 1;
+    port_profile_detail_end(PORT_PROFILE_CD_READ, t);
 }
 
 static void read_user(unsigned int lba, u8 *buf2048) {
@@ -357,6 +371,7 @@ static int execute(u8 com, const u8 *param, u8 *result) {
         break;
     case CdlReadN:
     case CdlReadS:
+        psx_cd_read_starts++;
         read_lba = loc;
         CdIntToPos((int)loc, (CdlLOC *)last_pos);
         reading = 1;
