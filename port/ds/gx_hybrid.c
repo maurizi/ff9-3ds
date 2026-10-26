@@ -414,7 +414,8 @@ static int mesh_area2(const u32 *xy, const u8 *s, int t, int nclip) {
     return a;
 }
 
-int port_native_mesh(const NativeMesh *nm) {
+/* (ARM in ovl_0b's area: only the battle's btl_drawMesh calls it) */
+PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const NativeMesh *nm) {
     if (!active || place->field) return 0;
     Buffer *b = buffer_at(nm->draw_x, nm->draw_y);
     if (!b || !b->pool) return 0;
@@ -456,7 +457,7 @@ int port_native_mesh(const NativeMesh *nm) {
             u8 f = MB(s, mesh_flags_at[t]);
             int x0 = (s16)xy[vi[0]], y0 = (s16)(xy[vi[0]] >> 16), x1 = (s16)xy[vi[1]], y1 = (s16)(xy[vi[1]] >> 16);
             int x2 = (s16)xy[vi[2]], y2 = (s16)(xy[vi[2]] >> 16);
-            int nclip = x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1;
+            int nclip = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0); /* (NCLIP's sum, factored) */
             info[pi] = 0xFF;
             if (!(f & 2) && nclip <= 0) continue;
             int a2 = mesh_area2(xy, s, t, nclip);
