@@ -628,3 +628,12 @@ Halving the rendering needs work that isn't redone every frame: the background t
 recorded, planned and emitted once and replayed while unchanged, as the models' native path does for meshes. A
 second lever outside rendering is the SPU's voice stepping on the ARM7 (about 3 ms per VBlank everywhere), at the
 cost of up to a frame's latency on the values AKAO reads back (a decision for the user).
+
+### The background composite for still backgrounds (2026-10-26)
+
+The composite (the sprites behind everything in their cells, drawn once into bank A) now also serves a scene whose
+background sprites have hashed the same for 4 frames, and stops at the first change (a scrolling scene would
+compose every frame: forced on, d3_f2205 went from 31.0 to 41.5 ms). Still scenes: d1_f0110 21.7 -> 19.4 ms per
+VBlank, d4_f2110 34.9 -> 33.9, d3_f2205 31.0 -> 31.6 (the per-frame hash). Walking (8 fields of the walking sweep):
+the same within 0.5 ms. The composite's colours sit one step of the LCD's 6 bits below the 3D layer's (the 2D engine
+widens a 5-bit colour as 2c, the 3D engine as 2c + 1), as for the over-budget scenes before.

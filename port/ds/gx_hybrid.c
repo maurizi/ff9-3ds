@@ -3835,6 +3835,7 @@ PORT_OVERLAY_CODE(0a) static void bgc_compose(Buffer *b, int display_h) {
 
 /* The composite for this scene (0: the background stays in the 3D scene): drawn again when it changed; the far
  * sprites marked L_BACK, *polys and *vertices less theirs */
+static u32 bgc_frame_hash; /* the scene's background sprites' hash (field_frame) */
 PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int display_h, int *polys, int *vertices) {
     if (!ovl0a_resident() || !b->slots) return 0;
     /* per 16-pixel cell, the farthest 3D primitive or model group over it (the larger the depth, the nearer): a
@@ -3898,7 +3899,7 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
     }
     *polys -= back_polys;
     *vertices -= back_vertices;
-    u32 hash = bgc_hash(b, display_h);
+    u32 hash = bgc_frame_hash; /* (field_frame's, this scene's) */
     bank_a_as_bg(1);
     back_mode(0);
     if (!bgc.valid || bgc.hash != hash || bgc.tex != bgc_tex) {
@@ -3929,8 +3930,17 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         /* the background composite in bank A for a scene past the 3D engine's polygons or vertices (it would go
          * software), when the additive layer doesn't need bank A; kept a while (a scene near the limit would flip
          * bank A between textures and the bitmap) */
-        static int bgc_keep;
+        /* also for a background that has held still a few frames (a still camera: composed once, its sprites then
+         * neither planned nor sent to the 3D engine), dropped as soon as it moves (a scrolling scene would compose
+         * every frame) */
+        static int bgc_keep, bg_still;
+        static u32 bg_last;
+        u32 bg_now = bgc_frame_hash = bgc_hash(b, display_h);
+        bg_still = bg_now == bg_last ? bg_still + 1 : 0;
+        bg_last = bg_now;
         if (polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) bgc_keep = 60;
+        else if (bg_still >= 4) bgc_keep = bgc_keep > 1 ? bgc_keep : 1;
+        else if (!bg_still) bgc_keep = bgc_keep > 1 ? bgc_keep - 1 : 0;
         else if (bgc_keep) --bgc_keep;
         int composite = !adds && bgc_keep && bgc_use(b, fst, display_h, &polys, &vertices);
         /* the 3D engine's polygon and vertex RAM (2048, 6144 a frame): a scene past them stays exact in software */
