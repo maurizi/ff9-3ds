@@ -112,7 +112,9 @@ typedef struct {
 } Buffer;
 
 static Buffer buffers[2];
-static struct { int valid; u32 hash; unsigned tex; } bgc; /* a field's background composite in bank A (bgc_use) */
+#define BGC_BANDS 32 /* 8-row bands of the buffer, each with its sprites' hash: a change redraws its rows alone */
+static struct { int valid; u32 hash, key, bands[BGC_BANDS]; unsigned tex; } bgc; /* a field's background composite in bank A (bgc_use) */
+static u32 bgc_bands_now[BGC_BANDS]; /* (bgc_hash's, this scene's) */
 
 /* field models (port_native_field_mesh) */
 #define FM_GROUPS 32       /* groups a scene */
@@ -4028,13 +4030,17 @@ static void back_mode(int add) {
 
 PORT_OVERLAY_CODE(0a) static u32 bgc_hash(const Buffer *b, int display_h) {
     u32 h = 2166136261u ^ (u32)display_h ^ b->clear << 12; /* (not the buffer's place: the sprites are relative) */
+    for (int i = 0; i < BGC_BANDS; ++i) bgc_bands_now[i] = 2166136261u + (u32)i;
     for (int k = 0; k < b->count; ++k) {
         const Prim *p = &b->prims[k];
         if (!bg_prim(p)) continue;
         const u32 *w = (const u32 *)p;
-        h = (h ^ w[0]) * 16777619u; h = (h ^ w[1]) * 16777619u; h = (h ^ w[2]) * 16777619u;
-        h = (h ^ w[3]) * 16777619u; h = (h ^ w[5]) * 16777619u; h = (h ^ w[7]) * 16777619u;
-        h = (h ^ w[10]) * 16777619u; h = (h ^ w[11]) * 16777619u;
+        u32 s = (w[0] ^ w[1] * 31u ^ w[2] * 961u) + (w[3] ^ w[5] * 31u ^ w[7] * 961u) * 7u + (w[10] ^ w[11] * 31u) * 49u;
+        h = (h ^ s) * 16777619u;
+        /* (its rows' bands: sprites, so y[0] the top and y[2] the bottom's next) */
+        int y0 = p->y[0] < 0 ? 0 : p->y[0], y1 = p->y[2] - 1;
+        if (y1 > BGC_BANDS * 8 - 1) y1 = BGC_BANDS * 8 - 1;
+        for (int band = y0 >> 3; band <= y1 >> 3; ++band) bgc_bands_now[band] = (bgc_bands_now[band] ^ s) * 16777619u;
     }
     return h;
 }
@@ -4057,6 +4063,39 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void bgc_scale(const
         DC_FlushRange(band, rows * 512);
         dmaCopyWords(3, band, bitmap + (top + oy) * 256, rows * 512);
     }
+}
+
+/* Rows [ry0, ry1] of the buffer only: the sprites over them drawn (clipped to them), the output rows that sample
+ * only them scaled (the others keep theirs), the rows their clear value again. */
+PORT_OVERLAY_CODE(0a) static void bgc_compose_rows(Buffer *b, int display_h, int ry0, int ry1) {
+    int h = display_h > 0 ? display_h : 224, out_h = h * 4 / 5, top = (192 - out_h) / 2;
+    if (ry1 > b->h - 1) ry1 = b->h - 1;
+    if (ry0 > ry1) return;
+    Buffer rows = *b;
+    rows.y = b->y + ry0; rows.h = ry1 - ry0 + 1;
+    fill_buffer(&rows, b->clear == FIELD_KEY ? 0 : b->clear);
+    int clip[4] = {b->x, b->y + ry0, b->x + b->w - 1, b->y + ry1};
+    replay_clip(b, 0, b->count, -2, clip);
+    int oy0 = (4 * ry0 + 4) / 5, oy1 = (4 * ry1 + 3) / 5; /* (output row oy samples row 5 oy / 4) */
+    if (ry0 == 0) oy0 = 0;
+    if (oy1 > out_h - 1) oy1 = out_h - 1;
+    u16 *band = scaled_block(), *bitmap = (u16 *)BG_BMP_RAM(8);
+    for (int oy = oy0; oy <= oy1; oy += BLOCK) {
+        int n = oy1 + 1 - oy < BLOCK ? oy1 + 1 - oy : BLOCK;
+        for (int r = 0; r < n; ++r) {
+            const u16 *src = psx_vram + ((b->y + ((5 * (oy + r)) >> 2)) & 511) * 1024 + b->x;
+            u32 *out = (u32 *)(band + r * 256);
+            for (int dx = 0; dx < 256; dx += 4, src += 5) {
+                out[0] = (src[0] | (u32)src[1] << 16) | 0x80008000u;
+                out[1] = (src[2] | (u32)src[3] << 16) | 0x80008000u;
+                out += 2;
+            }
+        }
+        DC_FlushRange(band, n * 512);
+        dmaCopyWords(3, band, bitmap + (top + oy) * 256, n * 512);
+    }
+    fill_buffer(&rows, b->clear);
+    dirty_cells(b->x, b->y + ry0, b->x + b->w - 1, b->y + ry1);
 }
 
 /* every background sprite drawn by the software renderer into the scene's frame buffer (the PS1's own drawing, in its
@@ -4131,11 +4170,20 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
     u32 hash = bgc_frame_hash; /* (field_frame's, this scene's) */
     bank_a_as_bg(1);
     back_mode(0);
-    if (!bgc.valid || bgc.hash != hash || bgc.tex != bgc_tex) {
+    u32 key = (u32)display_h ^ b->clear << 12;
+    if (!bgc.valid || bgc.tex != bgc_tex || bgc.key != key) {
         bgc_compose(b, display_h);
-        bgc.valid = 1; bgc.hash = hash; bgc.tex = bgc_tex;
+        gxh_stats_bgc++;
+    } else if (bgc.hash != hash) { /* the bands that changed (animated tiles, say): their rows alone */
+        int lo = BGC_BANDS, hi = -1;
+        for (int i = 0; i < BGC_BANDS; ++i)
+            if (bgc.bands[i] != bgc_bands_now[i]) { if (i < lo) lo = i; hi = i; }
+        if (hi >= 0) bgc_compose_rows(b, display_h, lo * 8, hi * 8 + 7);
+        else bgc_compose(b, display_h); /* (the same bands, another order: all of it) */
         gxh_stats_bgc++;
     }
+    bgc.valid = 1; bgc.hash = hash; bgc.tex = bgc_tex; bgc.key = key;
+    memcpy(bgc.bands, bgc_bands_now, sizeof bgc.bands);
     return 1;
 }
 
