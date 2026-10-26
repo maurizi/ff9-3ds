@@ -508,6 +508,20 @@ GTE_HOT static void mat_mul(int mbase, i64 vx, i64 vy, i64 vz, i64 tx, i64 ty, i
 
 /* Interpolate MAC (in .12 colour units) toward the far colour by IR0, then push the colour FIFO. */
 GTE_HOT static void interpolate(i64 m1, i64 m2, i64 m3, int sf, int lm) {
+#define FITS(v, bits) ((uint64_t)((i64)(v) + ((i64)1 << (bits))) < ((uint64_t)1 << ((bits) + 1))) /* -2^bits <= v < 2^bits */
+    if (sf && FITS(m1, 29) && FITS(m2, 29) && FITS(m3, 29) && FITS(RFC, 17) && FITS(GFC, 17) && FITS(BFC, 17)) {
+        /* every sum within 32 bits (colours: DPCS's RGB << 16, INTPL's IR << 12, the lighting's colour x IR << 4),
+         * so the same MAC, IR and FLAG as below without the 64-bit arithmetic (the 44-bit flags can't be set) */
+        i32 a1 = (RFC * 4096 - (i32)m1) >> 12, a2 = (GFC * 4096 - (i32)m2) >> 12, a3 = (BFC * 4096 - (i32)m3) >> 12;
+        g.d[25] = (u32)a1; g.d[26] = (u32)a2; g.d[27] = (u32)a3;
+        set_ir(1, a1, 0); set_ir(2, a2, 0); set_ir(3, a3, 0);
+        i32 b1 = (IR1 * IR0 + (i32)m1) >> 12, b2 = (IR2 * IR0 + (i32)m2) >> 12, b3 = (IR3 * IR0 + (i32)m3) >> 12;
+        g.d[25] = (u32)b1; g.d[26] = (u32)b2; g.d[27] = (u32)b3;
+        set_ir(1, b1, lm); set_ir(2, b2, lm); set_ir(3, b3, lm);
+        push_color();
+        return;
+    }
+#undef FITS
     int shift = sf * 12;
     set_ir(1, set_mac(1, ((i64)RFC * 4096) - m1, shift), 0);
     set_ir(2, set_mac(2, ((i64)GFC * 4096) - m2, shift), 0);
