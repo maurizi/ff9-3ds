@@ -1028,6 +1028,10 @@ typedef struct {
 } Region;
 
 static Region regions[MAX_REGIONS];
+/* PS1 VRAM cells (32 halfwords x 16 lines) holding any region's texels or CLUT or any palette's colours (a superset:
+ * rebuilt when one is placed), for regions_touch to pass over the writes elsewhere at once */
+static u32 touch_cells[32];
+static int touch_stale = 1;
 static u8 unit_used[TEX_UNITS];
 /* Untextured additive glows sample a fixed ramp whose alpha rises along U (A5I3, 32x8, white): each vertex's U is
  * its brightness, so the interpolated coordinate is a per-pixel alpha (the DS has none per vertex). */
@@ -1111,6 +1115,7 @@ static Region *place_region(int depth, int conv, int cx, int cy, int x, int y, i
         if (conv) cpal_users[cpal]--;
         return NULL;
     }
+    touch_stale = 1;
     regions[i] = (Region){1, depth, x, y, wh, h, 1 << sw, 1 << sh, (u32)(sw - 3) << 20 | (u32)(sh - 3) << 23,
                           unit, units, 1, 1, conv, cx, cy, cpal};
     return &regions[i];
@@ -1317,8 +1322,39 @@ void psx_vram_touch(int x, int y, int w, int h) {
 }
 
 static void runs_touch(int x, int y, int w, int h);
+/* cells x0..x1 of a cell row, as bits (x clamped to VRAM) */
+static inline u32 cell_columns(int x, int w) {
+    int x0 = x < 0 ? 0 : x > 1023 ? 1023 : x, x1 = x + w - 1;
+    x1 = x1 < x0 ? x0 : x1 > 1023 ? 1023 : x1;
+    return ((2u << (x1 >> 5)) - 1) & ~((1u << (x0 >> 5)) - 1);
+}
+static void cells_mark(int x, int y, int w, int h) {
+    u32 cols = cell_columns(x, w);
+    int y0 = y < 0 ? 0 : y > 511 ? 511 : y, y1 = y + h - 1;
+    y1 = y1 < y0 ? y0 : y1 > 511 ? 511 : y1;
+    for (int r = y0 >> 4; r <= y1 >> 4; ++r) touch_cells[r] |= cols;
+}
 static void regions_touch(int x, int y, int w, int h) {
     runs_touch(x, y, w, h);
+    if (touch_stale) {
+        touch_stale = 0;
+        memset(touch_cells, 0, sizeof touch_cells);
+        for (int i = 0; i < MAX_REGIONS; ++i) {
+            const Region *r = &regions[i];
+            if (!r->used) continue;
+            cells_mark(r->x, r->y, r->wh, r->h);
+            if (r->conv && r->depth < 2) cells_mark(r->clut_x, r->clut_y, r->depth ? 256 : 16, 1);
+        }
+        for (int i = 0; i < PAL_SLOTS; ++i)
+            if (palettes[i].used) cells_mark(palettes[i].x, palettes[i].y, palettes[i].count, 1);
+    }
+    if (w > 0 && h > 0) { /* (an empty one keeps the full test's verdict) */
+        u32 cols = cell_columns(x, w), any = 0;
+        int y0 = y < 0 ? 0 : y > 511 ? 511 : y, y1 = y + h - 1;
+        y1 = y1 < y0 ? y0 : y1 > 511 ? 511 : y1;
+        for (int r = y0 >> 4; r <= y1 >> 4; ++r) any |= touch_cells[r];
+        if (!(any & cols)) return;
+    }
     for (int i = 0; i < MAX_REGIONS; ++i) {
         Region *r = &regions[i];
         if (r->used && x < r->x + r->wh && r->x < x + w && y < r->y + r->h && r->y < y + h) r->dirty = 1;
@@ -1611,6 +1647,7 @@ palette:
             if (empty < 0) return;
             s = empty;
             palettes[s] = (Palette){1, p->clut_x, p->clut_y, count, 1, 0, 0, plan_scale};
+            touch_stale = 1;
         }
         palettes[s].wanted = 1;
         *palette_out = (u8)s;
@@ -3831,6 +3868,7 @@ void gxh_enable(int on) {
         unit_used[RAMP_UNIT] = 1;
         ramp_written = 0;
         memset(palettes, 0, sizeof palettes);
+        touch_stale = 1;
         for (int i = 0; i < 2; ++i) { buffers[i].valid = 0; buffers[i].count = 0; }
         ++buffers_version;
         gp0_backend = &hybrid_backend;
