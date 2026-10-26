@@ -785,3 +785,11 @@ It is data: `D_800CF580[5]` (declared in ovl_0c.h), the word `func_800CF588` tha
 `btlbg_setOtShift`). Asked: split it out of the text as data (like the `textbin` table at 0x28A80) and name it,
 so the code ranges in the split config are exactly the bytes nothing reads. A list of any other data kept in
 `.text` (in any overlay or main) would let the port reuse those ranges without its own exception list.
+
+### F34 (2026-10-26). Buffers named by their PS1 address in headers
+`TITLE_PACK_BUF` (ovl_14.h), `DISC_PICTURE_BUF` (ovl_3e.h), `CARD_VRAM_SAVE_BUF` (ovl_36.h), `SAVE_BUF` (ovl_39.h)
+and `g_tmCardData` / `g_tmDecks` / `g_tmOpponents` (ovl_0d.h) are `((T *)0x801CDF00)`-style constants. On the PS1
+that is the buffer; in the port a pointer is native, so the title's TIM pack read went to address 0x801CDF00 (the
+host crashed at boot, CdGetSector from cd_onSectorReady). The port redefines them through `PSX_ADDR` in
+`port/include/port_prelude.h`. Asked: name such buffers as symbols (`extern u8 D_801CDF00[]` placed by the
+linker, as other fixed RAM is) or one macro the port can redefine for all, so new ones don't break a port build.
