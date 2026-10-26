@@ -14,14 +14,14 @@ void movie_fv_stop(void);
 int movie_fv_active(void);
 
 /* A 15-bit MBG (behind a field) from its transcode, decoded by the CPU into the player's MDEC slices: start (1 if it
- * plays), the player starting STR frame `frame` (1-based; 0 if it couldn't be decoded), a slice of columns
+ * plays, 0 if it has no transcode, -1 if it can't start yet), the player starting STR frame `frame` (1-based; 0 if it couldn't be decoded), a slice of columns
  * [x, x + w), h rows, filled row by row (`stp` the MDEC's bit 15), stop. */
 int movie_fv_mbg_start(void *work, unsigned int size, unsigned int lba);
 int movie_fv_mbg_frame(unsigned int frame);
 void movie_fv_mbg_slice(unsigned short *dst, int x, int w, int h, unsigned int stp);
 void movie_fv_mbg_stop(void);
 int movie_fv_mbg_active(void);
-/* gx_hybrid.c: banks B-D to a movie behind the field and back (1 if taken) */
+/* gx_hybrid.c: banks B-D to a movie behind the field and back (1 if taken, 0 if not now) */
 int gxh_movie_banks(int take);
 
 /* display.c: the VBlank interrupt, and the game's waits for VBlanks (pace) */

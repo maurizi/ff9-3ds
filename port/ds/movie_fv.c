@@ -657,7 +657,7 @@ void movie_fv_stop(void) {
 #define MBG_LIST ((u32 *)0x06870000)                                 /* D, before the hybrid's ramp at its end */
 #define MBG_LIST_MAX (0x0687F800 - 0x06870000)
 
-__attribute__((weak)) int gxh_movie_banks(int take) { (void)take; return 0; }
+__attribute__((weak)) int gxh_movie_banks(int take) { (void)take; return -1; } /* (no field renderer to take from) */
 
 static int mbg_active, mbg_ref = -1, mbg_latest = -1;
 static u16 mbg_col_x[320]; /* PS1 column -> the transcode's */
@@ -753,14 +753,16 @@ int movie_fv_mbg_active(void) {
 MOVIE_CODE int movie_fv_mbg_start(void *work, unsigned int size, unsigned int lba) {
     if (mbg_active) movie_fv_mbg_stop();
     if (active) movie_fv_stop();
+    int banks = gxh_movie_banks(1);
+    if (banks <= 0) return banks < 0 ? 0 : -1; /* (0: the field's renderer not back yet, after a full-screen part) */
     char path[64];
     snprintf(path, sizeof path, "%s/fmv/d%d/%u.fv", plat_data_dir(), psx_cd_disc(), lba);
     file = fopen(path, "rb");
-    if (!file) return 0;
-    if (fread(&header, sizeof header, 1, file) != 1 || header.signature != 0x53445646 || header.width != MOVIE_W ||
-        header.height != MOVIE_H || !header.keys || !gxh_movie_banks(1)) {
-        fclose(file);
+    if (!file || fread(&header, sizeof header, 1, file) != 1 || header.signature != 0x53445646 ||
+        header.width != MOVIE_W || header.height != MOVIE_H || !header.keys) {
+        if (file) fclose(file);
         file = NULL;
+        gxh_movie_banks(0);
         return 0;
     }
     u8 *w = (u8 *)(((u32)work + 31) & ~31u);

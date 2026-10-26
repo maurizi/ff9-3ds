@@ -485,7 +485,14 @@ the picture turned to blocks.
 
 The transcodes' quality: the encoder's trellis weighs rate against distortion with a fixed 200; `fmv_transcode.py
 --lambda 30` (an encoder build taking `FV_LAMBDA`) keeps visibly more of the trees' detail for 1.7 times the size
-(MBG108 1.1 -> 1.8 MB) and the same decoding time. (Its q is only written into the header.)
+(MBG108 1.1 -> 1.8 MB) and the same decoding time. (Its q is only written into the header.) A heavy movie decodes
+slower with more detail, though: MBG101 (the crane over Alexandria, about 13 KB a frame at 200) takes 51 ms a movie
+frame at 200, 62 at 80 and 69 at 30, against 67 ms between its frames. `--lambda auto` (the MBGs') keeps 200 unless
+the frames average under 8 KB, then takes 30.
+
+MBG101 starts full-screen and goes behind the field: its MBG part waited until the field's renderer was back
+(`gxh_movie_banks` 0: tried again at the next frame). d1_f0100 at frame 900: 87 ms per VBlank on the MDEC, 32.9
+from the transcode (the decoding 11.7).
 
 d2_f1464 at frame 900 (MBG108 playing), original DS: 90.6 ms per VBlank with the VLC and the MDEC (76 of it), 26.3
 from the transcode: the decoding 7.6 (30 ms a movie frame), the slices 3.8, the field in software the rest.

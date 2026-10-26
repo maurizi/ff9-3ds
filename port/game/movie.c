@@ -71,7 +71,7 @@ static int fv_take(u8 *bs, u32 *out) {
         movie_fv_stop();
         if (!movie_fv_mbg_active() && !fv_mbg_unavailable &&
             !movie_fv_mbg_start(in0, 0x20000, (unsigned int)g_mbgStream.baseSector))
-            fv_mbg_unavailable = 1;
+            fv_mbg_unavailable = 1; /* (-1, not yet: tried again at the next frame) */
         if (!movie_fv_mbg_active()) return 0;
         fv_frame_of[idx] = slot_frame(bs);
         return fv_frame_of[idx] != 0;
