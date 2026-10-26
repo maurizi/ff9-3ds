@@ -521,6 +521,42 @@ With walking input from frame 300 (`tools/walk_presses.py`, encounters and all),
 sweep all reach frame 1500 (two, d4_w9000 and d4_w9009, inside a battle with no complete timing block): 20.6-45.8 ms
 per VBlank where timed. d4_w9000 had stalled at frame 1453 in software.
 
+## Field models native (FIELDGX=1, 2026-10-25)
+
+The user's choice of 2026-10-25 (native drawing, per-pixel depth). Model polygons were most of a field's cost (the
+experiment above: d4_f2110 55.7 -> 22.3 ms without them).
+
+- The field's primitives are depth tested, each at its OT entry's depth (as the world map's: opaque ones from the last
+  of an entry, translucent ones in order just in front).
+- `fldmdl_drawMesh` is wrapped (`port/game/field_mesh.c`, renamed `_link`): `port_native_field_mesh` takes the group's
+  vertices as `fldmdl_projectMesh` left them (x and y in 11 bits each, as the GTE saturates them, and 10 bits of depth
+  from the group's nearest OT entry, 4 bytes a vertex), culls its polygons as `model_link.c` does (NCLIP unless
+  double-sided) and keeps their bits. The scene is sent two frames later: three slots by OT generation, in the rest
+  of ovl_0a's dead code range (3456 vertices a scene; field buffers at most 1500 primitives, as a scene with its
+  models native records about 400-900).
+- A group's translucent polygons are linked into the OT as `model_link.c` does (`link_translucent`), so they keep
+  the PS1's order; its opaque ones are drawn natively, each vertex at its own depth on the OT entries' scale.
+- The 3D engine's budget counts the polygons actually drawn (an estimate of half sent d4_f2110 into software).
+- A group the game freed or reused before its scene is sent (a field change) is skipped (its polygon records and
+  counts as taken; an index past its vertices), and a sector loaded over the ring empties it: d1_f0456 crashed at
+  frame 368 without this.
+- A buffer that fills goes software for that scene only: the 60-scene hold kept the models in packets, which filled
+  the next buffer too. The snapshot doesn't look at the buffer's soft flag or the GPU's backend (both the last
+  scene's).
+- Memory: port code only an overlay calls lives in that overlay's native area (`PORT_OVERLAY_CODE`, native_mesh.h):
+  the world map's overrides in ovl_0c (slot 0 is sized by ovl_0b), the field models' hooks and their emission (ARM,
+  one loop per polygon kind) in ovl_0a, whose tail the 1500-primitive buffers leave free. The DS-mode heap had only a
+  few KB over the shadows: a 6 KB resident growth stopped the build at boot ("no room for the VRAM/SPU shadows").
+
+Original DS, PROFWIN=1024, ms per PS1 VBlank: d4_f2110 57.9 -> 36.2, d3_f2205 48.9 -> 33.8, d1_f0110 32.5 -> 24.2;
+screens as the host's.
+
+Measuring: PROFILE=3 now counts from CAPTURE_FRAME / 2 to the capture (it counted the load and the 16 s wait for
+the state, which made the VBlank wait look like a third of the frame), and its window build (PCLO) fits DS mode's
+heap. `ds_profile.py` calls a frame-0 stall after 300 s (a fatal stop at boot used to wait out the 45-minute timeout).
+In d4_f2110 skipping the background tiles' planning and emission saves only 3.5 ms (44.6 -> 41.1): the rear plane
+would buy less than its cost suggested.
+
 ## 54 battles after the architecture levers (2026-10-25)
 
 The 24 bosses and the 30 random battles again on 0f71760 (UI drawn once a game frame, GTE register file in DTCM,
