@@ -104,8 +104,8 @@ static void block(const u16 *ref, u16 *dst, int bx, int by, int ax, int ay, int 
     }
 }
 
-void fv_mc_predict(const u16 *ref, u16 *dst, const u32 *list_a, const u32 *list_b, int h) {
-    const int rows = h / 8, top = h / 16, shift = 256 - h;
+void fv_mc_predict(const u16 *ref, u16 *dst, const u32 *list_a, const u32 *list_b, int h, int bottom) {
+    const int rows = h / 8, top = h / 16, shift = bottom;
     const u32 *a = list_a, *b = list_b; /* each block's texcoord word: s (1/16 texel) low, t high */
     for (int by = 0; by < rows; ++by) {
         if (by == top) { a += 3; b += 3; } /* (the lists' texture switch between the halves) */

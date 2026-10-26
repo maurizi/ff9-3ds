@@ -8,6 +8,7 @@
 
 /* The prediction of a P-frame of `h` rows from `ref` into `dst` (RGB555, bit 15 set), from the texcoords the vector
  * decoder wrote: `list_a` and `list_b` at the first block's texcoord in each list (5 words a block, 3 more between
- * the halves). */
-void fv_mc_predict(const uint16_t *ref, uint16_t *dst, const uint32_t *list_a, const uint32_t *list_b, int h);
+ * the halves); `bottom`: the rows the bottom half's texcoords carry (the decoder's texYOffset / 2). */
+void fv_mc_predict(const uint16_t *ref, uint16_t *dst, const uint32_t *list_a, const uint32_t *list_b, int h,
+                   int bottom);
 #endif

@@ -401,10 +401,18 @@ longer ticks in hardware mode), disc sectors 1.0.
 
 Frames show when the player shows them: a frame can't be shown while it is the next one's reference, so the player's
 frame n needs n+1 decoded. The first frames build that one-frame lead (the player waits for it) and the decoding
-keeps it (frame n+1 already decoded at 519 of 522 frames by 2398, 16.74 ms per VBlank). Keeping it needed the
-chain from one frame's finish to the next's within four VBlanks: the capture is armed with the swap when the swap
-is written mid-frame (it starts at the next line 0, after the swap), and the swap waits for its triangles' DMA
-instead of retrying later.
+keeps it (frame n+1 decoded at every call by 1758 and 2398; 16.73-16.74 ms per VBlank). Keeping it needed the chain
+from one frame's finish to the next's within four VBlanks: the swap waits for its triangles' DMA and the geometry
+engine to drain (rather than retrying later), so it lands at the next VBlank; that VBlank's interrupt waits a moment
+for the engine's busy flag (it can still read busy right after the swap) before arming the capture, rather than a
+frame. Arming the capture together with a swap written mid-frame took the last prediction in some frames instead.
+
+The frames sit from bank row 8 (the screen's row 8 too), with their first row repeated above. From row 0 the top
+row of the motion compensation's triangles started 8 rows above the screen, and the 3D engine's clipped texcoords
+sampled off the encoder's prediction there: about 820 of the first 8 rows' pixels a frame, carried on by later
+P-frames until the next key frame. The list's fixed head (a black strip along the top of the screen, for the stock
+player's layout) is skipped. `fv_bench_mc` now finds the 3D engine's prediction and the CPU's (the encoder's model)
+identical on all 708 P-frames of the intro.
 
 ## Movies in fields: survey (2026-10-26)
 
@@ -452,10 +460,8 @@ frame's edges: the encoder's model of the two blended passes. Inside the frame, 
 average rounded up, done two pixels a word ((x | y) - ((x ^ y) >> 1) per 5-bit field).
 
 `make build/tests/fv_bench_mc.nds` checks it against the 3D engine's capture on every P-frame of the intro (708).
-Block rows 1-21 match exactly. Row 0 differs (about 820 pixels a frame), where the 3D engine clips the triangles that
-start 8 rows above the screen: its clipped texcoords sample differently from the encoder's model. The CPU follows the
-encoder there, so the 3D path's top 8 rows are the inexact ones (to fix there: blocks 8 rows down the screen, the
-reference and the capture with them, and the frame's first row repeated above it).
+Block rows 1-21 matched exactly at first; row 0 differed where the 3D engine clipped the triangles that started 8
+rows above the screen. With the frames moved to row 8 (above) all rows match.
 
 On the original DS the CPU prediction takes 14.4 ms a frame. Most of that is cache-line fills from the reference,
 8 scattered rows a block from two places. With the vectors (1 ms), the residual (12) and the finish (9), a CPU-decoded

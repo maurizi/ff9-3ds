@@ -34,6 +34,16 @@ int psx_cd_disc(void);
 #define MOVIE_W 256
 #define MOVIE_H 176
 #define BANK_LCD(b) ((u16 *)(0x06800000 + 0x20000 * (b)))
+/* Frames from bank (and screen) row 8: the top row of the motion compensation's triangles then starts on the
+ * screen. Clipped at its top, as from row 0, their texcoords sample off the encoder's prediction (fv_bench_mc: about
+ * 820 pixels a frame of the first 8 rows); from row 8 the 3D engine's prediction is the encoder's, exactly. The
+ * frame's first row is repeated above it, which the texture's top clamp then reads, as the encoder clamps. */
+#define TOP 8
+#define FRAME(b) (BANK_LCD(b) + TOP * 256)
+/* The list's fixed head starts with a black triangle strip along the top of the screen (the stock player's layout),
+ * in front of the blocks: it would black out the frame's first rows. The DMA starts after it, at the blocks' polygon
+ * attributes and texture. */
+#define LIST_SKIP (172 * 4)
 #define RESIDUAL ((u8 *)0x06860000)          /* bank D, on into E */
 #define LIST ((u32 *)0x06884000)             /* bank E, after the residual's 138 KB */
 #define LIST_MAX (0x06890000 - 0x06884000)
@@ -165,9 +175,9 @@ MOVIE_CODE static u32 *block_list(u32 *dl, u32 tex_param) {
         for (int x = 0; x < MOVIE_W / 8; x++) {
             *dl++ = FIFO_COMMAND_PACK(FIFO_TEX_COORD, FIFO_VERTEX10, FIFO_VERTEX10, FIFO_VERTEX10);
             *dl++ = 0;
-            *dl++ = BLOCK_VTX(x * 8, y * 8 - 8, 33 - x);
-            *dl++ = BLOCK_VTX(x * 8, y * 8 + 8, 32 - x);
-            *dl++ = BLOCK_VTX(x * 8 + 16, y * 8 + 8, 32 - x);
+            *dl++ = BLOCK_VTX(x * 8, y * 8 - 8 + TOP, 33 - x);
+            *dl++ = BLOCK_VTX(x * 8, y * 8 + 8 + TOP, 32 - x);
+            *dl++ = BLOCK_VTX(x * 8 + 16, y * 8 + 8 + TOP, 32 - x);
         }
     *dl++ = FIFO_COMMAND_PACK(FIFO_END, FIFO_TEX_FORMAT, FIFO_BEGIN, FIFO_NOP);
     *dl++ = tex_param;
@@ -176,9 +186,9 @@ MOVIE_CODE static u32 *block_list(u32 *dl, u32 tex_param) {
         for (int x = 0; x < MOVIE_W / 8; x++) {
             *dl++ = FIFO_COMMAND_PACK(FIFO_TEX_COORD, FIFO_VERTEX10, FIFO_VERTEX10, FIFO_VERTEX10);
             *dl++ = 0;
-            *dl++ = BLOCK_VTX(x * 8, y * 8 - 8, 33 - x);
-            *dl++ = BLOCK_VTX(x * 8, y * 8 + 8, 32 - x);
-            *dl++ = BLOCK_VTX(x * 8 + 16, y * 8 + 8, 32 - x);
+            *dl++ = BLOCK_VTX(x * 8, y * 8 - 8 + TOP, 33 - x);
+            *dl++ = BLOCK_VTX(x * 8, y * 8 + 8 + TOP, 32 - x);
+            *dl++ = BLOCK_VTX(x * 8 + 16, y * 8 + 8 + TOP, 32 - x);
         }
     return dl;
 }
@@ -311,6 +321,13 @@ MOVIE_CODE static void residual(int k, const u16 *rest) {
     port_profile_detail_end(PORT_PROFILE_MOVIE_FV, t);
 }
 
+/* (the frame's first row above it: TOP) */
+MOVIE_CODE static void repeat_top(int b) {
+    u32 *bank = (u32 *)BANK_LCD(b);
+    for (int r = 0; r < TOP; ++r)
+        for (int i = 0; i < 128; ++i) bank[r * 128 + i] = bank[TOP * 128 + i];
+}
+
 /* The P-frame captured: add its residual; it becomes the reference. */
 MOVIE_CODE static void finish_frame(void) {
     while (phase != CAPTURED) {
@@ -320,7 +337,8 @@ MOVIE_CODE static void finish_frame(void) {
     if (res_frame != target_frame) residual(target_frame, target_rest);
     unsigned int t = port_profile_begin();
     DC_FlushAll(); /* (the capture wrote the prediction behind the cache) */
-    fv->finish(dec, RESIDUAL, BANK_LCD(target));
+    fv->finish(dec, RESIDUAL, FRAME(target));
+    repeat_top(target);
     res_frame = -1;
     movie_fv_stats[1]++;
     DC_FlushAll();
@@ -338,26 +356,20 @@ MOVIE_CODE static int swap_frame(void) {
     if (geo_frame < 0 || target >= 0 || latest != geo_frame - 1 || ref < 0) return 0;
     int b = free_bank(1);
     if (b < 0) return 0;
-    while (DMA_CR(1) & DMA_BUSY) {} /* (the triangles' last words: the swap goes after them) */
+    /* (the triangles' last words in, and through the geometry engine: the swap then comes at the next VBlank) */
+    while (DMA_CR(1) & DMA_BUSY) {}
+    while (GFX_STATUS & (1 << 27)) {}
     vram_cr[ref] = 0x83; /* texture slot 0 */
     if (b != shown) vram_cr[b] = 0x80;
     target = b;
     target_frame = geo_frame;
     target_rest = geo_rest;
     geo_frame = -1;
-    /* The swap comes at the next VBlank. Written well before it (the engine has a few commands left at most), the
-     * capture can be armed now: it starts at the next line 0, after that swap. Otherwise the VBlank interrupt arms
-     * it at the first VBlank that finds the engine idle (swapped). */
-    int irq = enterCriticalSection();
+    /* The swap at the next VBlank; the capture is armed at the first VBlank that finds the engine idle (swapped):
+     * armed together with a swap written mid-frame instead, it took the last prediction in some frames (melonDS, the
+     * intro's frame ~520). */
     GFX_FLUSH = 0;
-    if (REG_VCOUNT < 176) {
-        REG_DISPCAPCNT = DCAP_ENABLE | DCAP_MODE(DCAP_MODE_A) | DCAP_BANK(target) | DCAP_SIZE(DCAP_SIZE_256x192) |
-                         DCAP_SRC_A(DCAP_SRC_A_3DONLY);
-        phase = CAPTURING;
-    } else {
-        phase = LISTED;
-    }
-    leaveCriticalSection(irq);
+    phase = LISTED;
     return 1;
 }
 
@@ -378,9 +390,9 @@ MOVIE_CODE static int start_frame(int n) {
             geo_rest = fv->vectors(dec, src);
             port_profile_detail_end(PORT_PROFILE_MOVIE_VLC, ta); /* (the vectors alone) */
             DC_FlushRange(fv->list, list_bytes);
-            DMA_SRC(1) = (u32)fv->list;
+            DMA_SRC(1) = (u32)fv->list + LIST_SKIP;
             DMA_DEST(1) = (u32)&GFX_FIFO;
-            DMA_CR(1) = DMA_FIFO | (list_bytes >> 2);
+            DMA_CR(1) = DMA_FIFO | ((list_bytes - LIST_SKIP) >> 2);
             geo_frame = n;
             ok = 1;
         }
@@ -392,7 +404,8 @@ MOVIE_CODE static int start_frame(int n) {
         int b = free_bank(0);
         if (b >= 0) {
             vram_cr[b] = 0x80;
-            fv->decode_i(dec, src, (u8 *)BANK_LCD(b));
+            fv->decode_i(dec, src, (u8 *)FRAME(b));
+            repeat_top(b);
             movie_fv_stats[4]++;
             DC_FlushAll();
             bank_frame[b] = n;
@@ -466,6 +479,8 @@ void movie_fv_vblank(void) {
         shown = flip_to;
         flip_to = -1;
     }
+    /* (the engine may still read busy for a moment at the VBlank that swaps: a short wait rather than a frame's) */
+    for (int spin = 0; phase == LISTED && (GFX_STATUS & (1 << 27)) && spin < 256; ++spin) {}
     if (phase == LISTED && !(GFX_STATUS & (1 << 27))) {
         REG_DISPCAPCNT = DCAP_ENABLE | DCAP_MODE(DCAP_MODE_A) | DCAP_BANK(target) | DCAP_SIZE(DCAP_SIZE_256x192) |
                          DCAP_SRC_A(DCAP_SRC_A_3DONLY);
@@ -565,8 +580,8 @@ MOVIE_CODE int movie_fv_start(void *work, unsigned int size, unsigned int lba) {
     file_next = 1 << 30;
     fv->init(dec);
     dec->y_blocks = MOVIE_H / 8;
-    dec->tex_y_offset = (256 - MOVIE_H) << 1;
-    u32 tex_param = 0xDED00000 + (((-(256 - MOVIE_H) * 256 * 2) >> 3) & 0xFFFF);
+    dec->tex_y_offset = (256 - MOVIE_H - TOP) << 1;
+    u32 tex_param = 0xDED00000 + (((-(256 - MOVIE_H - TOP) * 256 * 2) >> 3) & 0xFFFF);
     u32 *dl = block_list(fv->list_a, tex_param);
     *dl++ = FIFO_COMMAND_PACK(FIFO_END, FIFO_POLY_FORMAT, FIFO_TEX_FORMAT, FIFO_BEGIN);
     *dl++ = 0x0F4080;
@@ -591,7 +606,7 @@ MOVIE_CODE int movie_fv_start(void *work, unsigned int size, unsigned int lba) {
     REG_BG2CNT = (u16)BgSize_B16_256x256;
     REG_BG2PA = 256; REG_BG2PB = 0; REG_BG2PC = 0; REG_BG2PD = 256;
     REG_BG2X = 0;
-    REG_BG2Y = -(((192 - MOVIE_H) >> 1) << 8);
+    REG_BG2Y = (TOP - ((192 - MOVIE_H) >> 1)) << 8;
     vblanks_since_frame = 0;
     active = 1;
     port_log("movie: %s, %u frames\n", path, (unsigned int)header.frames);

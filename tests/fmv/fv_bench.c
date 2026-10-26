@@ -25,6 +25,9 @@ static u16 mc[256 * 192];
 static u32 mc_bad_frames, mc_bad_pixels, mc_ticks, mc_rows[24], mc_example[6];
 #endif
 
+/* the frame from bank (and screen) row 8: the top row of triangles starts on screen, unclipped (clipped, its texcoords
+ * sample off the encoder's prediction); its first row repeated above it, as the texture's top clamp then reads */
+#define TOP 8
 #define BLOCK_VTX(x, y, z) (((x) & 0x3FF) | ((((y) >> 3) & 0x3FF) << 10) | ((z) << 20))
 
 /* the motion compensation's quads: a texcoord the vector decoder fills, then three VTX_10 per 16x16 block */
@@ -34,9 +37,9 @@ static u32 *mb_list(u32 *dl, int height, u32 tex_param) {
         for (int x = 0; x < 32; x++) {
             *dl++ = FIFO_COMMAND_PACK(FIFO_TEX_COORD, FIFO_VERTEX10, FIFO_VERTEX10, FIFO_VERTEX10);
             *dl++ = 0;
-            *dl++ = BLOCK_VTX(x * 8, y * 8 - 8, 33 - x);
-            *dl++ = BLOCK_VTX(x * 8, y * 8 + 8, 32 - x);
-            *dl++ = BLOCK_VTX(x * 8 + 16, y * 8 + 8, 32 - x);
+            *dl++ = BLOCK_VTX(x * 8, y * 8 - 8 + TOP, 33 - x);
+            *dl++ = BLOCK_VTX(x * 8, y * 8 + 8 + TOP, 32 - x);
+            *dl++ = BLOCK_VTX(x * 8 + 16, y * 8 + 8 + TOP, 32 - x);
         }
     *dl++ = FIFO_COMMAND_PACK(FIFO_END, FIFO_TEX_FORMAT, FIFO_BEGIN, FIFO_NOP);
     *dl++ = tex_param;
@@ -45,9 +48,9 @@ static u32 *mb_list(u32 *dl, int height, u32 tex_param) {
         for (int x = 0; x < 32; x++) {
             *dl++ = FIFO_COMMAND_PACK(FIFO_TEX_COORD, FIFO_VERTEX10, FIFO_VERTEX10, FIFO_VERTEX10);
             *dl++ = 0;
-            *dl++ = BLOCK_VTX(x * 8, y * 8 - 8, 33 - x);
-            *dl++ = BLOCK_VTX(x * 8, y * 8 + 8, 32 - x);
-            *dl++ = BLOCK_VTX(x * 8 + 16, y * 8 + 8, 32 - x);
+            *dl++ = BLOCK_VTX(x * 8, y * 8 - 8 + TOP, 33 - x);
+            *dl++ = BLOCK_VTX(x * 8, y * 8 + 8 + TOP, 32 - x);
+            *dl++ = BLOCK_VTX(x * 8 + 16, y * 8 + 8 + TOP, 32 - x);
         }
     return dl;
 }
@@ -116,8 +119,8 @@ int main(void) {
 
     fv_initDecoderAsm(&dec);
     dec.yBlocks = height / 8;
-    dec.texYOffset = (256 - height) << 1;
-    u32 tex_param = 0xDED00000 + (((-(256 - height) * 256 * 2) >> 3) & 0xFFFF);
+    dec.texYOffset = (256 - height - TOP) << 1;
+    u32 tex_param = 0xDED00000 + (((-(256 - height - TOP) * 256 * 2) >> 3) & 0xFFFF);
     u32 *dl = mb_list(fv_gMcGxCmdBufA, height, tex_param);
     *dl++ = FIFO_COMMAND_PACK(FIFO_END, FIFO_POLY_FORMAT, FIFO_TEX_FORMAT, FIFO_BEGIN);
     *dl++ = 0x0F4080;
@@ -137,7 +140,7 @@ int main(void) {
     videoSetMode(MODE_5_3D | DISPLAY_BG2_ACTIVE);
     REG_BG2CNT = (u16)BgSize_B16_256x256;
     REG_BG2PA = 256; REG_BG2PB = 0; REG_BG2PC = 0; REG_BG2PD = 256;
-    REG_BG2X = 0; REG_BG2Y = -((192 - height) >> 1) << 8;
+    REG_BG2X = 0; REG_BG2Y = (TOP - ((192 - height) >> 1)) << 8;
     REG_DISPCNT = MODE_5_2D | DISPLAY_BG2_ACTIVE;
     TIMER_DATA(0) = 0; TIMER_DATA(1) = 0;
     TIMER_CR(1) = TIMER_ENABLE | TIMER_CASCADE;
@@ -179,9 +182,10 @@ int main(void) {
             vram_cr[ref] = 0x80;
             DC_FlushAll();
             u32 tm = ticks();
-            fv_mc_predict(bank_lcd(ref), mc, (const u32 *)fv_gMcGxCmdBufA + 1, dec.dlB, height);
+            fv_mc_predict(bank_lcd(ref) + TOP * 256, mc, (const u32 *)fv_gMcGxCmdBufA + 1, dec.dlB, height,
+                          256 - height - TOP);
             mc_ticks += ticks() - tm;
-            const u16 *cap = bank_lcd(tgt);
+            const u16 *cap = bank_lcd(tgt) + TOP * 256;
             u32 bad = 0;
             for (int i = 0; i < 256 * height; ++i)
                 if ((cap[i] | 0x8000) != mc[i]) {
@@ -200,15 +204,16 @@ int main(void) {
             u32 t1 = ticks();
             fv_decodePFrameDcts(&dec, p, (u8 *)VRAM_D);
             DC_FlushAll();
-            fv_finishPBlock(&dec, (u8 *)VRAM_D, bank_lcd(tgt));
+            fv_finishPBlock(&dec, (u8 *)VRAM_D, bank_lcd(tgt) + TOP * 256);
             cpu += ticks() - t1;
             vram_cr[ref] = 0x80;
             pframes++;
         } else {
-            fv_decodeFrame_asm(&dec, (const u16 *)data, (u8 *)bank_lcd(tgt));
+            fv_decodeFrame_asm(&dec, (const u16 *)data, (u8 *)(bank_lcd(tgt) + TOP * 256));
             cpu += ticks() - t0;
             iframes++;
         }
+        for (int r = 0; r < TOP; ++r) memcpy(bank_lcd(tgt) + r * 256, bank_lcd(tgt) + TOP * 256, 512);
         DC_FlushAll();
         swiWaitForVBlank();
         if (shown >= 0) vram_cr[shown] = 0x80;
