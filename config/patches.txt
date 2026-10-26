@@ -189,8 +189,3 @@ src/ovl_0b/btlfx_op.c | u->model->texAnims | PSX_NZ(u->model->texAnims) | 7
 src/ovl_0b/btlseq.c | arg1->model->texAnims | PSX_NZ(arg1->model->texAnims) | 6
 src/ovl_0b/btl_status.c | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != g_gameState->gameData->unk8E4.battle->curCmd->caster | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != PSX_NZ(g_gameState->gameData->unk8E4.battle->curCmd)->caster | 1
 src/ovl_0b/btl_unit.c | unk34.b.unk4 == 2 && cmd->cmdNo == BTL_CMD_SWD_MAG | unk34.b.unk4 == 2 && PSX_NZ(cmd)->cmdNo == BTL_CMD_SWD_MAG | 1
-# The decomp's src_equiv/main/script_text.c defines three functions with other types than ff9.h now declares
-# (reported to the decomp 2026-10-26): the header's types, the body's names through a local.
-src_equiv/main/script_text.c | void func_8005309C(SVECTOR *v, s32 rx, s32 ry, s32 len) { | void func_8005309C(s16 *port_v, s32 rx, s32 ry, s32 len) { SVECTOR *v = (SVECTOR *)port_v; | 1
-src_equiv/main/script_text.c | s32 evt_isInRegion(u8 *p, s32 x, s32 z) { | s32 evt_isInRegion(Unk8004AB64 *port_p, s32 x, s32 z) { u8 *p = (u8 *)port_p; | 1
-src_equiv/main/script_text.c | void func_80064C24(u8 n) { | void func_80064C24(s32 port_n) { u8 n = (u8)port_n; | 1
