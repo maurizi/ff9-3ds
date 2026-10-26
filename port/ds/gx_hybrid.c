@@ -3988,6 +3988,7 @@ static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1) {
  * textures don't fit, the frame is the software renderer's: the whole scene in PS1 VRAM, scaled into bank A as a 16-bit
  * bitmap BG (the 3D layer transparent, the 2D layer hidden); bank A's textures are given up until a 3D frame takes it
  * back. After textures didn't fit, the next scenes stay software for a while (a field's textures stay as big). */
+extern int psx_softgpu_row_skip; /* (softgpu.c) */
 static void back_mode(int add);
 static void bank_a_as_bg(int bg) {
     if (bg == bank_a_bg) return;
@@ -4261,7 +4262,9 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
                 Buffer band = *b;
                 band.y = b->y + ry0; band.h = ry1 - ry0;
                 fill_buffer(&band, 0);
+                psx_softgpu_row_skip = b->y; /* (the rows scale_back_rows doesn't sample: not drawn) */
                 replay(b, 0, b->count, L_ADD);
+                psx_softgpu_row_skip = -1;
                 scale_back_rows(b, display_h, oy0, oy1);
                 fill_buffer(&band, b->clear); /* as it was: the key, or the game's clear (the 2D layer's "nothing") */
                 back_mode(1);

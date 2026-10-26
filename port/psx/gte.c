@@ -465,7 +465,7 @@ GTE_HOT void psx_gte_mvmva_rt12(gte_u32 op) {
 
 /* RTPT's depths alone (sf=1, DS mode's 32-bit MAC3): SZ1-3 pushed as RTPT pushes them, nothing else written. For a
  * caller that overwrites the rest (screen positions, MAC/IR, MAC0/IR0, FLAG) before reading it: world_verts.c */
-GTE_HOT void psx_gte_rtpt_depths(void) {
+void psx_gte_rtpt_depths(void) { /* (main RAM: ITCM is full; a call per three vertices) */
     const gte_u32 *c = g.c;
     const i32 c3 = (i32)c[3], c4 = (i16)c[4], trz = (i32)c[7];
     for (int v = 0; v < 3; ++v) {

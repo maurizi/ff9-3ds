@@ -10,6 +10,10 @@
 #include "psyq_port.h"
 #include "psx_raster.h"
 
+/* rows y with (y - this) % 5 == 4 not drawn (-1: all): a layer that a 5:4 nearest scaling then samples (gx_hybrid.c's
+ * additive layer) never shows them */
+int psx_softgpu_row_skip = -1;
+
 #ifdef PORT_RASTER_ITCM
 #define SG_HOT __attribute__((section(".itcm"), long_call))
 #else
@@ -670,6 +674,7 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     u32 inv0 = 0, inv1 = 0, inv2 = 0;
 #endif
     for (int y = miny; y < maxy; y++) {
+        if (psx_softgpu_row_skip >= 0 && (unsigned)(y - psx_softgpu_row_skip) % 5u == 4u) goto next_row;
         int w0 = w0row, w1 = w1row, w2 = w2row;
         int r = rrow, g = grow, bl = brow, u = urow, v = vrow;
         int left=minx,right=maxx;
@@ -746,6 +751,7 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
             r = step_attribute(r, drdx); g = step_attribute(g, dgdx);
             bl = step_attribute(bl, dbdx); u = step_attribute(u, dudx); v = step_attribute(v, dvdx);
         }
+    next_row:
         w0row += B0;
         w1row += B1;
         w2row += B2;
