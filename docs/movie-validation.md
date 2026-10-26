@@ -443,6 +443,25 @@ choice of 2026-10-26: closest fidelity at full speed):
 3. The mask (which background pixels cover the characters): the field draws its models with the GPU's mask
    check. Native field models don't apply it yet; to check against the PS1 on d2_f1464.
 
+### Step 1: the prediction on the CPU (2026-10-26)
+
+`port/ds/fv_mc.c` makes a P-frame's prediction from the texcoords the vector decoder writes into the two lists:
+list A holds each block's vector rounded down, list B rounded up (1/16 texels; the bottom half's t carries the rows
+its texture starts above the frame). Per channel the result is (a6 + b6) >> 2, a6 = 2a + (a != 0), clamped at the
+frame's edges: the encoder's model of the two blended passes. Inside the frame, with no zero channel, that is the
+average rounded up, done two pixels a word ((x | y) - ((x ^ y) >> 1) per 5-bit field).
+
+`make build/tests/fv_bench_mc.nds` checks it against the 3D engine's capture on every P-frame of the intro (708).
+Block rows 1-21 match exactly. Row 0 differs (about 820 pixels a frame), where the 3D engine clips the triangles that
+start 8 rows above the screen: its clipped texcoords sample differently from the encoder's model. The CPU follows the
+encoder there, so the 3D path's top 8 rows are the inexact ones (to fix there: blocks 8 rows down the screen, the
+reference and the capture with them, and the frame's first row repeated above it).
+
+On the original DS the CPU prediction takes 14.4 ms a frame. Most of that is cache-line fills from the reference,
+8 scattered rows a block from two places. With the vectors (1 ms), the residual (12) and the finish (9), a CPU-decoded
+MBG costs about 36 ms a movie frame, about 9 ms per VBlank. MBG scenes also need the field itself faster: d2_f1464's
+field already costs about 28 ms per VBlank without the movie.
+
 ## Still incomplete
 
 Not yet compared frame-by-frame with a PSX capture of the same movie (timing,

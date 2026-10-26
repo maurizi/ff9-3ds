@@ -14,11 +14,16 @@
 #include <string.h>
 #include "fvDecoder.h"
 #include "fvMcData.h"
+#include "fv_mc.h"
 
 static fv_decoder_asm_t dec;
 static fv_header_t header;
 static u8 *data;
 static u32 dl_length;
+#ifdef FV_BENCH_CPU_MC
+static u16 mc[256 * 192];
+static u32 mc_bad_frames, mc_bad_pixels, mc_ticks, mc_rows[24], mc_example[6];
+#endif
 
 #define BLOCK_VTX(x, y, z) (((x) & 0x3FF) | ((((y) >> 3) & 0x3FF) << 10) | ((z) << 20))
 
@@ -156,7 +161,10 @@ int main(void) {
             const u16 *p = fv_decodePFrameVectors(&dec, (const u16 *)data);
             cpu += ticks() - t0;
             DC_FlushRange(fv_gMcGxCmdBuf, dl_length);
-            DMA3_SRC = (u32)fv_gMcGxCmdBuf; DMA3_DEST = (u32)&GFX_FIFO; DMA3_CR = DMA_FIFO | (dl_length >> 2);
+            /* (from the blocks' polygon setup: the list's head first draws a black strip over the top rows, which the
+             * encoder's prediction doesn't have) */
+            DMA3_SRC = (u32)fv_gMcGxCmdBuf + 172 * 4; DMA3_DEST = (u32)&GFX_FIFO;
+            DMA3_CR = DMA_FIFO | ((dl_length - 172 * 4) >> 2);
             /* the whole list in before the VBlank that swaps (a swap the geometry engine reaches late is a frame
              * late: the capture would take the last prediction) */
             while (DMA3_CR & DMA_BUSY) {}
@@ -166,6 +174,29 @@ int main(void) {
                              DCAP_SRC_A(DCAP_SRC_A_3DONLY);
             swiWaitForVBlank();
             while (REG_DISPCAPCNT & DCAP_ENABLE) {}
+#ifdef FV_BENCH_CPU_MC
+            /* the CPU's prediction against the 3D engine's capture */
+            vram_cr[ref] = 0x80;
+            DC_FlushAll();
+            u32 tm = ticks();
+            fv_mc_predict(bank_lcd(ref), mc, (const u32 *)fv_gMcGxCmdBufA + 1, dec.dlB, height);
+            mc_ticks += ticks() - tm;
+            const u16 *cap = bank_lcd(tgt);
+            u32 bad = 0;
+            for (int i = 0; i < 256 * height; ++i)
+                if ((cap[i] | 0x8000) != mc[i]) {
+                    bad++;
+                    mc_rows[i / 256 / 8]++;
+                    if (!mc_example[0]) {
+                        int bx = (i % 256) / 8, by = i / 256 / 8, k = by * 32 + bx + (by >= height / 16 ? 0 : 0);
+                        const u32 *la = (const u32 *)fv_gMcGxCmdBufA + 1 + k * 5 + (by >= height / 16 ? 3 : 0);
+                        const u32 *lb = dec.dlB + k * 5 + (by >= height / 16 ? 3 : 0);
+                        mc_example[0] = i | 0x80000000u; mc_example[1] = cap[i]; mc_example[2] = mc[i];
+                        mc_example[3] = *la; mc_example[4] = *lb; mc_example[5] = n;
+                    }
+                }
+            if (bad) { mc_bad_frames++; mc_bad_pixels += bad; }
+#endif
             u32 t1 = ticks();
             fv_decodePFrameDcts(&dec, p, (u8 *)VRAM_D);
             DC_FlushAll();
@@ -188,7 +219,19 @@ int main(void) {
         if (n % 30 == 29)
             printf("\x1b[4;0H%lu: avg %lu us worst %lu us\nP %lu I %lu   ", n + 1, total / (n + 1) * 1000 / 33514,
                    worst * 1000 / 33514, pframes, iframes);
+#ifdef FV_BENCH_CPU_MC
+        if (n % 30 == 29)
+            printf("\nMC bad %lu f %lu px, %lu us   ", mc_bad_frames, mc_bad_pixels,
+                   pframes ? mc_ticks / pframes * 1000 / 33514 : 0);
+#endif
     }
+#ifdef FV_BENCH_CPU_MC
+    printf("\x1b[2J");
+    for (int r = 0; r < 22; ++r) printf("%lu ", mc_rows[r]);
+    printf("\nMC %lu us/frame", pframes ? mc_ticks / pframes * 1000 / 33514 : 0);
+    printf("\nex px %lu,%lu frame %lu\ncap %04lx mc %04lx\nA %08lx B %08lx\n", (mc_example[0] & 0xFFFF) % 256,
+           (mc_example[0] & 0xFFFFF) / 256, mc_example[5], mc_example[1], mc_example[2], mc_example[3], mc_example[4]);
+#endif
     printf("\ndone: avg %lu us/frame\n", total / (pframes + iframes) * 1000 / 33514);
     for (;;) swiWaitForVBlank();
 }
