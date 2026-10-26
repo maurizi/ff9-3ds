@@ -22,9 +22,11 @@ p.add_argument('--overlay', default='0a')
 p.add_argument('--top', type=int, default=40)
 p.add_argument('--detail', help='a function: its buckets with their source lines')
 p.add_argument('--detail-n', type=int, default=20, help='how many of its buckets')
+p.add_argument('--base', type=Path, help='an earlier state of the same run: only the samples since it')
 a = p.parse_args()
 data = a.state.read_bytes()
-if data[:4] != b'MELN':
+base_data = a.base.read_bytes() if a.base else None
+if data[:4] != b'MELN' or (base_data and base_data[:4] != b'MELN'):
     p.error('expected a melonDS state')
 
 symbols = {}
@@ -50,9 +52,9 @@ for name in ('port_pc_header', 'port_pc_main', 'port_pc_itcm'):
         p.error('the ELF has no %s: build with PROFILE=3' % name)
 
 
-def ram(addr, size):
+def ram(addr, size, src=None):
     off = 36 + addr - 0x02000000
-    return data[off:off + size]
+    return (src or data)[off:off + size]
 
 
 nhead = 9 if sizes.get('port_pc_header', 32) >= 36 else 8  # older builds: one shift for both tables
@@ -60,6 +62,10 @@ head = struct.unpack('<%dI' % nhead, ram(symbols['port_pc_header'], 4 * nhead)) 
 if head[0] not in (0x53504331, 0x53504332):
     p.error('no sampler header in the state')
 _, main_lo, main_n, itcm_lo, itcm_n, total, outside, shift, itcm_shift = head
+if base_data:
+    base_head = struct.unpack('<%dI' % nhead, ram(symbols['port_pc_header'], 4 * nhead, base_data))
+    total -= base_head[5]
+    outside -= base_head[6]
 shift = shift or 6
 itcm_shift = itcm_shift or shift
 counts = collections.Counter()
@@ -73,7 +79,13 @@ funcs = [(s, size or ((funcs[i + 1][0] - s) if i + 1 < len(funcs) else 64), name
 def attribute(base, n, table, shift, wide=False):
     """each bucket's samples split over the functions it overlaps, by bytes"""
     bucket = 1 << shift
-    words = struct.unpack('<%d%s' % (n, 'I' if wide else 'H'), ram(symbols[table], (4 if wide else 2) * n))
+    fmt = '<%d%s' % (n, 'I' if wide else 'H')
+    words = struct.unpack(fmt, ram(symbols[table], (4 if wide else 2) * n))
+    if base_data:
+        before = struct.unpack(fmt, ram(symbols[table], (4 if wide else 2) * n, base_data))
+        if not wide and any(c == 0xFFFF for c in words):
+            print('warning: %d buckets saturated' % sum(c == 0xFFFF for c in words))
+        words = [c - b for c, b in zip(words, before)]
     for i, c in enumerate(words):
         if not c:
             continue

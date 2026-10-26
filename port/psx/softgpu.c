@@ -544,6 +544,50 @@ static __attribute__((noinline)) void poly_row_semi_small(const Gp0Mode *m, u16 
 #endif
 
 #ifndef PORT_SOFTGPU_REFERENCE
+/* The same for a 4-bit dithered texture, set up once per polygon by semi4_setup: Alexandria's lights sample a
+ * 32x32 texture of mostly transparent texels, so the loop finds those without the CLUT (`opaque`: the CLUT entries
+ * other than 0) and does the colour work for the rest. A 4-bit page never wraps VRAM (tx <= 960, ty 0 or 256). */
+static struct {
+    const u16 *tex, *clut;
+    u32 opaque;
+    int r, g, b, abr;
+} s4;
+static __attribute__((noinline)) int semi4_setup(const Gp0Mode *m, int r, int g, int b, int miny, int maxy) {
+    if (m->tx > 1024 - 64 || m->ty > 256) return 0;
+    if ((m->clut_y & 511) >= miny && (m->clut_y & 511) < maxy) return 0; /* (drawing over its CLUT: opaque changes) */
+    s4.tex = psx_vram + m->ty * 1024 + m->tx;
+    s4.clut = psx_vram + (m->clut_y & 511) * 1024 + m->clut_x;
+    u32 opaque = 0;
+    for (int i = 0; i < 16; ++i) if (s4.clut[i]) opaque |= 1u << i;
+    s4.opaque = opaque; s4.r = r; s4.g = g; s4.b = b; s4.abr = m->abr;
+    return 1;
+}
+static __attribute__((noinline)) void poly_row_semi4(u16 *dst, int width, unsigned u, unsigned v, unsigned dudx,
+                                                     unsigned dvdx, u16 mask, int y) {
+    static const signed char offsets[16]={-4,0,-3,1,2,-2,3,-1,-3,1,-4,0,3,-1,2,-2};
+    const u16 *const tex = s4.tex;
+    const u32 opaque = s4.opaque;
+    u16 *const end = dst + width;
+    for (; dst != end; ++dst, u += dudx, v += dvdx) {
+        unsigned uu = (u >> 16) & 0xFF, vv = (v >> 16) & 0xFF;
+        unsigned i = (tex[vv * 1024 + (uu >> 2)] >> ((uu & 3) * 4)) & 15;
+        if (!(opaque >> i & 1)) continue;
+        u16 t = s4.clut[i], c;
+        if (!t) continue;
+        int bias = offsets[((y & 3) << 2) | ((dst - psx_vram) & 3)];
+        int cr = ((t & 31) * s4.r >> 4) + bias, cg = (((t >> 5) & 31) * s4.g >> 4) + bias,
+            cb = (((t >> 10) & 31) * s4.b >> 4) + bias;
+        cr = cr < 0 ? 0 : cr > 255 ? 255 : cr;
+        cg = cg < 0 ? 0 : cg > 255 ? 255 : cg;
+        cb = cb < 0 ? 0 : cb > 255 ? 255 : cb;
+        c = (u16)((cr >> 3) | (cg >> 3) << 5 | (cb >> 3) << 10 | (t & 0x8000));
+        if (t & 0x8000) c = blend(*dst, c, s4.abr) | 0x8000;
+        *dst = c | mask;
+    }
+}
+#endif
+
+#ifndef PORT_SOFTGPU_REFERENCE
 /* num / area for area > 0 and |num| < 2^31, with inv = 0xFFFFFFFF / area: the estimate is at most 2 low */
 static inline int div_by_area(int num, u32 area, u32 inv) {
     u32 n = num < 0 ? 0u - (u32)num : (u32)num;
@@ -708,6 +752,7 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
         if (dither_semi && dither_key(m->raw ? 128 : flat_r, m->raw ? 128 : flat_g, m->raw ? 128 : flat_b, dither) !=
                                dtab_key) dither_semi = 0, semi_small = !palette_ready;
     }
+    if (semi_small && m->depth == 0 && dither && !m->raw && semi4_setup(m, flat_r, flat_g, flat_b, miny, maxy)) semi_small = 2;
     if (dither_indexed) dither_tables(flat_r, flat_g, flat_b, 1);
     if (dither_semi) dither_tables(m->raw ? 128 : flat_r, m->raw ? 128 : flat_g, m->raw ? 128 : flat_b, dither);
 #endif
@@ -749,6 +794,10 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
             if (right > left)
                 poly_row_dither_semi(m, psx_vram + (y & 511) * 1024 + left, right - left, u, v, dudx, dvdx,
                                      gp0_state.set_mask ? 0x8000 : 0, left, y);
+        } else if (semi_small == 2 && right <= VRAM_W) {
+            if (right > left)
+                poly_row_semi4(psx_vram + (y & 511) * 1024 + left, right - left, u, v, dudx, dvdx,
+                               gp0_state.set_mask ? 0x8000 : 0, y);
         } else if (semi_small && right <= VRAM_W) {
             if (right > left)
                 poly_row_semi_small(m, psx_vram + (y & 511) * 1024 + left, right - left, u, v, dudx, dvdx,
