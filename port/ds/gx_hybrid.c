@@ -266,6 +266,10 @@ static void start_scene(Buffer *b, int filled /* the game's fill is about to cov
 /* The buffer the current drawing area belongs to (NULL: offscreen), starting its scene if it was shown; *shown is
  * the displayed buffer. */
 static Buffer *target(Buffer **shown) {
+    /* the place's buffers and tables are in its overlay's code range: none while another overlay is loading there
+     * (between a mode's overlay arriving and display_present enabling its place; d3_f0455 wrote a field's depths
+     * over ovl_0b's data and crashed in btlbg_init) */
+    if (psx_ovl_resident[0] != place->overlay) { *shown = NULL; return NULL; }
     /* the lookups depend only on the drawing environment, the display position and the buffers' places */
     static struct { int x, y, w, h, ax, ay, dx, dy; unsigned version; Buffer *shown, *b; } last = {.w = -1};
     int x, y, w, h, dx, dy, dw, dh;
@@ -4190,6 +4194,7 @@ static void present_direct(const PsxDisplayInfo *d) {
 
 void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, int w, int h)) {
     scale_fn = scale;
+    if (psx_ovl_resident[0] != place->overlay) return; /* (its scenes' tables are being overwritten: target) */
     if (direct_soft) {
         if (layer_bg >= 0) bgHide(layer_bg);
         present_direct(d);
