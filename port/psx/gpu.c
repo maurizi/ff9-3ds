@@ -505,7 +505,12 @@ unsigned int psx_main_ot_n, psx_ot_slot, psx_ot_generation; /* generation: bumpe
 u32 *ClearOTagR(u32 *ot, int n) {
     if (n >= 0x1000) { psx_main_ot = (unsigned int *)ot; psx_main_ot_n = (unsigned int)n; psx_ot_slot = (unsigned int)n; ++psx_ot_generation; }
     ot[0] = OT_END;
-    for (int i = 1; i < n; i++) {
+    int i = 1;
+    for (u32 a = (u32)(uintptr_t)ot; i + 4 <= n; i += 4) { /* (four a step: the battle's 0x1010 every frame) */
+        u32 e = (a + (u32)(i - 1) * 4) & 0xFFFFFF;
+        ot[i] = e; ot[i + 1] = (e + 4) & 0xFFFFFF; ot[i + 2] = (e + 8) & 0xFFFFFF; ot[i + 3] = (e + 12) & 0xFFFFFF;
+    }
+    for (; i < n; i++) {
         ot[i] = (u32)&ot[i - 1] & 0xFFFFFF;
     }
     return ot;
