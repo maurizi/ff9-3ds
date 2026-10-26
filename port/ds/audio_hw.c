@@ -10,12 +10,46 @@
  * sounds. One that finds none, or loses its channel, plays from its next samples once it gets both again, as a
  * voice that lost its channel always did.
  */
-#ifdef PORT_HW_SOUND
+#if defined(PORT_HW_SOUND) && (!defined(PORT_SPU_ARM7) || defined(ARM7)) /* (the ARM7's with the SPU there) */
 #include <nds.h>
 #include <string.h>
 #include "psx_spu.h"
 #include "audio_hw.h"
+#ifdef ARM7
+/* On the ARM7 (spu7.h) the channels are its own registers: libnds's ARM9 calls as register writes, a sound id being
+ * its channel; no cache to flush. */
+static int ch_play(int ch, const void *data, u32 bytes, u16 freq, u8 vol, u8 pan) {
+    REG_SOUNDXCNT(ch) = 0;
+    REG_SOUNDXSAD(ch) = (u32)data;
+    REG_SOUNDXPNT(ch) = 0;
+    REG_SOUNDXLEN(ch) = bytes >> 2;
+    REG_SOUNDXTMR(ch) = SOUNDXTMR_FREQ(freq);
+    REG_SOUNDXCNT(ch) = SOUNDXCNT_ENABLE | SOUNDXCNT_VOL_MUL(vol) | SOUNDXCNT_PAN(pan) | SOUNDXCNT_FORMAT_16BIT |
+                        SOUNDXCNT_REPEAT;
+    return ch;
+}
+static int noise_play(int ch, u16 freq, u8 vol, u8 pan) {
+    REG_SOUNDXCNT(ch) = SOUNDXCNT_ENABLE | SOUNDXCNT_VOL_MUL(vol) | SOUNDXCNT_PAN(pan) | SOUNDXCNT_FORMAT_PSG;
+    REG_SOUNDXTMR(ch) = SOUNDXTMR_FREQ(freq);
+    return ch;
+}
+static void capture_start(void *buffer, u16 words, int unit) {
+    if (unit == 0) { REG_SNDCAP0DAD = (u32)buffer; REG_SNDCAP0LEN = words; REG_SNDCAP0CNT = SNDCAPCNT_START_BUSY; }
+    else { REG_SNDCAP1DAD = (u32)buffer; REG_SNDCAP1LEN = words; REG_SNDCAP1CNT = SNDCAPCNT_START_BUSY; }
+}
+#define soundEnable() ((void)0)
+#define soundPlaySampleChannel(ch, data, fmt, bytes, freq, vol, pan, loop, point) ch_play(ch, data, bytes, freq, vol, pan)
+#define soundPlayNoiseChannel(ch, freq, vol, pan) noise_play(ch, freq, vol, pan)
+#define soundKill(id) (REG_SOUNDXCNT(id) = 0)
+#define soundSetVolume(id, v) (REG_SOUNDXCNT(id) = (REG_SOUNDXCNT(id) & ~0x7Fu) | SOUNDXCNT_VOL_MUL(v))
+#define soundSetPan(id, p) (REG_SOUNDXCNT(id) = (REG_SOUNDXCNT(id) & ~(0x7Fu << 16)) | SOUNDXCNT_PAN(p))
+#define soundSetFreq(id, f) (REG_SOUNDXTMR(id) = SOUNDXTMR_FREQ(f))
+#define soundCaptureStart(buffer, words, unit, add, mixer, repeat, format) capture_start(buffer, words, unit)
+#define soundCaptureStop(unit) ((unit) ? (REG_SNDCAP1CNT = 0) : (REG_SNDCAP0CNT = 0))
+#define DC_FlushRange(p, n) ((void)0)
+#else
 #include "psx_runtime.h"
+#endif
 
 #define VOICES 24
 #define RING 4096          /* samples per voice ring: ~93 ms at 44.1 kHz, longer at lower pitches */
@@ -80,10 +114,19 @@ static void block(unsigned v, const int16_t *samples, void *user) {
 static const PsxSpuSink sink = {key_on, block, NULL};
 static void echo_alloc(void);
 
+#ifdef ARM7
+static s16 *echo_buffer;
+/* (the ARM9 allocated the rings and the echo's buffer: spu7.h) */
+void port_hw_sound_init_arm7(int16_t *ring_memory, int16_t *echo_memory) {
+    rings = (s16 (*)[RING])ring_memory;
+    echo_buffer = echo_memory;
+    echo_alloc();
+#else
 void port_hw_sound_init(void) {
     soundEnable();
     rings = psx_spare_alloc(RINGS * RING * sizeof(s16));
     echo_alloc(); /* (at start-up, as every spare PS1 RAM buffer: one that doesn't fit stops the port at boot) */
+#endif
     for (int i = 0; i < VOICES; ++i)
         voices[i] = (Voice){NULL, 0, 0, -1, -1, 0, 64, 0, 0, 0};
     psx_spu_set_hw(&sink);
@@ -96,7 +139,11 @@ void port_hw_sound_init(void) {
 #define ECHO_HZ 11025
 #define ECHO_MAX 3072  /* samples per side: 0.28 s */
 static struct { int on, ids[2]; u8 volume; unsigned words; s16 *ring; } echo = {0, {-1, -1}, 0, 0, NULL};
+#ifdef ARM7
+static void echo_alloc(void) { echo.ring = echo_buffer; }
+#else
 static void echo_alloc(void) { echo.ring = psx_spare_alloc(2 * ECHO_MAX * sizeof(s16)); }
+#endif
 
 static void echo_stop(void) {
     for (int k = 0; k < 2; ++k) {

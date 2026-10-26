@@ -357,6 +357,14 @@ renderer reproduces the opcode interpreter's layout (R15).
 
 ### 7.0 Original-DS sound path (decided 2026-10-17)
 
+**Update (2026-10-26, the user's choice):** in DS mode the voices' stepping and the hardware channels run on the ARM7
+(`SPU7=1`, the default with `DSMODE=1 HWSOUND=1`; port/include/spu7.h). The ARM9 keeps the register file the game
+reads, and sends register writes, sample advances (in the game's virtual time), frame updates and SPU RAM transfers
+through a ring in main RAM. The shared WRAM goes to the ARM7, for SPU RAM's second piece. What the game reads back
+(envelope levels, addresses, ENDX) arrives up to a frame later than on the PS1. A just-keyed voice reads as
+attacking until the ARM7's readback includes its key-on; without that, AKAO took new notes for finished and never
+keyed them off.
+
 The exact software SPU (24 voices, Gaussian interpolation, reverb) costs about 16 ms per 60 Hz frame on the DSi's
 134 MHz ARM9, so about 32 ms on the DS's 67 MHz: twice a frame by itself, and the ARM7 (33 MHz) is far slower.
 The port targets the original DS, so the DS's 16 hardware channels do the mixing:

@@ -22,8 +22,14 @@ __attribute__((weak)) void port_log(const char *fmt, ...); /* absent from the SP
 
 /* Copy `n` bytes at SPU RAM address `at` in (src), out (dst) or clear them (neither), piece by piece; what lies
  * past the kept size is dropped (out: zeros). */
+#ifdef PORT_SPU_ARM7
+int psx_spu7_ram(unsigned at, unsigned n, const unsigned char *src, unsigned char *dst); /* (port/ds/spu7_client.c) */
+#endif
 static void spu_ram_span(u32 at, u32 n, const u8 *src, u8 *dst) {
     static int logged;
+#ifdef PORT_SPU_ARM7
+    if (psx_spu7_ram(at, n, src, dst)) return; /* (the ARM7 keeps SPU RAM in its order) */
+#endif
     if (!&psx_spu_ram_size) { /* one plain SPU RAM */
         u8 *p = psx_spu_ram + at;
         if (src) __builtin_memcpy(p, src, n);

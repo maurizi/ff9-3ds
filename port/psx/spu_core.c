@@ -1,5 +1,6 @@
 /* Register/timing integration for the shared SPU voice stage. Streamed
  * CD input and IRQ delivery remain unfinished; see audio-validation.md. */
+#if !defined(PORT_SPU_ARM7) || defined(ARM7) /* (with the SPU on the ARM7, the ARM9 has port/ds/spu7_client.c) */
 #include "psx_spu.h"
 #include "spu_hot.h"
 #include "psx_spu_voice.h"
@@ -351,3 +352,4 @@ SPU_HOT void psx_spu_advance(unsigned ticks) {
     sync_readbacks();
     port_profile_detail_end(PORT_PROFILE_SPU, profile_spu);
 }
+#endif

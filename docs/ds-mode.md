@@ -637,3 +637,28 @@ compose every frame: forced on, d3_f2205 went from 31.0 to 41.5 ms). Still scene
 VBlank, d4_f2110 34.9 -> 33.9, d3_f2205 31.0 -> 31.6 (the per-frame hash). Walking (8 fields of the walking sweep):
 the same within 0.5 ms. The composite's colours sit one step of the LCD's 6 bits below the 3D layer's (the 2D engine
 widens a 5-bit colour as 2c, the 3D engine as 2c + 1), as for the over-budget scenes before.
+
+### The SPU on the ARM7 (2026-10-26)
+
+`SPU7=1` (the default in DS mode) moves the emulated SPU's voices and the hardware channels to the ARM7 (spu7.h,
+port/ds/spu7_client.c, port/arm7/spu7_server.c; the same spu_core/voice/source/adpcm/envelope code, as ARM code in
+the ARM7's WRAM: 33.5 KB of code and 17 KB of data of its 64 KB).
+
+Checked on the intro at frame 1800 against the ARM9 path (`SPU7=0`):
+- the same key-ons (161) and key-offs (219);
+- 8 sample rings in use in both;
+- voices 0-2 and 7 up identical, voices 3-6 holding the same notes in another order (AKAO's voice choice follows
+  the later readbacks).
+
+Two bugs found that way:
+- the client's reset left the control register at 0, so AKAO's read-modify-write turned the SPU off;
+- a just-keyed voice read back the last note's state (level 0, ENDX set): AKAO detached it and never keyed it off.
+
+ms per VBlank, before -> after:
+- d1_f0110 19.4 -> 16.9 (PS1 16.7).
+- d4_f2110 33.9 -> 30.4.
+- d3_f2205 31.6 -> 31.3.
+- Battles d1_b0004 28.1 -> 27.7, d2_b0300 39.6 -> 35.8.
+- The 8-field walking set: 1-4.7 ms faster each, no crash.
+
+The intro's movie now has 10.6 ms of its 16.7 free.

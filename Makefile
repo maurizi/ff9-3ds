@@ -199,7 +199,10 @@ $(BUILD)/ds/port/ds/video_gl.o: third_party/libnds/videoGL.c
 $(BUILD)/ds/port/ds/render_gx.o $(BUILD)/tests/gx_backend.o: port/ds/gx_shadow_lazy.h port/include/profile.h
 SPECS    := $(BLOCKSDS)/sys/crts/dsi_arm9.specs
 DS_ARCH  := -mcpu=arm946e-s -mthumb -mthumb-interwork
-PORT_EXTRA_ds := $(if $(filter 1,$(SPUITCM)),-DPORT_SPU_ITCM) $(if $(filter 1,$(HWSOUND)),-DPORT_HW_SOUND -DPORT_GTE_ITCM,$(if $(filter 1,$(AUDIO)),-DPORT_AUDIO)) $(if $(filter 1,$(AUDIOHASH)),-DPORT_AUDIO_HASH) $(if $(AUDIOCAPTURE),-DPORT_AUDIO_CAPTURE=$(AUDIOCAPTURE)) -I$(BLOCKSDS)/libs/maxmod/include -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include $(if $(AUTORUN),-DPORT_AUTORUN) \
+# SPU7=1 (the default with DSMODE=1 HWSOUND=1): the emulated SPU's voices and the channels on the ARM7 (spu7.h)
+SPU7 ?= 1
+SPU7_ON := $(and $(filter 1,$(DSMODE)),$(filter 1,$(HWSOUND)),$(filter 1,$(SPU7)))
+PORT_EXTRA_ds := $(if $(SPU7_ON),-DPORT_SPU_ARM7) $(if $(filter 1,$(SPUITCM)),-DPORT_SPU_ITCM) $(if $(filter 1,$(HWSOUND)),-DPORT_HW_SOUND -DPORT_GTE_ITCM,$(if $(filter 1,$(AUDIO)),-DPORT_AUDIO)) $(if $(filter 1,$(AUDIOHASH)),-DPORT_AUDIO_HASH) $(if $(AUDIOCAPTURE),-DPORT_AUDIO_CAPTURE=$(AUDIOCAPTURE)) -I$(BLOCKSDS)/libs/maxmod/include -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include $(if $(AUTORUN),-DPORT_AUTORUN) \
                  $(if $(CAPTURE_FRAME),-DPORT_CAPTURE_FRAME=$(CAPTURE_FRAME)) \
                  $(if $(filter 1,$(CAPTURE_READBACK)),-DPORT_CAPTURE_READBACK) \
                  $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') $(if $(filter 1,$(SOFTDISPLAY) $(HYBRID)),-DPORT_SOFT_DISPLAY) $(if $(filter 1,$(HYBRID)),-DPORT_GX_HYBRID) $(if $(filter 0,$(GXMERGE)),-DPORT_GX_NO_MERGE) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) $(if $(filter 1,$(GXEXPERIMENTAL)),-DPORT_GX_EXPERIMENTAL) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXLAZY)),-DPORT_GX_LAZY) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD) $(if $(filter 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD_LOW) $(if $(filter 1 2 3,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 2 3,$(PROFILE)),-DPORT_PROFILE_FRAME_ONLY) $(if $(PROFWIN),-DPORT_PROFILE_WINDOW=$(PROFWIN)) $(if $(filter 3,$(PROFILE)),-DPORT_PC_SAMPLER $(if $(PCLO),-DPORT_PC_LO=$(PCLO)u -DPORT_PC_SHIFT=$(or $(PCSHIFT),4))) $(if $(filter 1,$(CANARY)),-DPORT_CANARY) $(if $(filter 1,$(DSMODE)),-DPORT_DS_MODE -DPORT_GTE_APPROX) $(if $(filter 1,$(FIELDGX)),-DPORT_FIELD_GX) $(if $(filter 1,$(WORLDGX)),-DPORT_WORLD_GX) $(if $(filter 1,$(BLACKBOX)),-DPORT_BLACKBOX)
@@ -231,7 +234,7 @@ $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH)
 .PHONY: FORCE_DS_CONFIG
 $(BUILD)/ds/runtime-config: FORCE_DS_CONFIG
 	@mkdir -p $(dir $@)
-	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(AUDIO)' '$(AUDIOHASH)' '$(AUDIOCAPTURE)' '$(SPUARM)' '$(SPUITCM)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' '$(GXLAZY)' '$(CAPTURE_READBACK)' '$(CANARY)' '$(HYBRID)' '$(HWSOUND)' '$(DSMODE)' '$(FIELDGX)' '$(WORLDGX)' '$(BLACKBOX)' '$(PCLO)' '$(PCSHIFT)' '$(PROFWIN)' > $@.tmp
+	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(AUDIO)' '$(AUDIOHASH)' '$(AUDIOCAPTURE)' '$(SPUARM)' '$(SPUITCM)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' '$(GXLAZY)' '$(CAPTURE_READBACK)' '$(CANARY)' '$(HYBRID)' '$(HWSOUND)' '$(DSMODE)' '$(FIELDGX)' '$(WORLDGX)' '$(BLACKBOX)' '$(PCLO)' '$(PCSHIFT)' '$(PROFWIN)' '$(SPU7)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(ds_PORTOBJS): $(BUILD)/ds/runtime-config
@@ -384,11 +387,17 @@ ifeq ($(DSMODE),1)
 # BlocksDS's minimal ARM7 core without the shared WRAM, which the ARM9 then takes (port/arm7/main.c)
 ARM7ELF  := $(BUILD)/arm7/ff9ds_arm7.elf
 endif
-$(BUILD)/arm7/ff9ds_arm7.elf: port/arm7/main.c
+# with SPU7, the SPU's voice stage (port/psx/spu_*.c, as ARM code in the ARM7's own RAM) and the channels
+SPU7_SRCS := port/arm7/spu7_server.c port/psx/spu_core.c port/psx/spu_voice.c port/psx/spu_source.c \
+	port/psx/spu_adpcm.c port/psx/spu_envelope.c port/psx/spu_reverb.c port/psx/spu_noise.c port/psx/spu_layout.c \
+	port/ds/audio_hw.c
+$(BUILD)/arm7/ff9ds_arm7.elf: port/arm7/main.c $(if $(SPU7_ON),$(SPU7_SRCS) port/include/spu7.h port/psx/spu_hot.h) Makefile
 	@mkdir -p $(dir $@)
 	@echo "ARM7 $@"
 	@arm-none-eabi-gcc -mcpu=arm7tdmi -mthumb -O2 -Wall -specs=$(BLOCKSDS)/sys/crts/ds_arm7.specs \
-		-I$(BLOCKSDS)/libs/libnds/include -DARM7 $< -L$(BLOCKSDS)/libs/libnds/lib -lnds7 \
+		-I$(BLOCKSDS)/libs/libnds/include -DARM7 \
+		$(if $(SPU7_ON),-DPORT_SPU_ARM7 -DPORT_HW_SOUND -DPORT_DS_MODE -Iport/include -Iport/psx -Iport/ds -marm -ffunction-sections -fdata-sections) \
+		port/arm7/main.c $(if $(SPU7_ON),$(SPU7_SRCS)) -L$(BLOCKSDS)/libs/libnds/lib -lnds7 \
 		-Wl,--start-group -lnds7 -lc -Wl,--end-group -Wl,--gc-sections -Wl,--defsym=__shared_wram_size=0 -o $@
 NDSTOOL  := $(BLOCKSDS)/tools/ndstool/ndstool
 

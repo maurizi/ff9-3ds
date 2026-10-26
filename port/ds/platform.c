@@ -239,7 +239,11 @@ __attribute__((target("arm"), noinline)) static void shared_wram_region(void) {
 int main(void) {
     defaultExceptionHandler();
 #ifdef PORT_DS_MODE
+#ifdef PORT_SPU_ARM7
+    WRAM_CR = 3; /* both shared WRAM banks to the ARM7: SPU RAM's second piece, which the SPU there reads (spu7.h) */
+#else
     WRAM_CR = 0; /* both shared WRAM banks to the ARM9, at 0x03000000: its ARM7 doesn't use them (port/arm7/main.c) */
+#endif
     /* and readable: in DS mode BlocksDS's protection regions don't cover 0x03000000 (main RAM's ends at 0x02FFFFFF),
      * so the first access to the SPU RAM piece there (psx_mem_init) was a data abort, a minute into a field when a
      * sound first used it. Region 3 (the Slot-2 cartridge space, unused) becomes the 32 KB of shared WRAM. */
