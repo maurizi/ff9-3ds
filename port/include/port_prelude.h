@@ -74,6 +74,14 @@
 #undef g_tmOpponents
 #define g_tmOpponents ((TmOpponent *)PSX_ADDR(0x80104000))
 #endif
+#ifdef TM_IMAGE_FILE /* (used as numbers: casts, and the primitive buffers' offsets) */
+#undef TM_IMAGE_FILE
+#define TM_IMAGE_FILE PSX_ADDR(0x80104A00)
+#endif
+#ifdef TM_PRIM_BUF
+#undef TM_PRIM_BUF
+#define TM_PRIM_BUF PSX_ADDR(0x80104A00)
+#endif
 #include "psx_runtime.h"
 #include "effect_bridge.h"
 void port_measure_text_into(void *out, const void *text);

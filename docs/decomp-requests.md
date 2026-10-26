@@ -793,3 +793,6 @@ that is the buffer; in the port a pointer is native, so the title's TIM pack rea
 host crashed at boot, CdGetSector from cd_onSectorReady). The port redefines them through `PSX_ADDR` in
 `port/include/port_prelude.h`. Asked: name such buffers as symbols (`extern u8 D_801CDF00[]` placed by the
 linker, as other fixed RAM is) or one macro the port can redefine for all, so new ones don't break a port build.
+Since then (2026-10-26): `TM_IMAGE_FILE` and `TM_PRIM_BUF` (ovl_0d.h, both `0x80104A00`), used as numbers
+(`(void *)TM_IMAGE_FILE`, `ctx->unk8 * TM_PRIM_BUF_SIZE + TM_PRIM_BUF`): Tetra Master's image file read went to
+0x80104A00 and crashed the host on entering a card game. Redefined in the prelude too; the same ask covers them.

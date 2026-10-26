@@ -13,7 +13,7 @@ void o14_opening_findSceneSectors(void);
 void port_scenario_set_enemy_hp(const int *values);
 s32 chr_resetToLevel(s32,s32,u8);
 static struct {
-    int enabled,consumed,kind,disc,field,battle,world,world_explicit,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil;
+    int enabled,consumed,kind,disc,field,battle,world,world_explicit,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil,tetra;
     unsigned seed;
     int party[4],hp[4],enemy_hp[4],trance[4],preset[4],equip[4][5];
     s16 events[0x800],items[256]; /* -1: unset */
@@ -54,6 +54,7 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"level")) scenario.level=number(eq,1,99);
         else if(!__builtin_strcmp(s,"story")) scenario.story=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"gil")) scenario.gil=number(eq,0,9999999);
+        else if(!__builtin_strcmp(s,"tetra")) scenario.tetra=number(eq,0,1); /* kind=field: then a card game */
         else if(!__builtin_strcmp(s,"summons_seen")) scenario.summons_seen=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"seed")) scenario.seed=(unsigned)number(eq,0,0x7fffffff);
         else if(!__builtin_strcmp(s,"party")) {
@@ -165,9 +166,16 @@ void port_scenario_field_entering(int field) {
     port_fatal("scenario: unavailable field %d in current archive (initial fixture disc %d, field %d); supply appropriate story/event state",
                field,scenario.disc,scenario.field);
 }
+void port_scenario_tetra_exit(void); /* (scenario_field.c, ovl_0a's) */
 void port_scenario_field_ready(int field) {
-    if(scenario.enabled && scenario.consumed)
+    if(scenario.enabled && scenario.consumed) {
         port_log("scenario field ready: %d\n",field);
+        if(scenario.tetra==1 && scenario.kind==1) { /* (once: the card game returns to the field) */
+            scenario.tetra=2;
+            port_scenario_tetra_exit();
+            port_log("scenario: Tetra Master\n");
+        }
+    }
 }
 /* Battle-only fixtures may omit a field unavailable on their disc, but an
  * actual return requires valid saved ranges instead of an unbounded CD read. */
