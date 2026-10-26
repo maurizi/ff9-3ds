@@ -134,6 +134,7 @@ typedef struct {
     u32 *verts;
 } FStore;
 static FStore *fm_ring[3];         /* by generation (use_place: after the field's depths) */
+static s16 fm_bounds[3][FM_GROUPS][4]; /* each store's groups' vertex bounds: x0 y0 x1 y1 (bgc_use) */
 static int fm_cap;                 /* vertices a scene */
 /* packet sizes and xy offsets per source type (FT4, FT3, GT4, GT3, G4, G3, F4, F3: model_link.c's kinds) */
 static const u8 fm_size[8] = {0x28, 0x20, 0x34, 0x28, 0x24, 0x1C, 0x18, 0x14};
@@ -3536,12 +3537,21 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     nearest >>= 2;
     fg->depth0 = world_entry_depth(base + (int)nearest);
     u32 *vw = st->verts + st->nverts, far = 0;
+    int x0 = 0x7FFF, y0 = 0x7FFF, x1 = -0x8000, y1 = -0x8000;
     for (int i = 0; i < nv; ++i) {
         u32 xy = (u32)n->sxy[i], rel = ((u32)n->sz[i] >> 2) - nearest;
         if (rel > 1023) rel = 1023;
         if (rel > far) far = rel;
-        vw[i] = (xy & 0x7FF) | (xy >> 16 & 0x7FF) << 11 | rel << 22;
+        u32 w = (xy & 0x7FF) | (xy >> 16 & 0x7FF) << 11 | rel << 22;
+        vw[i] = w;
+        int x = (s32)(w << 21) >> 21, y = (s32)(w << 10) >> 21;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
     }
+    s16 *bounds = fm_bounds[st - fm_ring[0]][fg - st->groups];
+    bounds[0] = (s16)x0; bounds[1] = (s16)y0; bounds[2] = (s16)x1; bounds[3] = (s16)y1;
     fg->depth_far = fg->depth0 - (s32)far * 4;
     st->nverts += nv;
     gxh_stats_fm = st->ngroups;
@@ -4048,17 +4058,10 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
         }
     if (!any) return 0;
     if (fst)
-        for (int gi = 0; gi < fst->ngroups; ++gi) { /* (each group's screen bounds from its vertices) */
+        for (int gi = 0; gi < fst->ngroups; ++gi) { /* (each group's screen bounds, from its snapshot) */
             const FGroup *fg = &fst->groups[gi];
-            const u32 *vw = fst->verts + fg->vert0;
-            int d = fg->depth_far < 0 ? 0 : fg->depth_far, x0 = 0x7FFF, y0 = 0x7FFF, x1 = -0x8000, y1 = -0x8000;
-            for (int i = 0; i < fg->verts; ++i) {
-                int x = (s32)(vw[i] << 21) >> 21, y = (s32)(vw[i] << 10) >> 21;
-                if (x < x0) x0 = x;
-                if (x > x1) x1 = x;
-                if (y < y0) y0 = y;
-                if (y > y1) y1 = y;
-            }
+            const s16 *bounds = fm_bounds[fst - fm_ring[0]][gi];
+            int d = fg->depth_far < 0 ? 0 : fg->depth_far, x0 = bounds[0], y0 = bounds[1], x1 = bounds[2], y1 = bounds[3];
             x0 += b->ofs_x; x1 += b->ofs_x; y0 += b->ofs_y; y1 += b->ofs_y;
             if (x1 < 0 || y1 < 0) continue;
             BGC_MARK(x0, y0, x1, y1, d);
