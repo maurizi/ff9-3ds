@@ -3442,7 +3442,14 @@ int port_ovl_native_extent(unsigned int id, uintptr_t *at, unsigned int *size);
  * (NCLIP <= 0 unless double-sided). Groups with translucent polygons, and scenes in software, keep their packets. */
 int gxh_stats_fm, gxh_stats_bgc;
 
-PORT_OVERLAY_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
+static inline void fuse_bounds(FUse *fu, int u0, int v0, int u1, int v1) {
+    if (u0 < fu->u0) fu->u0 = (u8)u0;
+    if (u1 > fu->u1) fu->u1 = (u8)u1;
+    if (v0 < fu->v0) fu->v0 = (u8)v0;
+    if (v1 > fu->v1) fu->v1 = (u8)v1;
+}
+
+PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(const NativeFieldMesh *n) {
     /* (not the GPU's backend: a scene gone software keeps the software renderer until it's shown, after this) */
     if (!active || !place->field || !fm_ring[0] || soft_hold) return 0;
     /* (the buffer's soft flag is still its last scene's: this one is walked later) */
@@ -3467,6 +3474,7 @@ PORT_OVERLAY_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
     int opaque = 0, front_polys = 0, front_verts = 0;
     const u8 *src = *(const u8 *const *)(g + 0x1C);
     int pi = st->npolys;
+    int lu0 = 255, lv0 = 255, lu1 = 0, lv1 = 0, gathering = 0; /* last_use's bounds, gathered in registers */
     for (int t = 0; t < 8; ++t) {
         const int quad = !(t & 1), flags_at = mesh_flags_at[t], textured = t < 4, nvp = quad ? 4 : 3;
         for (int k = *(const u16 *)(g + 2 + 2 * t); k > 0; --k, src += mesh_size[t], pk += fm_size[t], ++pi) {
@@ -3490,24 +3498,30 @@ PORT_OVERLAY_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
             for (int i = 0; i < nvp; ++i) uv[i] = *(const u32 *)(pk + fm_xy_at[t][i] + 4);
             u16 clut = (u16)(uv[0] >> 16), tpage = (u16)(uv[1] >> 16);
             int u = last_use;
-            if (u >= st->nuses || st->uses[u].tpage != tpage || st->uses[u].clut != clut)
-                for (u = 0; u < st->nuses; ++u) if (st->uses[u].tpage == tpage && st->uses[u].clut == clut) break;
-            if (u == st->nuses) {
-                if (u == FM_USES) continue;
-                st->uses[u] = (FUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF};
-                st->nuses++;
+            if (!gathering || st->uses[u].tpage != tpage || st->uses[u].clut != clut) {
+                if (gathering) fuse_bounds(&st->uses[last_use], lu0, lv0, lu1, lv1);
+                gathering = 0;
+                if (u >= st->nuses || st->uses[u].tpage != tpage || st->uses[u].clut != clut)
+                    for (u = 0; u < st->nuses; ++u) if (st->uses[u].tpage == tpage && st->uses[u].clut == clut) break;
+                if (u == st->nuses) {
+                    if (u == FM_USES) continue;
+                    st->uses[u] = (FUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF};
+                    st->nuses++;
+                }
+                last_use = u;
+                gathering = 1;
+                lu0 = lv0 = 255; lu1 = lv1 = 0;
             }
-            last_use = u;
-            FUse *fu = &st->uses[u];
             for (int i = 0; i < nvp; ++i) {
-                u8 cu = (u8)uv[i], cv = (u8)(uv[i] >> 8);
-                if (cu < fu->u0) fu->u0 = cu;
-                if (cu > fu->u1) fu->u1 = cu;
-                if (cv < fu->v0) fu->v0 = cv;
-                if (cv > fu->v1) fu->v1 = cv;
+                int cu = uv[i] & 0xFF, cv = uv[i] >> 8 & 0xFF;
+                if (cu < lu0) lu0 = cu;
+                if (cu > lu1) lu1 = cu;
+                if (cv < lv0) lv0 = cv;
+                if (cv > lv1) lv1 = cv;
             }
         }
     }
+    if (gathering) fuse_bounds(&st->uses[last_use], lu0, lv0, lu1, lv1);
     if (!opaque) return 0;
     FGroup *fg = &st->groups[st->ngroups++];
     fg->group = g; fg->packets = n->packets; fg->vert0 = (u16)st->nverts; fg->poly0 = (u16)st->npolys;
