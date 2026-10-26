@@ -402,18 +402,6 @@ static int offscreen(const Buffer *b, const u32 *xy, const u32 *v, int n) {
     return x1 + b->ofs_x < 0 || x0 + b->ofs_x >= b->w || y1 + b->ofs_y < 0 || y0 + b->ofs_y >= b->h;
 }
 
-/* twice a source polygon's screen area (as prim_area2), given NCLIP of its first three vertices */
-static int mesh_area2(const u32 *xy, const u8 *s, int t, int nclip) {
-    int a = nclip < 0 ? -nclip : nclip;
-    if (!(t & 1)) {
-        u32 c = xy[MW(s, 0) >> 16], d = xy[MW(s, 4) & 0xFFFF], e = xy[MW(s, 4) >> 16];
-        int x1 = (s16)c, y1 = (s16)(c >> 16), x2 = (s16)d, y2 = (s16)(d >> 16), x3 = (s16)e, y3 = (s16)(e >> 16);
-        int q = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
-        a += q < 0 ? -q : q;
-    }
-    return a;
-}
-
 /* (ARM in ovl_0b's area: only the battle's btl_drawMesh calls it) */
 PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const NativeMesh *nm) {
     if (!active || place->field) return 0;
@@ -448,55 +436,81 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
     /* each polygon once: the PS1's culling (NCLIP <= 0 unless double-sided), no area or off the buffer (as
      * hybrid_poly), its size for the budget, the texture word and blend mode it uses and their texels' bounds */
     unsigned polys = 0, vertices = 0;
-    int last_use = 0;
+    int last_use = -1, tex_use = -1; /* the use whose bounds are being gathered; the last textured polygon's */
+    int lu0 = 255, lv0 = 255, lu1 = 0, lv1 = 0;
     const u8 *s = nm->src;
-    for (int t = 0, k = 0, pi = 0; t < 8; ++t)
-        for (k = 0; k < nm->count[t]; ++k, s += mesh_size[t], ++pi) {
-            int quad = !(t & 1), nv = quad ? 4 : 3;
-            u32 vi[4] = {MW(s, 0) & 0xFFFF, MW(s, 0) >> 16, quad ? MW(s, 4) & 0xFFFF : MH(s, 4), quad ? MW(s, 4) >> 16 : 0};
-            u8 f = MB(s, mesh_flags_at[t]);
-            int x0 = (s16)xy[vi[0]], y0 = (s16)(xy[vi[0]] >> 16), x1 = (s16)xy[vi[1]], y1 = (s16)(xy[vi[1]] >> 16);
-            int x2 = (s16)xy[vi[2]], y2 = (s16)(xy[vi[2]] >> 16);
+    for (int t = 0, pi = 0; t < 8; ++t) {
+        const int quad = !(t & 1), nv = quad ? 4 : 3, size = mesh_size[t], flags_at = mesh_flags_at[t];
+        for (int k = 0; k < nm->count[t]; ++k, s += size, ++pi) {
+            u32 w0 = MW(s, 0), w1 = MW(s, 4);
+            u32 vi[4] = {w0 & 0xFFFF, w0 >> 16, quad ? w1 & 0xFFFF : w1 & 0xFFFF, quad ? w1 >> 16 : 0};
+            u8 f = MB(s, flags_at);
+            u32 p0 = xy[vi[0]], p1 = xy[vi[1]], p2 = xy[vi[2]];
+            int x0 = (s16)p0, y0 = (s16)(p0 >> 16), x1 = (s16)p1, y1 = (s16)(p1 >> 16), x2 = (s16)p2, y2 = (s16)(p2 >> 16);
             int nclip = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0); /* (NCLIP's sum, factored) */
             info[pi] = 0xFF;
             if (!(f & 2) && nclip <= 0) continue;
-            int a2 = mesh_area2(xy, s, t, nclip);
+            int a2 = nclip < 0 ? -nclip : nclip;
+            if (quad) {
+                u32 p3 = xy[vi[3]];
+                int x3 = (s16)p3, y3 = (s16)(p3 >> 16), q = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
+                a2 += q < 0 ? -q : q;
+            }
             if (!a2 || (!inside && offscreen(b, xy, vi, nv))) continue;
-            int tier = 0, use = 15, semi = 0;
-            while (a2 >= drop_bounds[tier]) ++tier;
+            /* the first drop bound above it (16, 64, ... 4096: powers of 4) */
+            int tier = a2 < 16 ? 0 : ((31 - __builtin_clz((u32)a2)) - 4) / 2 + 1;
+            if (tier > DROP_TIERS - 1) tier = DROP_TIERS - 1;
+            int use = 15, semi = 0;
             if (t < 4) {
                 u8 tex = MB(s, mesh_tex_at[t]), mode = f & 0xE1;
                 u16 uv[4];
                 mesh_uvs(mi, t, s, uv);
                 use = last_use; /* (consecutive polygons nearly always share one) */
-                if (use >= mi->nuses || mi->uses[use].tex != tex || mi->uses[use].mode != mode)
+                if (use < 0 || mi->uses[use].tex != tex || mi->uses[use].mode != mode) {
+                    if (use >= 0) { /* the last one's bounds */
+                        MeshUse *u = &mi->uses[use];
+                        if (lu0 < u->u0) u->u0 = (u8)lu0;
+                        if (lu1 > u->u1) u->u1 = (u8)lu1;
+                        if (lv0 < u->v0) u->v0 = (u8)lv0;
+                        if (lv1 > u->v1) u->v1 = (u8)lv1;
+                    }
                     for (use = 0; use < mi->nuses; ++use)
                         if (mi->uses[use].tex == tex && mi->uses[use].mode == mode) break;
-                last_use = use;
-                if (use == mi->nuses) {
-                    if (mi->nuses == MESH_USES) { gxh_stats_mesh_fallback++; return 0; }
-                    mi->uses[mi->nuses++] = (MeshUse){nm->tex[tex], tex, mode, (u8)(mode & 0xE0), (u8)(mode & 1), 255, 255, 0,
-                                                      0, 0xFF, 0xFF};
+                    if (use == mi->nuses) {
+                        if (mi->nuses == MESH_USES) { gxh_stats_mesh_fallback++; return 0; }
+                        mi->uses[mi->nuses++] = (MeshUse){nm->tex[tex], tex, mode, (u8)(mode & 0xE0), (u8)(mode & 1), 255, 255,
+                                                          0, 0, 0xFF, 0xFF};
+                    }
+                    last_use = use;
+                    lu0 = lv0 = 255; lu1 = lv1 = 0;
                 }
-                MeshUse *u = &mi->uses[use];
                 for (int i = 0; i < nv; ++i) {
-                    u8 cu = (u8)uv[i], cv = (u8)(uv[i] >> 8);
-                    if (cu < u->u0) u->u0 = cu;
-                    if (cu > u->u1) u->u1 = cu;
-                    if (cv < u->v0) u->v0 = cv;
-                    if (cv > u->v1) u->v1 = cv;
+                    int cu = uv[i] & 0xFF, cv = uv[i] >> 8;
+                    if (cu < lu0) lu0 = cu;
+                    if (cu > lu1) lu1 = cu;
+                    if (cv < lv0) lv0 = cv;
+                    if (cv > lv1) lv1 = cv;
                 }
                 semi = f & 1;
+                tex_use = use;
             } else if (t >= 6) {
                 semi = (MW(s, 8) & 0x02000000) != 0;
             }
             info[pi] = (u8)(semi << 7 | use << 3 | tier);
-                    if (t < 4) mi->untex_abr = (u8)((((mi->uses[use].page & 0xFFFF) | mi->uses[use].orbits) >> 5) & 3);
             ++polys;
             vertices += (unsigned)nv;
             mi->tier_polys[tier]++;
             mi->tier_vertices[tier] += (u16)nv;
         }
+    }
+    if (last_use >= 0) {
+        MeshUse *u = &mi->uses[last_use];
+        if (lu0 < u->u0) u->u0 = (u8)lu0;
+        if (lu1 > u->u1) u->u1 = (u8)lu1;
+        if (lv0 < u->v0) u->v0 = (u8)lv0;
+        if (lv1 > u->v1) u->v1 = (u8)lv1;
+    }
+    if (tex_use >= 0) mi->untex_abr = (u8)((((mi->uses[tex_use].page & 0xFFFF) | mi->uses[tex_use].orbits) >> 5) & 3);
     mi->polys = (u16)polys; mi->vertices = (u16)vertices;
     b->mesh_at[b->meshes] = (u16)b->pool_used;
     b->pool_used += need;
@@ -1520,7 +1534,7 @@ static int conv_choose(int depth, int x, int y, int wh, int h, int clut_x, int c
 static int run_code_cpal = -1; /* the palette upload_run's codes are for (-1 at each upload) */
 static void upload_run(const Run *r, u8 *base) {
     u32 key = r->key;
-    int depth = KEY_DEPTH(key), conv = KEY_CONV(key), per = texels_per_halfword(depth), fmt = run_format(key);
+    int depth = KEY_DEPTH(key), conv = KEY_CONV(key), fmt = run_format(key);
     int row_bytes = fmt == 0 ? 128 : fmt == 2 ? 512 : 256;
     int x = KEY_TX(key) + (r->bu * 16 >> texel_shift(depth)), wh = r->n * 16 >> texel_shift(depth), y = KEY_TY(key) + KEY_BV(key) * 16;
     u8 *dst = base + rows[r->row].unit * TEX_UNIT + r->slot * (fmt == 0 ? 8 : fmt == 2 ? 32 : 16);
