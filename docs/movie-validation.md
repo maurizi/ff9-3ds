@@ -320,6 +320,41 @@ area is unchanged (`psx_vram_generation`), which covers three of every four
 VSyncs during a 15 fps movie. The SPU is now the largest single cost here and
 everywhere else in the game.
 
+## FastVideoDS transcode: measured (2026-10-26)
+
+STR decoding costs about 105 ms a VBlank on an original DS (MDEC 66, VLC 10), so full-screen movies are to be
+transcoded at build time (design 6.3). FastVideoDS has no licence, so it stays an external checkout: `fastvideo`
+is a gitignored symlink to the player, and `tools/docker.sh` mounts its target. The encoder (C#, .NET 8,
+FFmpeg 5.1) runs from its own checkout. It needed local patches: no audio stream (the audio stays the game's own
+XA), net8.0, and `docker run -t` (it reads the console width).
+
+* `tools/movie_export.c` (host) decodes one movie extent of a raw disc image to 320x224 RGB24 frames. It uses the
+  port's frame assembly, BS v2 expansion and MDEC, with a tables file holding the movie overlay's
+  `g_mbgVlcPairs`, `D_8019DEC8` and `D_8019DF4C` (216+128+128 bytes, taken from a host RAM dump during a movie).
+  FFmpeg scales those frames for the encoder.
+* `make fmv-bench` builds `build/tests/fv_bench.nds` (decoder code and tables in main RAM, as the port would load
+  them) and `fv_bench_itcm.nds` (code in ITCM). Both build only when the `fastvideo` checkout is present. They
+  decode `fat:/testVideo.fv` frame by frame and show the decode time per frame.
+
+melonDS, original DS (67 MHz), the intro (FMVD001, 740 frames, 15 fps), CPU time per movie frame:
+
+| build | average | worst |
+|---|---:|---:|
+| decoder in main RAM, VRAM cached (MPU region 3) | 33 ms | 53 ms |
+| decoder in ITCM | 27.6 ms | |
+
+A 15 fps frame has 66 ms. Each P-frame also waits two VBlanks for the 3D engine's motion compensation and capture.
+
+Height: a P-frame's residual is 192 bytes per 8x8 block, written from bank D on (LCD 0x06860000). At 256x192 it
+is 144 KB, which overflows the 128 KB of bank D. The overflow is read back as zero, shows as black blocks, and
+spreads up from the bottom through the motion compensation. Heights up to 170 fit in bank D; mapping bank E as
+LCD as well (contiguous after D) makes 256x192 decode cleanly. The movies have square pixels (320x224 on a 4:3
+screen), so they scale to 256x179. They are encoded as 256x184 (a multiple of 8) with black padding rows.
+
+Not done yet: exporting every movie, and playback in the port. The plan: the game's player keeps streaming the
+STR for its audio and camera data, the VLC/MDEC calls are skipped, and the matching `.fv` frame is decoded
+instead. Movie backgrounds in fields (MBG) stay on MDEC for now.
+
 ## Still incomplete
 
 Not yet compared frame-by-frame with a PSX capture of the same movie (timing,

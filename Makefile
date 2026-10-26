@@ -799,3 +799,31 @@ $(BUILD)/tests/display_scale.elf: $(BUILD)/tests/display_scale_main.o $(BUILD)/t
 	arm-none-eabi-gcc $(DS_ARCH) -specs=$(SPECS) -L$(BLOCKSDS)/libs/libnds/lib $^ -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
 $(BUILD)/tests/display_scale.nds: $(BUILD)/tests/display_scale.elf
 	$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "Display scaling;ARM9;No disc data"
+
+# FastVideoDS decode benchmark (FMV transcode): fastvideo/ links to a FastVideoDS player checkout (not part of this
+# repository); its decoder's code and tables are moved out of ITCM/DTCM into main RAM, as the port would run them.
+FV_SRC := fastvideo/arm9/source/FastVideo
+FV_DS_FLAGS := $(RASTER_DS_FLAGS) -marm -I$(FV_SRC) -Ifastvideo/arm9/source # (ARM: its asm entry points have no .type for interworking)
+.PHONY: fmv-bench
+fmv-bench: $(BUILD)/tests/fv_bench.nds
+$(BUILD)/tests/fv/%.o: $(FV_SRC)/%.s
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(FV_DS_FLAGS) -x assembler-with-cpp -c $< -o $@.tmp
+	arm-none-eabi-objcopy --rename-section .itcm=.text.fv --rename-section .dtcm=.data.fv $@.tmp $@ && rm $@.tmp
+$(BUILD)/tests/fv/%.o: $(FV_SRC)/%.c
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(FV_DS_FLAGS) -c $< -o $@.tmp
+	arm-none-eabi-objcopy --rename-section .itcm=.text.fv --rename-section .dtcm=.data.fv $@.tmp $@ && rm $@.tmp
+$(BUILD)/tests/fv_bench.elf: tests/fmv/fv_bench.c $(addprefix $(BUILD)/tests/fv/,fvDecoder_asm.o fvConst_asm.o fvConst.o fvMcData.o fvDecoder.o)
+	arm-none-eabi-gcc $(FV_DS_FLAGS) $^ -L$(BLOCKSDS)/libs/libnds/lib -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/fv_bench.nds: $(BUILD)/tests/fv_bench.elf
+	$(NDSTOOL) -c $@ -7 $(BLOCKSDS)/sys/default_arm7/arm7.elf -9 $< -b $(BLOCKSDS)/sys/icon.bmp "FV bench;ARM9;FastVideoDS"
+# (the same with its code in ITCM, as a movie would load it: tables still in main RAM, DTCM being the stack)
+$(BUILD)/tests/fvi/%.o: $(FV_SRC)/%.s
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(FV_DS_FLAGS) -x assembler-with-cpp -c $< -o $@.tmp
+	arm-none-eabi-objcopy --rename-section .dtcm=.data.fv $@.tmp $@ && rm $@.tmp
+$(BUILD)/tests/fv_bench_itcm.elf: tests/fmv/fv_bench.c $(addprefix $(BUILD)/tests/fvi/,fvDecoder_asm.o fvConst_asm.o) $(addprefix $(BUILD)/tests/fv/,fvConst.o fvMcData.o fvDecoder.o)
+	arm-none-eabi-gcc $(FV_DS_FLAGS) $^ -L$(BLOCKSDS)/libs/libnds/lib -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/fv_bench_itcm.nds: $(BUILD)/tests/fv_bench_itcm.elf
+	$(NDSTOOL) -c $@ -7 $(BLOCKSDS)/sys/default_arm7/arm7.elf -9 $< -b $(BLOCKSDS)/sys/icon.bmp "FV bench;ARM9;FastVideoDS"

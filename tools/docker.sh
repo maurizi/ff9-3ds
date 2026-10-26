@@ -20,6 +20,11 @@ if [ -L "$ROOT/disks" ]; then
     TARGET="$(readlink -f "$ROOT/disks")"
     MOUNTS+=(-v "$TARGET:$TARGET:ro")
 fi
+# fastvideo may be a link to a FastVideoDS player checkout (make fmv-bench compiles its decoder): mount it too.
+if [ -L "$ROOT/fastvideo" ]; then
+    TARGET="$(readlink -f "$ROOT/fastvideo")"
+    MOUNTS+=(-v "$TARGET:$TARGET:ro")
+fi
 
 # Extra docker arguments, e.g. FF9DS_DOCKER_ARGS="--network host" to reach DeSmuME's GDB stub.
 read -r -a EXTRA <<< "${FF9DS_DOCKER_ARGS:-}"
