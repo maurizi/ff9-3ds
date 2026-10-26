@@ -47,6 +47,11 @@
 #undef BTLFX_EXPORTS
 #define BTLFX_EXPORTS(env) ((void)(env), (BtlfxExports *)PSX_ADDR(0x800F7510))
 #endif
+#ifdef RAND16
+/* ovl_0b.h: unsequenced in C; the PS1 reads the byte (twice) before the increment */
+#undef RAND16
+#define RAND16() ({ u32 port_b = *g_randPtr++; (s32)(port_b << 8 | port_b); })
+#endif
 #include "psx_runtime.h"
 #include "effect_bridge.h"
 void battleEnd_main(void);
