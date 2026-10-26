@@ -442,6 +442,46 @@ GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *
 #endif
 }
 
+#ifdef PORT_GTE_APPROX
+/* gte.h's DS-mode commands for the game's constant ones: MVMVA sf=1 lm=0 with RT (rtir, rtv0tr, rtv0) in 32 bits as
+ * RTPS, so without MAC1-3's 44-bit overflow flags (bone matrices: two of every three MVMVAs) */
+GTE_HOT void psx_gte_mvmva_rt12(gte_u32 op) {
+    const gte_u32 *c = g.c;
+    i32 x, y, z, tx = 0, ty = 0, tz = 0;
+    if ((op & 0x18000) == 0x18000) { x = (i16)g.d[9]; y = (i16)g.d[10]; z = (i16)g.d[11]; }
+    else { x = (i16)g.d[0]; y = (i32)g.d[0] >> 16; z = (i16)g.d[1]; }
+    if (!(op & 0x6000)) { tx = (i32)c[5]; ty = (i32)c[6]; tz = (i32)c[7]; }
+    i32 m1 = tx + (((i16)c[0] * x + ((i32)c[0] >> 16) * y + (i16)c[1] * z) >> 12);
+    i32 m2 = ty + ((((i32)c[1] >> 16) * x + (i16)c[2] * y + ((i32)c[2] >> 16) * z) >> 12);
+    i32 m3 = tz + (((i16)c[3] * x + ((i32)c[3] >> 16) * y + (i16)c[4] * z) >> 12);
+    u32 flag = 0;
+    g.d[25] = (u32)m1; g.d[26] = (u32)m2; g.d[27] = (u32)m3;
+    if (m1 > 0x7FFF) { m1 = 0x7FFF; flag |= 1u << 24; } else if (m1 < -0x8000) { m1 = -0x8000; flag |= 1u << 24; }
+    if (m2 > 0x7FFF) { m2 = 0x7FFF; flag |= 1u << 23; } else if (m2 < -0x8000) { m2 = -0x8000; flag |= 1u << 23; }
+    if (m3 > 0x7FFF) { m3 = 0x7FFF; flag |= 1u << 22; } else if (m3 < -0x8000) { m3 = -0x8000; flag |= 1u << 22; }
+    g.d[9] = (u32)m1; g.d[10] = (u32)m2; g.d[11] = (u32)m3;
+    FLAG = flag ? flag | 0x80000000u : 0;
+}
+
+/* GPF sf=1 lm=0 (gte_gpf12: the rotation matrices) */
+GTE_HOT void psx_gte_gpf12(void) {
+    i32 ir0 = (i16)g.d[8];
+    u32 flag = 0, rgb = g.d[6] & 0xFF000000u;
+    for (int i = 0; i < 3; ++i) {
+        i32 m = ir0 * (i16)g.d[9 + i] >> 12;
+        g.d[25 + i] = (u32)m;
+        i32 ir = m;
+        if (ir > 0x7FFF) { ir = 0x7FFF; flag |= 1u << (24 - i); } else if (ir < -0x8000) { ir = -0x8000; flag |= 1u << (24 - i); }
+        g.d[9 + i] = (u32)ir;
+        i32 col = m >> 4;
+        if (col > 0xFF) { col = 0xFF; flag |= 1u << (21 - i); } else if (col < 0) { col = 0; flag |= 1u << (21 - i); }
+        rgb |= (u32)col << (8 * i);
+    }
+    g.d[20] = g.d[21]; g.d[21] = g.d[22]; g.d[22] = rgb;
+    FLAG = flag & 0x7F87E000 ? flag | 0x80000000u : flag;
+}
+#endif
+
 /* [MAC1..3] = (T << 12 + M * V) >> shift, IR = MAC (MVMVA and the lighting steps) */
 GTE_HOT static void mat_mul(int mbase, i64 vx, i64 vy, i64 vz, i64 tx, i64 ty, i64 tz, int sf, int lm) {
     i32 x = (i32)vx, y = (i32)vy, z = (i32)vz;

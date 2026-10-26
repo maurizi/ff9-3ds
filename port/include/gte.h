@@ -38,6 +38,9 @@ static inline __attribute__((always_inline)) void gte_ctc2_inline(int reg, gte_u
 /* NCLIP and AVSZ3/AVSZ4 in place, as gte.c computes them (MAC0's flags, OTZ's saturation): about half of a
  * battle's commands, each a few multiplies behind a call and a dispatch otherwise. */
 void gte_cmd(gte_u32 op);
+/* DS mode: MVMVA sf=1 lm=0 with RT (rtir, rtv0tr, rtv0) and GPF sf=1 lm=0 in 32 bits (gte.c) */
+void psx_gte_mvmva_rt12(gte_u32 op);
+void psx_gte_gpf12(void);
 /* RTPT's projection over many vertices (gte.c) */
 void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *sz);
 static inline __attribute__((always_inline)) void gte_mac0_flags(long long m, gte_u32 flag) {
@@ -65,40 +68,9 @@ static inline __attribute__((always_inline)) void gte_cmd_inline(gte_u32 op) {
 #ifdef PORT_GTE_APPROX
     } else if (__builtin_constant_p(op) && ((op & 0x1FFFFFF) == 0x049E012 || (op & 0x1FFFFFF) == 0x0480012 ||
                                             (op & 0x1FFFFFF) == 0x0486012)) {
-        /* MVMVA sf=1 lm=0 with RT: RT x IR (rtir), RT x V0 + TR (rtv0tr), RT x V0 (rtv0). DS mode: in 32 bits as
-         * RTPS (gte.c), so without MAC1-3's 44-bit overflow flags (bone matrices, two of every three MVMVAs). */
-        const gte_u32 *c = psx_gte.c;
-        int x, y, z, tx = 0, ty = 0, tz = 0;
-        if ((op & 0x18000) == 0x18000) { x = (short)psx_gte.d[9]; y = (short)psx_gte.d[10]; z = (short)psx_gte.d[11]; }
-        else { x = (short)psx_gte.d[0]; y = (short)(psx_gte.d[0] >> 16); z = (short)psx_gte.d[1]; }
-        if (!(op & 0x6000)) { tx = (int)c[5]; ty = (int)c[6]; tz = (int)c[7]; }
-        int m1 = tx + (((short)c[0] * x + ((int)c[0] >> 16) * y + (short)c[1] * z) >> 12);
-        int m2 = ty + ((((int)c[1] >> 16) * x + (short)c[2] * y + ((int)c[2] >> 16) * z) >> 12);
-        int m3 = tz + (((short)c[3] * x + ((int)c[3] >> 16) * y + (short)c[4] * z) >> 12);
-        gte_u32 flag = 0;
-        psx_gte.d[25] = (gte_u32)m1; psx_gte.d[26] = (gte_u32)m2; psx_gte.d[27] = (gte_u32)m3;
-        if (m1 > 0x7FFF) { m1 = 0x7FFF; flag |= 1u << 24; } else if (m1 < -0x8000) { m1 = -0x8000; flag |= 1u << 24; }
-        if (m2 > 0x7FFF) { m2 = 0x7FFF; flag |= 1u << 23; } else if (m2 < -0x8000) { m2 = -0x8000; flag |= 1u << 23; }
-        if (m3 > 0x7FFF) { m3 = 0x7FFF; flag |= 1u << 22; } else if (m3 < -0x8000) { m3 = -0x8000; flag |= 1u << 22; }
-        psx_gte.d[9] = (gte_u32)m1; psx_gte.d[10] = (gte_u32)m2; psx_gte.d[11] = (gte_u32)m3;
-        psx_gte.c[31] = flag ? flag | 0x80000000u : 0;
+        psx_gte_mvmva_rt12(op); /* (gte.c: a call no larger than gte_cmd's) */
     } else if (__builtin_constant_p(op) && (op & 0x1FFFFFF) == 0x198003D) {
-        /* GPF sf=1 lm=0 (gte_gpf12: the rotation matrices) */
-        int ir0 = (short)psx_gte.d[8];
-        int m[3];
-        gte_u32 flag = 0, rgb = psx_gte.d[6] & 0xFF000000u;
-        for (int i = 0; i < 3; ++i) {
-            m[i] = ir0 * (short)psx_gte.d[9 + i] >> 12;
-            psx_gte.d[25 + i] = (gte_u32)m[i];
-            int ir = m[i];
-            if (ir > 0x7FFF) { ir = 0x7FFF; flag |= 1u << (24 - i); } else if (ir < -0x8000) { ir = -0x8000; flag |= 1u << (24 - i); }
-            psx_gte.d[9 + i] = (gte_u32)ir;
-            int col = m[i] >> 4;
-            if (col > 0xFF) { col = 0xFF; flag |= 1u << (21 - i); } else if (col < 0) { col = 0; flag |= 1u << (21 - i); }
-            rgb |= (gte_u32)col << (8 * i);
-        }
-        psx_gte.d[20] = psx_gte.d[21]; psx_gte.d[21] = psx_gte.d[22]; psx_gte.d[22] = rgb;
-        psx_gte.c[31] = flag & 0x7F87E000 ? flag | 0x80000000u : flag;
+        psx_gte_gpf12();
 #endif
     } else {
         gte_cmd(op);

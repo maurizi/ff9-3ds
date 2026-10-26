@@ -62,6 +62,10 @@ DECOMP_CFLAGS := -std=gnu89 -fpermissive -O2 -g -fsigned-char -fno-strict-aliasi
                  $(addprefix -I,$(wildcard $(DECOMP)/src_equiv/*/)) # their "../src_equiv.h" resolves from here
 # On the DS the battle overlay is optimized for size: it alone sets the size of the code overlay slot (ds-mode.md)
 DECOMP_OPT_ds_ovl_0b := -Os
+# DS mode: the overlays' own GTE sequences take gte.h's approximate paths too (bone matrices, rotations: a call each,
+# no larger than gte_cmd's); decomp-config rebuilds them when DSMODE changes
+DECOMP_GTE_BINS := ovl_0a ovl_0b ovl_0c
+DECOMP_GTE_ds := $(if $(filter 1,$(DSMODE)),-DPORT_GTE_APPROX)
 PORT_CFLAGS   := -std=gnu17 -O2 -g -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter -Wno-builtin-declaration-mismatch -ffunction-sections -fdata-sections \
                  -Iport/include -I$(DECOMP)/include
 
@@ -112,7 +116,8 @@ $(1)_MAINLINK := $$(filter-out $$($(1)_FXOBJS),$$($(1)_LINK))
 $$($(1)_DIR)/obj/%.o: $(BUILD)/portified/%.c $(PORT_HDRS)
 	@mkdir -p $$(dir $$@)
 	@echo "CC   [$(1)] $$*"
-	@$(2) $(4) $(DECOMP_CFLAGS) $$(DECOMP_OPT_$(1)_$$(call bin_of,$$*)) -DPORT_HEADER='"$$(call header_of,$$(call bin_of,$$*))"' \
+	@$(2) $(4) $(DECOMP_CFLAGS) $$(DECOMP_OPT_$(1)_$$(call bin_of,$$*)) \
+		$$(if $$(filter $(DECOMP_GTE_BINS),$$(call bin_of,$$*)),$$(DECOMP_GTE_$(1))) -DPORT_HEADER='"$$(call header_of,$$(call bin_of,$$*))"' \
 		-DPORT_BIN_$$(call bin_of,$$*) -c $$< -o $$@ $$(if $$(filter docs/wip/%,$$*),2> $$@.log || \
 		{ echo "draft $$* doesn't compile against current headers (skipped, see $$@.log)"; \
 		  echo "" | $(2) $(4) -x c -c - -o $$@; })
@@ -238,6 +243,12 @@ $(BUILD)/ds/runtime-config: FORCE_DS_CONFIG
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(ds_PORTOBJS): $(BUILD)/ds/runtime-config
+$(BUILD)/ds/decomp-config: FORCE_DS_CONFIG
+	@mkdir -p $(dir $@)
+	@printf '%s\n' '$(DECOMP_GTE_ds)' > $@.tmp
+	@cmp -s $@.tmp $@ || cp $@.tmp $@
+	@rm -f $@.tmp
+$(ds_DOBJS): $(BUILD)/ds/decomp-config
 $(BUILD)/ds/port/ds/audio.o: port/ds/audio.h port/ds/pcm_ring.h
 $(BUILD)/ds/port/ds/pcm_ring.o: port/ds/pcm_ring.h
 $(BUILD)/ds/port/ds/platform.o: port/ds/audio.h
