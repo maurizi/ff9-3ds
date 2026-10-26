@@ -12,7 +12,9 @@
 
 /* rows y with (y - this) % 5 == 4 not drawn (-1: all): a layer that a 5:4 nearest scaling then samples (gx_hybrid.c's
  * additive layer) never shows them */
+#ifdef PORT_GX_HYBRID
 int psx_softgpu_row_skip = -1;
+#endif
 
 #ifdef PORT_RASTER_ITCM
 #define SG_HOT __attribute__((section(".itcm"), long_call))
@@ -674,7 +676,9 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
     u32 inv0 = 0, inv1 = 0, inv2 = 0;
 #endif
     for (int y = miny; y < maxy; y++) {
+#ifdef PORT_GX_HYBRID
         if (psx_softgpu_row_skip >= 0 && (unsigned)(y - psx_softgpu_row_skip) % 5u == 4u) goto next_row;
+#endif
         int w0 = w0row, w1 = w1row, w2 = w2row;
         int r = rrow, g = grow, bl = brow, u = urow, v = vrow;
         int left=minx,right=maxx;
@@ -751,7 +755,9 @@ static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, 
             r = step_attribute(r, drdx); g = step_attribute(g, dgdx);
             bl = step_attribute(bl, dbdx); u = step_attribute(u, dudx); v = step_attribute(v, dvdx);
         }
+#ifdef PORT_GX_HYBRID
     next_row:
+#endif
         w0row += B0;
         w1row += B1;
         w2row += B2;
