@@ -34,3 +34,10 @@ o0c_wm_projectMesh
 # World map blocks and backdrop: the renderer may take their faces after the game's vertex pass (port/game/world_native.c).
 o0c_wm_drawBlock
 o0c_wm_drawBackdrop
+
+# World map vertex pass: the first RTPT of each group for its depths alone (port/game/world_verts.c).
+o0c_wm_blockVertsFog
+o0c_wm_modelVerts
+o0c_wm_modelVertsFlat
+o0c_wm_blockVertsFar
+o0c_wm_blockVertsNear

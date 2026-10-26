@@ -41,6 +41,8 @@ void gte_cmd(gte_u32 op);
 /* DS mode: MVMVA sf=1 lm=0 with RT (rtir, rtv0tr, rtv0) and GPF sf=1 lm=0 in 32 bits (gte.c) */
 void psx_gte_mvmva_rt12(gte_u32 op);
 void psx_gte_gpf12(void);
+/* RTPT's depths alone, for a caller that overwrites the rest before reading it (gte.c) */
+void psx_gte_rtpt_depths(void);
 /* RTPT's projection over many vertices (gte.c) */
 void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *sz);
 static inline __attribute__((always_inline)) void gte_mac0_flags(long long m, gte_u32 flag) {

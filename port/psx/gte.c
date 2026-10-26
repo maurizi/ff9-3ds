@@ -463,6 +463,18 @@ GTE_HOT void psx_gte_mvmva_rt12(gte_u32 op) {
     FLAG = flag ? flag | 0x80000000u : 0;
 }
 
+/* RTPT's depths alone (sf=1, DS mode's 32-bit MAC3): SZ1-3 pushed as RTPT pushes them, nothing else written. For a
+ * caller that overwrites the rest (screen positions, MAC/IR, MAC0/IR0, FLAG) before reading it: world_verts.c */
+GTE_HOT void psx_gte_rtpt_depths(void) {
+    const gte_u32 *c = g.c;
+    const i32 c3 = (i32)c[3], c4 = (i16)c[4], trz = (i32)c[7];
+    for (int v = 0; v < 3; ++v) {
+        u32 vxy = g.d[v * 2];
+        i32 mac3 = trz + (((i16)c3 * (i16)vxy + (c3 >> 16) * ((i32)vxy >> 16) + c4 * (i16)g.d[v * 2 + 1]) >> 12);
+        push_sz(mac3 > 0xFFFF ? 0xFFFF : mac3 < 0 ? 0 : (u32)mac3);
+    }
+}
+
 /* GPF sf=1 lm=0 (gte_gpf12: the rotation matrices) */
 GTE_HOT void psx_gte_gpf12(void) {
     i32 ir0 = (i16)g.d[8];
