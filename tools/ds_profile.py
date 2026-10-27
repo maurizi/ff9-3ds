@@ -19,7 +19,11 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = Path.home() / '.var/app/net.kuribo64.melonDS/config/melonDS/melonDS.toml'
+# MELON_BIN: another melonDS build to run instead of the Flatpak's (its config in ~/.config/melonDS): e.g. the
+# accurate-timing interpreter of melonDS PR 2235 (ARM9 caches, interlocks, main RAM contention) for calibration
+MELON_BIN = os.environ.get('MELON_BIN')
+CONFIG = (Path.home() / '.config/melonDS/melonDS.toml' if MELON_BIN else
+          Path.home() / '.var/app/net.kuribo64.melonDS/config/melonDS/melonDS.toml')
 
 
 def symbols(elf):
@@ -52,7 +56,7 @@ def window(display):
     except FileNotFoundError:
         sys.exit('xwininfo is required')
     for line in tree.splitlines():
-        if 'melonDS 1.1' in line and '"[' in line:
+        if ('melonDS 1.1' in line or 'melonDS 1.0' in line) and '"[' in line:
             return line.split()[0]
     return None
 
@@ -124,7 +128,7 @@ def main():
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(1)
     env = dict(os.environ, DISPLAY=a.display, XAUTHORITY='/dev/null')
-    emu = subprocess.Popen(['flatpak', 'run', 'net.kuribo64.melonDS', str(rom)], env=env,
+    emu = subprocess.Popen(([MELON_BIN] if MELON_BIN else ['flatpak', 'run', 'net.kuribo64.melonDS']) + [str(rom)], env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.monotonic() + a.timeout

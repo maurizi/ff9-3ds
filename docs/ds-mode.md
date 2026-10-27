@@ -932,3 +932,9 @@ and a 1 MB array a 32-byte line a load (a miss each on a DS): 11.0, 9.0 and 12.0
 original-DS setting. melonDS doesn't model the ARM9's data cache: every load costs about as much, cached or not.
 Every ms-per-VBlank figure here is that machine's: on hardware, cache-friendly loops (most of the port's) should run
 faster than measured and scattered accesses (texels, PS1 VRAM lookups) slower. Only a real DS settles parity.
+Calibration tried with melonDS PR 2235's accurate-timing interpreter (github.com/Jaklyy/melonDS, branch chemical-x2,
+built at ~/src/melonDS-accurate; tools/ds_profile.py runs it with MELON_BIN=<binary>, config in ~/.config/melonDS,
+JIT off): it does model the cache (cache_bench: 6.2, 11.0 and 47.1 cycles a load for the three patterns), but whole
+scenes don't measure consistently: d1_f0110 85.2 ms per VBlank with PROFILE=2 (reproducibly), 23.9 with PROFILE=3
+(its sampler's 8 kHz timer interrupt on), d4_f2110 100.1, d1_b0071 96.5. Something in its halt or interrupt timing
+is off: not usable for calibration as it stands.
