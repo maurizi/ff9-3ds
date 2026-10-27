@@ -163,7 +163,7 @@ void plat_wait_frame(void) {
                        gxh_stats_blocks, gxh_stats_ui_drawn, gxh_stats_ui_skipped);
         }
 #endif
-#ifdef PORT_HW_SOUND
+#if defined(PORT_HW_SOUND) && !defined(PORT_SPU_ARM7) /* (with SPU7 the channels are the ARM7's: audio_hw.c isn't linked) */
         status_row(17, "snd %d on, %d starts, %d waiting", port_hw_sound_stats[2], port_hw_sound_stats[0],
                    port_hw_sound_stats[1]);
 #endif

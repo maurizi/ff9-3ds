@@ -780,3 +780,9 @@ polygons: 2,829 polygons and 9,189 vertices a frame against 2,048 and 6,144; wit
 still 7,497 vertices, and only 5 of the other 813 primitives are behind everything else in their cells. Such a
 scene needs two 3D passes per frame (two DS frames per 30 fps game frame, the first captured) or dropped geometry:
 not built.
+
+100 more (the next of the shuffled 747): 100/100 reach frame 1500 without a crash or stall; median 24.4 ms per
+VBlank, 16.6-105.7 (d2_f1225 105.7, d4_f2955 67.0, d4_f2926 55.6, d3_f1866 53.2). No screen of the 200 blank or
+flat. 584 of the 1,131 fields have now run on an original DS. The status screen's sound line read a stub: with
+SPU7 audio_hw.c isn't linked and the stub generator made `port_hw_sound_stats` a 12-byte function; the line is
+gone from SPU7 builds.
