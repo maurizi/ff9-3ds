@@ -458,8 +458,13 @@ int CdControlB(u8 com, u8 *param, u8 *result) {
 
 static void pump(int max_sectors);
 
+/* A loader's poll: commands complete at once, but sectors only come at the drive's rate (psx_cd_frame), so a load
+ * takes the PS1's frames, through which its interrupts go on (AKAO's sound sequences, the VSync callback): a run of
+ * polls lets a frame pass. (Delivering a sector at each poll loaded in no time at all: a battle's sound effect
+ * still played from its data when the field's overwrote it, d1_f0310.) */
 void psx_cd_pump(void) {
-    pump(MAX_SECTORS_PER_PUMP);
+    pump(0);
+    if (reading && ready_cb) psx_poll_wait();
 }
 
 /* One frame of drive time: 75 sectors/s at normal speed, 150 with CdlModeSpeed (mode bit 7), as whole sectors

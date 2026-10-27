@@ -882,7 +882,13 @@ overwrote it). Letting a run of 512 polls stand for a frame (as VSync(-1) busy-w
 come at the drive's rate fixed d1_f0310 on the host, and the host wander sweeps found three more problems through the
 new timing (fixed: below), but every DS field load then crashed: frames now pass while a field streams data, and
 the DS's native field models (port_native_field_mesh, a stub on the host) read groups half overwritten, writing
-through a NULL pointer into the ITCM's mirror at 0. Reverted until the native path survives data changing under it.
+through a NULL pointer into the ITCM's mirror at 0. Reverted, then found: not the field models themselves but the DS's stack. A frame a loader's poll lets pass ran the
+whole present (gx_hybrid's scene and UI work) on top of the game's own calls deep in the load, which overran the
+DS's DTCM stack and corrupted what lay below (a call through a NULL pointer, garbage, the ITCM). Such a frame now
+keeps time only (psx_poll_frame: no new picture, as the PS1's screen holds its last one through a load), with AKAO,
+the VSync callback and the drive going on. Taken: d1_f0310 runs on the DS past its old stop (frame 12,048, now
+12,966 and on), the 28-field sweep runs as before (frames at 1500 differ a little: the loads took the PS1's time),
+and music and sound now go on through loads.
 
 Found through it and kept:
 - Effects with two modules: the second loads at 0x801EC700 (btlfx_pool.c, d->unk10; the _1 builds). Calls into it

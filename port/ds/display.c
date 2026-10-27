@@ -180,6 +180,11 @@ void display_present(void) {
 #ifndef PORT_SOFT_DISPLAY
     return;
 #endif
+    { /* a frame a loader's busy-wait let pass: time only (the present's stack on top of the game's deep in a load
+       * overran the DS's) */
+        extern int psx_poll_frame;
+        if (psx_poll_frame) { pace(); return; }
+    }
 #ifdef PORT_GX_HYBRID
     gxh_tp_tick();
 #endif

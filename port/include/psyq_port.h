@@ -12,6 +12,7 @@
 
 /* Virtual interrupts (irq.c): the PS1's interrupt-driven work happens at defined points, deterministically. */
 void psx_frame(void);           /* one 60 Hz frame: CD, root counters, pad, VSync callback, then wait */
+void psx_poll_wait(void);       /* a busy-wait's poll: enough of them within a frame let one pass */
 void psx_drawsync_pending(void); /* gpu.c: a DrawSyncCallback is owed */
 
 /* CD (cd.c): service queued commands and at most one sector event. */

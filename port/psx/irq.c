@@ -21,6 +21,7 @@ static unsigned int vblanks;      /* VSync(-1) */
 static unsigned int last_vsync;   /* vblank count at the previous VSync(n >= 0) */
 static void (*vsync_cb)(void);
 static unsigned int polls; /* VSync(-1) calls since the last frame */
+#define POLLS_PER_FRAME 512 /* (VSync below) */
 
 /* ---- root counters -------------------------------------------------------------------------------------- */
 
@@ -197,9 +198,18 @@ static void rcnt_frame(void) {
 __attribute__((weak)) void movie_fv_idle(void) {
 }
 
+static int in_frame; /* (a poll inside the frame's own work doesn't start another) */
+/* A busy-wait's poll (VSync(-1), the CD loader's state): a run of POLLS_PER_FRAME of them stands for a frame, as the
+ * PS1's interrupts and counters keep going while code spins */
+int psx_poll_frame; /* (the frame a busy-wait let pass: no new picture, platform.c) */
+void psx_poll_wait(void) {
+    if (++polls >= POLLS_PER_FRAME && !in_frame) { psx_poll_frame = 1; psx_frame(); psx_poll_frame = 0; }
+}
+
 void psx_frame(void) {
     port_canary("game code before psx_frame");
     polls = 0;
+    in_frame++;
     movie_fv_idle(); /* (a transcoded movie's decoding goes on between the frame's parts) */
     psx_cd_frame();
     port_canary("CD frame");
@@ -219,6 +229,7 @@ void psx_frame(void) {
     }
     plat_wait_frame();
     port_canary("present/wait");
+    in_frame--;
 }
 
 /* VSync(mode) (libetc): -1 the vblank count; 1 hblanks since the last vblank (no wait); 0 wait for the next
@@ -227,15 +238,11 @@ void psx_frame(void) {
 /* Polls of the vblank count within one frame before the port treats them as a busy-wait and lets a frame pass. On
  * the PS1 the counter moves in real time while code spins on it (func_800B2C80 in the field loader waits that
  * way); here virtual time only moves at frame boundaries, so a long run of polls stands in for that time. */
-#define POLLS_PER_FRAME 512
-
 __attribute__((weak)) void plat_vsync_begin(unsigned int frames) { (void)frames; }
 
 long VSync(long mode) {
     if (mode < 0) {
-        if (++polls >= POLLS_PER_FRAME) {
-            psx_frame();
-        }
+        psx_poll_wait();
         return (long)vblanks;
     }
     if (mode == 1) {
