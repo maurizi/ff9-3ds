@@ -905,3 +905,11 @@ d2_f1225 in two passes: 126 units placed and 175 groups and runs left over in C 
 in 3D (the composite, which takes them out of the texture plan at 104 units, needs bank A or C, and the passes hold
 A and B). A composite with two passes needs a third bitmap bank, leaving D alone (128 KB) for the textures: not
 built; the scene stays in software (105 ms per VBlank).
+
+d2_f0931 (56 ms per VBlank; at frame 1500 now a narration screen over a scene still drawn behind): the composite is
+kept for being past the 3D engine's RAM, and 27 of its 32 bands change at most redraws (416 of 589 frames), so it is
+drawn again almost whole: 52 ms a redraw (fill 1.6, replay of 717 background sprites over 175,554 pixels 42.6, scale
+7.1), plus 32 ms of emission a frame. The sprites don't scroll (matched by texture source, nearly all stay put):
+the band hashes change with the sprite list. Tried, not taken: two passes instead of the composite for a moving
+background (no gain here: its textures don't fit C-D; Alexandria 53.6 -> 68.8, losing its composite and additive
+layer); the redraw's scaling in ARM (no gain: melonDS charges ARM fetches from main RAM as Thumb's).
