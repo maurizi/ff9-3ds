@@ -791,3 +791,9 @@ gone from SPU7 builds.
 d2_f1751 108.9, d4_f2915 93.0, d2_f0957 65.9); d2_f0070 stops at frame 123, the fixture limit the host sweep
 found (the opening scene, whose FMV001 is on disc 1). The near-black screens are narration (d2_f1461, d3_f1819).
 783 of the 1,131 fields have now run on an original DS.
+
+The last 347: 347/347 reach frame 1500 without a crash or stall (median 24.7 ms per VBlank, 16.4-107.5: d1_f0576
+107.5, d1_f0851 and d2_f0851 71.6, d3_f2955 67.0, d2_f1660 64.8); the near-black screens are a minigame's retry
+prompt (d3_f2204) and a starfield (d4_f2921). Every field ID on the four discs (1,131) has now been entered on an
+original DS and run its first 1,500 frames: the only stop is d2_f0070, the fixture limit. Entry and the first 25
+seconds only: events later in a field need their own scenarios.
