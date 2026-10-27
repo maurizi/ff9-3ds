@@ -80,6 +80,13 @@ src/ovl_0b/btl_model.c | if ((u32)f > 0x80000000) { | if (PORT_IS_RAM_PTR(f)) { 
 # inputs at the access boundary, retaining the stored NULL and native pointers.
 src/ovl_0b/btlfx_heap.c | owner->unk64 | PSX_NZ(owner->unk64) | 16
 src/ovl_0b/btlfx_heap.c | owner->unk68 | PSX_NZ(owner->unk68) | 5
+# Found by wandering the fields on the host (20,000 frames of walking and confirm from each field, 2026-10-27):
+# script opcodes 0x95/0x96 and the 0x2F store take an object id that names no object (evt_getObjectArg NULL);
+# btl_rollAmbush reads a party slot that is empty after a party change (gd->party[i] NULL).
+src/main/event.c | evt_execInstr_window(po, c, D_8007B704->unk10); | evt_execInstr_window(PSX_NZ(po), c, D_8007B704->unk10); | 2
+src/main/event.c | po->unk2F = b; | PSX_NZ(po)->unk2F = b; | 1
+src/main/event.c | WinLayout *evt_getMsgLayout(Unk8004AB64 *obj, s32 id, s32 flags) { | WinLayout *evt_getMsgLayout(Unk8004AB64 *obj, s32 id, s32 flags) { obj = PSX_NZ(obj); | 1
+src/ovl_0b/btl_cmd.c | gd->party[i]->supportAbilities[arg0] & arg1 | PSX_NZ(gd->party[i])->supportAbilities[arg0] & arg1 | 1
 # Bone matrices can be absent while an enemy is entering. Preserve the NULL
 # field, mapping the array base before indexing (C585C reads bone*32+0x18).
 # Ifrit's final bone queries outlive its model buffer. The original also reads
