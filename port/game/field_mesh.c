@@ -101,6 +101,7 @@ PORT_OVERLAY_CODE(0a) static void link_translucent(u8 *grp, u8 *pkt, u32 *ot) {
                 gte_stotz(&z);
             }
             u32 *slot = &ot[z];
+            if (PSX_OT_OUTSIDE(slot)) continue; /* (past the table: the PS1 never draws it, psx_mem.h) */
             *(u32 *)pkt = *slot | ((u32)kind_len[k] << 24);
             *slot = (u32)pkt & 0xFFFFFF;
         }

@@ -26,6 +26,13 @@ void psx_load_low_ram(void);
  * as the GPU walker does; applying PSX_ADDR would use the wrong arena offset. */
 #define PSX_OT_PTR(a) ((unsigned int *)(((unsigned int)psx_ram & 0xFF000000u) | ((unsigned int)(a) & 0xFFFFFFu)))
 
+/* An OT slot the game is about to link into, outside the frame's main table (fldmdl_drawMesh's depth isn't
+ * clamped, in the original asm either: d2_f1750). The PS1 writes the link over whatever follows the table, a packet
+ * the walk never reaches; there a ModelObj's model pointer took a KUSEG packet address, which the PS1 reads through
+ * its RAM mirror and the port can't. The port leaves the packet unlinked (drawn the same: not at all). */
+extern unsigned int *psx_main_ot, psx_main_ot_n;
+#define PSX_OT_OUTSIDE(s) (psx_main_ot_n && (unsigned int)((const unsigned int *)(s) - psx_main_ot) >= psx_main_ot_n)
+
 /* A pointer the game passes to a library call that is really a small PS1 address (KUSEG, below 2 MB): Square's
  * code sometimes passes a constant where a pointer is expected (CdControlB(CdlSetmode, (u8 *)0x80, 0) in
  * cd_init), which on the PS1 reads that physical address. Map such values into psx_ram. */

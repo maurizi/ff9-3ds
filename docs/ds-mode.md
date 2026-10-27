@@ -822,9 +822,13 @@ into neighbouring fields, talks, opens shops and fights its random encounters (3
   that names no object, and btl_rollAmbush reading an empty party slot after a party change; all 17 now run their
   20,000 frames.
 - Open, both the PS1's own out-of-bounds behaviour that its memory map survives:
-  - d2_f1750: fldmdl_drawMesh links a polygon into an OT entry past the table (z = depth sum >> 4, unclamped in
-    the original asm too); the link word (0x00147890, a KUSEG packet address) lands in another ModelObj's model
-    pointer, which the PS1 then reads through the KUSEG mirror and the port can't (fldmdl_calcBoneMatrices faults).
+  - d2_f1750 (fixed 2026-10-27): fldmdl_drawMesh links a polygon into an OT entry past the table (z = depth sum
+    >> 4, unclamped in the original asm too); the link word (0x00147890, a KUSEG packet address) lands in another
+    ModelObj's model pointer, which the PS1 then reads through the KUSEG mirror and the port can't
+    (fldmdl_calcBoneMatrices faults). The port now leaves such a packet unlinked (PSX_OT_OUTSIDE, psx_mem.h; a
+    counted patch in model_link.c and the same test in field_mesh.c's link_translucent): the PS1 never draws it
+    either (the walk doesn't reach past the table). The wander run: a crash at frame ~2000 before, 20,000 frames
+    after; host frames of d4_f2110, d2_f0955, d1_f0453 identical with and without it.
   - d1_f0310: after a battle, a sound effect channel (18) keeps reading its sequence at 0x8010AE93 in the
     overlay area the field overlay has replaced; opcode 0xFE 0x4F indexes g_akaoOpsFE (at 0x8006FCE0) far past
     its end, where the PS1 finds other code pointers and the port a wild one.

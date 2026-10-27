@@ -201,3 +201,4 @@ src/ovl_0b/btlfx_op.c | u->model->texAnims | PSX_NZ(u->model->texAnims) | 7
 src/ovl_0b/btlseq.c | arg1->model->texAnims | PSX_NZ(arg1->model->texAnims) | 6
 src/ovl_0b/btl_status.c | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != g_gameState->gameData->unk8E4.battle->curCmd->caster | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != PSX_NZ(g_gameState->gameData->unk8E4.battle->curCmd)->caster | 1
 src/ovl_0b/btl_unit.c | unk34.b.unk4 == 2 && cmd->cmdNo == BTL_CMD_SWD_MAG | unk34.b.unk4 == 2 && PSX_NZ(cmd)->cmdNo == BTL_CMD_SWD_MAG | 1
+src_equiv/ovl_0a/model_link.c | slot = &ot[z]; | slot = &ot[z]; if (PSX_OT_OUTSIDE(slot)) continue; | 1   # d2_f1750: a depth past the OT (psx_mem.h)
