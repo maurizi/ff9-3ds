@@ -807,4 +807,4 @@ The other 536: 536/536 reach frame 1500 without a crash or stall, no screen blan
 17.2-77.5 (d3_b0211 and d4_b0057 77.5, d3_b0890 77.4, d3_b0851 68.2). With the 49 earlier sweeps had run, every one
 of the 1,085 disc/encounter pairs that start on their disc has now run its first 1,500 frames on an original DS
 (1,036 of them on this build): none crashes or stalls. Across the 1,036, the median is 26.9 ms per VBlank against
-the PS1's 16.7, and 4 in 5 run between 22 and 33.
+the PS1's 16.7, and 4 in 5 run between 23.5 and 35.8.
