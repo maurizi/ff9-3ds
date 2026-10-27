@@ -400,14 +400,14 @@ static const u8 mesh_tex_at[4] = {0x13, 0x06, 0x1D, 0x16}, mesh_flags_at[8] = {0
 int gxh_stats_meshes, gxh_stats_mesh_fallback;
 
 /* the uv words of a textured source polygon (type 0-3) into u[4]/v[4] */
-static inline __attribute__((always_inline)) int mesh_uvs(const MeshInst *mi, int type, const u8 *s, u16 *uv) {
+static inline __attribute__((always_inline)) int mesh_uvs(const u16 *uvs, int type, const u8 *s, u16 *uv) {
     switch (type) {
-    case 0: uv[0] = mi->uvs[MW(s, 8) & 0xFFFF]; uv[1] = mi->uvs[MW(s, 8) >> 16];
-            uv[2] = mi->uvs[MW(s, 0xC) & 0xFFFF]; uv[3] = mi->uvs[MW(s, 0xC) >> 16]; return 4;
-    case 1: uv[0] = mi->uvs[MW(s, 0xC) & 0xFFFF]; uv[1] = mi->uvs[MW(s, 0xC) >> 16]; uv[2] = mi->uvs[MH(s, 0x10)]; return 3;
-    case 2: uv[0] = mi->uvs[MW(s, 8) & 0xFFFF]; uv[1] = mi->uvs[MW(s, 8) >> 16];
-            uv[2] = mi->uvs[MW(s, 0xC) & 0xFFFF]; uv[3] = mi->uvs[MW(s, 0xC) >> 16]; return 4;
-    default: uv[0] = mi->uvs[MH(s, 6)]; uv[1] = mi->uvs[MW(s, 8) & 0xFFFF]; uv[2] = mi->uvs[MW(s, 8) >> 16]; return 3;
+    case 0: uv[0] = uvs[MW(s, 8) & 0xFFFF]; uv[1] = uvs[MW(s, 8) >> 16];
+            uv[2] = uvs[MW(s, 0xC) & 0xFFFF]; uv[3] = uvs[MW(s, 0xC) >> 16]; return 4;
+    case 1: uv[0] = uvs[MW(s, 0xC) & 0xFFFF]; uv[1] = uvs[MW(s, 0xC) >> 16]; uv[2] = uvs[MH(s, 0x10)]; return 3;
+    case 2: uv[0] = uvs[MW(s, 8) & 0xFFFF]; uv[1] = uvs[MW(s, 8) >> 16];
+            uv[2] = uvs[MW(s, 0xC) & 0xFFFF]; uv[3] = uvs[MW(s, 0xC) >> 16]; return 4;
+    default: uv[0] = uvs[MH(s, 6)]; uv[1] = uvs[MW(s, 8) & 0xFFFF]; uv[2] = uvs[MW(s, 8) >> 16]; return 3;
     }
 }
 
@@ -456,11 +456,12 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
     mi->src = nm->src; mi->uvs = nm->uvs; mi->colors = (const u32 *)nm->colors; mi->bias = (s16)nm->ot_bias;
     mi->xy = xy; mi->z = z; mi->info = info; mi->nuses = 0; mi->kind = MESH_MODEL; mi->untex_abr = 0;
     for (int t = 0; t < 8; ++t) mi->count[t] = nm->count[t];
-    memset(mi->tier_polys, 0, sizeof mi->tier_polys);
-    memset(mi->tier_vertices, 0, sizeof mi->tier_vertices);
     /* each polygon once: the PS1's culling (NCLIP <= 0 unless double-sided), no area or off the buffer (as
      * hybrid_poly), its size for the budget, the texture word and blend mode it uses and their texels' bounds */
     unsigned polys = 0, vertices = 0;
+    /* (in locals: the stores to info and z would reload them through mi) */
+    const u16 *const uvs = (const u16 *)nm->uvs;
+    u16 tier_polys[DROP_TIERS] = {0}, tier_vertices[DROP_TIERS] = {0};
     int last_use = -1, tex_use = -1; /* the use whose bounds are being gathered; the last textured polygon's */
     int lu0 = 255, lv0 = 255, lu1 = 0, lv1 = 0;
     const u8 *s = nm->src;
@@ -489,7 +490,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
             if (t < 4) {
                 u8 tex = MB(s, mesh_tex_at[t]), mode = f & 0xE1;
                 u16 uv[4];
-                mesh_uvs(mi, t, s, uv);
+                mesh_uvs(uvs, t, s, uv);
                 use = last_use; /* (consecutive polygons nearly always share one) */
                 if (use < 0 || mi->uses[use].tex != tex || mi->uses[use].mode != mode) {
                     if (use >= 0) { /* the last one's bounds */
@@ -530,10 +531,12 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
             }
             ++polys;
             vertices += (unsigned)nv;
-            mi->tier_polys[tier]++;
-            mi->tier_vertices[tier] += (u16)nv;
+            tier_polys[tier]++;
+            tier_vertices[tier] += (u16)nv;
         }
     }
+    memcpy(mi->tier_polys, tier_polys, sizeof tier_polys);
+    memcpy(mi->tier_vertices, tier_vertices, sizeof tier_vertices);
     if (last_use >= 0) {
         MeshUse *u = &mi->uses[last_use];
         if (lu0 < u->u0) u->u0 = (u8)lu0;
@@ -2366,7 +2369,7 @@ static void decode_model(const Buffer *b, const MeshInst *mi, int t, const u8 *s
         *group = u->group; *palette = u->palette;
         p->flags = (u8)(P_TEXTURED | (f & 1 ? P_SEMI : 0));
         u16 uv[4];
-        mesh_uvs(mi, t, s, uv);
+        mesh_uvs(mi->uvs, t, s, uv);
         for (int v = 0; v < n; ++v) { p->u[v] = (u8)uv[v]; p->v[v] = (u8)(uv[v] >> 8); }
         if (t < 2) {
             col[0] = col[1] = col[2] = col[3] = MW(s, t == 0 ? 0x10 : 8);
@@ -2561,7 +2564,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
         } else {
             xy[0] = mi->xy[MW(s, 0) & 0xFFFF]; xy[1] = mi->xy[MW(s, 0) >> 16];
             if (n == 4) { xy[2] = mi->xy[MW(s, 4) & 0xFFFF]; xy[3] = mi->xy[MW(s, 4) >> 16]; } else xy[2] = mi->xy[MH(s, 4)];
-            mesh_uvs(mi, t, s, uv);
+            mesh_uvs(mi->uvs, t, s, uv);
             if (t < 2) col[0] = MW(s, t == 0 ? 0x10 : 8);
             else {
                 col[0] = mi->colors[MW(s, 0x10) & 0xFFFF]; col[1] = mi->colors[MW(s, 0x10) >> 16];

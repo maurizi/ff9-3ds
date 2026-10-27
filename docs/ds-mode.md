@@ -962,3 +962,5 @@ values to the stack per vertex. Three steps, ms per VBlank (d4_f2110, d2_f0955, 
 - Battles: native_run's positions as one add of the packed drawing offset (the GTE's SXY already saturate to 11 bits;
   a background record's slots, which may be an earlier record's, are made so as they're read) and its walk state in
   registers: -> 28.11, 25.96, 28.04 (identical frames).
+- port_native_mesh's uv table and size-tier counts in locals: -> 28.08, 25.93, 28.01 (within noise; identical frames).
+  The per-polygon loops are now load-bound; what's left of the model pipeline's cost is the two passes themselves.
