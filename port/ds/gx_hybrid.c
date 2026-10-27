@@ -2073,7 +2073,17 @@ static __attribute__((noinline)) void upload(void) {
             const u16 *src = psx_vram + ((r->y + row) & 511) * 1024;
             u16 *out = (u16 *)(dst + row * row_bytes);
             if (r->depth < 2 && r->x + r->wh <= 1024) {
-                memcpy(out, src + r->x, r->wh * 2);
+                /* (not memcpy: it aligns and finishes with byte stores, which VRAM ignores on the hardware; melonDS
+                 * takes them, so rows whose start or length isn't a whole word kept stale texels on a DS only) */
+                const u16 *in = src + r->x;
+                int n = r->wh, k = 0;
+                if (((uintptr_t)in ^ (uintptr_t)out) & 2) {
+                    for (; k < n; ++k) out[k] = in[k];
+                } else {
+                    if ((uintptr_t)out & 2) { out[0] = in[0]; k = 1; }
+                    for (; k + 2 <= n; k += 2) *(u32 *)(out + k) = *(const u32 *)(in + k);
+                    if (k < n) out[k] = in[k];
+                }
             } else if (r->depth == 2 && !(r->x & 1) && !(r->wh & 1) && r->x + r->wh <= 1024) {
                 /* two texels a word: bit 15 set on each nonzero one (adding 0x7FFF to its low 15 bits carries
                  * into bit 15 exactly when they aren't all zero) */
