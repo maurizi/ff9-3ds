@@ -953,3 +953,6 @@ values to the stack per vertex. Three steps, ms per VBlank (d4_f2110, d2_f0955, 
   plus 1024 in 11 bits, so a vertex is two masks and a shift; a group whose depths leave +-32000 keeps its packets
   instead of being clamped) -> 26.95, 33.41, 29.08. The 3D engine's clip matrix (position x projection) rounds:
   49-95 scattered pixels a frame differ, edges a pixel over (the approximate geometry of 2026-10-25).
+- Battles: native_run keeps the last texture use's words (region, image, palette, origin; it recomputed them for every
+  polygon) and its drawing state in locals: d2_b0300 28.94 -> 28.72, d1_b0071 26.59 -> 26.44, d2_b0128 29.03 -> 28.69
+  (identical frames; the heap 112 bytes smaller).
