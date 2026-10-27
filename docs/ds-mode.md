@@ -808,3 +808,25 @@ The other 536: 536/536 reach frame 1500 without a crash or stall, no screen blan
 of the 1,085 disc/encounter pairs that start on their disc has now run its first 1,500 frames on an original DS
 (1,036 of them on this build): none crashes or stalls. Across the 1,036, the median is 26.9 ms per VBlank against
 the PS1's 16.7, and 4 in 5 run between 23.5 and 35.8.
+
+### Wandering the fields on the host (2026-10-27)
+
+Every field (`build/validation/fieldsweep/cfg`, 1,131) on the host for 20,000 frames with scripted play: a direction
+held 180 of every 200 frames (up, right, down, left in turn) and confirm (CROSS) every 30 frames, so each run walks
+into neighbouring fields, talks, opens shops and fights its random encounters (3-30 s a field, no rasterising).
+1,085 pass. The failures:
+- 26 fixture limits: walking into a field the fixture's disc doesn't have ("unavailable field ... in current
+  archive": story state the direct entry doesn't set), and three reads of sector -1 (d2_f0070, d3_f1609,
+  d3_f1800: a file absent from that disc).
+- 17 crashes, fixed (config/patches.txt, PSX_NZ): script opcodes 0x95/0x96 and the 0x2F store with an object id
+  that names no object, and btl_rollAmbush reading an empty party slot after a party change; all 17 now run their
+  20,000 frames.
+- Open, both the PS1's own out-of-bounds behaviour that its memory map survives:
+  - d2_f1750: fldmdl_drawMesh links a polygon into an OT entry past the table (z = depth sum >> 4, unclamped in
+    the original asm too); the link word (0x00147890, a KUSEG packet address) lands in another ModelObj's model
+    pointer, which the PS1 then reads through the KUSEG mirror and the port can't (fldmdl_calcBoneMatrices faults).
+  - d1_f0310: after a battle, a sound effect channel (18) keeps reading its sequence at 0x8010AE93 in the
+    overlay area the field overlay has replaced; opcode 0xFE 0x4F indexes g_akaoOpsFE (at 0x8006FCE0) far past
+    its end, where the PS1 finds other code pointers and the port a wild one.
+  Reproduce: `tools/docker.sh gdb --args build/pc/ff9ds --scenario build/validation/fieldsweep/cfg/<field>.cfg
+  --frames 20000` with the wander presses (any 200-frame direction cycle plus CROSS every 30 frames from 400).
