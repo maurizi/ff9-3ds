@@ -829,9 +829,14 @@ into neighbouring fields, talks, opens shops and fights its random encounters (3
     counted patch in model_link.c and the same test in field_mesh.c's link_translucent): the PS1 never draws it
     either (the walk doesn't reach past the table). The wander run: a crash at frame ~2000 before, 20,000 frames
     after; host frames of d4_f2110, d2_f0955, d1_f0453 identical with and without it.
-  - d1_f0310: after a battle, a sound effect channel (18) keeps reading its sequence at 0x8010AE93 in the
-    overlay area the field overlay has replaced; opcode 0xFE 0x4F indexes g_akaoOpsFE (at 0x8006FCE0) far past
-    its end, where the PS1 finds other code pointers and the port a wild one.
+  - d1_f0310 (guarded 2026-10-27): after a battle, a sound effect channel (18) keeps reading its sequence at
+    0x8010AE93 in the overlay area the field overlay has replaced; opcode 0xFE 0x4F indexes g_akaoOpsFE (at
+    0x8006FCE0, 0x20 handlers) far past its end. The exe's word there is 0x102D031D, data, an odd address: the PS1
+    would take an address error too, not run another handler. The port sends a 0xFE opcode past the table to the
+    unused slots' handler (akao_opInvalid: the track ends; a counted patch in akao.c). Not reproduced since the
+    first sweep (the second sweep's run of d1_f0310 passes with and without the guard).
+  - The world map's wm_drawMesh links with the same unclamped index (the decomp's note, F35): the same guard
+    (world frames identical with and without it).
   Reproduce: `tools/docker.sh gdb --args build/pc/ff9ds --scenario build/validation/fieldsweep/cfg/<field>.cfg
   --frames 20000` with the wander presses (any 200-frame direction cycle plus CROSS every 30 frames from 400).
 
