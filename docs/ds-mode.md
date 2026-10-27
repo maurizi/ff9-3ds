@@ -754,3 +754,10 @@ ran, so Alexandria recomposed its background every frame: d1_f0107 74.2 -> 55.8;
 and semi4's loop for 4-bit dithered semi polygons (Alexandria's 132 lights, 84% of their texels transparent) up to
 area 1024: d1_f0107 79.5 -> 53.6, d3_f1812 59.7 -> 55.4, d3_f2055 41.2 -> 38.1. Not taken: a cache of decoded texel
 rectangles (melonDS doesn't model the data cache, so the copies only cost); emit_scene in ARM (55.4 -> 55.0, 5 KB).
+
+A still background under additive primitives is composited too (bank C, held 60 frames after the last one; before,
+a single additive primitive kept its tiles in the 3D scene). The 28-field sweep after it (original DS, ms per
+VBlank): d1_f0205 23.7 -> 19.5, d2_f1203 18.9 -> 16.7, d2_f1425 24.1 -> 21.3, d3_f2055 41.2 -> 38.4, d1_f0453
+31.0 -> 29.5, the others within 1; every field as close to the software renderer as before or closer (blurred mean
+difference under 1.5 in 15 of 28, 4-7 in the rest, d3_f1812 57 -> 4.8 with the bank A fix). Eleven of the 28 run
+at the PS1's 16.7.
