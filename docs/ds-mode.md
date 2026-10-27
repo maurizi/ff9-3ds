@@ -846,3 +846,22 @@ and d4_b0878 to 2500).
 - Textures that don't fit banks B-D (gxh_stats_soft 128): d4_f2902, 110 ms. Two passes don't help it by themselves.
 - d4_f2907 (rain, hybrid): some 260 shaded semi-transparent lines a frame, 217 pixels each, divided five times a
   pixel; stepped instead: 87.2 -> 79.4 ms. plot() inline for those pixels gained nothing (80.4).
+
+### Two 3D passes for scenes past the 3D engine's RAM (2026-10-27)
+
+A field scene past 2,044 polygons or 6,140 vertices (after the composite) is drawn in two passes instead of in
+software (gx_hybrid.c, tp_*). The split is a depth (the recorded primitives' OT slots and the models' vertex depths
+share a scale; larger is nearer): pass one the polygons farther than it, pass two the rest, the split chosen from a
+256-bucket histogram so that both fit and the vertices divide evenly. Banks: A is the first pass's capture (LCD) and
+then BG3 behind the second pass (its clear transparent, alpha by GFX_CLEAR_COLOR in the VBlank interrupt); B holds
+the whole screen, captured at the second pass and shown (VRAM display) while the next first pass renders; textures
+in C and D only (128 units). The interrupt (gxh_vblank) switches them when each list has swapped. The second pass is
+emitted right after the first swaps, before the game goes on: the models' packets change with the next frame
+(texture animation), and the passes must see the same (emitted later, 577 model polygons a frame lost their
+texture). Without the composite and the additive layer (their primitives in 3D); a scene whose textures don't fit
+C and D stays in software.
+
+d1_f0574 112.4 -> 83.6 ms per VBlank (blurred difference from the software frame 9.8: the display is a frame late),
+d1_f0576 107.5 -> 66.7. Not helped: d2_f1225 (textures past C and D), d4_f2902 (textures past B-D: no two-pass
+needed by polygons), and the slow fields that are slow for other reasons. 5,000 frames of walking from d1_f0574
+on the DS leave the mode for the next field without a fault.

@@ -115,6 +115,19 @@ static Buffer buffers[2];
 #define BGC_BANDS 32 /* 8-row bands of the buffer, each with its sprites' hash: a change redraws its rows alone */
 static struct { int valid; u32 hash, key, bands[BGC_BANDS]; unsigned tex; } bgc; /* a field's background composite in bank A (bgc_use) */
 static u32 bgc_bands_now[BGC_BANDS]; /* (bgc_hash's, this scene's) */
+/* A field scene past the 3D engine's RAM in two passes (tp_*): the polygons emitted are those at depths in
+ * [tp_zlo, tp_zhi); tp_counting notes them instead (tp_note) */
+static int tp_zlo = -0x7FFFFFFF, tp_zhi = 0x7FFFFFFF, tp_counting;
+/* the passes, by the VBlank interrupt (gxh_vblank): the first is rendered while the screen shows bank B (the last
+ * whole frame) and captured into bank A (LCD); the second over bank A as BG3 (its clear transparent), the whole
+ * screen then captured into bank B. Textures in banks C and D. */
+enum { TP_OFF, TP_IDLE, TP_P1_LISTED, TP_P1_SHOWN, TP_P2_LISTED, TP_P2_SHOWN };
+static volatile int tp_state = TP_OFF;
+static int tp_split, tp_final;  /* the depth between the passes; bank B holds a whole frame */
+static u32 tp_dispcnt;          /* REG_DISPCNT while the first pass shows bank B */
+static u16 tp_clear;            /* the scene's clear colour (the passes' alpha: 31, then 0) */
+static Buffer *tp_b;            /* (the scene's buffer, for the second pass) */
+static int tp_display_h;
 /* bank A's bitmap rows outside the additive layer's band are clear (0: something else wrote them since: a software
  * frame, the composite, textures) */
 static int add_rows_clear;
@@ -2740,7 +2753,8 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         polys++;
         vertices += 4;
     }
-    plan_drops(b);
+    if (tp_state != TP_OFF) memset(prim_drop, 0, b->count); /* (two passes: each fits) */
+    else plan_drops(b);
     memset(light_cells, 0, sizeof light_cells);
     FStore *fst = scene_models(b);
     if (fst) { /* the field models first (depth tested: any order; their polygons before the rest's budget) */
@@ -2792,6 +2806,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             if (polys >= MAX_POLYS || vertices + src->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
             /* (a field's buffers hold more than 2047; the world map's at their OT entries' depths) */
             z = b->slots ? b->slots[kk] + (src->flags & P_SEMI ? 2 : 0) : with_meshes ? Z_STEP * ++nw.zc : kk + 1;
+            if (z < tp_zlo || z >= tp_zhi) continue; /* (the other pass's) */
             grp = prim_group[kk]; pal = prim_palette[kk];
             if ((src->flags & (P_RECT | P_TEXTURED | P_SEMI | P_GOURAUD | P_UI | P_TWIN)) == (P_RECT | P_TEXTURED) && src->n == 4) {
                 /* An opaque textured sprite (a field's background tiles): the general path's words, without its
@@ -3696,7 +3711,10 @@ typedef struct {
     u32 key[FM_USES], image[FM_USES], palette[FM_USES]; /* key: tpage << 16 | clut; image 0: not drawable */
     s16 tu[FM_USES], tv[FM_USES];
     int last_use, ofs_x, ofs_y;
+    int zlo, zhi, count; /* two passes (tp_*): only the polygons whose first vertex's depth is in [zlo, zhi); count:
+                          * none emitted, each noted (tp_note) */
 } FmCtx;
+static void tp_note(int z, int nv);
 
 /* a packet's colour word as the 3D engine's (textured: modulated, 0x80 the texel's own: x2 saturated; raw: white) */
 static inline __attribute__((always_inline)) u32 fm_colour(u32 c, const int textured, int raw) {
@@ -3725,6 +3743,11 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
         }
         if ((u32)*(const u16 *)src >= nverts || (u32)*(const u16 *)(src + 2) >= nverts ||
             (u32)*(const u16 *)(src + 4) >= nverts || (quad && (u32)*(const u16 *)(src + 6) >= nverts)) continue;
+        { /* (two passes: the polygon's depth, as its first vertex's below) */
+            int pz = depth0 - (int)(vw[*(const u16 *)src] >> 22) * 4;
+            if (c->count) { tp_note(pz, nv); continue; }
+            if (pz < c->zlo || pz >= c->zhi) continue;
+        }
         if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
         if (es->polys >= MAX_POLYS || es->vertices + nv > MAX_VERTICES) { gxh_stats_dropped++; continue; }
         u32 uv[4] = {0, 0, 0, 0}, *header = wp++, ids = 0;
@@ -3825,6 +3848,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_soft_draw(Bu
 PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const Buffer *b, const FStore *fst, EmitState *es) {
     FmCtx c;
     c.fst = fst; c.last_use = 0; c.ofs_x = b->ofs_x; c.ofs_y = b->ofs_y;
+    c.zlo = tp_zlo; c.zhi = tp_zhi; c.count = tp_counting;
     for (int u = 0; u < FM_USES; ++u) { c.key[u] = ~0u; c.image[u] = 0; }
     for (int u = 0; u < fst->nuses; ++u) {
         const FUse *fu = &fst->uses[u];
@@ -3954,6 +3978,7 @@ static void textures_reset(void) {
     memset(unit_used, 0, sizeof unit_used);
     unit_used[RAMP_UNIT] = 1;
     if (bank_a_bg) memset(unit_used, 1, 64); /* (bank A is a background) */
+    if (tp_state != TP_OFF) memset(unit_used + 64, 1, 64); /* (bank B is the two passes') */
     field_runs = 0;
 }
 
@@ -3970,8 +3995,10 @@ void gxh_init(void) {
 
 int gxh_active(void) { return active; }
 
+static void tp_leave(void);
 void gxh_enable(int on) {
     if (on == active) return;
+    tp_leave();
     const Place *p = NULL; /* its primitives need the resident mode overlay's code range */
     for (unsigned int i = 0; i < sizeof places / sizeof places[0]; ++i)
         if (psx_ovl_resident[0] == places[i].overlay) p = &places[i];
@@ -4320,6 +4347,132 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
     return 1;
 }
 
+/* ---- two 3D passes for a field scene past the 3D engine's RAM (tp_*) -----------------------------------------
+ * The PS1 draws back to front: the polygons farther than tp_split (the depths emit_scene and fm_kind give them) go
+ * first, rendered and captured, the nearer ones over that image in the next DS frame (a 30 fps game frame is two).
+ * Each pass fits the 3D engine; the second's polygons are all nearer than the first's, as their OT order has it. */
+static int tp_hist_mode, tp_lo, tp_hi;
+static u16 tp_hp[256], tp_hv[256];
+static void tp_note(int z, int nv) {
+    if (!tp_hist_mode) {
+        if (z < tp_lo) tp_lo = z;
+        if (z > tp_hi) tp_hi = z;
+        return;
+    }
+    int k = (int)((long long)(z - tp_lo) * 256 / (tp_hi - tp_lo + 1));
+    tp_hp[k]++; tp_hv[k] += (u16)nv;
+}
+PORT_OVERLAY_CODE(0a) static void tp_note_all(Buffer *b, const FStore *fst) {
+    for (int k = 0; k < b->count; ++k) {
+        const Prim *p = &b->prims[k];
+        if (prim_layer[k] != L_3D) continue;
+        tp_note(b->slots ? b->slots[k] + (p->flags & P_SEMI ? 2 : 0) : k + 1, p->n);
+    }
+    if (fst) {
+        u32 scratch[1];
+        EmitState es = {scratch, 0, 0, 0, 0, 0};
+        tp_counting = 1;
+        fm_emit(b, fst, &es);
+        tp_counting = 0;
+    }
+}
+/* the split depth (1), or 0 if no depth gives two passes that fit */
+PORT_OVERLAY_CODE(0a) static int tp_choose(Buffer *b, const FStore *fst) {
+    tp_hist_mode = 0; tp_lo = 0x7FFFFFFF; tp_hi = -0x7FFFFFFF;
+    tp_note_all(b, fst);
+    if (tp_lo > tp_hi) return 0;
+    memset(tp_hp, 0, sizeof tp_hp); memset(tp_hv, 0, sizeof tp_hv);
+    tp_hist_mode = 1;
+    tp_note_all(b, fst);
+    int tp = 0, tv = 0;
+    for (int i = 0; i < 256; ++i) { tp += tp_hp[i]; tv += tp_hv[i]; }
+    int best = -1, best_cost = 0x7FFFFFFF, p1 = 0, v1 = 0;
+    for (int i = 1; i < 256; ++i) { /* (pass one: the buckets below i) */
+        p1 += tp_hp[i - 1]; v1 += tp_hv[i - 1];
+        if (p1 > MAX_POLYS || v1 > MAX_VERTICES) break;
+        if (tp - p1 > MAX_POLYS || tv - v1 > MAX_VERTICES) continue;
+        int cost = v1 * 2 - tv; /* (as even as the vertices go) */
+        if (cost < 0) cost = -cost;
+        if (cost < best_cost) { best_cost = cost; best = i; }
+    }
+    if (best < 0) return 0;
+    long long range = (long long)tp_hi - tp_lo + 1;
+    tp_split = tp_lo + (int)((best * range + 255) / 256); /* (bucket < best exactly when depth < tp_split) */
+    return 1;
+}
+/* banks A (the first pass's capture, then BG3) and B (the whole frame, shown during the first pass) leave the
+ * textures */
+PORT_OVERLAY_CODE(0a) static int tp_enter(void) {
+    if (movie_banks) return 0;
+    if (tp_state != TP_OFF) return 1;
+    bank_a_as_bg(1);
+    for (int i = 0; i < MAX_REGIONS; ++i)
+        if (regions[i].used && regions[i].unit < 128 && regions[i].unit + regions[i].units > 64) free_region(&regions[i]);
+    if (runs)
+        for (int i = 0; i < MAX_RUNS; ++i)
+            if (runs[i].flags && rows[runs[i].row].unit < 128 && rows[runs[i].row].unit + (rows[runs[i].row].fmt_units & 15) > 64)
+                free_run(i);
+    for (int u = 64; u < 128; ++u) unit_used[u] = 1;
+    vramSetBankB(VRAM_B_LCD);
+    back_mode(0);
+    tp_final = 0;
+    tp_state = TP_IDLE;
+    return 1;
+}
+static void tp_leave(void) {
+    if (tp_state == TP_OFF) return;
+    tp_state = TP_OFF; /* (the interrupt leaves the registers alone from here) */
+    REG_DISPCAPCNT = 0;
+    if ((REG_DISPCNT & (3u << 16)) == DISPLAY_MODE_FB) REG_DISPCNT = tp_dispcnt;
+    if (bank_a_bg) vramSetBankA(VRAM_A_MAIN_BG_0x06020000);
+    for (int u = 64; u < 128; ++u) unit_used[u] = 0;
+    if (!movie_banks) vramSetBankB(VRAM_B_TEXTURE_SLOT1);
+}
+/* the second pass, once the first is on screen (display.c, at each present, and before a scene is submitted) */
+void gxh_tp_tick(void) {
+    if (tp_state != TP_P1_SHOWN) return;
+    while (dmaBusy(0)) {}
+    tp_zlo = tp_split;
+    emit_scene(tp_b);
+    flush_chunk();
+    tp_zlo = -0x7FFFFFFF;
+    while (dmaBusy(0)) {}
+    tp_state = TP_P2_LISTED;
+}
+/* wait for the passes under way (a scene is about to be submitted over them) */
+static void tp_settle(void) {
+    for (int n = 0; tp_state != TP_OFF && tp_state != TP_IDLE && n < 16; ++n) {
+        gxh_tp_tick();
+        if (tp_state != TP_IDLE) swiWaitForVBlank();
+    }
+}
+/* display.c's VBlank interrupt: each pass's list swapped in (the geometry engine idle again) */
+void gxh_vblank(void) {
+    int s = tp_state;
+    if (s != TP_P1_LISTED && s != TP_P2_LISTED && s != TP_P2_SHOWN) return;
+    if (s == TP_P2_SHOWN) {
+        if (!(REG_DISPCAPCNT & DCAP_ENABLE)) { tp_final = 1; tp_state = TP_IDLE; }
+        return;
+    }
+    for (int spin = 0; (GFX_STATUS & (1 << 27)) && spin < 256; ++spin) {} /* (it may read busy a moment at the swap) */
+    if (GFX_STATUS & (1 << 27)) return;
+    if (s == TP_P1_LISTED) {
+        vramSetBankA(VRAM_A_LCD);
+        REG_DISPCAPCNT = DCAP_ENABLE | DCAP_MODE(DCAP_MODE_A) | DCAP_BANK(DCAP_BANK_VRAM_A) | DCAP_SIZE(DCAP_SIZE_256x192) |
+                         DCAP_SRC_A(DCAP_SRC_A_3DONLY);
+        if (tp_final) { tp_dispcnt = REG_DISPCNT; REG_DISPCNT = MODE_FB1; }
+        glClearColor(tp_clear & 31, (tp_clear >> 5) & 31, (tp_clear >> 10) & 31, 31); /* (read as it renders: opaque) */
+        tp_state = TP_P1_SHOWN;
+    } else {
+        vramSetBankA(VRAM_A_MAIN_BG_0x06020000);
+        if ((REG_DISPCNT & (3u << 16)) == DISPLAY_MODE_FB) REG_DISPCNT = tp_dispcnt;
+        REG_DISPCAPCNT = DCAP_ENABLE | DCAP_MODE(DCAP_MODE_A) | DCAP_BANK(DCAP_BANK_VRAM_B) | DCAP_SIZE(DCAP_SIZE_256x192) |
+                         DCAP_SRC_A(DCAP_SRC_A_COMPOSITED);
+        glClearColor(tp_clear & 31, (tp_clear >> 5) & 31, (tp_clear >> 10) & 31, 0); /* (the first pass shows through) */
+        tp_state = TP_P2_SHOWN;
+    }
+}
+
 PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
     bgc_quad = 0;
     bgc_quad_h = display_h > 0 ? display_h : 224;
@@ -4362,7 +4515,7 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
          * held a while after the last one (they come and go: d1_f0054 flipped between the two, composing each time) */
         static int tex_hold;
         tex_hold = adds ? 60 : tex_hold > 0 ? tex_hold - 1 : 0;
-        int want_tex = (adds && over) || (tex_hold && bg_still >= 4) || (bgc_texmode && tex_hold && bgc_keep);
+        int want_tex = tp_state == TP_OFF && ((adds && over) || (tex_hold && bg_still >= 4) || (bgc_texmode && tex_hold && bgc_keep));
         if (want_tex != bgc_texmode) {
             bgc_texmode = want_tex;
             bgc.valid = 0;
@@ -4377,15 +4530,26 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
                             free_run(i);
             }
         }
-        int composite = bgc_keep && (!adds || bgc_texmode) && bgc_use(b, fst, display_h, &polys, &vertices);
+        int composite = tp_state == TP_OFF && bgc_keep && (!adds || bgc_texmode) && bgc_use(b, fst, display_h, &polys, &vertices);
         bgc_quad = composite && bgc_texmode;
-        /* the 3D engine's polygon and vertex RAM (2048, 6144 a frame): a scene past them stays exact in software */
-        if (polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) {
+        /* the 3D engine's polygon and vertex RAM (2048, 6144 a frame): a scene past them goes in two passes (tp_*),
+         * without the composite or the additive layer (banks A and B are the passes'); else exact in software */
+        int over_now = polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES, two = 0;
+        if (over_now) {
+            for (int k = 0; k < b->count; ++k) if (prim_layer[k] == L_BACK || prim_layer[k] == L_ADD) prim_layer[k] = L_3D;
+            composite = 0; bgc_quad = 0; adds = 0;
+            if (bgc_texmode) { bgc_texmode = 0; bgc.valid = 0; }
+            two = tp_choose(b, fst) && tp_enter();
+        }
+        if (!two) tp_leave();
+        else bgc.valid = 0; /* (bank A is the first pass's capture) */
+        if (over_now && !two) {
             gxh_stats_soft |= 8;
         } else {
             /* additive primitives (PS1 modes 1 and 3): exact in software onto black in bank A, added over the 3D
              * layer by the 2D compositor, if the textures fit in banks B-D; else approximated in 3D (conv_upload) */
-            if (adds) bank_a_as_bg(1);
+            if (two) {}
+            else if (adds) bank_a_as_bg(1);
             else if (bank_a_bg && !composite) bank_a_as_bg(0);
             else if (bank_a_bg && bgc_texmode && last_oy1 > last_oy0) { /* (held: no additive primitives now) */
                 int top = (192 - (display_h > 0 ? display_h : 224) * 4 / 5) / 2;
@@ -4394,6 +4558,7 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
                 last_oy0 = last_oy1 = 0;
             }
             plan_textures(b);
+            if (two && gxh_stats_unplaced) tp_leave(); /* (C and D too small: software, below) */
             if (adds && gxh_stats_unplaced) {
                 for (int k = 0; k < b->count; ++k) if (prim_layer[k] == L_ADD) prim_layer[k] = L_3D;
                 adds = 0;
@@ -4495,14 +4660,17 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     BB(0x47580001, b->count);
     unsigned int profile = port_profile_begin();
     while (dmaBusy(0)) {} /* the previous scene's list */
+    tp_settle(); /* (and a two-pass scene's second pass, its capture) */
     if (place->field && ovl0a_resident()) field_frame(b, display_h); /* (ovl_0a's: see ovl0a_resident) */
     else { memset(prim_layer, L_3D, b->count); plan_textures(b); }
+    const int two = tp_state == TP_IDLE; /* (field_frame: this scene in two passes) */
     gxh_stats_regions = gxh_stats_units = 0;
     for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) { gxh_stats_regions++; gxh_stats_units += regions[i].units; }
     if (runs) for (int i = 0; i < RUN_ROWS; ++i) gxh_stats_units += rows[i].fmt_units & 15;
     if (gxh_stats_units > gxh_stats_units_peak) gxh_stats_units_peak = gxh_stats_units;
     u32 saved = 0;
-    if (place->field && bank_a_bg) {
+    if (two) { vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); } /* (A and B the passes') */
+    else if (place->field && bank_a_bg) {
         if (!movie_banks) { vramSetBankB(VRAM_B_LCD); vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); }
     } else saved = vramSetPrimaryBanks(VRAM_A_LCD, VRAM_B_LCD, VRAM_C_LCD, VRAM_D_LCD);
     vramSetBankF(VRAM_F_LCD);
@@ -4510,7 +4678,8 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     BB(0x47580002, 0);
     upload();
     BB(0x47580003, 0);
-    if (place->field && bank_a_bg) {
+    if (two) { vramSetBankC(VRAM_C_TEXTURE_SLOT2); vramSetBankD(VRAM_D_TEXTURE_SLOT3); }
+    else if (place->field && bank_a_bg) {
         if (!movie_banks) { vramSetBankB(VRAM_B_TEXTURE_SLOT1); vramSetBankC(VRAM_C_TEXTURE_SLOT2); vramSetBankD(VRAM_D_TEXTURE_SLOT3); }
     } else vramRestorePrimaryBanks(saved); /* (B-D as they were: a movie's LCD) */
     vramSetBankF(VRAM_F_TEX_PALETTE_SLOT0);
@@ -4528,9 +4697,24 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     glMatrixMode(GL_MODELVIEW);
     unsigned int c = b->clear;
     if (place->world) c = 0; /* (emit_scene draws its clear colour inside the viewport) */
+    if (two) { /* the first pass, opaque (gxh_vblank keeps the clear's alpha from here) */
+        tp_clear = (u16)(c & 0x7FFF);
+        glClearColor(c & 31, (c >> 5) & 31, (c >> 10) & 31, 31);
+        tp_zhi = tp_split;
+    } else
     glClearColor(c & 31, (c >> 5) & 31, (c >> 10) & 31, place->field && bank_a_bg && !bank_a_add ? 0 : 31); /* a software frame shows */
     emit_scene(b);
     flush_chunk();
+    if (two) {
+        tp_zhi = 0x7FFFFFFF;
+        while (dmaBusy(0)) {}
+        tp_b = b; tp_display_h = display_h;
+        tp_state = TP_P1_LISTED;
+        /* the second pass as soon as the first is on screen, before the game goes on: the models' packets change
+         * with its next frame (texture animation), and the passes must see the same */
+        for (int n = 0; tp_state == TP_P1_LISTED && n < 4; ++n) swiWaitForVBlank();
+        gxh_tp_tick();
+    }
     b->submitted = 1;
     port_profile_detail_end(PORT_PROFILE_UPLOAD, profile); /* reported as gx_texture_upload */
 }

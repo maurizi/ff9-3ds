@@ -98,6 +98,9 @@ static volatile int queued_buffer = -1, queued_scroll;
 static void vblank_irq(void) {
     real_vblanks++;
     movie_fv_vblank();
+#ifdef PORT_GX_HYBRID
+    gxh_vblank();
+#endif
     if (queued_buffer >= 0) {
         bgSetMapBase(bg, queued_buffer * 8);
         bgSetScroll(bg, 0, queued_scroll);
@@ -176,6 +179,9 @@ void display_movie_release(void) {
 void display_present(void) {
 #ifndef PORT_SOFT_DISPLAY
     return;
+#endif
+#ifdef PORT_GX_HYBRID
+    gxh_tp_tick();
 #endif
     if (bg < 0) {
         swiWaitForVBlank();
