@@ -2109,7 +2109,7 @@ static __attribute__((noinline)) void upload(void) {
  * map's sea CLUT has a colour there, and its texels showed as holes). A 0x0000 elsewhere in a CLUT stays opaque. */
 static inline u32 index0_transparent(int pal) { return (u32)palettes[pal].index0; }
 
-enum { CMD_COLOR = 0x20, CMD_TEXCOORD = 0x22, CMD_VTX16 = 0x23, CMD_VTXXY = 0x25, CMD_POLYATTR = 0x29,
+enum { CMD_MTX_IDENTITY = 0x15, CMD_MTX_LOAD4X3 = 0x17, CMD_COLOR = 0x20, CMD_TEXCOORD = 0x22, CMD_VTX16 = 0x23, CMD_VTXXY = 0x25, CMD_POLYATTR = 0x29,
        CMD_TEXIMAGE = 0x2A, CMD_PLTTBASE = 0x2B, CMD_BEGIN = 0x40 };
 #define INITIAL_ATTR (3u << 6 | 31u << 16)
 
@@ -3602,6 +3602,20 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     const u8 *g = n->group, *pk = n->packets;
     for (int t = 0; t < 8; ++t) np += *(const u16 *)(g + 2 + 2 * t);
     if (st->ngroups == FM_GROUPS || st->nverts + nv > fm_cap || st->npolys + np > FM_POLYS) return 0;
+    /* a vertex's OT entry: the group's (its bias from the frame's OT) plus SZ / 4; drawn at the group's nearest less
+     * 4 per entry (fm_emit's matrix), so a group whose depths leave the 3D layer's range keeps its packets */
+    int base = (int)((const u32 *)n->ot - (const u32 *)psx_main_ot);
+    u32 nearest = ~0u, farthest = 0;
+    for (int i = 0; i < nv; ++i) {
+        u32 z = (u32)n->sz[i];
+        if (z < nearest) nearest = z;
+        if (z > farthest) farthest = z;
+    }
+    nearest >>= 2;
+    u32 far = (farthest >> 2) - nearest;
+    if (far > 1023) far = 1023;
+    const int depth0 = world_entry_depth(base + (int)nearest), depth_far = depth0 - (int)far * 4;
+    if (depth0 > 32000 || depth_far < -32000) return 0;
     /* One pass over the packets (they stream through the data cache: each pass costs as much again): the opaque
      * polygons (code bit 1 clear: the translucent ones keep the PS1's order, their caller links them), the PS1's
      * culling of them (model_link: NCLIP <= 0 unless double-sided; the budget counts what's drawn), and the drawn
@@ -3671,21 +3685,15 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     st->front_polys += front_polys;
     st->front_verts += front_verts;
     st->npolys = pi;
-    /* xy as projected; a vertex's OT entry: the group's (its bias from the frame's OT) plus SZ / 4 */
-    int base = (int)((const u32 *)n->ot - (const u32 *)psx_main_ot);
-    u32 nearest = ~0u;
-    for (int i = 0; i < nv; ++i) if ((u32)n->sz[i] < nearest) nearest = (u32)n->sz[i];
-    nearest >>= 2;
-    fg->depth0 = world_entry_depth(base + (int)nearest);
-    u32 *vw = st->verts + st->nverts, far = 0;
+    fg->depth0 = depth0;
+    /* xy as projected, each plus 1024 in 11 bits (fm_emit's matrix takes it off), and the entries from the nearest */
+    u32 *vw = st->verts + st->nverts;
     int x0 = 0x7FFF, y0 = 0x7FFF, x1 = -0x8000, y1 = -0x8000;
     for (int i = 0; i < nv; ++i) {
         u32 xy = (u32)n->sxy[i], rel = ((u32)n->sz[i] >> 2) - nearest;
         if (rel > 1023) rel = 1023;
-        if (rel > far) far = rel;
-        u32 w = (xy & 0x7FF) | (xy >> 16 & 0x7FF) << 11 | rel << 22;
-        vw[i] = w;
-        int x = (s32)(w << 21) >> 21, y = (s32)(w << 10) >> 21;
+        vw[i] = ((xy + 1024) & 0x7FF) | (((xy >> 16) + 1024) & 0x7FF) << 11 | rel << 22;
+        int x = (s32)(xy << 21) >> 21, y = (s32)(xy << 5) >> 21;
         if (x < x0) x0 = x;
         if (x > x1) x1 = x;
         if (y < y0) y0 = y;
@@ -3693,7 +3701,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     }
     s16 *bounds = fm_bounds[st - fm_ring[0]][fg - st->groups];
     bounds[0] = (s16)x0; bounds[1] = (s16)y0; bounds[2] = (s16)x1; bounds[3] = (s16)y1;
-    fg->depth_far = fg->depth0 - (s32)far * 4;
+    fg->depth_far = depth_far;
     st->nverts += nv;
     gxh_stats_fm = st->ngroups;
     return opaque == np ? 1 : 2;
@@ -3740,7 +3748,7 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
                                                           const u8 *src, const u8 *pk, int pi, int count) {
     const int quad = !(t & 1), nv = quad ? 4 : 3, textured = t < 4, gouraud = t >= 2 && t <= 5;
     const u32 *vw = c->fst->verts + fg->vert0, *front = c->fst->front;
-    const int depth0 = fg->depth0, ofs_x = c->ofs_x, ofs_y = c->ofs_y;
+    const int depth0 = fg->depth0;
     const u32 nverts = fg->verts;
     /* (in locals: with -fno-strict-aliasing every store through wp would reload them from c and es) */
     const int counting = c->count, zlo = c->zlo, zhi = c->zhi, nuses = c->fst->nuses;
@@ -3796,11 +3804,9 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
             } else *wp++ = textured ? CMD_TEXCOORD | CMD_VTX16 << 8 : CMD_VTX16;
             if (textured)
                 *wp++ = (u32)(u16)(((int)(uv[i] & 0xFF) - tu) * 16) | (u32)(u16)(((int)(uv[i] >> 8 & 0xFF) - tv) * 16) << 16;
-            const u32 wv = w[i];
-            int x = (s32)(wv << 21) >> 21, y = (s32)(wv << 10) >> 21, z = depth0 - (int)(wv >> 22) * 4;
-            z = z < -32000 ? -32000 : z > 32000 ? 32000 : z;
-            *wp++ = (u32)(u16)(x + ofs_x) | (u32)(u16)(y + ofs_y) << 16;
-            *wp++ = (u32)(u16)z;
+            const u32 wv = w[i]; /* (the group's matrix: x - 1024 + ofs_x, y - 1024 + ofs_y, depth0 - 4 z) */
+            *wp++ = (wv & 0x7FF) | (wv << 5 & 0x07FF0000);
+            *wp++ = wv >> 22;
         }
         polys++;
         vertices += nv;
@@ -3851,8 +3857,8 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_soft_draw(Bu
                 for (int i = 0; i < len; ++i) w[i] = *(const u32 *)(pk + 4 + 4 * i);
                 for (int i = 0; i < nv; ++i) {
                     u32 vv = vw[vi[i]];
-                    w[(fm_xy_at[t][i] - 4) / 4] = (vv & 0x7FF) | (vv >> 11 & 0x7FF) << 16 | (vv & 0x400 ? 0xF800 : 0) |
-                                                  (vv & 0x200000 ? 0xF8000000 : 0);
+                    w[(fm_xy_at[t][i] - 4) / 4] = (u32)(u16)((int)(vv & 0x7FF) - 1024) |
+                                                  (u32)((int)(vv >> 11 & 0x7FF) - 1024) << 16;
                 }
                 gp0_run_plain(w, (unsigned)len);
             }
@@ -3888,6 +3894,14 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
     for (int gi = 0; gi < fst->ngroups; ++gi) {
         const FGroup *fg = &fst->groups[gi];
         if (!fm_live(fg)) continue;
+        /* its vertices' place: the snapshot's xy less 1024 plus the drawing offset, depth0 less 4 per entry
+         * (v16 x the 4.12 matrix: rows x, y, z, then the translation) */
+        if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
+        *wp++ = CMD_MTX_LOAD4X3;
+        *wp++ = 4096; *wp++ = 0; *wp++ = 0;
+        *wp++ = 0; *wp++ = 4096; *wp++ = 0;
+        *wp++ = 0; *wp++ = 0; *wp++ = (u32)-4 * 4096;
+        *wp++ = (u32)(c.ofs_x - 1024); *wp++ = (u32)(c.ofs_y - 1024); *wp++ = (u32)fg->depth0;
         const u8 *g = fg->group, *src = fg->src, *pk = fg->packets;
         int pi = fg->poly0;
         for (int t = 0; t < 8; ++t) {
@@ -3906,6 +3920,8 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
             src += count * mesh_size[t]; pk += count * fm_size[t]; pi += count;
         }
     }
+    if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
+    *wp++ = CMD_MTX_IDENTITY; /* (the rest of the scene's in place) */
     es->wp = wp;
 }
 

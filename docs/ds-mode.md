@@ -938,3 +938,18 @@ JIT off): it does model the cache (cache_bench: 6.2, 11.0 and 47.1 cycles a load
 scenes don't measure consistently: d1_f0110 85.2 ms per VBlank with PROFILE=2 (reproducibly), 23.9 with PROFILE=3
 (its sampler's 8 kHz timer interrupt on), d4_f2110 100.1, d1_b0071 96.5. Something in its halt or interrupt timing
 is off: not usable for calibration as it stands.
+
+### The field models' passes, per polygon (2026-10-27)
+
+With fine buckets (PCLO/PCSHIFT=4), d4_f2110's model pipeline is about 46% of its sampled time: the snapshot
+(`port_native_field_mesh`, 16.5%), the emit (`fm_emit`, 16.6%) and the GTE's projection and bone matrices (~13%).
+Battles are the same shape (d2_b0300: `port_native_mesh` 10.1%, `native_run` 9.7%, `emit_scene` 9.7%, GTE ~8%). The
+hot lines are the first loads of each polygon's mesh record and packet; the emit's per-vertex loop spilled about nine
+values to the stack per vertex. Three steps, ms per VBlank (d4_f2110, d2_f0955, d1_f0453):
+- fm_kind: the indices loaded once as two words, its state in locals (27.86, 34.24, 29.65 -> 27.82, 34.19, 29.62;
+  identical frames).
+- The snapshot: the front bits a word at a time in a register, the indices once (-> 27.42, 33.83, 29.38; identical).
+- Each group placed by a position matrix (the drawing offset, its depth and 4 per entry: the snapshot stores x and y
+  plus 1024 in 11 bits, so a vertex is two masks and a shift; a group whose depths leave +-32000 keeps its packets
+  instead of being clamped) -> 26.95, 33.41, 29.08. The 3D engine's clip matrix (position x projection) rounds:
+  49-95 scattered pixels a frame differ, edges a pixel over (the approximate geometry of 2026-10-25).
