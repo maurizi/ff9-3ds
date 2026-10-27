@@ -22,7 +22,7 @@ p.add_argument('--overlay', default='0a')
 p.add_argument('--top', type=int, default=40)
 p.add_argument('--detail', help='a function: its buckets with their source lines')
 p.add_argument('--detail-n', type=int, default=20, help='how many of its buckets')
-p.add_argument('--base', type=Path, help='an earlier state of the same run: only the samples since it')
+p.add_argument('--base', type=Path, help='a state whose samples to subtract (the sampler starts at CAPTURE_FRAME / 2: a build of another capture frame starts elsewhere)')
 a = p.parse_args()
 data = a.state.read_bytes()
 base_data = a.base.read_bytes() if a.base else None

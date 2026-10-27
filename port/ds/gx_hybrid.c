@@ -115,6 +115,9 @@ static Buffer buffers[2];
 #define BGC_BANDS 32 /* 8-row bands of the buffer, each with its sprites' hash: a change redraws its rows alone */
 static struct { int valid; u32 hash, key, bands[BGC_BANDS]; unsigned tex; } bgc; /* a field's background composite in bank A (bgc_use) */
 static u32 bgc_bands_now[BGC_BANDS]; /* (bgc_hash's, this scene's) */
+/* bank A's bitmap rows outside the additive layer's band are clear (0: something else wrote them since: a software
+ * frame, the composite, textures) */
+static int add_rows_clear;
 
 /* field models (port_native_field_mesh) */
 #define FM_GROUPS 32       /* groups a scene */
@@ -3941,6 +3944,7 @@ void gxh_enable(int on) {
         vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_TEXTURE, VRAM_C_TEXTURE, VRAM_D_TEXTURE);
         if (movie_banks) { vramSetBankB(VRAM_B_LCD); vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); }
         bank_a_bg = 0;
+        add_rows_clear = 0;
         bank_a_add = 0; /* (back_mode 0) */
         REG_BLDCNT = place->field ? BLEND_ALPHA | BLEND_SRC_BG0 | BLEND_DST_BG3 : 0;
         REG_BLDALPHA = place->field ? 16 : 0;
@@ -3990,7 +3994,7 @@ void gxh_enable(int on) {
 
 /* Field: the background layer (bank A, 16-bit with bit 15 set) from b's PS1 VRAM, scaled like the software display */
 static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1);
-static void scale_back(Buffer *b, int display_h) { scale_back_rows(b, display_h, 0, 1 << 30); }
+static void scale_back(Buffer *b, int display_h) { add_rows_clear = 0; scale_back_rows(b, display_h, 0, 1 << 30); }
 /* output rows [oy0, oy1) only (in 32-row bands) */
 static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1) {
     if (!bgc_texmode) bgc.valid = 0; /* (bank A's bitmap is now the software frame's; bank C's texture stays) */
@@ -4019,6 +4023,7 @@ static void back_mode(int add);
 static void bank_a_as_bg(int bg) {
     if (bg == bank_a_bg) return;
     bank_a_bg = bg;
+    add_rows_clear = 0;
     bgc.valid = 0;
     if (bg) {
         for (int i = 0; i < MAX_REGIONS; ++i)
@@ -4076,6 +4081,7 @@ PORT_OVERLAY_CODE(0a) static u32 bgc_hash(const Buffer *b, int display_h) {
 /* where the composite's rows go: bank A's bitmap (letterboxed), or bank C's texture (LCD while composing) */
 static inline u16 *bgc_target(int out_h, int *top) {
     if (bgc_texmode) { *top = 0; return (u16 *)0x06840000; }
+    add_rows_clear = 0;
     *top = (192 - out_h) / 2;
     return (u16 *)BG_BMP_RAM(8);
 }
@@ -4315,6 +4321,11 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
                 int h = display_h > 0 ? display_h : 224, top = (192 - h * 4 / 5) / 2;
                 int oy0 = y0 * 4 / 5 & ~(BLOCK - 1), oy1 = ((y1 + 1) * 4 / 5 + BLOCK) & ~(BLOCK - 1);
                 static int last_oy0, last_oy1;
+                if (!add_rows_clear) { /* all of it outside this band (what else wrote bank A would be added) */
+                    for (int y = 0; y < 192; ++y)
+                        if (y < top + oy0 || y >= top + oy1) dmaFillWords(0, (u16 *)BG_BMP_RAM(8) + y * 256, 512);
+                    add_rows_clear = 1;
+                } else
                 for (int oy = last_oy0; oy < last_oy1; ++oy) /* the last scene's band outside this one: clear */
                     if ((oy < oy0 || oy >= oy1) && top + oy < 192)
                         dmaFillWords(0, (u16 *)BG_BMP_RAM(8) + (top + oy) * 256, 512);
