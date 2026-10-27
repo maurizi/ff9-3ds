@@ -379,7 +379,7 @@ typedef struct {
     const u16 *uvs;
     const u32 *colors;
     const u32 *xy;
-    const u16 *z;        /* a mesh's vertex depths; a record's OT entries per polygon (0xFFFF: not drawn) */
+    const u16 *z;        /* per polygon: its OT entry (a model: those drawn; a record: 0xFFFF not drawn) */
     u8 kind;             /* MESH_MODEL, MESH_BG */
     u16 bright;          /* a record's brightness (0x80: as is) */
     u16 count[8];        /* a record: [0] quads, [1] triangles */
@@ -433,16 +433,18 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
     if (b->mesh_gen != psx_ot_generation) { b->mesh_gen = psx_ot_generation; b->pool_used = 0; b->meshes = 0; }
     unsigned npolys = 0;
     for (int t = 0; t < 8; ++t) npolys += nm->count[t];
-    unsigned need = (sizeof(MeshInst) + (unsigned)nm->nverts * 6 + npolys + 3) & ~3u;
+    unsigned need = (sizeof(MeshInst) + (unsigned)nm->nverts * 4 + npolys * 3 + 3) & ~3u;
     if (b->meshes >= MAX_MESHES || b->pool_used + need > POOL_BYTES) { gxh_stats_mesh_fallback++; return 0; }
     MeshInst *mi = (MeshInst *)(b->pool + b->pool_used);
     u32 *xy = (u32 *)(mi + 1);
-    u16 *z = (u16 *)(xy + nm->nverts);
-    u8 *info = (u8 *)(z + nm->nverts);
+    u16 *z = (u16 *)(xy + nm->nverts); /* per polygon drawn: its OT entry (collect_native) */
+    u8 *info = (u8 *)(z + npolys);
+    const unsigned *sz = nm->sz;
+    const int zsf3 = (s16)psx_gte.c[29], ebias = 8 - (int)nm->ot_bias;
     int bx0 = 1 << 30, by0 = 1 << 30, bx1 = -(1 << 30), by1 = -(1 << 30);
     for (int i = 0; i < nm->nverts; ++i) {
         u32 w = nm->sxy[i];
-        xy[i] = w; z[i] = (u16)nm->sz[i];
+        xy[i] = w;
         int x = (s16)w, y = (s16)(w >> 16);
         if (x < bx0) bx0 = x;
         if (x > bx1) bx1 = x;
@@ -520,6 +522,12 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
                 semi = (MW(s, 8) & 0x02000000) != 0;
             }
             info[pi] = (u8)(semi << 7 | use << 3 | tier);
+            { /* the OT entry its packet would have: the depth sum >> 6 (quads), AVSZ3's OTZ / 4 (triangles) */
+                u32 zs = (u16)sz[vi[0]] + (u16)sz[vi[1]] + (u16)sz[vi[2]];
+                int e = quad ? (int)((zs + (u16)sz[vi[3]]) >> 6) : (zsf3 * (int)zs >> 12) >> 2;
+                e += ebias;
+                z[pi] = (u16)(e < 0 ? 0 : e > 0x100F ? 0x100F : e);
+            }
             ++polys;
             vertices += (unsigned)nv;
             mi->tier_polys[tier]++;
@@ -2388,7 +2396,7 @@ static void decode_model(const Buffer *b, const MeshInst *mi, int t, const u8 *s
         p->x[v] = (s16)(sext11i(xy) + b->ofs_x);
         p->y[v] = (s16)(sext11i(xy >> 16) + b->ofs_y);
         p->r[v] = (u8)col[v]; p->g[v] = (u8)(col[v] >> 8); p->b[v] = (u8)(col[v] >> 16);
-        zv[v] = mi->z[i[v]];
+        zv[v] = 0; /* (a model's entries are per polygon) */
     }
 }
 
@@ -2430,25 +2438,9 @@ static int collect_native(Buffer *b) {
         const MeshInst *mi = mesh_at(b, m);
         int np = mi->kind == MESH_BG ? mi->count[0] + mi->count[1] : 0;
         if (mi->kind != MESH_BG) for (int t = 0; t < 8; ++t) np += mi->count[t];
-        const u8 *s = mi->src;
-        for (int t = 0, k = 0, pi = 0; pi < np; ++pi) {
-            u8 inf = mi->info[pi];
-            int e;
-            if (mi->kind == MESH_BG) {
-                if (inf == 0xFF) continue;
-                e = mi->z[pi];
-            } else {
-                while (k >= mi->count[t]) { s += mi->count[t] * mesh_size[t]; ++t; k = 0; }
-                const u8 *q = s + k++ * mesh_size[t];
-                if (inf == 0xFF) continue;
-                /* the OT entry its packet would have: the depth sum >> 6 (quads), AVSZ3's OTZ / 4 (triangles) */
-                const u16 *sz = mi->z;
-                u32 zs = sz[MW(q, 0) & 0xFFFF] + sz[MW(q, 0) >> 16];
-                if (!(t & 1)) e = (int)((zs + sz[MW(q, 4) & 0xFFFF] + sz[MW(q, 4) >> 16]) >> 6);
-                else e = (int)(((s16)psx_gte.c[29] * (int)(zs + sz[MH(q, 4)]) >> 12) >> 2);
-                e += 8 - mi->bias;
-                if (e < 0) e = 0; else if (e > 0x100F) e = 0x100F;
-            }
+        for (int pi = 0; pi < np; ++pi) {
+            if (mi->info[pi] == 0xFF) continue;
+            int e = mi->z[pi]; /* (both kinds: the entry per polygon) */
             if (n == cap) { gxh_stats_dropped++; continue; }
             native_refs[n] = (NativeRef){(u8)m, 0, (u16)pi, native_heads[e]}; /* (an entry's list starts at its newest) */
             native_heads[e] = (u16)n++;

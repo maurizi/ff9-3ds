@@ -956,3 +956,6 @@ values to the stack per vertex. Three steps, ms per VBlank (d4_f2110, d2_f0955, 
 - Battles: native_run keeps the last texture use's words (region, image, palette, origin; it recomputed them for every
   polygon) and its drawing state in locals: d2_b0300 28.94 -> 28.72, d1_b0071 26.59 -> 26.44, d2_b0128 29.03 -> 28.69
   (identical frames; the heap 112 bytes smaller).
+- Battles: each model polygon's OT entry is worked out in the snapshot (port_native_mesh, which has its indices and
+  depths in hand) and kept per polygon, as a background record's are, instead of collect_native reading the mesh
+  records and per-vertex depths again: -> 28.32, 26.09, 28.29 (identical frames).
