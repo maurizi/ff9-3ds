@@ -293,11 +293,19 @@ static Buffer *target(Buffer **shown) {
      * over ovl_0b's data and crashed in btlbg_init) */
     if (psx_ovl_resident[0] != place->overlay) { *shown = NULL; return NULL; }
     /* the lookups depend only on the drawing environment, the display position and the buffers' places */
-    static struct { int x, y, w, h, ax, ay, dx, dy; unsigned version; Buffer *shown, *b; } last = {.w = -1};
+    static struct { int x, y, w, h, ax, ay, dx, dy; unsigned version, env; Buffer *shown, *b; } last = {.w = -1, .env = ~0u};
+    Buffer *b;
+    if (psx_gpu_env_version == last.env && gp0_state.area_x0 == last.ax && gp0_state.area_y0 == last.ay &&
+        buffers_version == last.version) { /* (nothing they depend on changed: the common case, a primitive at once) */
+        *shown = last.shown;
+        b = last.b;
+        if (b && b->shown && b != *shown) start_scene(b, 0);
+        return b;
+    }
     int x, y, w, h, dx, dy, dw, dh;
     psx_gpu_draw_area(&x, &y, &w, &h);
     psx_gpu_display_area(&dx, &dy, &dw, &dh);
-    Buffer *b;
+    last.env = psx_gpu_env_version;
     if (x == last.x && y == last.y && w == last.w && h == last.h && gp0_state.area_x0 == last.ax &&
         gp0_state.area_y0 == last.ay && dx == last.dx && dy == last.dy && buffers_version == last.version) {
         *shown = last.shown;
@@ -3422,22 +3430,22 @@ static int field_sprite(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int w, int
     ui_flush();
     if (extend_rect(b, m, v, w, h)) return 1;
     note_walk(b);
+    /* the record's twelve words made in registers (Prim's layout, little-endian), stored at once */
     PrimCopy t;
-    Prim *p = &t.p;
-    p->n = 4;
-    p->flags = (u8)((m->textured ? P_TEXTURED : 0) | (m->raw ? P_RAW : 0) | (m->semi ? P_SEMI : 0) | P_RECT |
-                    (gp0_state.texpage & 0x200 ? P_DITHER : 0));
-    p->abr = (u8)m->abr; p->depth = (u8)(m->depth > 2 ? 2 : m->depth);
-    p->tx = (u16)m->tx; p->ty = (u16)m->ty; p->clut_x = (u16)m->clut_x; p->clut_y = (u16)m->clut_y;
-    s16 x0 = (s16)(v->x - b->x), y0 = (s16)(v->y - b->y);
-    p->x[0] = p->x[2] = x0; p->x[1] = p->x[3] = (s16)(x0 + w);
-    p->y[0] = p->y[1] = y0; p->y[2] = p->y[3] = (s16)(y0 + h);
-    u8 r = (u8)(v->r < 0 ? 0 : v->r > 255 ? 255 : v->r), g = (u8)(v->g < 0 ? 0 : v->g > 255 ? 255 : v->g),
-       bl = (u8)(v->b < 0 ? 0 : v->b > 255 ? 255 : v->b);
-    u8 u0 = (u8)v->u, u1 = (u8)(v->u + w - 1), v0 = (u8)v->v, v1 = (u8)(v->v + h - 1);
-    for (int i = 0; i < 4; ++i) { p->r[i] = r; p->g[i] = g; p->b[i] = bl; }
-    p->u[0] = p->u[2] = u0; p->u[1] = p->u[3] = u1;
-    p->v[0] = p->v[1] = v0; p->v[2] = p->v[3] = v1;
+    const u32 flags = (m->textured ? P_TEXTURED : 0) | (m->raw ? P_RAW : 0) | (m->semi ? P_SEMI : 0) | P_RECT |
+                      (gp0_state.texpage & 0x200 ? P_DITHER : 0);
+    const u32 x0 = (u16)(v->x - b->x), x1 = (u16)(v->x - b->x + w), y0 = (u16)(v->y - b->y), y1 = (u16)(v->y - b->y + h);
+    const u32 r = (u32)(v->r < 0 ? 0 : v->r > 255 ? 255 : v->r), g = (u32)(v->g < 0 ? 0 : v->g > 255 ? 255 : v->g),
+              bl = (u32)(v->b < 0 ? 0 : v->b > 255 ? 255 : v->b);
+    const u32 u0 = (u8)v->u, u1 = (u8)(v->u + w - 1), v0 = (u8)v->v, v1 = (u8)(v->v + h - 1);
+    t.w[0] = 4 | flags << 8 | (u32)(u8)m->abr << 16 | (u32)(m->depth > 2 ? 2 : m->depth) << 24;
+    t.w[1] = (u32)(u16)m->tx | (u32)(u16)m->ty << 16;
+    t.w[2] = (u32)(u16)m->clut_x | (u32)(u16)m->clut_y << 16;
+    t.w[3] = t.w[4] = x0 | x1 << 16;
+    t.w[5] = y0 | y0 << 16; t.w[6] = y1 | y1 << 16;
+    t.w[7] = r * 0x01010101u; t.w[8] = g * 0x01010101u; t.w[9] = bl * 0x01010101u;
+    t.w[10] = u0 | u1 << 8 | u0 << 16 | u1 << 24;
+    t.w[11] = v0 | v0 << 8 | v1 << 16 | v1 << 24;
     note_depth(b);
     store_prim(&b->prims[b->count++], &t);
     return 1;

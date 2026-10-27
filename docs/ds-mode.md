@@ -968,3 +968,21 @@ values to the stack per vertex. Three steps, ms per VBlank (d4_f2110, d2_f0955, 
   its samples (the 2 KB buckets had spread it over its neighbours). Its saturations as one range check per pair,
   done in branches (an empty asm keeps GCC from selecting both clamps every vertex): 112 -> 81 instructions a vertex,
   d4_f2110 26.95 -> 26.79, d2_f0955 33.41 -> 33.22, d1_f0453 29.08 -> 28.94 (identical frames).
+
+### Where a field's background goes (2026-10-27)
+
+Timers (PROFILE=1, with section timers added for the measurement) on d4_f2110, ms per VBlank of 27.0: the models'
+projection 3.07, snapshot 4.95 and emit 4.96; the OT walk 4.8 (2.4 of it the sprites' recording, hybrid_rect, about
+200 a VBlank); field_frame 2.1 (bgc_hash 0.35, bgc_use 0.62, plan_textures 0.82); the rest of emit_scene 2.5. A
+build with the background overlays unlinked (a patch on fldbg_drawOverlay's addPrim, measurement only): d4_f2110
+26.8 -> 20.2, d2_f0955 33.3 -> 23.8, d1_f0453 29.2 -> 18.4 ms; with them walked and decoded but not recorded
+(gp0_tpage_sprite16 returning before the backend): 21.5, 24.8, 19.6. So the walk and GP0 decoding of the tiles are
+about 1.1 ms; the renderer's own handling of them (record, the composite's hash and choice, planning, emit) 5-9 ms.
+d4_f2110 and d1_f0453 hold a still composite (302 and 280 of their 468 and 503 primitives in it, recorded, hashed
+and planned every frame though the composite doesn't change); d2_f0955's background moves (no composite: 423 of its
+456 primitives in the 3D scene).
+
+First steps on the per-sprite cost: target() checks a version the game's PutDrawEnv/PutDispEnv bump before its
+lookups (two calls and nine compares a primitive), and field_sprite makes its record's twelve words in registers.
+d4_f2110 26.79 -> 26.39, d2_f0955 33.22 -> 32.91, d1_f0453 28.94 -> 28.60, d2_b0300 28.08 -> 27.64 (identical
+frames). The larger step is not recording a still composite's sprites at all.

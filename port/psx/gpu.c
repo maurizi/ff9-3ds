@@ -345,7 +345,11 @@ void SetDrawEnv(DR_ENV *dr, DRAWENV *env) {
 
 static void draw_packet(u32 *p);
 
+/* bumped when the drawing or display area may change (the hybrid's target caches its lookups by it) */
+unsigned int psx_gpu_env_version;
+
 DRAWENV *PutDrawEnv(DRAWENV *env) {
+    psx_gpu_env_version++;
     make_draw_env(&env->dr_env, env, 1);
     ((P_TAG *)&env->dr_env)->addr = OT_END;
     __builtin_memcpy(&draw_env, env, sizeof draw_env);
@@ -364,6 +368,7 @@ DISPENV *PutDispEnv(DISPENV *env) {
         psx_gpu_scene_prims = 0;
     }
     __builtin_memcpy(&disp_env, env, sizeof disp_env);
+    psx_gpu_env_version++;
     return env;
 }
 
