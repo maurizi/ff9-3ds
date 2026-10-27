@@ -728,3 +728,29 @@ live in main RAM to make room.
 
 Crash sweep, 40 more fields (`build/validation/fields40.txt`, walking input from frame 300, original DS): 40/40
 reach frame 1500, 17.0-76.4 ms per VBlank (median about 28); outliers d1_f0107 76.4 and d3_f2401 61.3.
+
+### Against the software renderer (2026-10-26, evening)
+
+The hybrid's screenshots had only been compared with earlier hybrid builds. The all-software DS build (the same
+scenario and frame, `FLAGS="HWSOUND=1"` in a copy of the bench script) is the reference: its rasterizer matches
+DuckStation (render-colour-validation.md), and the game state at a frame doesn't depend on speed. Compare after a
+6-pixel box blur: the 5:4 scaling's phase differs between the 3D scene and the software display's scaler, which
+leaves edges different in every field without either being wrong.
+
+Found and fixed:
+- The additive layer cleared only its last band of bank A: rows an earlier software frame or the composite had
+  written were added over the scene (Alexandria and d3_f1812 washed out by a ghost of an old frame, +70 to +95 per
+  channel). Now everything outside the band is cleared when something else wrote bank A.
+- Textured vertex colours (TEX_TINT): c x 31 / 128 rounded and one step under, against the 3D engine's rounding up
+  of (T + 1)(V + 1): bias d1_f0453 +4.7 -> +2.5, d1_b0071 +10 -> +6 per channel.
+
+Left: blurred mean difference under 2 in 17 of 28 fields, 4-8 in the rest; the battle 7.8 (slope 0.95, +10 in the
+darks: the 3D engine's modulation lifts dark texels by up to a 6-bit step). Models shade more smoothly than the
+PS1's dithered gouraud. The battle's 2D layer differs (the selected row's highlight, a black line over the panel):
+the top-screen UI, which the dual-screen redesign replaces.
+
+Performance (original DS, ms per VBlank): the additive layer threw away bank C's background composite whenever it
+ran, so Alexandria recomposed its background every frame: d1_f0107 74.2 -> 55.8; with fill_buffer in STMIA bursts
+and semi4's loop for 4-bit dithered semi polygons (Alexandria's 132 lights, 84% of their texels transparent) up to
+area 1024: d1_f0107 79.5 -> 53.6, d3_f1812 59.7 -> 55.4, d3_f2055 41.2 -> 38.1. Not taken: a cache of decoded texel
+rectangles (melonDS doesn't model the data cache, so the copies only cost); emit_scene in ARM (55.4 -> 55.0, 5 KB).
