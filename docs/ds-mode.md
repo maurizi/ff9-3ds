@@ -769,3 +769,14 @@ composited already (the time is the field models, fm_emit and port_native_field_
 d2_f0955 (28 of 32 bands change every frame: the camera moves) and d4_f1706 (11) aren't still, so their tiles go to
 the 3D engine every frame. A scrolling background needs the layer composites of design §5.3 (each layer once, then
 scrolled), not yet built.
+
+### DS coverage, 100 more fields (2026-10-26, night)
+
+100 fields no DS sweep had run (random from the 747 left, frame 1500, original DS): 100/100 reach frame 1500
+without a crash or stall; median 23.3 ms per VBlank, 16.6-112.4. The outliers are scenes past the 3D engine's
+RAM, drawn wholly in software: d1_f0574 (Lindblum's festival, two close-up NPCs) 112.4, d4_f2907 87.3, d2_f1662
+83.2, d3_f2000 65.8. d1_f0574 has 1,272 recorded polygons (459 background sprites) and 1,557 native model
+polygons: 2,829 polygons and 9,189 vertices a frame against 2,048 and 6,144; without the background sprites
+still 7,497 vertices, and only 5 of the other 813 primitives are behind everything else in their cells. Such a
+scene needs two 3D passes per frame (two DS frames per 30 fps game frame, the first captured) or dropped geometry:
+not built.
