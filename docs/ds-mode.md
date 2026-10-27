@@ -803,3 +803,8 @@ Battles: 200 random encounters of the 1,085 disc/encounter pairs that start on t
 no screen blank; median 26.8 ms per VBlank, 18.6-64.5 (d2_b0038 and d4_b0038 64.5, d3_b0002 61.1, d4_b0931 59.1).
 300 more: 300/300 reach frame 1500 without a crash or stall, no screen blank; median 27.2 ms per VBlank, 18.3-77.5
 (d3_b0057 and d4_b0211 77.5, d4_b0935 68.0, d4_b0168 60.4).
+The other 536: 536/536 reach frame 1500 without a crash or stall, no screen blank; median 26.9 ms per VBlank,
+17.2-77.5 (d3_b0211 and d4_b0057 77.5, d3_b0890 77.4, d3_b0851 68.2). With the 49 earlier sweeps had run, every one
+of the 1,085 disc/encounter pairs that start on their disc has now run its first 1,500 frames on an original DS
+(1,036 of them on this build): none crashes or stalls. Across the 1,036, the median is 26.9 ms per VBlank against
+the PS1's 16.7, and 4 in 5 run between 22 and 33.
