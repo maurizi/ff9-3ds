@@ -1001,8 +1001,9 @@ static void replay_clip(Buffer *b, int from, int to, int layer /* -1: all, -2: t
 }
 static void replay(Buffer *b, int from, int to, int layer /* -1: all */) { replay_clip(b, from, to, layer, NULL); }
 
-/* Field: what the 3D engine can't draw exactly from here on (a subtractive blend, a texture window, mask bits, a
- * polygon past the drawing area, too many primitives) turns the scene into software: what it recorded is drawn
+/* Field: what the 3D engine can't draw exactly from here on (a texture window, mask bits, a polygon past the
+ * drawing area, too many primitives) turns the scene into software (a subtractive blend doesn't: the 3D engine's
+ * approximation, the user's choice of 2026-10-27): what it recorded is drawn
  * now, the rest as it comes; it is shown like the software renderer's frames. */
 static void go_software(Buffer *b) {
     /* the next scenes will likely need it too: drawn in software from the start; but not for a buffer that filled
@@ -3265,7 +3266,7 @@ static void mark_ui(Buffer *b) {
 
 static int ui_page_of(const Gp0Mode *m) { return m->textured && m->ty == 256 && (m->tx == 896 || m->tx == 960); }
 static int field_unexact(const Buffer *b, const Gp0Mode *m) {
-    /* (a subtractive blend is decided when the scene is sent: field_layers); a texture window only on the UI pages,
+    /* (a subtractive blend: the 3D engine's approximation, emit_scene); a texture window only on the UI pages,
      * which the replay applies (twins) */
     int twin = gp0_state.twin_mask_x || gp0_state.twin_mask_y;
     int why = (twin && (!ui_page_of(m) || b->twin_count == 32) ? 2 : 0) |
