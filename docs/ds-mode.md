@@ -801,3 +801,5 @@ seconds only: events later in a field need their own scenarios.
 Battles: 200 random encounters of the 1,085 disc/encounter pairs that start on their disc
 (`build/validation/battlesweep11`), none run on the DS before: 200/200 reach frame 1500 without a crash or stall,
 no screen blank; median 26.8 ms per VBlank, 18.6-64.5 (d2_b0038 and d4_b0038 64.5, d3_b0002 61.1, d4_b0931 59.1).
+300 more: 300/300 reach frame 1500 without a crash or stall, no screen blank; median 27.2 ms per VBlank, 18.3-77.5
+(d3_b0057 and d4_b0211 77.5, d4_b0935 68.0, d4_b0168 60.4).
