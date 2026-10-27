@@ -1179,12 +1179,14 @@ static Region *place_region(int depth, int conv, int cx, int cy, int x, int y, i
 #define TINT 1
 #endif
 #if TINT == 0
-#define TEX_TINT(c) ((u32)(c) >> 2 > 31 ? 31u : (u32)(c) >> 2)
+#define TEX_TINT_OF(c) ((c) >> 2 > 31 ? 31u : (c) >> 2)
 #elif TINT == 1 /* c x 31 / 128 rounded, one step under: the 3D engine's (T + 1)(V + 1) rounds up, the PS1 truncates */
-#define TEX_TINT(c) ((u32)(c) >= 128 ? 30u : ((u32)(c) * 31 + 64) >> 7 ? (((u32)(c) * 31 + 64) >> 7) - 1 : 0u)
+#define TEX_TINT_OF(c) ((c) >= 128 ? 30u : ((c) * 31 + 64) >> 7 ? (((c) * 31 + 64) >> 7) - 1 : 0u)
 #else /* c x 31 / 128 rounded */
-#define TEX_TINT(c) ((u32)(c) >= 128 ? 31u : ((u32)(c) * 31 + 64) >> 7)
+#define TEX_TINT_OF(c) ((c) >= 128 ? 31u : ((c) * 31 + 64) >> 7)
 #endif
+static u8 tex_tint[256]; /* TEX_TINT_OF's, filled by gxh_enable */
+#define TEX_TINT(c) ((u32)tex_tint[(u8)(c)])
 #ifndef ADD_WHITEN
 #define ADD_WHITEN 4
 #endif
@@ -3951,6 +3953,7 @@ void gxh_enable(int on) {
         videoSetMode(MODE_5_3D);
         vramSetPrimaryBanks(VRAM_A_TEXTURE, VRAM_B_TEXTURE, VRAM_C_TEXTURE, VRAM_D_TEXTURE);
         if (movie_banks) { vramSetBankB(VRAM_B_LCD); vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); }
+        for (u32 c = 0; c < 256; ++c) tex_tint[c] = (u8)TEX_TINT_OF(c);
         bank_a_bg = 0;
         add_rows_clear = 0;
         bank_a_add = 0; /* (back_mode 0) */
