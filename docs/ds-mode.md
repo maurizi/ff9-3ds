@@ -786,3 +786,8 @@ VBlank, 16.6-105.7 (d2_f1225 105.7, d4_f2955 67.0, d4_f2926 55.6, d3_f1866 53.2)
 flat. 584 of the 1,131 fields have now run on an original DS. The status screen's sound line read a stub: with
 SPU7 audio_hw.c isn't linked and the stub generator made `port_hw_sound_stats` a 12-byte function; the line is
 gone from SPU7 builds.
+
+200 more: 199 reach frame 1500 without a crash or stall (median 24.2 ms per VBlank, 16.5-110.0: d4_f2902 110.0,
+d2_f1751 108.9, d4_f2915 93.0, d2_f0957 65.9); d2_f0070 stops at frame 123, the fixture limit the host sweep
+found (the opening scene, whose FMV001 is on disc 1). The near-black screens are narration (d2_f1461, d3_f1819).
+783 of the 1,131 fields have now run on an original DS.
