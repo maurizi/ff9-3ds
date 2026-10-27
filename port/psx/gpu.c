@@ -602,6 +602,12 @@ void DrawPrim(void *p) {
     draw_packet(p);
 }
 
+/* Port markers: native memory an OT may link into (registered by port code, port/game/field_bg.c), each packet there
+ * handed to port_ot_marker instead of being drawn. Their links are 24-bit as the game's: the range shares the
+ * ordering tables' high byte. */
+const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi;
+__attribute__((weak)) void port_ot_marker(unsigned int *m) { (void)m; }
+
 static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
     unsigned int profile_start = port_profile_begin();
     /* Explicit bounds disambiguate stack links whose low 24 bits alias arena RAM. */
@@ -615,7 +621,9 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
             while ((unsigned char *)p > psx_ram && *p == (((u32)(p - 1)) & 0xFFFFFF)) --p;
         if ((unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n) psx_ot_slot = (unsigned int)((unsigned int *)p - psx_main_ot);
         u32 addr = *p & 0xFFFFFF;
-        if (((P_TAG *)p)->len) {
+        if ((uintptr_t)p - (uintptr_t)psx_ot_marker_lo < (uintptr_t)psx_ot_marker_hi - (uintptr_t)psx_ot_marker_lo) {
+            port_ot_marker(p);
+        } else if (((P_TAG *)p)->len) {
             draw_packet(p);
         }
         if (addr == OT_END) {
@@ -626,7 +634,8 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
             p = (u32 *)candidate;
         else {
             p = link_ptr(addr);
-            if ((unsigned char *)p < psx_ram || (unsigned char *)p >= psx_ram + PSX_RAM_SIZE)
+            if (((unsigned char *)p < psx_ram || (unsigned char *)p >= psx_ram + PSX_RAM_SIZE) &&
+                (uintptr_t)p - (uintptr_t)psx_ot_marker_lo >= (uintptr_t)psx_ot_marker_hi - (uintptr_t)psx_ot_marker_lo)
                 port_fatal("DrawOTag: link 0x%06X outside known buffers", addr);
         }
         if (++guard > 1000000) {
