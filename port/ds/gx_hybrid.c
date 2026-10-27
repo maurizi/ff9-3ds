@@ -1589,10 +1589,13 @@ static int plan_runs(int place_missing) {
     int missing = 0;
     for (int k = 0; k < need_count; ++k) {
         const Need *q = &needs[k];
+        /* (a one-block gap bridged: one run rather than two, a block of texels more; d4_f2902's 286 needs filled
+         * the 512 runs) */
+        const u32 mask = q->mask | (~(u32)q->mask & (u32)q->mask << 1 & (u32)q->mask >> 1 & 0xFFFF);
         for (int bu = 0; bu < 16;) {
-            if (!(q->mask >> bu & 1)) { ++bu; continue; }
+            if (!(mask >> bu & 1)) { ++bu; continue; }
             int n = 1;
-            while (bu + n < 16 && (q->mask >> (bu + n) & 1)) ++n;
+            while (bu + n < 16 && (mask >> (bu + n) & 1)) ++n;
             Run *r = run_holding(q->key, bu, bu + n - 1);
             if (!r && place_missing) r = place_run(q->key, bu, n);
             if (r) r->flags |= RUN_WANTED;

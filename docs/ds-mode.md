@@ -895,3 +895,9 @@ Found through it and kept:
   had no native function (only the first slot was identified). Now each slot is identified on its own; on the DS
   the _1 modules link at the top 12 KB of psx_fx_area (FX_SLOT2_SIZE), the others at its bottom (at most 14.3 KB).
 - NULL reads: btl_clearCmdQueue with no current command (d1_f0761), fx_0fb_1's rocks testing a target not yet set.
+
+d4_f2902's software frames: its background needs (286 page rows of blocks) took more than the 512 texture runs.
+A one-block gap in a row's blocks is now bridged (one run, a block more of texels): it fits, 115 -> 35.9 ms per
+VBlank; six other fields' frames identical. Its subtractive (PS1 mode 2) layers are now the 3D engine's
+approximation (black at the source's brightness), as in every other hybrid field: lighter than the software frame
+(blurred difference 8.9). The DS has no exact subtraction in either engine; exact means software (115 ms here).
