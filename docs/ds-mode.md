@@ -916,3 +916,10 @@ layer); the redraw's scaling in ARM (no gain: melonDS charges ARM fetches from m
 Tried, not taken: moving background layers (a slot whose sprites changed in two of the last four frames) kept out of
 the composite and its stillness: d4_f2110 27.9 -> 30.9, d2_f0955 34.3 -> 35.6, d4_f1706 34.1 -> 32.5 but its frame
 changed (blurred 4.4).
+
+What the moving-camera fields change, layer by layer (each OT slot's background sprites against the last scene's):
+d2_f0955 changes nearly every layer as a set each frame (tiles entering and leaving: a scrolling camera); d4_f1706
+keeps its layers but for about 10 animated sprites a frame; d2_f0931 has still, uniformly shifted and changed
+layers. Composing scrolling layers apart (a full-screen 16-bit buffer each, about 150 KB) doesn't fit the DS's
+memory, so such fields keep their tiles in 3D; d2_f0955's frame is then mostly its models (fm_emit and
+port_native_field_mesh 21%) and the tiles' record, plan and emission (15%), all already in tight ARM loops.
