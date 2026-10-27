@@ -1173,6 +1173,18 @@ static Region *place_region(int depth, int conv, int cx, int cy, int x, int y, i
  * Over a uniform background d the two agree with d added to the hue (clamped): that's what turns the PS1's stacked
  * light white, where the plain hue stays coloured. The background is taken as ADD_WHITEN / 31 (the user's "whiter
  * approximation" of 2026-10-25; FF9's battle backgrounds behind effects are mostly about a quarter bright). */
+/* A textured polygon's PS1 colour channel (0x80 = the texel's own) as the 3D engine's vertex colour (31 = the
+ * texel's own; brighter clamps) */
+#ifndef TINT
+#define TINT 1
+#endif
+#if TINT == 0
+#define TEX_TINT(c) ((u32)(c) >> 2 > 31 ? 31u : (u32)(c) >> 2)
+#elif TINT == 1 /* c x 31 / 128 rounded, one step under: the 3D engine's (T + 1)(V + 1) rounds up, the PS1 truncates */
+#define TEX_TINT(c) ((u32)(c) >= 128 ? 30u : ((u32)(c) * 31 + 64) >> 7 ? (((u32)(c) * 31 + 64) >> 7) - 1 : 0u)
+#else /* c x 31 / 128 rounded */
+#define TEX_TINT(c) ((u32)(c) >= 128 ? 31u : ((u32)(c) * 31 + 64) >> 7)
+#endif
 #ifndef ADD_WHITEN
 #define ADD_WHITEN 4
 #endif
@@ -2110,8 +2122,7 @@ static inline u32 rgb_for(const Prim *p, int i, int additive) {
     } else if ((p->flags & (P_TEXTURED | P_RAW)) == (P_TEXTURED | P_RAW)) {
         r = g = b = 31;
     } else if (p->flags & P_TEXTURED) { /* PS1: 128 = x1.0; DS: 31 = x1.0 (brighter clamps) */
-        r = p->r[i] >> 2; g = p->g[i] >> 2; b = p->b[i] >> 2;
-        r = r > 31 ? 31 : r; g = g > 31 ? 31 : g; b = b > 31 ? 31 : b;
+        r = TEX_TINT(p->r[i]); g = TEX_TINT(p->g[i]); b = TEX_TINT(p->b[i]);
     } else {
         r = p->r[i] >> 3; g = p->g[i] >> 3; b = p->b[i] >> 3;
     }
@@ -2516,9 +2527,8 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
             u32 tc = (u32)(u16)(((uv[i] & 0xFF) - tu) * 16) | (u32)(u16)(((uv[i] >> 8) - tv) * 16) << 16;
             if (j == 0 || gouraud) {
                 u32 c = col[gouraud ? i : 0];
-                u32 cr = (c & 0xFF) >> 2, cg = (c >> 8 & 0xFF) >> 2, cb = (c >> 16 & 0xFF) >> 2;
                 put(j == 0 ? CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTX16 << 16 : CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTXXY << 16);
-                put((cr > 31 ? 31 : cr) | (cg > 31 ? 31 : cg) << 5 | (cb > 31 ? 31 : cb) << 10);
+                put(TEX_TINT(c & 0xFF) | TEX_TINT(c >> 8 & 0xFF) << 5 | TEX_TINT(c >> 16 & 0xFF) << 10);
             } else {
                 put(CMD_TEXCOORD | CMD_VTXXY << 8);
             }
@@ -2780,8 +2790,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 u32 colour;
                 if (src->flags & P_RAW) colour = 0x7FFF;
                 else {
-                    int r = src->r[0] >> 2, g = src->g[0] >> 2, bl = src->b[0] >> 2;
-                    colour = (u32)((r > 31 ? 31 : r) | (g > 31 ? 31 : g) << 5 | (bl > 31 ? 31 : bl) << 10);
+                    colour = TEX_TINT(src->r[0]) | TEX_TINT(src->g[0]) << 5 | TEX_TINT(src->b[0]) << 10;
                 }
                 u32 xy[4], uv[4];
                 static const u8 order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
@@ -3659,8 +3668,7 @@ typedef struct {
 static inline __attribute__((always_inline)) u32 fm_colour(u32 c, const int textured, int raw) {
     if (textured) {
         if (raw) return 0x7FFF;
-        u32 r = (c & 0xFF) >> 2, g = (c >> 8 & 0xFF) >> 2, bl = (c >> 16 & 0xFF) >> 2;
-        return (r > 31 ? 31 : r) | (g > 31 ? 31 : g) << 5 | (bl > 31 ? 31 : bl) << 10;
+        return TEX_TINT(c & 0xFF) | TEX_TINT(c >> 8 & 0xFF) << 5 | TEX_TINT(c >> 16 & 0xFF) << 10;
     }
     return (c & 0xFF) >> 3 | ((c >> 8 & 0xFF) >> 3) << 5 | ((c >> 16 & 0xFF) >> 3) << 10;
 }
