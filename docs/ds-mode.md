@@ -797,3 +797,7 @@ The last 347: 347/347 reach frame 1500 without a crash or stall (median 24.7 ms 
 prompt (d3_f2204) and a starfield (d4_f2921). Every field ID on the four discs (1,131) has now been entered on an
 original DS and run its first 1,500 frames: the only stop is d2_f0070, the fixture limit. Entry and the first 25
 seconds only: events later in a field need their own scenarios.
+
+Battles: 200 random encounters of the 1,085 disc/encounter pairs that start on their disc
+(`build/validation/battlesweep11`), none run on the DS before: 200/200 reach frame 1500 without a crash or stall,
+no screen blank; median 26.8 ms per VBlank, 18.6-64.5 (d2_b0038 and d4_b0038 64.5, d3_b0002 61.1, d4_b0931 59.1).
