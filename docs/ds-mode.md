@@ -835,3 +835,14 @@ The battles the same way (`build/validation/battlesweep11/cfg`, 1,085 encounters
 30 frames from 300: each fight's commands until it ends and returns to its field): 1,082 pass, no crash. The other
 three are fixture limits: the battle returns to a field the fixture's disc doesn't have (d2_b0076 to 2054, d4_b0246
 and d4_b0878 to 2500).
+
+### The slowest fields, by cause (2026-10-27)
+
+- Past the 3D engine's polygon or vertex RAM (gxh_stats_soft 8): d1_f0574 (2,829 polygons, 9,189 vertices), d2_f1225
+  (with additive primitives, 520). Wholly software, 105-112 ms. The user's decision: no dropped polygons;
+  simplified replacement models only as a last resort. The route is two 3D passes a 30 fps game frame (the far
+  primitives in the first DS frame, captured, then shown behind the near ones in the second). d1_f0574's textures
+  need 125 of the 128 2 KB units the two banks left by the captures would hold.
+- Textures that don't fit banks B-D (gxh_stats_soft 128): d4_f2902, 110 ms. Two passes don't help it by themselves.
+- d4_f2907 (rain, hybrid): some 260 shaded semi-transparent lines a frame, 217 pixels each, divided five times a
+  pixel; stepped instead: 87.2 -> 79.4 ms. plot() inline for those pixels gained nothing (80.4).
