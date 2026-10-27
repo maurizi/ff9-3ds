@@ -761,3 +761,11 @@ VBlank): d1_f0205 23.7 -> 19.5, d2_f1203 18.9 -> 16.7, d2_f1425 24.1 -> 21.3, d3
 31.0 -> 29.5, the others within 1; every field as close to the software renderer as before or closer (blurred mean
 difference under 1.5 in 15 of 28, 4-7 in the rest, d3_f1812 57 -> 4.8 with the bank A fix). Eleven of the 28 run
 at the PS1's 16.7.
+
+The composite is drawn again only for VRAM writes to what its sprites read (per texture page the rows, and the CLUTs
+themselves, taken when it is drawn): d3_f2055's animated CLUT elsewhere in the CLUT area recomposed everything each
+frame, 38.4 -> 18.4 ms per VBlank. Where it stands for the heaviest fields: five of the seven at 27-30 ms are
+composited already (the time is the field models, fm_emit and port_native_field_mesh about 20%, and the game);
+d2_f0955 (28 of 32 bands change every frame: the camera moves) and d4_f1706 (11) aren't still, so their tiles go to
+the 3D engine every frame. A scrolling background needs the layer composites of design §5.3 (each layer once, then
+scrolled), not yet built.
