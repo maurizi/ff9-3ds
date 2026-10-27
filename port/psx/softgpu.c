@@ -915,6 +915,41 @@ static void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
     }
     unsigned int profile_start=port_profile_begin();
     if (!target.pixels) rows_written(a->y < b->y ? a->y : b->y, (a->y > b->y ? a->y : b->y) + 1);
+#ifndef PORT_SOFTGPU_REFERENCE
+    if (n) { /* delta * i / n truncated toward zero, stepped: |delta| / n and its remainder (no division a pixel) */
+#define LSTEP_INIT(d, q, r, dq, dr, neg) do { unsigned ad_ = (d) < 0 ? 0u - (unsigned)(d) : (unsigned)(d); \
+        neg = (d) < 0; q = 0; r = 0; dq = (int)(ad_ / (unsigned)n); dr = (int)(ad_ % (unsigned)n); } while (0)
+#define LSTEP(q, r, dq, dr) do { q += dq; r += dr; if (r >= n) { r -= n; ++q; } } while (0)
+        int qx, rx, dqx, drx, nx, qy, ry, dqy, dry, ny;
+        LSTEP_INIT(dx, qx, rx, dqx, drx, nx);
+        LSTEP_INIT(dy, qy, ry, dqy, dry, ny);
+        const int x0 = gp0_state.area_x0, x1 = gp0_state.area_x1, y0 = gp0_state.area_y0, y1 = gp0_state.area_y1;
+        const int dither = gp0_state.texpage & 0x200;
+        if (!m->gouraud) {
+            for (int i = 0; i <= n; i++) {
+                int x = a->x + (nx ? -qx : qx), y = a->y + (ny ? -qy : qy);
+                if (x >= x0 && x <= x1 && y >= y0 && y <= y1) plot(m, x, y, a->r, a->g, a->b, 0, 0, dither);
+                LSTEP(qx, rx, dqx, drx); LSTEP(qy, ry, dqy, dry);
+            }
+        } else {
+            int qr, rr, dqr, drr, nr, qg, rg, dqg, drg, ng, qb, rb, dqb, drb, nb;
+            LSTEP_INIT(b->r - a->r, qr, rr, dqr, drr, nr);
+            LSTEP_INIT(b->g - a->g, qg, rg, dqg, drg, ng);
+            LSTEP_INIT(b->b - a->b, qb, rb, dqb, drb, nb);
+            for (int i = 0; i <= n; i++) {
+                int x = a->x + (nx ? -qx : qx), y = a->y + (ny ? -qy : qy);
+                if (x >= x0 && x <= x1 && y >= y0 && y <= y1)
+                    plot(m, x, y, a->r + (nr ? -qr : qr), a->g + (ng ? -qg : qg), a->b + (nb ? -qb : qb), 0, 0, dither);
+                LSTEP(qx, rx, dqx, drx); LSTEP(qy, ry, dqy, dry);
+                LSTEP(qr, rr, dqr, drr); LSTEP(qg, rg, dqg, drg); LSTEP(qb, rb, dqb, drb);
+            }
+        }
+#undef LSTEP_INIT
+#undef LSTEP
+        port_profile_draw_end(2,profile_start);
+        return;
+    }
+#endif
     for (int i = 0; i <= n; i++) {
         int x = n ? a->x + dx * i / n : a->x, y = n ? a->y + dy * i / n : a->y;
         if (x < gp0_state.area_x0 || x > gp0_state.area_x1 || y < gp0_state.area_y0 || y > gp0_state.area_y1) {
