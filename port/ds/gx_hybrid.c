@@ -118,6 +118,7 @@ static u32 bgc_bands_now[BGC_BANDS]; /* (bgc_hash's, this scene's) */
 /* bank A's bitmap rows outside the additive layer's band are clear (0: something else wrote them since: a software
  * frame, the composite, textures) */
 static int add_rows_clear;
+static int last_oy0, last_oy1; /* the additive layer's last band (output rows) */
 
 /* field models (port_native_field_mesh) */
 #define FM_GROUPS 32       /* groups a scene */
@@ -4284,8 +4285,13 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
          * scene past the 3D engine's limits (else all of it software), not for a still background (a scene whose
          * additive primitives come and go would flip between the two and compose each time) */
         int over = polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES;
-        if ((adds && over) != bgc_texmode) {
-            bgc_texmode = adds && over;
+        /* also a still background under additive primitives (d1_f0453: one of them kept its tiles in the 3D scene),
+         * held a while after the last one (they come and go: d1_f0054 flipped between the two, composing each time) */
+        static int tex_hold;
+        tex_hold = adds ? 60 : tex_hold > 0 ? tex_hold - 1 : 0;
+        int want_tex = (adds && over) || (tex_hold && bg_still >= 4) || (bgc_texmode && tex_hold && bgc_keep);
+        if (want_tex != bgc_texmode) {
+            bgc_texmode = want_tex;
             bgc.valid = 0;
             if (bgc_texmode) {
                 for (int i = 0; i < MAX_REGIONS; ++i)
@@ -4308,6 +4314,12 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
              * layer by the 2D compositor, if the textures fit in banks B-D; else approximated in 3D (conv_upload) */
             if (adds) bank_a_as_bg(1);
             else if (bank_a_bg && !composite) bank_a_as_bg(0);
+            else if (bank_a_bg && bgc_texmode && last_oy1 > last_oy0) { /* (held: no additive primitives now) */
+                int top = (192 - (display_h > 0 ? display_h : 224) * 4 / 5) / 2;
+                for (int oy = last_oy0; oy < last_oy1; ++oy)
+                    if (top + oy < 192) dmaFillWords(0, (u16 *)BG_BMP_RAM(8) + (top + oy) * 256, 512);
+                last_oy0 = last_oy1 = 0;
+            }
             plan_textures(b);
             if (adds && gxh_stats_unplaced) {
                 for (int k = 0; k < b->count; ++k) if (prim_layer[k] == L_ADD) prim_layer[k] = L_3D;
@@ -4331,7 +4343,6 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
                 if (y0 > y1) y0 = y1 = 0;
                 int h = display_h > 0 ? display_h : 224, top = (192 - h * 4 / 5) / 2;
                 int oy0 = y0 * 4 / 5 & ~(BLOCK - 1), oy1 = ((y1 + 1) * 4 / 5 + BLOCK) & ~(BLOCK - 1);
-                static int last_oy0, last_oy1;
                 if (!add_rows_clear) { /* all of it outside this band (what else wrote bank A would be added) */
                     for (int y = 0; y < 192; ++y)
                         if (y < top + oy0 || y >= top + oy1) dmaFillWords(0, (u16 *)BG_BMP_RAM(8) + y * 256, 512);
