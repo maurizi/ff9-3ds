@@ -2491,15 +2491,19 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
     /* (in locals: with -fno-strict-aliasing every store through wp would reload them from es) */
     u32 image = es->image, palette = es->palette, attr = es->attr;
     int polys = es->polys, vertices = es->vertices;
-    const int ofs_x = b->ofs_x, ofs_y = b->ofs_y;
+    /* a position: x and y each in 11 bits, sign-extended to 16 (the GTE's SXY saturate there; a background
+     * record's slots are made so below), each plus the drawing offset in its halfword */
+    const u32 ofs_x = (u32)b->ofs_x, ofs_y = (u32)b->ofs_y << 16;
+    const int count = b->count;
+    NativeWalk walk = *w; /* (in registers: stores through wp would reload it) */
     /* the last texture use's words (the polygons in order mostly share one) */
     const MeshUse *last_u = NULL;
     int tu = 0, tv = 0;
     u32 want_image = 0, want_palette = ~0u;
     for (;;) {
-        native_next(b, w);
-        if (w->ri == NO_REF || (k < b->count && w->erank > k)) break;
-        const NativeRef *r = &native_refs[w->ri];
+        native_next(b, &walk);
+        if (walk.ri == NO_REF || (k < count && walk.erank > k)) break;
+        const NativeRef *r = &native_refs[walk.ri];
         const MeshInst *mi = mesh_at(b, r->m);
         int pi = r->pi, n, t = 0, gouraud;
         u8 inf = mi->info[pi];
@@ -2543,14 +2547,15 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
             if (depth < 2) { want_image |= index0_transparent(pal); want_palette = (u32)pal * 512 / 16; }
             last_u = u;
         }
-        w->ri = r->next;
+        walk.ri = r->next;
         if (mesh_dropped(b, inf & 7)) { gxh_stats_dropped++; continue; }
-        int z = Z_STEP * ++w->zc;
+        int z = Z_STEP * ++walk.zc;
         reserve();
         if (polys >= MAX_POLYS || vertices + n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
         if (mi->kind == MESH_BG) {
             for (int i = 0; i < n; ++i) {
-                xy[i] = mi->xy[MH(ix, 2 * i) / 4];
+                u32 p = mi->xy[MH(ix, 2 * i) / 4];
+                xy[i] = (u32)(u16)sext11i(p) | (u32)sext11i(p >> 16) << 16;
                 uv[i] = MH(uw, 2 * i);
             }
         } else {
@@ -2573,7 +2578,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
         static const u8 quad_order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
         for (int j = 0; j < n; ++j) {
             int i = n == 4 ? quad_order[j] : j;
-            u32 pos = (u32)(u16)(sext11i(xy[i]) + ofs_x) | (u32)(u16)(sext11i(xy[i] >> 16) + ofs_y) << 16;
+            u32 pos = ((xy[i] + ofs_x) & 0xFFFF) | ((xy[i] & 0xFFFF0000) + ofs_y);
             u32 tc = (u32)(u16)(((uv[i] & 0xFF) - tu) * 16) | (u32)(u16)(((uv[i] >> 8) - tv) * 16) << 16;
             if (j == 0 || gouraud) {
                 u32 c = col[gouraud ? i : 0];
@@ -2589,6 +2594,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
         vertices += n;
     }
     es->wp = wp; es->image = image; es->palette = palette; es->attr = attr; es->polys = polys; es->vertices = vertices;
+    *w = walk;
 }
 
 /* x * a / 31 for x, a up to 31 (exact over that range) */

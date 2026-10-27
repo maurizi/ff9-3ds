@@ -959,3 +959,6 @@ values to the stack per vertex. Three steps, ms per VBlank (d4_f2110, d2_f0955, 
 - Battles: each model polygon's OT entry is worked out in the snapshot (port_native_mesh, which has its indices and
   depths in hand) and kept per polygon, as a background record's are, instead of collect_native reading the mesh
   records and per-vertex depths again: -> 28.32, 26.09, 28.29 (identical frames).
+- Battles: native_run's positions as one add of the packed drawing offset (the GTE's SXY already saturate to 11 bits;
+  a background record's slots, which may be an earlier record's, are made so as they're read) and its walk state in
+  registers: -> 28.11, 25.96, 28.04 (identical frames).
