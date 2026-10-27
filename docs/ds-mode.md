@@ -990,3 +990,24 @@ frames). The larger step is not recording a still composite's sprites at all.
   u0 u1, v0 v1; any other layout vertex by vertex as before): d4_f2110 26.33, d2_f0955 32.69, d1_f0453 28.48
   (identical frames). d2_f0955's moving background: emit_scene outside the models 4.8 ms a VBlank for ~420 sprites,
   plan_textures 1.9.
+
+### Next: the field background by layer, not by sprite (plan, 2026-10-27)
+
+What the measurements above say: a field's background costs the renderer 5-10 ms a VBlank (a quarter to a third of
+a heavy field), spread evenly over its per-sprite path (record ~800 cycles a sprite, the composite's hash and choice,
+planning, emit ~760 cycles a sprite), with no hot spot left to tune. The game draws each background layer
+(fldbg_drawOverlay, ovl_0a) as the same prebuilt sprites at fixed offsets and fixed OT entries (the layer's depth plus
+each tile's), moved together by the layer's position (and, for the looping kinds, wrapped at the layer's width or
+height). So the work can be per layer:
+1. A port fldbg_drawOverlay (link-time override) that, when the hybrid takes the scene, positions the sprites as the
+   game does (their x0, y0 stay as the PS1 has them) but links one marker per (layer, OT entry) instead of each
+   sprite, so the walk's order between the background and everything else is unchanged.
+2. Per layer, kept while its sprites' words (all but x0, y0) and its texture placement are unchanged: its tiles'
+   textures planned once, and its 3D commands built once (positions relative to the layer, depth per entry), sent
+   each frame after a translation (the GX position matrix, as the field models' groups). Looping layers: the wrapped
+   tiles as a second translation of the same list, or rebuilt when the wrap moves.
+3. The composite (still backgrounds, scenes past the 3D engine's polygons): by layer (a layer behind everything in its
+   cells), its hash per layer.
+Out of the measurement: the d2_f0955 kind (a moving background, 423 sprites a frame) would gain the most (~9 ms a
+VBlank); still scenes ~5. Budget for the lists: the sprites no longer recorded free most of the primitive buffers
+(ovl_0a's range), where the lists would live.
