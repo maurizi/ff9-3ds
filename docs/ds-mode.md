@@ -1011,3 +1011,18 @@ height). So the work can be per layer:
 Out of the measurement: the d2_f0955 kind (a moving background, 423 sprites a frame) would gain the most (~9 ms a
 VBlank); still scenes ~5. Budget for the lists: the sprites no longer recorded free most of the primitive buffers
 (ovl_0a's range), where the lists would live.
+
+What the first step found (branch bg-layers, not merged): wrapping fldbg_draw (config/renames.txt) and lifting each
+layer's run of tiles at an OT entry into a port marker (gpu.c walks markers in place; exact, identical frames) gains
+nothing as such, because the still fields put nearly every tile at its own OT entry (d4_f2110: 396 tiles over more
+than 64 entries; d2_f0955's moving layers: 410 tiles in 3 runs). Grouping by layer instead (one unit, tiles at their
+own depths) is exact for the depth-tested 3D scene, but not for a scene that goes software after the walk
+(field_frame's replay draws the records in their order, as a painter): a unit recorded out of the walk's order
+would paint wrong. So a layer unit needs either the scene known to stay in 3D at the walk, or a software fallback
+that walks the OT again. Its tables also cost the heap 4 KB as static data: they belong in ovl_0a's range.
+Tried without gain: an inner loop for consecutive opaque sprites in emit_scene (the per-sprite cost isn't its loop
+control), indexing translucent_id's recent primitives by signature bit.
+
+A hardware calibration build (2026-10-27): PROFILE=2 builds print each published block's ms per VBlank on the
+status screen (platform.c), so the same ROM can be timed on a DS and in melonDS (melonDS, this ROM: d1_f0110 16.71,
+d1_f0453 28.47, d2_f0955 32.94, d4_f2110 26.34, d2_b0300 25.42).
