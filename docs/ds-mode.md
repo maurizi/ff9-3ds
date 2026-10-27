@@ -923,3 +923,12 @@ keeps its layers but for about 10 animated sprites a frame; d2_f0931 has still, 
 layers. Composing scrolling layers apart (a full-screen 16-bit buffer each, about 150 KB) doesn't fit the DS's
 memory, so such fields keep their tiles in 3D; d2_f0955's frame is then mostly its models (fm_emit and
 port_native_field_mesh 21%) and the tiles' record, plan and emission (15%), all already in tight ARM loops.
+
+### What melonDS measures (2026-10-27)
+
+`tests/cache/cache_bench.c` (`make build/tests/cache_bench.nds`, run with tools/ds_profile.py --frame 100): the same
+262,144 word loads from a 4 KB array (cache-resident on a DS), a 1 MB array read through (a line fill every 8 loads)
+and a 1 MB array a 32-byte line a load (a miss each on a DS): 11.0, 9.0 and 12.0 cycles a load, loop included, on the
+original-DS setting. melonDS doesn't model the ARM9's data cache: every load costs about as much, cached or not.
+Every ms-per-VBlank figure here is that machine's: on hardware, cache-friendly loops (most of the port's) should run
+faster than measured and scattered accesses (texels, PS1 VRAM lookups) slower. Only a real DS settles parity.
