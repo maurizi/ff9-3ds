@@ -4360,6 +4360,7 @@ static void tp_note(int z, int nv) {
         return;
     }
     int k = (int)((long long)(z - tp_lo) * 256 / (tp_hi - tp_lo + 1));
+    k = k < 0 ? 0 : k > 255 ? 255 : k; /* (a vertex past its group's bounds: clamped as emit_scene does) */
     tp_hp[k]++; tp_hv[k] += (u16)nv;
 }
 PORT_OVERLAY_CODE(0a) static void tp_note_all(Buffer *b, const FStore *fst) {
@@ -4378,8 +4379,21 @@ PORT_OVERLAY_CODE(0a) static void tp_note_all(Buffer *b, const FStore *fst) {
 }
 /* the split depth (1), or 0 if no depth gives two passes that fit */
 PORT_OVERLAY_CODE(0a) static int tp_choose(Buffer *b, const FStore *fst) {
-    tp_hist_mode = 0; tp_lo = 0x7FFFFFFF; tp_hi = -0x7FFFFFFF;
-    tp_note_all(b, fst);
+    /* the depths' range from bounds (the recorded primitives' slots, each model group's far and near depths), so
+     * one pass over the polygons makes the histogram */
+    tp_lo = 0x7FFFFFFF; tp_hi = -0x7FFFFFFF;
+    for (int k = 0; k < b->count; ++k) {
+        if (prim_layer[k] != L_3D) continue;
+        int z = b->slots ? b->slots[k] + (b->prims[k].flags & P_SEMI ? 2 : 0) : k + 1;
+        if (z < tp_lo) tp_lo = z;
+        if (z > tp_hi) tp_hi = z;
+    }
+    if (fst)
+        for (int gi = 0; gi < fst->ngroups; ++gi) {
+            const FGroup *fg = &fst->groups[gi];
+            if (fg->depth_far < tp_lo) tp_lo = fg->depth_far;
+            if (fg->depth0 > tp_hi) tp_hi = fg->depth0;
+        }
     if (tp_lo > tp_hi) return 0;
     memset(tp_hp, 0, sizeof tp_hp); memset(tp_hv, 0, sizeof tp_hv);
     tp_hist_mode = 1;
