@@ -830,3 +830,8 @@ into neighbouring fields, talks, opens shops and fights its random encounters (3
     its end, where the PS1 finds other code pointers and the port a wild one.
   Reproduce: `tools/docker.sh gdb --args build/pc/ff9ds --scenario build/validation/fieldsweep/cfg/<field>.cfg
   --frames 20000` with the wander presses (any 200-frame direction cycle plus CROSS every 30 frames from 400).
+
+The battles the same way (`build/validation/battlesweep11/cfg`, 1,085 encounters, 20,000 frames with confirm every
+30 frames from 300: each fight's commands until it ends and returns to its field): 1,082 pass, no crash. The other
+three are fixture limits: the battle returns to a field the fixture's disc doesn't have (d2_b0076 to 2054, d4_b0246
+and d4_b0878 to 2500).
