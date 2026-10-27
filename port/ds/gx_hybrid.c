@@ -3610,23 +3610,26 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     int opaque = 0, front_polys = 0, front_verts = 0;
     const u8 *src = *(const u8 *const *)(g + 0x1C);
     int pi = st->npolys;
+    /* the drawn polygons' bits, a word at a time in a register (the word's earlier bits are earlier groups') */
+    u32 *const front = st->front, fw = front[pi >> 5] & ~(~0u << (pi & 31));
+    const s32 *const sxy = (const s32 *)n->sxy;
     int lu0 = 255, lv0 = 255, lu1 = 0, lv1 = 0, gathering = 0; /* last_use's bounds, gathered in registers */
     for (int t = 0; t < 8; ++t) {
         const int quad = !(t & 1), flags_at = mesh_flags_at[t], textured = t < 4, nvp = quad ? 4 : 3;
         for (int k = *(const u16 *)(g + 2 + 2 * t); k > 0; --k, src += mesh_size[t], pk += fm_size[t], ++pi) {
-            u32 bit = 1u << (pi & 31);
-            st->front[pi >> 5] &= ~bit;
+          do { /* (a continue leaves this, for the word's store below) */
             if (pk[7] & 2) continue;
             ++opaque;
-            if (*(const u16 *)src >= nv || *(const u16 *)(src + 2) >= nv || *(const u16 *)(src + 4) >= nv ||
-                (quad && *(const u16 *)(src + 6) >= nv)) continue; /* (a vertex past the group's: not drawn) */
+            const u32 i01 = *(const u32 *)src, i23 = *(const u32 *)(src + 4); /* (the records are word aligned) */
+            const u32 i0 = i01 & 0xFFFF, i1 = i01 >> 16, i2 = i23 & 0xFFFF;
+            if (i0 >= (u32)nv || i1 >= (u32)nv || i2 >= (u32)nv || (quad && i23 >> 16 >= (u32)nv))
+                continue; /* (a vertex past the group's: not drawn) */
             if (!(src[flags_at] & 2)) {
-                u32 s0 = (u32)n->sxy[*(const u16 *)src], s1 = (u32)n->sxy[*(const u16 *)(src + 2)];
-                u32 s2 = (u32)n->sxy[*(const u16 *)(src + 4)];
+                u32 s0 = (u32)sxy[i0], s1 = (u32)sxy[i1], s2 = (u32)sxy[i2];
                 int x0 = (s16)s0, y0 = (s16)(s0 >> 16);
                 if (((s16)s1 - x0) * ((s16)(s2 >> 16) - y0) - ((s16)s2 - x0) * ((s16)(s1 >> 16) - y0) <= 0) continue;
             }
-            st->front[pi >> 5] |= bit;
+            fw |= 1u << (pi & 31);
             front_polys++;
             front_verts += nvp;
             if (!textured) continue;
@@ -3655,8 +3658,11 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
                 if (cv < lv0) lv0 = cv;
                 if (cv > lv1) lv1 = cv;
             }
+          } while (0);
+            if ((pi & 31) == 31) { front[pi >> 5] = fw; fw = 0; }
         }
     }
+    if (pi & 31) front[pi >> 5] = fw;
     if (gathering) fuse_bounds(&st->uses[last_use], lu0, lv0, lu1, lv1);
     if (!opaque) return 0;
     FGroup *fg = &st->groups[st->ngroups++];
