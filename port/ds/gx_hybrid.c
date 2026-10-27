@@ -1362,6 +1362,37 @@ void psx_vram_read(int x, int y, int w, int h) {
 
 /* gpu.c: LoadImage, MoveImage, fills are about to write this rectangle. */
 static unsigned bgc_tex;   /* VRAM writes outside the scene buffers (texture pages, CLUTs): the composite's */
+/* the texture pages (bit (ty / 256) * 16 + tx / 64) and CLUT rows the composite's sprites read (bgc_sources) */
+static u32 bgc_pages, bgc_cluts[16];
+/* and their CLUTs themselves (y, x, entries), while there are few (else the rows) */
+#define BGC_CLUTS 32
+static struct { u16 y, x, n; } bgc_clut[BGC_CLUTS];
+static int bgc_nclut; /* (BGC_CLUTS + 1: too many, the rows decide) */
+static u8 bgc_v0[32], bgc_v1[32]; /* each page's rows read (v range) */
+static int bgc_reads(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) return 0;
+    if (w > 1024) w = 1024;
+    if (h > 512) h = 512;
+    u32 cols = 0;
+    for (int c = x >> 6; c <= (x + w - 1) >> 6; ++c) cols |= 1u << (c & 15);
+    for (int r = y >> 8; r <= (y + h - 1) >> 8; ++r) {
+        u32 hit = (cols << ((r & 1) * 16)) & bgc_pages;
+        if (!hit) continue;
+        int y0 = y - (r << 8), y1 = y + h - 1 - (r << 8); /* the write's rows in this page row */
+        if (y0 < 0) y0 = 0;
+        if (y1 > 255) y1 = 255;
+        for (int bit = 0; bit < 32; ++bit)
+            if (hit >> bit & 1 && y0 <= bgc_v1[bit] && y1 >= bgc_v0[bit]) return 1;
+    }
+    if (bgc_nclut <= BGC_CLUTS) {
+        for (int i = 0; i < bgc_nclut; ++i)
+            if (bgc_clut[i].y >= y && bgc_clut[i].y < y + h && bgc_clut[i].x < x + w && bgc_clut[i].x + bgc_clut[i].n > x)
+                return 1;
+        return 0;
+    }
+    for (int r = y; r < y + h; ++r) if (bgc_cluts[(r >> 5) & 15] >> (r & 31) & 1) return 1;
+    return 0;
+}
 void psx_vram_touch(int x, int y, int w, int h) {
     if (!active) return;
     ui_flush();
@@ -1371,7 +1402,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
         for (int i = 0; i < 2; ++i)
             if (buffers[i].valid && x >= buffers[i].x && y >= buffers[i].y && x + w <= buffers[i].x + buffers[i].w &&
                 y + h <= buffers[i].y + buffers[i].h) in_buffer = 1;
-        if (!in_buffer) bgc_tex++;
+        if (!in_buffer && bgc_reads(x, y, w, h)) bgc_tex++;
     }
     ui_note_write(x, y, w, h);
     ui_dirty_rect(x, y, x + w - 1, y + h - 1);
@@ -4072,6 +4103,45 @@ static void back_mode(int add) {
  * farther than every other 3D primitive and model vertex leave the 3D scene (L_BACK); the rest are drawn there too,
  * over the same pixels, so they still cover what goes behind them (per pixel, as the 3D scene's depths do). */
 
+/* what the background sprites read, for psx_vram_touch (bgc_reads): taken when the composite is drawn */
+PORT_OVERLAY_CODE(0a) static void bgc_sources(const Buffer *b) {
+    bgc_pages = 0;
+    memset(bgc_cluts, 0, sizeof bgc_cluts);
+    bgc_nclut = 0;
+    u32 last_src = ~0u; int last_clut_y = -1, last_v0 = 0, last_v1 = 0; /* (the last sprite's: most share it) */
+    for (int k = 0; k < b->count; ++k) {
+        const Prim *p = &b->prims[k];
+        if (!bg_prim(p)) continue;
+        { /* (what it reads: its page, 1, 2 or 4 columns wide by depth, its rows, and its CLUT) */
+            int v0 = p->v[0], v1 = p->v[2]; /* (its top row and the bottom's next, inclusive: one more) */
+            if (v1 < v0) v0 = 0, v1 = 255; /* (wrapping past row 255) */
+            u32 src = (u32)p->tx | (u32)p->ty << 10 | (u32)p->depth << 19 | (u32)p->clut_x << 21;
+            if (src != last_src || p->clut_y != last_clut_y || v0 < last_v0 || v1 > last_v1) {
+                int w = p->depth == 0 ? 1 : p->depth == 1 ? 2 : 4, prow = (p->ty >> 8 & 1) * 16;
+                for (int c = 0; c < w; ++c) {
+                    int bit = (int)(((p->tx >> 6) + c) & 15) + prow;
+                    if (!(bgc_pages >> bit & 1)) { bgc_pages |= 1u << bit; bgc_v0[bit] = 255; bgc_v1[bit] = 0; }
+                    if (v0 < bgc_v0[bit]) bgc_v0[bit] = (u8)v0;
+                    if (v1 > bgc_v1[bit]) bgc_v1[bit] = (u8)v1;
+                }
+                if (p->depth < 2 && (src != last_src || p->clut_y != last_clut_y)) {
+                    bgc_cluts[(p->clut_y >> 5) & 15] |= 1u << (p->clut_y & 31);
+                    int i = 0;
+                    for (; i < bgc_nclut && i < BGC_CLUTS; ++i)
+                        if (bgc_clut[i].y == p->clut_y && bgc_clut[i].x == p->clut_x) break;
+                    if (i == bgc_nclut && bgc_nclut <= BGC_CLUTS) {
+                        if (i < BGC_CLUTS) bgc_clut[i] = (typeof(bgc_clut[0])){p->clut_y, p->clut_x, p->depth ? 256 : 16};
+                        bgc_nclut++;
+                    }
+                }
+                if (src != last_src || p->clut_y != last_clut_y) last_v0 = v0, last_v1 = v1;
+                else { if (v0 < last_v0) last_v0 = v0; if (v1 > last_v1) last_v1 = v1; }
+                last_src = src; last_clut_y = p->clut_y;
+            }
+        }
+    }
+}
+
 PORT_OVERLAY_CODE(0a) static u32 bgc_hash(const Buffer *b, int display_h) {
     u32 h = 2166136261u ^ (u32)display_h ^ b->clear << 12; /* (not the buffer's place: the sprites are relative) */
     for (int i = 0; i < BGC_BANDS; ++i) bgc_bands_now[i] = 2166136261u + (u32)i;
@@ -4227,17 +4297,20 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
     }
     u32 key = (u32)display_h ^ b->clear << 12;
     if (!bgc.valid || bgc.tex != bgc_tex || bgc.key != key) {
+        bgc_sources(b);
         bgc_compose(b, display_h);
         gxh_stats_bgc++;
     } else if (bgc.hash != hash) { /* the bands that changed (animated tiles, say): their rows alone */
         int lo = BGC_BANDS, hi = -1;
         for (int i = 0; i < BGC_BANDS; ++i)
             if (bgc.bands[i] != bgc_bands_now[i]) { if (i < lo) lo = i; hi = i; }
+        bgc_sources(b);
         if (hi >= 0) bgc_compose_rows(b, display_h, lo * 8, hi * 8 + 7);
         else bgc_compose(b, display_h); /* (the same bands, another order: all of it) */
         gxh_stats_bgc++;
     }
     bgc.valid = 1; bgc.hash = hash; bgc.tex = bgc_tex; bgc.key = key;
+
     memcpy(bgc.bands, bgc_bands_now, sizeof bgc.bands);
     if (bgc_texmode) {
         DC_FlushAll();
