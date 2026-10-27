@@ -901,3 +901,7 @@ A one-block gap in a row's blocks is now bridged (one run, a block more of texel
 VBlank; six other fields' frames identical. Its subtractive (PS1 mode 2) layers are now the 3D engine's
 approximation (black at the source's brightness), as in every other hybrid field: lighter than the software frame
 (blurred difference 8.9). The DS has no exact subtraction in either engine; exact means software (115 ms here).
+d2_f1225 in two passes: 126 units placed and 175 groups and runs left over in C and D, its background sprites all
+in 3D (the composite, which takes them out of the texture plan at 104 units, needs bank A or C, and the passes hold
+A and B). A composite with two passes needs a third bitmap bank, leaving D alone (128 KB) for the textures: not
+built; the scene stays in software (105 ms per VBlank).
