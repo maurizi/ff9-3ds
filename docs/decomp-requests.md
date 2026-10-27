@@ -796,3 +796,11 @@ linker, as other fixed RAM is) or one macro the port can redefine for all, so ne
 Since then (2026-10-26): `TM_IMAGE_FILE` and `TM_PRIM_BUF` (ovl_0d.h, both `0x80104A00`), used as numbers
 (`(void *)TM_IMAGE_FILE`, `ctx->unk8 * TM_PRIM_BUF_SIZE + TM_PRIM_BUF`): Tetra Master's image file read went to
 0x80104A00 and crashed the host on entering a card game. Redefined in the prelude too; the same ask covers them.
+
+### F35 (2026-10-27). fldmdl_drawMesh's OT index isn't clamped (annotation)
+`src_equiv/ovl_0a/model_link.c`: a quad's OT index is `(z0 + z1 + z2 + z3) >> 4` (up to 0x3FFF) and a triangle's
+AVSZ3's OTZ, used as `&ot[z]` with no clamp, as in the original asm. In d2_f1750 (walking about) a polygon lands
+past the field's OT; its link word (a KUSEG packet address) overwrites another ModelObj's model pointer, which the
+PS1 reads through its RAM mirror. The port leaves such a packet unlinked (counted patch, `PSX_OT_OUTSIDE`). Asked:
+a comment at the link saying the index can pass the table (and what lies after it), so the next reader doesn't take
+it for a port bug. No behaviour change.
