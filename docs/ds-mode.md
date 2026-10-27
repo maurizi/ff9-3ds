@@ -913,3 +913,6 @@ drawn again almost whole: 52 ms a redraw (fill 1.6, replay of 717 background spr
 the band hashes change with the sprite list. Tried, not taken: two passes instead of the composite for a moving
 background (no gain here: its textures don't fit C-D; Alexandria 53.6 -> 68.8, losing its composite and additive
 layer); the redraw's scaling in ARM (no gain: melonDS charges ARM fetches from main RAM as Thumb's).
+Tried, not taken: moving background layers (a slot whose sprites changed in two of the last four frames) kept out of
+the composite and its stillness: d4_f2110 27.9 -> 30.9, d2_f0955 34.3 -> 35.6, d4_f1706 34.1 -> 32.5 but its frame
+changed (blurred 4.4).
