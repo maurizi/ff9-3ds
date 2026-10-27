@@ -407,9 +407,14 @@ GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *
         i32 ir2 = try_ + (((m1 >> 16) * (i16)xy + (i16)m2 * (xy >> 16) + (m2 >> 16) * (i16)zw) >> 12);
         i32 mac3 = trz + (((i16)m3 * (i16)xy + (m3 >> 16) * (xy >> 16) + (i16)m4 * (i16)zw) >> 12);
 #endif
-        if (ir1 > 0x7FFF) ir1 = 0x7FFF; else if (ir1 < -0x8000) ir1 = -0x8000;
-        if (ir2 > 0x7FFF) ir2 = 0x7FFF; else if (ir2 < -0x8000) ir2 = -0x8000;
-        u32 sz3 = mac3 > 0xFFFF ? 0xFFFF : mac3 < 0 ? 0 : (u32)mac3;
+        /* (the saturations, rare, each range checked at once and done out of the loop's path) */
+        if (__builtin_expect(((u32)(ir1 + 0x8000) | (u32)(ir2 + 0x8000)) > 0xFFFF, 0)) {
+            __asm__ volatile(""); /* (a branch: GCC would otherwise select both clamps on every vertex) */
+            if (ir1 > 0x7FFF) ir1 = 0x7FFF; else if (ir1 < -0x8000) ir1 = -0x8000;
+            if (ir2 > 0x7FFF) ir2 = 0x7FFF; else if (ir2 < -0x8000) ir2 = -0x8000;
+        }
+        u32 sz3 = (u32)mac3;
+        if (__builtin_expect(sz3 > 0xFFFF, 0)) { __asm__ volatile(""); sz3 = mac3 < 0 ? 0 : 0xFFFF; }
         u32 div;
         if (h >= sz3 * 2) {
             div = 0x1FFFF;
@@ -423,8 +428,11 @@ GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *
             div = q > 0x1FFFF ? 0x1FFFF : (u32)q;
         }
         i32 sx = (i32)(((i64)ir1 * div + ofx) >> 16), sy = (i32)(((i64)ir2 * div + ofy) >> 16);
-        if (sx > 0x3FF) sx = 0x3FF; else if (sx < -0x400) sx = -0x400;
-        if (sy > 0x3FF) sy = 0x3FF; else if (sy < -0x400) sy = -0x400;
+        if (__builtin_expect(((u32)(sx + 0x400) | (u32)(sy + 0x400)) > 0x7FF, 0)) {
+            __asm__ volatile("");
+            if (sx > 0x3FF) sx = 0x3FF; else if (sx < -0x400) sx = -0x400;
+            if (sy > 0x3FF) sy = 0x3FF; else if (sy < -0x400) sy = -0x400;
+        }
         sxy[i] = (u32)sy << 16 | ((u32)sx & 0xFFFF);
         sz[i] = sz3;
     }

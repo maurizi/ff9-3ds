@@ -964,3 +964,7 @@ values to the stack per vertex. Three steps, ms per VBlank (d4_f2110, d2_f0955, 
   registers: -> 28.11, 25.96, 28.04 (identical frames).
 - port_native_mesh's uv table and size-tier counts in locals: -> 28.08, 25.93, 28.01 (within noise; identical frames).
   The per-polygon loops are now load-bound; what's left of the model pipeline's cost is the two passes themselves.
+- With fine buckets over the ITCM, d4_f2110's projection (`gte_rtpt_batch`, ~3,400 vertices a game frame) is 10.4% of
+  its samples (the 2 KB buckets had spread it over its neighbours). Its saturations as one range check per pair,
+  done in branches (an empty asm keeps GCC from selecting both clamps every vertex): 112 -> 81 instructions a vertex,
+  d4_f2110 26.95 -> 26.79, d2_f0955 33.41 -> 33.22, d1_f0453 29.08 -> 28.94 (identical frames).
