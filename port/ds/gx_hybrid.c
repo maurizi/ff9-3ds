@@ -3736,6 +3736,10 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
     const u32 *vw = c->fst->verts + fg->vert0, *front = c->fst->front;
     const int depth0 = fg->depth0, ofs_x = c->ofs_x, ofs_y = c->ofs_y;
     const u32 nverts = fg->verts;
+    /* (in locals: with -fno-strict-aliasing every store through wp would reload them from c and es) */
+    const int counting = c->count, zlo = c->zlo, zhi = c->zhi, nuses = c->fst->nuses;
+    u32 image = es->image, palette = es->palette, attr = es->attr;
+    int polys = es->polys, vertices = es->vertices, last_use = c->last_use;
     for (; count > 0; --count, src += mesh_size[t], pk += fm_size[t], ++pi) {
         u32 bits = front[pi >> 5] >> (pi & 31);
         if (!(bits & 1)) { /* (culled when taken: the run of them skipped at once) */
@@ -3745,34 +3749,36 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
             count -= skip; src += skip * mesh_size[t]; pk += skip * fm_size[t]; pi += skip;
             continue;
         }
-        if ((u32)*(const u16 *)src >= nverts || (u32)*(const u16 *)(src + 2) >= nverts ||
-            (u32)*(const u16 *)(src + 4) >= nverts || (quad && (u32)*(const u16 *)(src + 6) >= nverts)) continue;
+        /* the vertex indices once (two words: the records are word aligned), then their packed vertices */
+        const u32 i01 = *(const u32 *)src, i23 = *(const u32 *)(src + 4);
+        const u32 vi[4] = {i01 & 0xFFFF, i01 >> 16, i23 & 0xFFFF, quad ? i23 >> 16 : 0};
+        if (vi[0] >= nverts || vi[1] >= nverts || vi[2] >= nverts || (quad && vi[3] >= nverts)) continue;
+        u32 w[4] = {vw[vi[0]], vw[vi[1]], vw[vi[2]], quad ? vw[vi[3]] : 0};
         { /* (two passes: the polygon's depth, as its first vertex's below) */
-            int pz = depth0 - (int)(vw[*(const u16 *)src] >> 22) * 4;
-            if (c->count) { tp_note(pz, nv); continue; }
-            if (pz < c->zlo || pz >= c->zhi) continue;
+            int pz = depth0 - (int)(w[0] >> 22) * 4;
+            if (counting) { tp_note(pz, nv); continue; }
+            if (pz < zlo || pz >= zhi) continue;
         }
         if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
-        if (es->polys >= MAX_POLYS || es->vertices + nv > MAX_VERTICES) { gxh_stats_dropped++; continue; }
+        if (polys >= MAX_POLYS || vertices + nv > MAX_VERTICES) { gxh_stats_dropped++; continue; }
         u32 uv[4] = {0, 0, 0, 0}, *header = wp++, ids = 0;
         int shift = 0, tu = 0, tv = 0;
         if (textured) {
             for (int i = 0; i < nv; ++i) uv[i] = *(const u32 *)(pk + fm_xy_at[t][i] + 4);
             u32 key = uv[0] >> 16 | (uv[1] & 0xFFFF0000);
-            int u = c->last_use;
+            int u = last_use;
             if (c->key[u] != key) {
-                for (u = 0; u < c->fst->nuses && c->key[u] != key; ++u) {}
-                if (u == c->fst->nuses) { wp = header; gxh_stats_texture_fail++; continue; }
-                c->last_use = u;
+                for (u = 0; u < nuses && c->key[u] != key; ++u) {}
+                if (u == nuses) { wp = header; gxh_stats_texture_fail++; continue; }
+                last_use = u;
             }
-            if (!c->image[u]) { wp = header; gxh_stats_texture_fail++; continue; }
+            const u32 img = c->image[u], pal = c->palette[u];
+            if (!img) { wp = header; gxh_stats_texture_fail++; continue; }
             tu = c->tu[u]; tv = c->tv[u];
-            if (c->palette[u] != ~0u && c->palette[u] != es->palette) {
-                ids |= (u32)CMD_PLTTBASE << shift; shift += 8; *wp++ = es->palette = c->palette[u];
-            }
-            if (c->image[u] != es->image) { ids |= (u32)CMD_TEXIMAGE << shift; shift += 8; *wp++ = es->image = c->image[u]; }
+            if (pal != ~0u && pal != palette) { ids |= (u32)CMD_PLTTBASE << shift; shift += 8; *wp++ = palette = pal; }
+            if (img != image) { ids |= (u32)CMD_TEXIMAGE << shift; shift += 8; *wp++ = image = img; }
         }
-        if (es->attr != INITIAL_ATTR) { ids |= (u32)CMD_POLYATTR << shift; shift += 8; *wp++ = es->attr = INITIAL_ATTR; }
+        if (attr != INITIAL_ATTR) { ids |= (u32)CMD_POLYATTR << shift; shift += 8; *wp++ = attr = INITIAL_ATTR; }
         *header = ids | (u32)CMD_BEGIN << shift;
         *wp++ = quad ? 1 : 0;
         const int raw = pk[7] & 1;
@@ -3784,15 +3790,17 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
             } else *wp++ = textured ? CMD_TEXCOORD | CMD_VTX16 << 8 : CMD_VTX16;
             if (textured)
                 *wp++ = (u32)(u16)(((int)(uv[i] & 0xFF) - tu) * 16) | (u32)(u16)(((int)(uv[i] >> 8 & 0xFF) - tv) * 16) << 16;
-            u32 w = vw[*(const u16 *)(src + 2 * i)];
-            int x = (s32)(w << 21) >> 21, y = (s32)(w << 10) >> 21, z = depth0 - (int)(w >> 22) * 4;
+            const u32 wv = w[i];
+            int x = (s32)(wv << 21) >> 21, y = (s32)(wv << 10) >> 21, z = depth0 - (int)(wv >> 22) * 4;
             z = z < -32000 ? -32000 : z > 32000 ? 32000 : z;
             *wp++ = (u32)(u16)(x + ofs_x) | (u32)(u16)(y + ofs_y) << 16;
             *wp++ = (u32)(u16)z;
         }
-        es->polys++;
-        es->vertices += nv;
+        polys++;
+        vertices += nv;
     }
+    es->image = image; es->palette = palette; es->attr = attr; es->polys = polys; es->vertices = vertices;
+    c->last_use = last_use;
     return wp;
 }
 
