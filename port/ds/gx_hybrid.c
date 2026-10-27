@@ -4453,6 +4453,12 @@ void gxh_tp_tick(void) {
     while (dmaBusy(0)) {}
     tp_state = TP_P2_LISTED;
 }
+/* the second pass as soon as the first is on screen, before the game goes on (display.c, after gxh_present): the
+ * models' packets change with its next frame (texture animation), and the passes must see the same */
+void gxh_tp_finish(void) {
+    for (int n = 0; tp_state == TP_P1_LISTED && n < 4; ++n) swiWaitForVBlank();
+    gxh_tp_tick();
+}
 /* wait for the passes under way (a scene is about to be submitted over them) */
 static void tp_settle(void) {
     for (int n = 0; tp_state != TP_OFF && tp_state != TP_IDLE && n < 16; ++n) {
@@ -4723,11 +4729,7 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
         tp_zhi = 0x7FFFFFFF;
         while (dmaBusy(0)) {}
         tp_b = b; tp_display_h = display_h;
-        tp_state = TP_P1_LISTED;
-        /* the second pass as soon as the first is on screen, before the game goes on: the models' packets change
-         * with its next frame (texture animation), and the passes must see the same */
-        for (int n = 0; tp_state == TP_P1_LISTED && n < 4; ++n) swiWaitForVBlank();
-        gxh_tp_tick();
+        tp_state = TP_P1_LISTED; /* (the second pass: gxh_tp_finish, after the rest of the present) */
     }
     b->submitted = 1;
     port_profile_detail_end(PORT_PROFILE_UPLOAD, profile); /* reported as gx_texture_upload */

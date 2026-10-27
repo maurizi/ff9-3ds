@@ -271,6 +271,7 @@ void display_present(void) {
 #ifdef PORT_GX_HYBRID
     if (gxh_active()) {
         gxh_present(d, scale_region);
+        gxh_tp_finish();
         port_profile_end(PORT_PROFILE_SCALE,profile_scale);
         drawing = 0;
         pace();

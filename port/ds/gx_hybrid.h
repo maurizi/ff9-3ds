@@ -10,6 +10,7 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(unsigned short *dst, int
 /* a field scene in two 3D passes: the VBlank interrupt's part, and the second pass (at each present) */
 void gxh_vblank(void);
 void gxh_tp_tick(void);
+void gxh_tp_finish(void);
 extern int gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail, gxh_stats_palette_fail, gxh_stats_blocks;
 extern int gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced;
 #endif
