@@ -21,7 +21,8 @@ extern const u32 psx_fx_build_id __attribute__((weak)); /* the Makefile's (fxid.
 static FILE *pack;
 static u32 (*pack_index)[2], pack_count;
 static int pack_state;                /* 0 not opened yet, 1 usable, -1 not */
-static int loaded = -1;
+static int loaded[2] = {-1, -1}; /* each slot's module (its area: the bottom, or the top FX_SLOT2_SIZE bytes) */
+#define FX_SLOT2_SIZE 0x3000u /* (the Makefile's: the _1 modules are linked there) */
 
 static int open_pack(void) {
     if (pack_state) return pack_state > 0;
@@ -50,30 +51,42 @@ void port_fxmod_forget(void); /* effect_native.c */
 /* port/psx/mem.c: PS1 RAM [off, off + len) was overwritten (an overlay landing): a module there is gone */
 void port_fx_area_overwritten(unsigned int off, unsigned int len) {
     u32 at = (u32)(psx_fx_area - psx_ram);
-    if (loaded >= 0 && off < at + AREA_SIZE && at < off + len) {
-        loaded = -1;
+    if ((loaded[0] >= 0 || loaded[1] >= 0) && off < at + AREA_SIZE && at < off + len) {
+        loaded[0] = loaded[1] = -1;
         port_fxmod_forget();
     }
 }
 
 /* Module `index` in psx_fx_area (read unless it is already there), or NULL. Its header: magic, the zero-filled
  * range, then what effect_native.c uses. */
-const void *port_fx_pack_load(unsigned int index) {
+const void *port_fx_pack_load(unsigned int index, int slot) {
     if (!open_pack() || index >= pack_count) return NULL;
-    const u32 *h = (const u32 *)psx_fx_area;
-    if ((int)index == loaded) return h;
-    loaded = -1;
+    u8 *const at = psx_fx_area + (slot ? AREA_SIZE - FX_SLOT2_SIZE : 0);
+    const u32 room = slot ? FX_SLOT2_SIZE : AREA_SIZE;
+    const u32 *h = (const u32 *)at;
+    if ((int)index == loaded[slot]) return h;
+    loaded[slot] = -1;
     u32 offset = pack_index[index][0], size = pack_index[index][1];
-    if (size > AREA_SIZE || fseek(pack, (long)offset, SEEK_SET) != 0 ||
-        fread(psx_fx_area, 1, size, pack) != size || h[0] != FX_HEAD_MAGIC || h[2] < h[1] ||
-        h[1] < (u32)(uintptr_t)psx_fx_area || h[2] > (u32)(uintptr_t)(psx_fx_area + AREA_SIZE)) {
+    if (size > room || fseek(pack, (long)offset, SEEK_SET) != 0 ||
+        fread(at, 1, size, pack) != size || h[0] != FX_HEAD_MAGIC || h[2] < h[1] ||
+        h[1] < (u32)(uintptr_t)at || h[2] > (u32)(uintptr_t)(at + room)) {
         port_log("effect modules: module %u unreadable\n", index);
         return NULL;
     }
     memset((void *)(uintptr_t)h[1], 0, h[2] - h[1]);
+    /* the other slot's module, if this one reached into its part of the area */
+    if (!slot && h[2] > (u32)(uintptr_t)(psx_fx_area + AREA_SIZE - FX_SLOT2_SIZE) && loaded[1] >= 0) {
+        loaded[1] = -1;
+        port_fxmod_forget();
+    }
+    if (slot && loaded[0] >= 0 && *(const u32 *)psx_fx_area == FX_HEAD_MAGIC &&
+        ((const u32 *)psx_fx_area)[2] > (u32)(uintptr_t)at) {
+        loaded[0] = -1;
+        port_fxmod_forget();
+    }
     /* new code: out of the data cache, then a fresh instruction cache */
     DC_FlushRange(psx_fx_area, AREA_SIZE);
     IC_InvalidateAll();
-    loaded = (int)index;
+    loaded[slot] = (int)index;
     return h;
 }

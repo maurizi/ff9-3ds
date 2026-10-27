@@ -873,3 +873,19 @@ Textures that don't fit (software still): d4_f2902 places 118 of 255 units with 
 and a few small converted (subtractive) groups fail each frame: the background runs' rows, not the units, are what
 run out (to be looked into). d2_f1225 fits B-D with its composite and additive layer (104 units) but not C-D alone
 when it is past the 3D engine's RAM, so its two-pass frames go software.
+
+### Loads in PS1 time: tried, not taken yet (2026-10-27)
+
+A loader's poll delivered a sector at once, so a load took no virtual time: no VBlank, no AKAO tick passed through
+it (sound stops during loads, and d1_f0310's battle sound effect still played from its data when the field's
+overwrote it). Letting a run of 512 polls stand for a frame (as VSync(-1) busy-waits already do) and the sectors
+come at the drive's rate fixed d1_f0310 on the host, and the host wander sweeps found three more problems through the
+new timing (fixed: below), but every DS field load then crashed: frames now pass while a field streams data, and
+the DS's native field models (port_native_field_mesh, a stub on the host) read groups half overwritten, writing
+through a NULL pointer into the ITCM's mirror at 0. Reverted until the native path survives data changing under it.
+
+Found through it and kept:
+- Effects with two modules: the second loads at 0x801EC700 (btlfx_pool.c, d->unk10; the _1 builds). Calls into it
+  had no native function (only the first slot was identified). Now each slot is identified on its own; on the DS
+  the _1 modules link at the top 12 KB of psx_fx_area (FX_SLOT2_SIZE), the others at its bottom (at most 14.3 KB).
+- NULL reads: btl_clearCmdQueue with no current command (d1_f0761), fx_0fb_1's rocks testing a target not yet set.

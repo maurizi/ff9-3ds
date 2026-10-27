@@ -417,15 +417,20 @@ ds: $(BUILD)/ff9ds.nds $(BUILD)/fxmods.bin $(BUILD)/ovls.bin
 # Effect modules on the DS: each is linked on its own at psx_fx_area against the main executable's symbols, and
 # the pack (fxmods.bin, derived from game data: never commit it) goes next to the disc images in ff9ds/; the
 # build copies it into the test SD folders (build/sdroot*/ff9ds/) that exist.
+# a second module's (the _1 builds, PS1 slot 0x801EC700, alongside a first's when an effect uses two): the top of
+# psx_fx_area (port/ds/fx_pack.c FX_SLOT2_SIZE)
+FX_SLOT2_SIZE := 0x3000
 fx_objs_of = $(addprefix $(BUILD)/ds/nsobj/,$(addsuffix .o,$(call fx_srcs_of,$(1)))) \
              $(BUILD)/ds/gen/img_$(1).o $(BUILD)/ds/gen/fxhead_$(1).o
 .SECONDEXPANSION:
 $(BUILD)/ds/fx/%.elf: $$(call fx_objs_of,%) $(BUILD)/ds/ff9ds.elf port/ds/fxmod.ld
 	@mkdir -p $(dir $@)
 	@set -e; area=$$(arm-none-eabi-nm $(BUILD)/ds/ff9ds.elf | awk '$$3 == "psx_fx_area" {a = "0x" $$1} $$3 == "psx_fx_area_size" {s = "0x" $$1} END {print a, s}'); \
+	base=$$(echo $$area | cut -d' ' -f1); size=$$(echo $$area | cut -d' ' -f2); \
+	case $* in *_1) base=$$(printf '0x%x' $$(( base + size - $(FX_SLOT2_SIZE) ))); size=$(FX_SLOT2_SIZE);; esac; \
 	arm-none-eabi-gcc $(DS_ARCH) -nostdlib -nostartfiles -o $@ $(call fx_objs_of,$*) $(GEN)/psx_syms.ld \
-		-Wl,--just-symbols=$(BUILD)/ds/ff9ds.elf -Wl,--defsym=FX_BASE=$$(echo $$area | cut -d' ' -f1) \
-		-Wl,--defsym=FX_SIZE=$$(echo $$area | cut -d' ' -f2) -T port/ds/fxmod.ld -Wl,--gc-sections
+		-Wl,--just-symbols=$(BUILD)/ds/ff9ds.elf -Wl,--defsym=FX_BASE=$$base \
+		-Wl,--defsym=FX_SIZE=$$size -T port/ds/fxmod.ld -Wl,--gc-sections
 # The code overlays' native code, kept out of the executable's load segments (gen_link.py psx_ovl_areas.ld) and
 # read by port/ds/ovl_pack.c when the game loads an overlay; like fxmods.bin, it goes next to the disc images.
 $(BUILD)/ovls.bin: $(BUILD)/ds/ff9ds.elf tools/pack_overlays.py

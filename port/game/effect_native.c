@@ -26,7 +26,7 @@ typedef struct {
     u32 nfuncs;
     u32 funcs[];                      /* (PS1 address, native address) pairs */
 } FxHead;
-const void *port_fx_pack_load(unsigned int index); /* port/ds/fx_pack.c */
+const void *port_fx_pack_load(unsigned int index, int slot); /* port/ds/fx_pack.c */
 #else
 typedef struct {
     u32 vram, text_lo, text_hi, hash; /* code range [text_lo, text_hi), FNV-1a of its bytes */
@@ -37,16 +37,20 @@ typedef struct {
 #endif
 extern const PsxFxmod psx_fxmods[];
 
-static const u32 *current_funcs;      /* the identified module's (PS1, native) pairs, or NULL */
-static u32 current_nfuncs;
-static u32 seen[4]; /* the words that tell the slot changed: header pointer and three code words */
+/* the two module slots (a second module loads at 0x801EC700 when an effect uses two: btlfx_pool.c's d->unk10):
+ * each its identified module's (PS1, native) pairs or NULL, and the words that tell it changed (header pointer and
+ * three code words) */
+#define SLOT2 0x801EC700u
+static const u32 slot_vram[2] = {SLOT, SLOT2};
+static const u32 *current_funcs[2];
+static u32 current_nfuncs[2];
+static u32 seen[2][4];
 
 static u32 at(u32 vram) { return *(const u32 *)PSX_ADDR(vram); }
 
 /* port/ds/fx_pack.c: the loaded module's code was overwritten; identify the slot's module again on the next call */
 void port_fxmod_forget(void) {
-    current_funcs = NULL;
-    seen[0] = ~at(SLOT);
+    for (int k = 0; k < 2; ++k) { current_funcs[k] = NULL; seen[k][0] = ~at(slot_vram[k]); }
 }
 
 static int matches(const PsxFxmod *m) {
@@ -65,25 +69,34 @@ static void relocate(const u32 *relocs) {
     }
 }
 
-/* The native function for a call into the module slot at PS1 address `target`, or 0 (none: effect_bridge.c stops). */
-u32 port_fxmod_native(u32 target) {
-    u32 now[4] = {at(SLOT), at(SLOT + 4), at(SLOT + 0x100), at(SLOT + 0x400)};
-    if (now[0] != seen[0] || now[1] != seen[1] || now[2] != seen[2] || now[3] != seen[3]) {
-        current_funcs = NULL;
-        for (const PsxFxmod *m = psx_fxmods; m->vram; ++m)
-            if (m->vram == SLOT && matches(m)) {
+/* slot k's module identified (relocated, its native code loaded) if it changed since */
+static void identify(int k) {
+    const u32 v = slot_vram[k];
+    u32 now[4] = {at(v), at(v + 4), at(v + 0x100), at(v + 0x400)};
+    if (now[0] == seen[k][0] && now[1] == seen[k][1] && now[2] == seen[k][2] && now[3] == seen[k][3]) return;
+    current_funcs[k] = NULL;
+    for (const PsxFxmod *m = psx_fxmods; m->vram; ++m)
+        if (m->vram == v && matches(m)) {
 #ifdef __arm__
-                const FxHead *h = port_fx_pack_load(m->index);
-                if (h) { relocate(h->relocs); current_funcs = h->funcs; current_nfuncs = h->nfuncs; }
+            const FxHead *h = port_fx_pack_load(m->index, k);
+            if (h) { relocate(h->relocs); current_funcs[k] = h->funcs; current_nfuncs[k] = h->nfuncs; }
 #else
-                relocate(m->relocs); current_funcs = m->funcs; current_nfuncs = m->nfuncs;
+            relocate(m->relocs); current_funcs[k] = m->funcs; current_nfuncs[k] = m->nfuncs;
 #endif
-                break;
-            }
-        seen[0] = at(SLOT); seen[1] = at(SLOT + 4); seen[2] = at(SLOT + 0x100); seen[3] = at(SLOT + 0x400);
+            break;
+        }
+    /* (unidentified: asked again at the next call, as a module still loading leaves these words as they will stay) */
+    if (current_funcs[k]) for (int i = 0; i < 4; ++i) seen[k][i] = now[i];
+}
+
+/* The native function for a call into a module slot at PS1 address `target`, or 0 (none: effect_bridge.c stops). */
+u32 port_fxmod_native(u32 target) {
+    for (int k = target >= SLOT2 ? 1 : 0; k >= 0; --k) { /* (the second slot's range is the first's tail otherwise) */
+        identify(k);
+        const u32 *f = current_funcs[k];
+        if (!f) continue;
+        for (u32 i = 0; i < current_nfuncs[k]; ++i)
+            if (f[2 * i] == target) return f[2 * i + 1];
     }
-    if (!current_funcs) return 0;
-    for (u32 i = 0; i < current_nfuncs; ++i)
-        if (current_funcs[2 * i] == target) return current_funcs[2 * i + 1];
     return 0;
 }
