@@ -986,3 +986,7 @@ First steps on the per-sprite cost: target() checks a version the game's PutDraw
 lookups (two calls and nine compares a primitive), and field_sprite makes its record's twelve words in registers.
 d4_f2110 26.79 -> 26.39, d2_f0955 33.22 -> 32.91, d1_f0453 28.94 -> 28.60, d2_b0300 28.08 -> 27.64 (identical
 frames). The larger step is not recording a still composite's sprites at all.
+- emit_scene's opaque-sprite path reads a sprite's record as its words (corners and texel edges from x0 x1, y0 y1,
+  u0 u1, v0 v1; any other layout vertex by vertex as before): d4_f2110 26.33, d2_f0955 32.69, d1_f0453 28.48
+  (identical frames). d2_f0955's moving background: emit_scene outside the models 4.8 ms a VBlank for ~420 sprites,
+  plan_textures 1.9.

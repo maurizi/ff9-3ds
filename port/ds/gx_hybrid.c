@@ -2830,12 +2830,17 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             grp = prim_group[kk]; pal = prim_palette[kk];
             if ((src->flags & (P_RECT | P_TEXTURED | P_SEMI | P_GOURAUD | P_UI | P_TWIN)) == (P_RECT | P_TEXTURED) && src->n == 4) {
                 /* An opaque textured sprite (a field's background tiles): the general path's words, without its
-                 * blending cases. Its fields are read first: stores through wp would reload them. */
-                int depth = src->depth, u0 = src->u[0], v0 = src->v[0], tu, tv;
+                 * blending cases. Its fields are read first, as words: stores through wp would reload them. */
+                const u32 *sw = (const u32 *)src;
+                const u32 sw1 = sw[1], sw2 = sw[2], sx = sw[3], sy0 = sw[5], sy1 = sw[6], su = sw[10], sv = sw[11];
+                /* (a sprite's record: x0 x1 x0 x1, y0 y0 y1 y1, u0 u1 u0 u1, v0 v0 v1 v1; else vertex by vertex) */
+                const int paired = sx == sw[4] && sy0 >> 16 == (sy0 & 0xFFFF) && sy1 >> 16 == (sy1 & 0xFFFF) &&
+                                   su >> 16 == (su & 0xFFFF) && (sv & 0xFF) == (sv >> 8 & 0xFF) && (sv >> 16 & 0xFF) == sv >> 24;
+                const int tx = (int)(sw1 & 0xFFFF), ty = (int)(sw1 >> 16), cx = (int)(sw2 & 0xFFFF), cy = (int)(sw2 >> 16);
+                int depth = src->depth, u0 = (int)(su & 0xFF), v0 = (int)(sv & 0xFF), tu, tv;
                 u32 unit, size_bits;
                 if (grp == RUN_GROUP) {
-                    const Run *r = run_holding(STRIP_KEY(depth, 0, src->tx, src->ty, src->clut_x, src->clut_y, v0 >> 4),
-                                               u0 >> 4, src->u[1] >> 4);
+                    const Run *r = run_holding(STRIP_KEY(depth, 0, tx, ty, cx, cy, v0 >> 4), u0 >> 4, (int)(su >> 8 & 0xFF) >> 4);
                     if (!r) { gxh_stats_texture_fail++; continue; }
                     unit = rows[r->row].unit; size_bits = RUN_SIZE_BITS;
                     tu = (r->bu - r->slot) * 16;
@@ -2845,8 +2850,8 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                     if (!r) { gxh_stats_texture_fail++; continue; }
                     if (r->conv) goto general;
                     unit = r->unit; size_bits = r->size_bits;
-                    tu = (r->x - src->tx) * texels_per_halfword(depth);
-                    tv = r->y - src->ty;
+                    tu = (r->x - tx) * texels_per_halfword(depth);
+                    tv = r->y - ty;
                 }
                 u32 want_image = (u32)(unit * TEX_UNIT / 8) | size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
                 u32 set_palette = ~0u;
@@ -2859,14 +2864,22 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 u32 colour;
                 if (src->flags & P_RAW) colour = 0x7FFF;
                 else {
-                    colour = TEX_TINT(src->r[0]) | TEX_TINT(src->g[0]) << 5 | TEX_TINT(src->b[0]) << 10;
+                    colour = TEX_TINT(sw[7] & 0xFF) | TEX_TINT(sw[8] & 0xFF) << 5 | TEX_TINT(sw[9] & 0xFF) << 10;
                 }
                 u32 xy[4], uv[4];
-                static const u8 order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
-                for (int j = 0; j < 4; ++j) {
-                    int i = order[j];
-                    xy[j] = (u32)(u16)src->x[i] | (u32)(u16)src->y[i] << 16;
-                    uv[j] = (u32)(u16)((src->u[i] - tu + (i & 1)) * 16) | (u32)(u16)((src->v[i] - tv + (i >> 1)) * 16) << 16;
+                if (paired) { /* the DS quad's corners 0, 1, 3, 2 (PS1 quad 0,1,2 + 1,2,3), the right and bottom one on */
+                    const u32 x0 = sx & 0xFFFF, x1 = sx >> 16, y0 = sy0 << 16, y1 = sy1 << 16;
+                    const u32 ul = (u16)((u0 - tu) * 16), ur = (u16)(((int)(su >> 8 & 0xFF) - tu + 1) * 16);
+                    const u32 vt = (u32)(u16)((v0 - tv) * 16) << 16, vb = (u32)(u16)(((int)(sv >> 16 & 0xFF) - tv + 1) * 16) << 16;
+                    xy[0] = x0 | y0; xy[1] = x1 | y0; xy[2] = x1 | y1; xy[3] = x0 | y1;
+                    uv[0] = ul | vt; uv[1] = ur | vt; uv[2] = ur | vb; uv[3] = ul | vb;
+                } else {
+                    static const u8 order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
+                    for (int j = 0; j < 4; ++j) {
+                        int i = order[j];
+                        xy[j] = (u32)(u16)src->x[i] | (u32)(u16)src->y[i] << 16;
+                        uv[j] = (u32)(u16)((src->u[i] - tu + (i & 1)) * 16) | (u32)(u16)((src->v[i] - tv + (i >> 1)) * 16) << 16;
+                    }
                 }
                 pack_begin();
                 if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); palette = set_palette; }
