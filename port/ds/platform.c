@@ -115,6 +115,18 @@ void plat_wait_frame(void) {
     port_pc_frame = (u32)frames;
 #endif
     port_profile_frame(g_gameState ? g_gameState[8] : ~0u,(unsigned int)frames);
+#ifdef PORT_PROFILE
+    { /* each published block's time per PS1 VBlank, on screen (timing on hardware: PS1 speed is 16.67) */
+        extern volatile unsigned int port_profile_stats[16];
+        static unsigned int shown;
+        if (port_profile_stats[15] == 0x50524631 && port_profile_stats[0] && port_profile_stats[2] != shown) {
+            shown = port_profile_stats[2];
+            unsigned int us = (unsigned int)((unsigned long long)port_profile_stats[4] * 1000000u /
+                                             port_profile_stats[1] / port_profile_stats[0]);
+            status_row(15, "ms/vblank %u.%02u at f%u", us / 1000, us % 1000 / 10, shown);
+        }
+    }
+#endif
 #ifdef PORT_CAPTURE_FRAME
     if(frames==PORT_CAPTURE_FRAME) {
 #ifdef PORT_CAPTURE_READBACK
