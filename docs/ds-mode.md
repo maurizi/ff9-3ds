@@ -865,3 +865,11 @@ d1_f0574 112.4 -> 83.6 ms per VBlank (blurred difference from the software frame
 d1_f0576 107.5 -> 66.7. Not helped: d2_f1225 (textures past C and D), d4_f2902 (textures past B-D: no two-pass
 needed by polygons), and the slow fields that are slow for other reasons. 5,000 frames of walking from d1_f0574
 on the DS leave the mode for the next field without a fault.
+The split from one pass over the polygons (the depth range from bounds: slots and each model group's far and near
+depths) and the second pass after the rest of the present (the UI layer's work overlaps the first's swap):
+d1_f0574 -> 79.6, d1_f0576 -> 58.9 ms per VBlank, frames identical.
+
+Textures that don't fit (software still): d4_f2902 places 118 of 255 units with bank A free, yet a background run
+and a few small converted (subtractive) groups fail each frame: the background runs' rows, not the units, are what
+run out (to be looked into). d2_f1225 fits B-D with its composite and additive layer (104 units) but not C-D alone
+when it is past the 3D engine's RAM, so its two-pass frames go software.
