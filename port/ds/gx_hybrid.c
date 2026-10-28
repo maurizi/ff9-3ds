@@ -2942,8 +2942,21 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     NativeWalk nw = {-1, NO_REF, 0, 0};
     if (with_meshes && collect_native(b)) nw.ne = 0x100F;
     int runs_sent = !b->bg_runs || !ovl0a_resident();
+    /* depth-tested scenes without meshes: the primitives to draw listed once, the opaque ones from the last then the
+     * translucent ones in order (the loop below would visit each of them twice, and those of the composite too), in
+     * the buffer's free rows after them */
+    u16 *order = NULL;
+    int norder = 0, nopaque = b->count;
+    if (b->slots && !with_meshes && (prims_cap(b) - b->count) * (int)sizeof(Prim) >= 2 * b->count) {
+        order = (u16 *)&b->prims[b->count];
+        for (int kk = b->count - 1; kk >= 0; --kk)
+            if (prim_layer[kk] == L_3D && !(b->prims[kk].flags & P_SEMI)) order[norder++] = (u16)kk;
+        nopaque = norder;
+        for (int kk = 0; kk < b->count; ++kk)
+            if (prim_layer[kk] == L_3D && (b->prims[kk].flags & P_SEMI)) order[norder++] = (u16)kk;
+    }
     for (int k = 0;;) {
-        if (!runs_sent && k >= b->count) { /* the background runs: after the opaque pass, before the translucent */
+        if (!runs_sent && k >= nopaque) { /* the background runs: after the opaque pass, before the translucent */
             runs_sent = 1;
             EmitState es = {wp, attr, image, palette, polys, vertices};
             emit_bg_runs(b, &es);
@@ -2967,9 +2980,10 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             if (!native_poly(b, r, &local.p, &grp, &pal)) continue; /* a native polygon, in OT order */
             native = 1;
             z = Z_STEP * ++nw.zc;
-        } else if (k < (b->slots ? 2 * b->count : b->count)) {
+        } else if (order ? k < norder : k < (b->slots ? 2 * b->count : b->count)) {
             int kk = k++;
-            if (b->slots) {
+            if (order) kk = order[kk];
+            else if (b->slots) {
                 /* The world map: the opaque primitives first, from the last, at their OT entries' depths (the depth
                  * test keeps the first of equal depths: the PS1's topmost, however many share an entry), then the
                  * translucent ones in the walk's order, just in front of their entries (the 3D engine draws them
