@@ -62,6 +62,9 @@ DECOMP_CFLAGS := -std=gnu89 -fpermissive -O2 -g -fsigned-char -fno-strict-aliasi
                  $(addprefix -I,$(wildcard $(DECOMP)/src_equiv/*/)) # their "../src_equiv.h" resolves from here
 # On the DS the battle overlay is optimized for size: it alone sets the size of the code overlay slot (ds-mode.md)
 DECOMP_OPT_ds_ovl_0b := -Os
+# and the field overlay too: its code and the renderer's field code share slot 0 with the second scene buffer (gen_link's
+# assert); -Os takes 7 KB off at no measured cost (the game's field code is a few % of a field frame)
+DECOMP_OPT_ds_ovl_0a := -Os
 # DS mode: the overlays' own GTE sequences take gte.h's approximate paths too (bone matrices, rotations: a call each,
 # no larger than gte_cmd's); decomp-config rebuilds them when DSMODE changes
 DECOMP_GTE_BINS := ovl_0a ovl_0b ovl_0c
