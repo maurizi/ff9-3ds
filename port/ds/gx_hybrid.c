@@ -4855,7 +4855,9 @@ static void tp_note(int z, int nv) {
         if (z > tp_hi) tp_hi = z;
         return;
     }
-    int k = (int)((long long)(z - tp_lo) * 256 / (tp_hi - tp_lo + 1));
+    const int range = tp_hi - tp_lo + 1; /* (32 bits when they fit: Thumb's 64-bit division is a library call) */
+    int k = (unsigned)range < (1u << 23) && (unsigned)(z - tp_lo) < (1u << 23) ? (z - tp_lo) * 256 / range
+                                                                               : (int)((long long)(z - tp_lo) * 256 / range);
     k = k < 0 ? 0 : k > 255 ? 255 : k; /* (a vertex past its group's bounds: clamped as emit_scene does) */
     tp_hp[k]++; tp_hv[k] += (u16)nv;
 }
