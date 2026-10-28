@@ -3696,7 +3696,7 @@ PORT_OVERLAY_CODE(0a) static int bg_tile_prim(const Buffer *b, const BgRun *r, c
  * that holds still, which field_bg.c leaves linked a while) */
 /* field_frame: runs only in a field whose scenes have kept well inside the 3D engine's polygons (their tiles are quads
  * of their own where recorded sprites merge, and stay out of the composite): off at a field's start, on after
- * BG_RUNS_CALM scenes under BG_RUNS_ON, off for the field past BG_RUNS_OFF */
+ * BG_RUNS_CALM scenes under BG_RUNS_ON, off for the field past BG_RUNS_OFF or once the composite holds a scene */
 #define BG_RUNS_ON 1500
 #define BG_RUNS_OFF 1700
 #define BG_RUNS_CALM 8
@@ -4905,6 +4905,8 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         }
         int composite = tp_state == TP_OFF && bgc_keep && (!adds || bgc_texmode) && bgc_use(b, fst, display_h, &polys, &vertices);
         bgc_quad = composite && bgc_texmode;
+        /* (a scene the composite holds is one the runs would only take from it: none for the field) */
+        if (composite) { bg_runs_off = 1; bg_runs_latched = 1; }
         /* the 3D engine's polygon and vertex RAM (2048, 6144 a frame): a scene past them goes in two passes (tp_*),
          * without the composite or the additive layer (banks A and B are the passes'); else exact in software */
         int over_now = polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES, two = 0;
