@@ -3693,8 +3693,16 @@ PORT_OVERLAY_CODE(0a) static int bg_tile_prim(const Buffer *b, const BgRun *r, c
 
 /* field_bg.c's walk at a run of a background layer's tiles at one OT entry: taken whole (1) if the scene is the
  * hybrid's and every tile is an opaque one hybrid_rect would record as a quad; else (0) drawn tile by tile */
+static int bg_runs_off; /* field_frame: a scene past the 3D engine's polygons with runs: none for the field */
+/* per buffer, the runs it met lately (by first tile): their tiles' positions' hash and how many scenes that held. A
+ * run that holds still is left to the sprites' path: recorded, for the composite (which keeps a still background,
+ * and would see it change each time a run went from one form to the other) */
+#define BG_SEEN 32
+#define BG_STILL_SCENES 8
+static struct { uintptr_t head; u32 hash; u8 still; } bg_seen[2][BG_SEEN] __attribute__((section(".psxovl_0a.data")));
+void gxh_bg_runs_reset(void) { bg_runs_off = 0; } /* (field_bg.c: another field's background) */
 PORT_OVERLAY_CODE(0a) int gxh_bg_run(unsigned int *head, int count) {
-    if (!active || !place->field || gp0_backend != &hybrid_backend) return 0;
+    if (!active || !place->field || gp0_backend != &hybrid_backend || bg_runs_off) return 0;
     if (gp0_state.twin_mask_x || gp0_state.twin_mask_y || gp0_state.set_mask || gp0_state.check_mask) return 0;
     Buffer *shown, *b = target(&shown);
     if (!b || b == shown || b->soft || !b->slots || b->bg_runs == BG_RUNS ||
@@ -3706,7 +3714,7 @@ PORT_OVERLAY_CODE(0a) int gxh_bg_run(unsigned int *head, int count) {
     r->ax1 = (s16)gp0_state.area_x1; r->ay1 = (s16)gp0_state.area_y1;
     int x0 = 0x7FFF, y0 = 0x7FFF, x1 = -0x8000, y1 = -0x8000;
     uintptr_t lo = ~(uintptr_t)0, hi = 0;
-    u32 tp = 0;
+    u32 tp = 0, hash = 2166136261u;
     const u32 *p = (const u32 *)head;
     for (int i = 0; i < count; ++i, p = bg_next(p)) {
         /* (MargePrim's: tpage, a NOP tag, SPRT_16 opaque; not the UI pages (14, 15 of the lower row); no wrap) */
@@ -3722,6 +3730,18 @@ PORT_OVERLAY_CODE(0a) int gxh_bg_run(unsigned int *head, int count) {
         if (y + 16 > y1) y1 = y + 16;
         if ((uintptr_t)p < lo) lo = (uintptr_t)p;
         if ((uintptr_t)p + 24 > hi) hi = (uintptr_t)p + 24;
+        hash = (hash ^ p[4] ^ r->ox ^ (u32)r->oy << 16) * 16777619u;
+    }
+    { /* (still a while: the sprites' path) */
+        const int bi = (int)(b - buffers);
+        int s = 0, free_s = -1;
+        for (; s < BG_SEEN && bg_seen[bi][s].head != (uintptr_t)head; ++s)
+            if (free_s < 0 && !bg_seen[bi][s].head) free_s = s;
+        if (s == BG_SEEN) s = free_s >= 0 ? free_s : (int)((uintptr_t)head >> 3) % BG_SEEN;
+        if (bg_seen[bi][s].head != (uintptr_t)head || bg_seen[bi][s].hash != hash) {
+            bg_seen[bi][s].head = (uintptr_t)head; bg_seen[bi][s].hash = hash; bg_seen[bi][s].still = 0;
+        } else if (bg_seen[bi][s].still < BG_STILL_SCENES) bg_seen[bi][s].still++;
+        if (bg_seen[bi][s].still >= BG_STILL_SCENES) return 0;
     }
     p = (const u32 *)head;
     for (int i = 0; i < count; ++i, p = bg_next(p)) {
@@ -4202,6 +4222,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
 
 static void use_place(const Place *p) {
     place = p;
+    bg_runs_off = 0;
     for (int i = 0; i < 2; ++i) buffers[i].bg_runs = buffers[i].bg_run_tiles = 0;
     { extern const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi; psx_ot_marker_lo = psx_ot_marker_hi = NULL; }
     for (int i = 0; i < 2; ++i) buffers[i].prims = (Prim *)(psx_ram + p->at + p->prims_at[i]);
@@ -4826,6 +4847,9 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
             if (prim_layer[k] == L_ADD) { adds++; add_area2 += prim_area2(p); }
         }
         polys += b->bg_run_tiles; vertices += 4 * b->bg_run_tiles; /* (the background runs: quads in the 3D scene) */
+        /* (runs are quads of their own where the recorded sprites merge, and stay out of the composite: a scene past
+         * the 3D engine's polygons with them takes none for the rest of the field) */
+        if (b->bg_runs && (polys > MAX_POLYS || vertices > MAX_VERTICES)) bg_runs_off = 1;
         FStore *fst = scene_models(b); /* the native models (those facing the camera) */
         if (fst) { polys += fst->front_polys; vertices += fst->front_verts; } /* (its uses: taken with it) */
         /* the exact layer costs software drawing in proportion to the additive primitives' area (a sixth of the

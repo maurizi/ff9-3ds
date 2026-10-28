@@ -19,6 +19,7 @@ s32 o0a_fldbg_draw(void);
 extern const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi;
 /* gx_hybrid.c: the run's tiles taken by the renderer (0: drawn as packets, one by one) */
 int gxh_bg_run(unsigned int *head, int count);
+void gxh_bg_runs_reset(void);
 
 /* a run of one layer's tiles linked at one OT entry: its first (the walk's first: the newest linked) and how many */
 typedef struct { u32 tag; u32 *head; u16 count, entry; } BgMarker;
@@ -28,14 +29,6 @@ typedef struct { u32 tag; u32 *head; u16 count, entry; } BgMarker;
 #define BG_DATA __attribute__((section(".psxovl_0a.data")))
 static BgMarker bg_markers[2][BG_MARKERS] BG_DATA;
 static int bg_marker_count[2] BG_DATA;
-
-/* per layer (by index): where it was drawn last, and how many frames since that changed. Only a moving layer's
- * runs are lifted: a still one's tiles stay recorded one by one, for the composite (gx_hybrid.c bgc_use), which
- * holds a still background and would otherwise see it change each time a layer went from one form to the other. */
-#define BG_LAYERS 64
-#define BG_STILL_FRAMES 8
-static u32 bg_layer_at[BG_LAYERS] BG_DATA;
-static u8 bg_layer_still[BG_LAYERS] BG_DATA;
 
 static inline u32 *bg_link(u32 word) { return (u32 *)(((u32)(uintptr_t)bg_markers & 0xFF000000) | (word & 0xFFFFFF)); }
 
@@ -58,18 +51,7 @@ PORT_OVERLAY_CODE(0a) static void bg_lift_entry(u32 *ot, int d, uintptr_t first,
 
 /* one layer drawn this frame: its runs at the OT entries its tiles take (the game's z + the tile's), each entry
  * once in a row (consecutive tiles mostly share one; an entry met again finds its run already lifted) */
-PORT_OVERLAY_CODE(0a) static void bg_lift(int j, const BgOverlay *o, const BgFile *h, u32 *ot, int buf) {
-    if (j < BG_LAYERS) { /* (what places its tiles: the layer's and the screen's position, its scroll, its viewport's) */
-        const s16 *vp = g_fieldBgState.viewportPos[o->viewport & 3];
-        u32 at = (u32)(u16)(o->x + h->screenX) | (u32)(u16)(o->y + h->screenY) << 16;
-        at = at * 31u ^ (u32)(u16)o->scrollX ^ (u32)(u16)o->scrollY << 16;
-        at = at * 31u ^ (u32)(u16)o->fracX ^ (u32)(u16)o->fracY << 16;
-        at = at * 31u ^ (u32)(u16)vp[0] ^ (u32)(u16)vp[1] << 16;
-        at = at * 31u ^ (u32)(u16)g_fieldBgState.scroll.unk0 ^ (u32)(u16)g_fieldBgState.scroll.unk2 << 16;
-        if (at != bg_layer_at[j]) { bg_layer_at[j] = at; bg_layer_still[j] = 0; }
-        else if (bg_layer_still[j] < BG_STILL_FRAMES) bg_layer_still[j]++;
-        if (bg_layer_still[j] >= BG_STILL_FRAMES) return; /* (still: recorded, for the composite) */
-    }
+PORT_OVERLAY_CODE(0a) static void bg_lift(const BgOverlay *o, const BgFile *h, u32 *ot, int buf) {
     const BgSprt *spr = o->sprites;
     const u32 n = o->tileCount;
     if (buf != 0) spr += n;
@@ -105,10 +87,14 @@ PORT_OVERLAY_CODE(0a) s32 o0a_fldbg_draw(void) {
     const int buf = *g_fieldBgCtx.bufIndex;
     bg_marker_count[buf] = 0;
     BgFile *h = g_fieldBgCtx.data;
+    static u32 last_h BG_DATA; /* (the background file: its place and header, which another field's changes) */
+    const u32 hs = (u32)(uintptr_t)h ^ (u32)h->overlayCount << 16 ^ (u32)h->overlayOffset ^ (u32)h->cameraOffset << 8 ^
+                   (u32)h->orgX << 20 ^ (u32)h->orgY << 4;
+    if (hs != last_h) { last_h = hs; gxh_bg_runs_reset(); }
     const BgOverlay *o = (const BgOverlay *)((const u8 *)h + h->overlayOffset);
     /* (the last drawn first: an entry's run of a layer is at its head once the later layers' are lifted) */
     for (int j = h->overlayCount - 1; j >= 0; --j)
-        if ((o[j].flags & 2) && o[j].cameraId == g_fieldBgState.cameraId) bg_lift(j, &o[j], h, g_fieldBgCtx.ot[buf], buf);
+        if ((o[j].flags & 2) && o[j].cameraId == g_fieldBgState.cameraId) bg_lift(&o[j], h, g_fieldBgCtx.ot[buf], buf);
 #endif
     return r;
 }
