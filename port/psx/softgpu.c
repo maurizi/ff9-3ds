@@ -21,6 +21,13 @@ int psx_softgpu_row_skip = -1;
 #else
 #define SG_HOT
 #endif
+/* DS mode's hybrid renderer draws polygons in 3D; the software ones (its additive layer, a scene gone software) run
+ * from main RAM and leave ITCM to the renderer's per-primitive code (gx_hybrid.c GXH_HOT) */
+#if defined(PORT_RASTER_ITCM) && !(defined(PORT_GX_HYBRID) && defined(PORT_DS_MODE))
+#define SG_POLY_HOT SG_HOT
+#else
+#define SG_POLY_HOT
+#endif
 /* HWSOUND builds leave the exact mixer out of ITCM: some main-RAM raster code fits there too */
 #if defined(PORT_RASTER_ITCM) && defined(PORT_HW_SOUND)
 #define SG_HW_HOT __attribute__((section(".itcm"), long_call))
@@ -333,7 +340,7 @@ static inline int clip_span(int edge,int step,int width,int *left,int *right,u32
  * colour per texel either from the shaded palette, the texel itself (raw or neutral 128 modulation), or a flat
  * modulation (`mod`, r/g/b fixed for the polygon). Texel and CLUT reads happen per pixel, as plot() does, so a
  * polygon that draws over its own texture or CLUT sees the same values. */
-static SG_HOT __attribute__((noinline)) void poly_row_textured(const Gp0Mode *m, u16 *dst, int width, int u, int v,
+static SG_POLY_HOT __attribute__((noinline)) void poly_row_textured(const Gp0Mode *m, u16 *dst, int width, int u, int v,
         int dudx, int dvdx, u16 mask, int mod, int r, int g, int b, int dither, int x, int y) {
     const Gp0State *st = &gp0_state;
     const unsigned keep_x = ~st->twin_mask_x, wx = st->twin_off_x & st->twin_mask_x;
@@ -399,7 +406,7 @@ static void dither_tables(int r, int g, int b, int dither) {
             }
 }
 
-static SG_HOT __attribute__((noinline)) void poly_row_dither_indexed(const Gp0Mode *m, u16 *dst, int width, int u,
+static SG_POLY_HOT __attribute__((noinline)) void poly_row_dither_indexed(const Gp0Mode *m, u16 *dst, int width, int u,
         int v, int dudx, int dvdx, u16 mask, int x, int y) {
     const u16 (*phase)[3][32] = dtab[y & 3];
     const u16 *const vram = psx_vram; /* a local: the stores below could otherwise alias the global pointer */
@@ -437,7 +444,7 @@ static inline __attribute__((always_inline)) void constant_row(u16 *dst, int wid
     }
 }
 
-static SG_HOT __attribute__((noinline)) void poly_row_untextured(const Gp0Mode *m, u16 *dst, int width, int r, int g,
+static SG_POLY_HOT __attribute__((noinline)) void poly_row_untextured(const Gp0Mode *m, u16 *dst, int width, int r, int g,
         int b, int drdx, int dgdx, int dbdx, int dither, u16 mask, int x, int y) {
     const int abr = m->semi ? m->abr : -1;
     if (!drdx && !dgdx && !dbdx) {
@@ -482,7 +489,7 @@ static SG_HOT __attribute__((noinline)) void poly_row_untextured(const Gp0Mode *
 
 /* plot()'s dithered flat textured pixel with semi-transparency (blend mode abr on texels with bit 15), any
  * texel depth, no texture window, unwrapped CLUT: dtab (dither_tables) gives the modulated colour. */
-static SG_HOT __attribute__((noinline)) void poly_row_dither_semi(const Gp0Mode *m, u16 *dst, int width, int u, int v,
+static SG_POLY_HOT __attribute__((noinline)) void poly_row_dither_semi(const Gp0Mode *m, u16 *dst, int width, int u, int v,
         int dudx, int dvdx, u16 mask, int x, int y) {
     const u16 (*phase)[3][32] = dtab[y & 3];
     const u16 *const vram = psx_vram; /* a local: the stores below could otherwise alias the global pointer */
@@ -602,7 +609,7 @@ static inline int div_by_area(int num, u32 area, u32 inv) {
 }
 #endif
 
-static SG_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
+static SG_POLY_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
     /* The GPU seeds attributes at the leftmost input vertex. Preserve input
      * order for tied X before changing winding for edge coverage below. */
     const Gp0Vtx *anchor = b->x <= a->x ? b : a;

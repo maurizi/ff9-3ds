@@ -91,6 +91,13 @@ static inline int bg_prim(const Prim *p) { return (p->flags & (P_RECT | P_TEXTUR
  * few scenes and every one of them is behind the scene's 3D primitives in its cells (bgc_use: bgc_semi), their
  * blending then drawn exactly; moving ones (scrolling mist) would be composed in software every scene */
 static inline int semi_sprite(const Prim *p) { return (p->flags & (P_RECT | P_TEXTURED | P_SEMI | P_UI | P_TWIN)) == (P_RECT | P_TEXTURED | P_SEMI); }
+/* DS mode: the per-primitive functions that run most, as ARM in ITCM (one cycle an instruction; main-RAM Thumb takes
+ * 1.5-3 in melonDS), in the room the software polygon rasteriser left (softgpu.c SG_POLY_HOT) */
+#if defined(__arm__) && defined(PORT_DS_MODE)
+#define GXH_HOT __attribute__((section(".itcm"), long_call, target("arm"), noinline))
+#else
+#define GXH_HOT
+#endif
 static int bgc_semi, bgc_semi_still; /* the composite holds the semi-transparent sprites; scenes they held still */
 static u32 bgc_semi_hash;
 
@@ -338,7 +345,7 @@ static void start_scene(Buffer *b, int filled /* the game's fill is about to cov
 
 /* The buffer the current drawing area belongs to (NULL: offscreen), starting its scene if it was shown; *shown is
  * the displayed buffer. */
-static Buffer *target(Buffer **shown) {
+GXH_HOT static Buffer *target(Buffer **shown) {
     /* the place's buffers and tables are in its overlay's code range: none while another overlay is loading there
      * (between a mode's overlay arriving and display_present enabling its place; d3_f0455 wrote a field's depths
      * over ovl_0b's data and crashed in btlbg_init) */
@@ -398,7 +405,7 @@ static inline void note_depth(Buffer *b) {
     b->ofs_x = gp0_state.ofs_x - b->x; b->ofs_y = gp0_state.ofs_y - b->y;
 }
 
-static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) {
+GXH_HOT static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (b->count >= prims_cap(b)) { gxh_stats_dropped++; return; }
     note_walk(b);
     note_depth(b);
@@ -1314,7 +1321,7 @@ static inline int inside(int x, int y, int ax, int ay, int bx, int by, int cx, i
 /* x * a / 31 for x, a up to 31 (exact over that range; Thumb has no long multiply, so a division by a constant is a
  * call) */
 static inline u32 div31x(u32 x, int a) { return x * (u32)a * 2115u >> 16; }
-static u32 light_under(const Prim *p, int alpha, u32 hue) {
+GXH_HOT static u32 light_under(const Prim *p, int alpha, u32 hue) {
     int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
     for (int j = 1; j < p->n; ++j) {
         if (p->x[j] < x0) x0 = p->x[j]; else if (p->x[j] > x1) x1 = p->x[j];
@@ -1754,7 +1761,7 @@ enum { L_3D, L_UI, L_ADD /* field: an additive primitive, drawn exactly in softw
 static inline int in_scene(const Prim *p, int k) { (void)p; return prim_layer[k] == L_3D; }
 
 /* One textured primitive's texture group and palette slot (0xFF: none) for plan_textures. */
-static __attribute__((noinline)) void plan_prim(const Prim *p, int use_runs, int *last_group, int *last_palette, u8 *group_out,
+GXH_HOT static __attribute__((noinline)) void plan_prim(const Prim *p, int use_runs, int *last_group, int *last_palette, u8 *group_out,
                              u8 *palette_out) {
     *group_out = 0xFF;
     *palette_out = 0xFF;
@@ -1845,7 +1852,7 @@ palette:
     }
 }
 
-static __attribute__((noinline)) void plan_prim(const Prim *p, int use_runs, int *last_group, int *last_palette, u8 *group_out,
+GXH_HOT static __attribute__((noinline)) void plan_prim(const Prim *p, int use_runs, int *last_group, int *last_palette, u8 *group_out,
                              u8 *palette_out);
 PORT_OVERLAY_CODE(0a) static void bg_runs_plan(Buffer *b, int use_runs, int *last_group, int *last_palette) {
     for (int i = 0; i < b->bg_runs; ++i) {
@@ -2285,7 +2292,7 @@ static inline u32 div31(u32 c, u32 d) {
     return (u32)(((unsigned long long)(c * 31) * recip24[d]) >> 24);
 }
 /* vertex i's colour at full brightness: each channel x 31 / m (m its brightest channel or more) */
-static __attribute__((noinline)) u32 hue_of(const Prim *p, int i, u32 m) {
+GXH_HOT static __attribute__((noinline)) u32 hue_of(const Prim *p, int i, u32 m) {
     return div31(p->r[i], m) | div31(p->g[i], m) << 5 | div31(p->b[i], m) << 10;
 }
 
@@ -2385,7 +2392,7 @@ static inline int edge_side(const Prim *p, int a, int b, int x, int y) {
     return c > 0 ? 1 : c < 0 ? -1 : 0;
 }
 
-static int translucent_id(const Prim *p, int polys) {
+GXH_HOT static int translucent_id(const Prim *p, int polys) {
     int id = 1 + (polys & 31);
     const int n = p->n;
     u32 xy[4], bit[4];
