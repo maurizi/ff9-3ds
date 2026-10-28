@@ -2007,22 +2007,29 @@ static __attribute__((noinline)) int conv_choose(int depth, int x, int y, int wh
     /* representatives: the brightest entry's colour, then repeatedly the colour farthest from those chosen. A
      * CLUT's entries mostly share a few hues, so the search runs over the distinct normalised colours (the
      * brightest entry of each), with each one's distance to the chosen set kept as it grows. */
-    u32 *seen = conv_scratch; /* zero between uses (conv_upload clears its use) */
+    /* (each entry's candidate found through a hash of the normalised colours, in conv_scratch: zero between uses) */
+    enum { SEEN = 512 };
+    u32 *seen = conv_scratch;
     static u16 cand[CHOICES];
-    static u8 cand_alpha[CHOICES];
+    static u8 cand_alpha[CHOICES], cand_rep[CHOICES], entry_cand[CHOICES];
     static int cand_d[CHOICES];
     int ncand = 0;
     for (int i = 0; i < count; ++i) {
         if (!alpha[i]) continue;
-        u16 n = norm[i];
-        if (seen[n >> 5] >> (n & 31) & 1) {
-            for (int k = 0; k < ncand; ++k) if (cand[k] == n && alpha[i] > cand_alpha[k]) cand_alpha[k] = alpha[i];
+        const u16 n = norm[i];
+        u32 h = (n * 2654435761u) >> 23; /* (9 bits) */
+        while (seen[h] && (seen[h] & 0xFFFF) != (u32)n + 1) h = (h + 1) & (SEEN - 1);
+        if (seen[h]) {
+            const int k = (int)(seen[h] >> 16);
+            if (alpha[i] > cand_alpha[k]) cand_alpha[k] = alpha[i];
+            entry_cand[i] = (u8)k;
             continue;
         }
-        seen[n >> 5] |= 1u << (n & 31);
-        cand[ncand] = n; cand_alpha[ncand] = alpha[i]; cand_d[ncand] = 1 << 30; ++ncand;
+        seen[h] = ((u32)n + 1) | (u32)ncand << 16;
+        entry_cand[i] = (u8)ncand;
+        cand[ncand] = n; cand_alpha[ncand] = alpha[i]; cand_d[ncand] = 1 << 30; cand_rep[ncand] = 0; ++ncand;
     }
-    for (int k = 0; k < ncand; ++k) seen[cand[k] >> 5] = 0;
+    if (ncand) memset(seen, 0, SEEN * sizeof *seen);
     int nreps = 0;
     while (nreps < 8) {
         int best = -1, best_d = 0;
@@ -2031,10 +2038,12 @@ static __attribute__((noinline)) int conv_choose(int depth, int x, int y, int wh
             if (d > best_d) { best_d = d; best = k; }
         }
         if (best < 0) break;
-        reps[nreps++] = cand[best];
+        const u16 rep = cand[best];
+        reps[nreps++] = rep;
+        /* (each candidate's nearest representative so far, the first of equals: the code's below) */
         for (int k = 0; k < ncand; ++k) {
-            int e = colour_distance(cand[k], cand[best]);
-            if (e < cand_d[k]) cand_d[k] = e;
+            int e = colour_distance(cand[k], rep);
+            if (e < cand_d[k]) { cand_d[k] = e; cand_rep[k] = (u8)(nreps - 1); }
         }
     }
     if (!nreps) reps[nreps++] = 0x7FFF;
@@ -2043,10 +2052,14 @@ static __attribute__((noinline)) int conv_choose(int depth, int x, int y, int wh
     cpal_hue[cpal & 63] = reps[0];
     if (depth < 2)
         for (int i = 0; i < count; ++i) {
-            int best = 0, best_d = 1 << 30;
-            for (int k = 0; k < nreps; ++k) {
-                int e = colour_distance(norm[i], reps[k]);
-                if (e < best_d) { best_d = e; best = k; }
+            int best = 0;
+            if (alpha[i] && ncand) best = cand_rep[entry_cand[i]];
+            else { /* (a transparent entry: its index still the nearest, as the bytes always were) */
+                int best_d = 1 << 30;
+                for (int k = 0; k < nreps; ++k) {
+                    int e = colour_distance(norm[i], reps[k]);
+                    if (e < best_d) { best_d = e; best = k; }
+                }
             }
             code[i] = (u8)(alpha[i] << 3 | best);
         }
