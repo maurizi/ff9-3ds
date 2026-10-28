@@ -1058,3 +1058,11 @@ against master: d2_f0955 32.79 -> 30.52, d2_f1057 24.57 -> 22.49 (both moving ba
 slower, and two problems: d2_f0931 54.1 -> 114.7 (a scene past the 3D engine's polygons that lives on its
 composite: its moving layers' tiles, now quads of their own, take it past the limit), and d4_f1911 darker than
 master's frame (not yet understood). Kept on the branch.
+Follow-up on the branch: d4_f1911's darker frame was a still layer taken as runs (out of the composite: its tiles
+then drawn by the 3D engine, a few pixels from the composite's software drawing, which matches the PS1: blurred
+difference 0.66 against 5.87). Telling still from moving by the layer's fields or a sample of its sprites' positions
+failed (the game's two halves of a layer's sprites keep culled tiles' old positions); by each run's own positions
+(hashed at the walk, per buffer) works: d4_f1911 identical. But still runs then cost the lift, the check and the
+sprites' path (still scenes 0.9-1.3 ms slower than master), and d2_f0931 stays at 115 ms with no runs at frame 1500.
+Net: about 2 ms gained in the two moving-background fixtures, lost across the still ones. Not merged; the branch
+keeps it.
