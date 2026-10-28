@@ -15,7 +15,7 @@ int main(void) {
     glClearColor(0, 0, 0, 31);
     glClearPolyID(63);
     glClearDepth(0x7FFF);
-    glViewport(0, 0, 255, 191);
+    glViewport(0, 6, 255, 184); /* (the hybrid's: 224 rows at 4/5) */
     const int h = 224, H = 401, ofx = 160 << 16, ofy = 112 << 16, Z = 3000;
     for (;;) {
         glMatrixMode(GL_PROJECTION);
@@ -32,13 +32,20 @@ int main(void) {
         /* green, perspective: the same + 160 in x */
         s32 P[16] = {0};
         P[0] = 2 * H * 4096 / 320;
-        P[8] = (s32)(((long long)2 * ofx * 4096 / 320) >> 16) - 4096;
+        P[8] = -1434; /* (d4_f2110's) */
         P[5] = -2 * H * 4096 / h;
-        P[9] = 4096 - (s32)(((long long)2 * ofy * 4096 / h) >> 16);
-        P[10] = 0; P[14] = 0; P[11] = 4096;
+        P[9] = 1171;
+        P[10] = -1413; P[14] = -1159839; P[11] = 4096; /* (d4_f2110 first group's depth terms) */
+        s32 ortho[16];
+        while (GFX_BUSY) {}
+        for (int i = 0; i < 16; ++i) ortho[i] = MATRIX_READ_CLIP[i];
         put(0x10); put(0);
         put(0x16); for (int i = 0; i < 16; ++i) put((u32)P[i]);
         put(0x10); put(2);
+        for (int b = 0; b < 3; ++b) { /* (bones on the stack, as fm_emit_hw) */
+            put(0x17); for (int i = 0; i < 12; ++i) put((i == 0 || i == 4 || i == 8) ? (u32)(4096 * 4096) : i == 11 ? (u32)(3000 * 4096) : 0);
+            put(0x13); put((u32)b);
+        }
         put(0x17); for (int i = 0; i < 12; ++i) put((i == 0 || i == 4 || i == 8) ? (u32)(8 * 4096 * 4096) : 0);
         put(0x20); put(31 << 5);
         put(0x40); put(0);
@@ -47,9 +54,13 @@ int main(void) {
             put(0x23); put((u32)(u16)(X / 8) | (u32)(u16)(Y / 8) << 16); put((u32)(u16)(Z / 8));
         }
         put(0x10); put(0);
-        put(0x15);
+        put(0x16); for (int i = 0; i < 16; ++i) put((u32)ortho[i]);
         put(0x10); put(2);
         put(0x15);
+        /* blue, orthographic again after it: (40,140) (120,140) (80,180) */
+        put(0x20); put(31 << 10);
+        put(0x40); put(0);
+        for (int i = 0; i < 3; ++i) { put(0x23); put((u32)(u16)px[i] | (u32)(u16)(py[i] + 100) << 16); put(0); }
         glFlush(0);
         swiWaitForVBlank();
         frames++;
