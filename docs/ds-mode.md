@@ -1035,3 +1035,26 @@ control), indexing translucent_id's recent primitives by signature bit.
 A hardware calibration build (2026-10-27): PROFILE=2 builds print each published block's ms per VBlank on the
 status screen (platform.c), so the same ROM can be timed on a DS and in melonDS (melonDS, this ROM: d1_f0110 16.71,
 d1_f0453 28.47, d2_f0955 32.94, d4_f2110 26.34, d2_b0300 25.42).
+
+### The host wander sweep again (2026-10-27, evening)
+
+All 1,239 fixtures of build/validation/fieldsweep/cfg (fields, plus the battles and world maps kept there) on the
+host for 20,000 frames with the wander presses: no crash of the port's. The failures are fixture limits: fields
+and files the fixture's disc doesn't have, sectors at -1, and five runs (d3_f2750, d4_b0137, d4_b0664, d4_b0686,
+d4_boss_tiamat) that walked onto the world map in a story state whose world data file isn't on that disc
+(wm_loadWorldData read through file_find's NULL). These now stop with a message (a counted patch in wm_main.c), as
+the other fixture limits do. d3_f2750 passed the earlier sweep: loads in PS1 time change where the wander goes.
+
+### Background runs (branch bg-layers, 2026-10-27): what they gave, why not merged
+
+A moving layer's run of tiles at one OT entry (port/game/field_bg.c lifts it into a marker; gx_hybrid.c gxh_bg_run
+takes it whole) is not recorded tile by tile: its tiles' positions and packets are snapshotted at the walk (the game
+rewrites them and their links for the frame after next, which can come before the scene is sent: read later, the
+layer drew a pixel off), planned into the tables after the primitives, emitted between the opaque and translucent
+primitives (from the walk's last, as the opaque primitives go), and replayed at their place in the walk for software
+scenes. Only for layers that moved in the last 8 frames (a still layer's tiles stay recorded, for the composite).
+Its code is ovl_0a's, its state at the end of the buffer's primitive room (the heap: -0.8 KB). The 28-field set
+against master: d2_f0955 32.79 -> 30.52, d2_f1057 24.57 -> 22.49 (both moving backgrounds), most others 0.1-0.5 ms
+slower, and two problems: d2_f0931 54.1 -> 114.7 (a scene past the 3D engine's polygons that lives on its
+composite: its moving layers' tiles, now quads of their own, take it past the limit), and d4_f1911 darker than
+master's frame (not yet understood). Kept on the branch.
