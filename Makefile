@@ -845,6 +845,12 @@ $(BUILD)/tests/cache_bench.elf: tests/cache/cache_bench.c
 	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -O2 $< -L$(BLOCKSDS)/libs/libnds/lib -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
 $(BUILD)/tests/cache_bench.nds: $(BUILD)/tests/cache_bench.elf
 	$(NDSTOOL) -c $@ -7 $(BLOCKSDS)/sys/default_arm7/arm7.elf -9 $< -b $(BLOCKSDS)/sys/icon.bmp "Cache bench;ARM9;ff9ds"
+# How the 3D engine takes a perspective projection (tests/gx/persp_test.c)
+$(BUILD)/tests/persp_test.elf: tests/gx/persp_test.c
+	@mkdir -p $(dir $@)
+	arm-none-eabi-gcc $(RASTER_DS_FLAGS) -marm -O2 $< -L$(BLOCKSDS)/libs/libnds/lib -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
+$(BUILD)/tests/persp_test.nds: $(BUILD)/tests/persp_test.elf
+	$(NDSTOOL) -c $@ -7 $(BLOCKSDS)/sys/default_arm7/arm7.elf -9 $< -b $(BLOCKSDS)/sys/icon.bmp "Persp test;ARM9;ff9ds"
 $(BUILD)/tests/fv_bench.elf: tests/fmv/fv_bench.c $(addprefix $(BUILD)/tests/fv/,fvDecoder_asm.o fvConst_asm.o fvConst.o fvMcData.o fvDecoder.o)
 	arm-none-eabi-gcc $(FV_DS_FLAGS) $^ -L$(BLOCKSDS)/libs/libnds/lib -Wl,--gc-sections -Wl,--start-group -lnds9 -lc -Wl,--end-group -o $@
 $(BUILD)/tests/fv_bench.nds: $(BUILD)/tests/fv_bench.elf
