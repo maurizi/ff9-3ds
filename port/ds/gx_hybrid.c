@@ -4345,12 +4345,16 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
         if (!fm_live(fg)) continue;
         /* its vertices' place: the snapshot's xy less 1024 plus the drawing offset, depth0 less 4 per entry
          * (v16 x the 4.12 matrix: rows x, y, z, then the translation) */
-        if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
-        *wp++ = CMD_MTX_LOAD4X3;
-        *wp++ = 4096; *wp++ = 0; *wp++ = 0;
-        *wp++ = 0; *wp++ = 4096; *wp++ = 0;
-        *wp++ = 0; *wp++ = 0; *wp++ = (u32)-4 * 4096;
-        *wp++ = (u32)(c.ofs_x - 1024); *wp++ = (u32)(c.ofs_y - 1024); *wp++ = (u32)fg->depth0;
+        /* (counting: nothing written, es->wp isn't a chunk's; a flush from it started a DMA of millions of words
+         * into the geometry ports, d2_f0931's two-pass hang) */
+        if (!c.count) {
+            if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
+            *wp++ = CMD_MTX_LOAD4X3;
+            *wp++ = 4096; *wp++ = 0; *wp++ = 0;
+            *wp++ = 0; *wp++ = 4096; *wp++ = 0;
+            *wp++ = 0; *wp++ = 0; *wp++ = (u32)-4 * 4096;
+            *wp++ = (u32)(c.ofs_x - 1024); *wp++ = (u32)(c.ofs_y - 1024); *wp++ = (u32)fg->depth0;
+        }
         const u8 *g = fg->group, *src = fg->src, *pk = fg->packets;
         int pi = fg->poly0;
         for (int t = 0; t < 8; ++t) {
@@ -4369,6 +4373,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
             src += count * mesh_size[t]; pk += count * fm_size[t]; pi += count;
         }
     }
+    if (c.count) return;
     if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
     *wp++ = CMD_MTX_IDENTITY; /* (the rest of the scene's in place) */
     es->wp = wp;
@@ -4863,8 +4868,7 @@ PORT_OVERLAY_CODE(0a) static void tp_note_all(Buffer *b, const FStore *fst) {
     for (int i = 0; i < b->bg_runs; ++i) /* (a run's tiles, each a quad at its depth) */
         for (int t = 0; t < bg_runs_of(b)[i].count; ++t) tp_note(bg_runs_of(b)[i].slot, 4);
     if (fst) {
-        u32 scratch[1];
-        EmitState es = {scratch, 0, 0, 0, 0, 0};
+        EmitState es = {NULL, 0, 0, 0, 0, 0}; /* (counting: fm_emit writes nothing) */
         tp_counting = 1;
         fm_emit(b, fst, &es);
         tp_counting = 0;

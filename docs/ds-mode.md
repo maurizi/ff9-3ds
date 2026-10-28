@@ -1217,7 +1217,21 @@ d2_f0955. The scene is under the 3D engine's polygons but over its vertices (abo
 keeps the composite (bgc_keep 60); with the camera moving, 18 of the 32 bands change each scene and the composite
 is recomposed in software every time: about 200 sprites drawn by the software rasteriser per frame (row_direct8,
 rect_rows, poly_row_*: about 20% of the samples). Letting such a scene (over budget, background moving) go two-pass
-instead hangs it at frame 445 every time (a latent bug of the two-pass path, not yet found; the change is not kept).
+instead hung it at frame 445 every time. Found (the stall's savestate: the ARM9 in flush_chunk waiting on DMA0,
+whose control word was DMA_FIFO | 0x3E5085): the split's counting pass (tp_note_all) ran fm_emit with its write
+pointer on a one-word stack scratch, and fm_emit still wrote each model group's matrix load through it; its room
+check saw a "chunk" of the stack's distance from the chunks and flushed it: a DMA of 4 million words whose count ran
+into the destination-control bits, walking the geometry engine's command ports. Any two-pass scene with native
+models could hit it, depending on layout. Now counting writes nothing (d1_f0574 still in two passes, 75.2 ms per
+VBlank, its frame as before).
+
+With the hang gone, d2_f0931 still doesn't draw in two passes: its textures don't fit banks C and D (all 6 of its
+two-pass scenes left for software, 60 frames held each). What made it cheaper with the change (46.5 ms per VBlank
+against 49.7) is the 3D engine alone: without the composite, its background runs stay on (the composite latches
+them off for the field), and with them its scene fits the 3D engine's RAM (217 of 223 scenes, the whole measured
+window, plain 3D). The change (the composite only for a still background past the limits) is not kept: other moving
+scenes past the limits lose their composite with it (Alexandria above). The composite's latch on the background
+runs is the lead for d2_f0931.
 
 Measurement pitfall: a GP0 command histogram counted over packets' words counts data words (image uploads') as
 commands; counted at packets' starts, d2_f0931 has no POLY_GT4 packets (its models are all native).
