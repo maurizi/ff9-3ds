@@ -913,6 +913,10 @@ static void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
     if (n >= 1024) {
         return;
     }
+    /* (wholly outside the drawing area: no pixel; Burmecia's rain drew 50,000 such lines pixel by pixel) */
+    if ((a->x < b->x ? a->x : b->x) > gp0_state.area_x1 || (a->x > b->x ? a->x : b->x) < gp0_state.area_x0 ||
+        (a->y < b->y ? a->y : b->y) > gp0_state.area_y1 || (a->y > b->y ? a->y : b->y) < gp0_state.area_y0)
+        return;
     unsigned int profile_start=port_profile_begin();
     if (!target.pixels) rows_written(a->y < b->y ? a->y : b->y, (a->y > b->y ? a->y : b->y) + 1);
 #ifndef PORT_SOFTGPU_REFERENCE

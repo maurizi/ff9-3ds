@@ -3597,7 +3597,8 @@ static void hybrid_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b2) {
      * triangle with two equal vertices is drawn as a one-pixel line, blending with the scene (on the 2D layer it
      * blended with the buffer's key or clear value and covered the scene opaquely) */
     Gp0Vtx ca, cb;
-    if (b && b != shown && (place->field ? !b->soft && !field_unexact(b, m) : m->semi) && clip_line(a, b2, &ca, &cb)) {
+    if (!clip_line(a, b2, &ca, &cb)) return; /* (wholly outside the drawing area: nothing drawn) */
+    if (b && b != shown && (place->field ? !b->soft && !field_unexact(b, m) : m->semi)) {
         Gp0Vtx t[3] = {ca, cb, cb};
         Gp0Mode lm = *m;
         lm.textured = 0;
