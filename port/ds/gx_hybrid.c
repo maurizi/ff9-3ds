@@ -2590,6 +2590,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
     /* (in locals: with -fno-strict-aliasing every store through wp would reload them from es) */
     u32 image = es->image, palette = es->palette, attr = es->attr;
     int polys = es->polys, vertices = es->vertices;
+    u32 *wend = chunks[chunk] + (CHUNK_WORDS - PRIM_WORDS); /* (the chunk's room, in a register) */
     /* a position: x and y each in 11 bits, sign-extended to 16 (the GTE's SXY saturate there; a background
      * record's slots are made so below), each plus the drawing offset in its halfword */
     const u32 ofs_x = (u32)b->ofs_x, ofs_y = (u32)b->ofs_y << 16;
@@ -2649,7 +2650,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
         walk.ri = r->next;
         if (mesh_dropped(b, inf & 7)) { gxh_stats_dropped++; continue; }
         int z = Z_STEP * ++walk.zc;
-        reserve();
+        if (wp > wend) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; wend = wp + (CHUNK_WORDS - PRIM_WORDS); }
         if (polys >= MAX_POLYS || vertices + n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
         if (mi->kind == MESH_BG) {
             for (int i = 0; i < n; ++i) {
@@ -4187,6 +4188,7 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
     const int counting = c->count, zlo = c->zlo, zhi = c->zhi, nuses = c->fst->nuses;
     u32 image = es->image, palette = es->palette, attr = es->attr;
     int polys = es->polys, vertices = es->vertices, last_use = c->last_use;
+    u32 *wend = chunks[chunk] + (CHUNK_WORDS - PRIM_WORDS); /* (the chunk's room, in a register) */
     for (; count > 0; --count, src += mesh_size[t], pk += fm_size[t], ++pi) {
         u32 bits = front[pi >> 5] >> (pi & 31);
         if (!(bits & 1)) { /* (culled when taken: the run of them skipped at once) */
@@ -4206,7 +4208,7 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
             if (counting) { tp_note(pz, nv); continue; }
             if (pz < zlo || pz >= zhi) continue;
         }
-        if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
+        if (wp > wend) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; wend = wp + (CHUNK_WORDS - PRIM_WORDS); }
         if (polys >= MAX_POLYS || vertices + nv > MAX_VERTICES) { gxh_stats_dropped++; continue; }
         u32 uv[4] = {0, 0, 0, 0}, *header = wp++, ids = 0;
         int shift = 0, tu = 0, tv = 0;
