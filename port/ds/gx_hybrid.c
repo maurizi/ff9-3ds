@@ -2578,6 +2578,9 @@ static inline void native_next(const Buffer *b, NativeWalk *w) {
 /* Battle: the native polygons due before recorded primitive k, opaque and textured ones straight from their meshes
  * (the general path's words for them, without their Prim records). Returns at one the general path draws (w->ri),
  * or when none is due. */
+/* (col[]: a flat polygon's vertices take col[0] alone; GCC can't see it through the unrolled loops) */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buffer *b, EmitState *es, NativeWalk *w, int k) {
     u32 *wp = es->wp, *pack_header, pack_ids;
     int pack_shift;
@@ -2694,6 +2697,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
     es->wp = wp; es->image = image; es->palette = palette; es->attr = attr; es->polys = polys; es->vertices = vertices;
     *w = walk;
 }
+#pragma GCC diagnostic pop
 
 /* x * a / 31 for x, a up to 31 (exact over that range) */
 static inline u32 div31x(u32 x, int a) { return x * (u32)a * 2115u >> 16; }

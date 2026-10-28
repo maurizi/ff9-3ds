@@ -1435,7 +1435,7 @@ void psx_softgpu_shadow_rect(const Gp0Mode *m, const Gp0Vtx *v, int width, int h
     target.pixels = NULL;
 }
 
-const Gp0Backend psx_softgpu = {sg_poly, sg_line, sg_rect, 0, 0};
+const Gp0Backend psx_softgpu = {sg_poly, sg_line, sg_rect, 0, 0, 0};
 
 /* PC --render / DS debug: rasterise into the VRAM shadow */
 void psx_softgpu_enable(int on) {

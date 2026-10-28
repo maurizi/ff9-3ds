@@ -1773,7 +1773,7 @@ static void gx_frame(void) {
     submit_frame();
 }
 
-static const Gp0Backend gx_backend = {gx_poly, gx_line, gx_rect, gx_fill, gx_frame};
+static const Gp0Backend gx_backend = {gx_poly, gx_line, gx_rect, gx_fill, gx_frame, 0};
 
 void render_gx_init(void) {
 #ifdef PORT_GX_SHARE_INDEXED
