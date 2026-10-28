@@ -1290,6 +1290,9 @@ static inline int inside(int x, int y, int ax, int ay, int bx, int by, int cx, i
     int e2 = (ax - cx) * (y - cy) - (ay - cy) * (x - cx);
     return (e0 >= 0 && e1 >= 0 && e2 >= 0) || (e0 <= 0 && e1 <= 0 && e2 <= 0);
 }
+/* x * a / 31 for x, a up to 31 (exact over that range; Thumb has no long multiply, so a division by a constant is a
+ * call) */
+static inline u32 div31x(u32 x, int a) { return x * (u32)a * 2115u >> 16; }
 static u32 light_under(const Prim *p, int alpha, u32 hue) {
     int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
     for (int j = 1; j < p->n; ++j) {
@@ -1300,7 +1303,7 @@ static u32 light_under(const Prim *p, int alpha, u32 hue) {
     x1 = x1 < 0 ? -1 : x1 >> 4; y1 = y1 < 0 ? -1 : y1 >> 4;
     if (x1 >= LIGHT_W) x1 = LIGHT_W - 1;
     if (y1 >= LIGHT_H) y1 = LIGHT_H - 1;
-    u32 add[3] = {(hue & 31) * (u32)alpha / 31, (hue >> 5 & 31) * (u32)alpha / 31, (hue >> 10 & 31) * (u32)alpha / 31};
+    u32 add[3] = {div31x(hue & 31, alpha), div31x(hue >> 5 & 31, alpha), div31x(hue >> 10 & 31, alpha)};
     u32 sum[3] = {0, 0, 0}, cells = 0;
     int rect = (p->flags & P_RECT) != 0;
     for (int y = y0; y <= y1; ++y)
@@ -1329,7 +1332,7 @@ static u32 light_under(const Prim *p, int alpha, u32 hue) {
 }
 /* two 15-bit colours multiplied (31 = 1) */
 static __attribute__((noinline)) u32 modulate(u32 a, u32 b) {
-    return ((a & 31) * (b & 31) / 31) | ((a >> 5 & 31) * (b >> 5 & 31) / 31) << 5 | ((a >> 10 & 31) * (b >> 10 & 31) / 31) << 10;
+    return div31x(a & 31, (int)(b & 31)) | div31x(a >> 5 & 31, (int)(b >> 5 & 31)) << 5 | div31x(a >> 10 & 31, (int)(b >> 10 & 31)) << 10;
 }
 typedef struct { int used, x, y, count, dirty, wanted, index0, scale; } Palette; /* index0: TEXIMAGE bit 29 (emit_scene);
                                                                                * scale: colours x scale / 16 (plan_scale) */
@@ -2699,8 +2702,6 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
 }
 #pragma GCC diagnostic pop
 
-/* x * a / 31 for x, a up to 31 (exact over that range) */
-static inline u32 div31x(u32 x, int a) { return x * (u32)a * 2115u >> 16; }
 
 /* The world map's terrain and backdrop faces (emit_scene; ARM in ovl_0c's area) */
 PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) static void terrain_emit(Buffer *b, struct Terrain *tr, EmitState *es,
@@ -3168,7 +3169,8 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         } else if (p->flags & P_SEMI) {
             alpha = p->abr == 3 ? 8 : p->abr == 1 ? 24 : 16; /* additive: a brighter blend than 50% */
             if (p->abr == 2) {
-                alpha = (p->r[0] + p->g[0] + p->b[0]) * 31 / (3 * 255); /* darkening as black at source luminance */
+                /* darkening as black at source luminance: x / 765 as x * 43863 >> 25, exact for x up to 765 x 31 */
+                alpha = (int)((u32)(p->r[0] + p->g[0] + p->b[0]) * 31 * 43863u >> 25);
                 if (!alpha) continue; /* alpha 0 would be wireframe */
             }
             id = translucent_id(src, polys);
