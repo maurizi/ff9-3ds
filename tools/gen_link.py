@@ -465,6 +465,14 @@ def main():
                    f"    .psxovl_ff ADDR(.psxovl_{first}) : AT(0x0F000000) {{ *(.psxovl_ff.*) }} :NONE",  # an LMA of its own: never loaded
                    "    . = MAX(., __psxovl_slot0_end);",
                    f'    ASSERT(ADDR(.psxovl_ff) + SIZEOF(.psxovl_ff) <= __psxovl_slot0_end, "main\'s image is larger than slot 0")']
+            if "0a" in ids:
+                # gx_hybrid.c use_place: the field's second scene buffer goes to slot 0's room after ovl_0a's native
+                # code, and only that leaves ovl_0a's MIPS range room for the field models' ring (without it, no
+                # native models: every field in software, silently)
+                layout = (Path(__file__).resolve().parent.parent / "port/include/ovl0a_layout.h").read_text()
+                prims = int(re.search(r"#define OVL0A_FIELD_PRIMS\s+(\d+)", layout).group(1))
+                ld += [f"    ASSERT(__psxovl_slot0_end - (ADDR(.psxovl_0a) + SIZEOF(.psxovl_0a)) >= {prims * 48 + 32}, "
+                       f'"ovl_0a\'s native code leaves slot 0 no room for a field scene buffer ({prims} primitives)")']
     ld += ["    __psxovl_areas_end = .;"]
     for k, (i, lo, hi) in enumerate(in_place):  # LMAs of their own: never loaded
         ld += [f"    .psxovl_{i} (psx_ram + 0x{lo & 0x1FFFFF:X}) : AT(0x0F{k + 1:02X}0000) {{ *(.psxovl_{i}.*) }} :NONE",
