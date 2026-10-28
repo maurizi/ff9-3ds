@@ -1312,3 +1312,16 @@ regions_touch, conv_choose, the recording): 0-0.2 ms (noise) for 6.8 KB. Its hot
 already; melonDS charges main-RAM ARM fetches as Thumb's, so ARM pays only where Thumb needs library calls.
 The sampler's main table has 2 KB buckets, split over the functions they overlap by bytes: small functions near hot
 code (dlmalloc's, the double-float helpers) show samples they never take; PCLO/PCSHIFT=4 resolves a range.
+
+ITCM for the renderer (2026-10-28). In this melonDS main-RAM code costs 1.5-3 cycles an instruction (Thumb or ARM
+alike) and ITCM code 1, so what runs per primitive belongs in ITCM more than the software polygon rasteriser, which
+DS mode only uses for its additive layer and scenes gone software. DS-mode hybrid builds now keep triangle and the
+poly_row_* functions (11.8 KB) in main RAM (softgpu.c SG_POLY_HOT) and put in their place, as ARM (gx_hybrid.c
+GXH_HOT): translucent_id, plan_prim, light_under, hue_of, target, record; and the GP0 decoder (gp0.c GP0_HOT:
+command, gp0_tpage_sprite16, gp0_note_sprites). ITCM: 31.5 of 32 KB. Every scene measured gained, the software-heavy
+ones too: d1_f0604 41.0 -> 38.0, d3_f1818 43.1 -> 39.9, d4_f2110 24.8 -> 23.8, d2_f0931 48.2 -> 44.8, d4_b0331 34.3 ->
+32.4; walking d1_f0604 37.0 -> 34.9. Earlier, translucent_id (a translucent primitive's polygon ID, 14% of d1_f0604)
+lost its 16-slot scan: the recent polygons indexed by vertex hash, the same IDs (d1_f0604 45.4 -> 41.2).
+What stays in ITCM and is worth weighing next: emit_scene (8.5 KB Thumb, ~10% of a field) doesn't fit;
+ds_scale_display_text_pair (2 KB, the top-screen text) is 0.4-2% (battles), interpolate and light (2.9 KB, the GTE's
+lighting) under 0.4%.
