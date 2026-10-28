@@ -4693,10 +4693,11 @@ PORT_OVERLAY_CODE(0a) static u32 bgc_hash(const Buffer *b, int display_h) {
         if (x1 > BGC_COLS * 64 - 1) x1 = BGC_COLS * 64 - 1;
         for (int band = y0 >> 3; band <= y1 >> 3; ++band) bgc_bands_now[band] = (bgc_bands_now[band] ^ s) * 16777619u;
         for (int col = x0 >> 6; col <= x1 >> 6; ++col) bgc_cols_now[col] = (bgc_cols_now[col] ^ s) * 16777619u;
-        if (!opaque) continue;
+        if (!opaque || !bgc_semi) continue; /* (without the semi-transparent ones the two sets are the same: copied) */
         for (int band = y0 >> 3; band <= y1 >> 3; ++band) bgc_sbands_now[band] = (bgc_sbands_now[band] ^ s) * 16777619u;
         for (int col = x0 >> 6; col <= x1 >> 6; ++col) bgc_scols_now[col] = (bgc_scols_now[col] ^ s) * 16777619u;
     }
+    if (!bgc_semi) { memcpy(bgc_sbands_now, bgc_bands_now, sizeof bgc_sbands_now); memcpy(bgc_scols_now, bgc_cols_now, sizeof bgc_scols_now); }
     bgc_semi_still = hs == bgc_semi_hash ? bgc_semi_still + 1 : 0;
     bgc_semi_hash = hs;
     return h;
