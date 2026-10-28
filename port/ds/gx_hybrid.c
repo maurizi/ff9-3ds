@@ -166,7 +166,7 @@ static int last_oy0, last_oy1; /* the additive layer's last band (output rows) *
 #define FM_GROUPS 32       /* groups a scene */
 #define FIELD_PRIMS_NATIVE 1500 /* a field buffer's primitives at most (use_place) */
 #define FM_USES 32         /* texture pages and CLUTs a scene */
-#define FM_POLYS 4096       /* polygons a scene (its culling bits) */
+#define FM_POLYS 6144       /* polygons a scene (its culling bits; d1_f0574's close-ups pass 4096) */
 /* (src, polys and verts as taken: the game may have freed or reused the group by the time the scene is sent, two
  * frames later; fm_live checks) */
 typedef struct { const u8 *group, *packets, *src; u16 vert0, poly0, polys, verts; s32 depth0, depth_far; } FGroup;
