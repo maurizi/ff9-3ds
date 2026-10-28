@@ -3654,13 +3654,21 @@ static int hybrid_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, u
     if (!b || b == shown || b->soft || gp0_state.twin_mask_x || gp0_state.twin_mask_y || gp0_state.set_mask ||
         gp0_state.check_mask || b->count >= prims_cap(b))
         return 0;
-    const int u = (int)(uvc & 0xFF), v = (int)(uvc >> 8 & 0xFF);
+    int u = (int)(uvc & 0xFF), v = (int)(uvc >> 8 & 0xFF);
     if (u > 240 || v > 240) return 0; /* (a page wrap) */
-    const int x = (int)(xy & 0x7FF) - (int)((xy & 0x400) << 1) + gp0_state.ofs_x;
-    const int y = (int)(xy >> 16 & 0x7FF) - (int)((xy >> 16 & 0x400) << 1) + gp0_state.ofs_y;
-    if (x < gp0_state.area_x0 || y < gp0_state.area_y0 || x + 16 > gp0_state.area_x1 + 1 || y + 16 > gp0_state.area_y1 + 1)
-        return 0;
+    int x = (int)(xy & 0x7FF) - (int)((xy & 0x400) << 1) + gp0_state.ofs_x;
+    int y = (int)(xy >> 16 & 0x7FF) - (int)((xy >> 16 & 0x400) << 1) + gp0_state.ofs_y;
     ui_flush();
+    /* clipped to the drawing area as hybrid_rect clips it (texels following pixels): one wholly outside is nothing */
+    int w = 16, h = 16;
+    if (x < gp0_state.area_x0 || y < gp0_state.area_y0 || x + 16 > gp0_state.area_x1 + 1 || y + 16 > gp0_state.area_y1 + 1) {
+        const int dx = gp0_state.area_x0 - x, dy = gp0_state.area_y0 - y;
+        if (dx > 0) { x += dx; u += dx; w -= dx; }
+        if (dy > 0) { y += dy; v += dy; h -= dy; }
+        if (x + w > gp0_state.area_x1 + 1) w = gp0_state.area_x1 + 1 - x;
+        if (y + h > gp0_state.area_y1 + 1) h = gp0_state.area_y1 + 1 - y;
+        if (w <= 0 || h <= 0) return 1;
+    }
     const u32 depth = tp >> 7 & 3, flags = P_TEXTURED | (cmd >> 24 & 1 ? P_RAW : 0) | (cmd >> 25 & 1 ? P_SEMI : 0) | P_RECT |
                                            (tp & 0x200 ? P_DITHER : 0);
     const u32 w0 = 4 | flags << 8 | (tp >> 5 & 3) << 16 | (depth == 3 ? 2 : depth) << 24;
@@ -3668,19 +3676,19 @@ static int hybrid_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, u
     const int bx = x - b->x, by = y - b->y;
     if (b->count) { /* extend_rect: the last record's row continued */
         u32 *q = (u32 *)&b->prims[b->count - 1];
-        if (q[0] == w0 && q[1] == w1 && q[2] == w2 && (s16)(q[3] >> 16) == bx && (s16)q[5] == by && (s16)q[6] == by + 16 &&
+        if (q[0] == w0 && q[1] == w1 && q[2] == w2 && (s16)(q[3] >> 16) == bx && (s16)q[5] == by && (s16)q[6] == by + h &&
             ((q[7] ^ cmd) & 0xFF) == 0 && ((q[8] ^ cmd >> 8) & 0xFF) == 0 && ((q[9] ^ cmd >> 16) & 0xFF) == 0 &&
-            (int)(q[10] >> 8 & 0xFF) + 1 == u && (int)(q[11] & 0xFF) == v && (int)(q[11] >> 16 & 0xFF) == v + 15) {
+            (int)(q[10] >> 8 & 0xFF) + 1 == u && (int)(q[11] & 0xFF) == v && (int)(q[11] >> 16 & 0xFF) == v + h - 1) {
             Prim *p = (Prim *)q;
-            p->x[1] = p->x[3] = (s16)(bx + 16);
-            p->u[1] = p->u[3] = (u8)(u + 15);
+            p->x[1] = p->x[3] = (s16)(bx + w);
+            p->u[1] = p->u[3] = (u8)(u + w - 1);
             return 1;
         }
     }
     note_walk(b);
     PrimCopy t;
-    const u32 x0 = (u16)bx, x1 = (u16)(bx + 16), y0 = (u16)by, y1 = (u16)(by + 16);
-    const u32 u0 = (u8)u, u1 = (u8)(u + 15), v0 = (u8)v, v1 = (u8)(v + 15);
+    const u32 x0 = (u16)bx, x1 = (u16)(bx + w), y0 = (u16)by, y1 = (u16)(by + h);
+    const u32 u0 = (u8)u, u1 = (u8)(u + w - 1), v0 = (u8)v, v1 = (u8)(v + h - 1);
     t.w[0] = w0; t.w[1] = w1; t.w[2] = w2;
     t.w[3] = t.w[4] = x0 | x1 << 16;
     t.w[5] = y0 | y0 << 16; t.w[6] = y1 | y1 << 16;
