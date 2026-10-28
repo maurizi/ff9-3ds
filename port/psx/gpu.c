@@ -616,16 +616,17 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     /* ClearOTagR's empty entries each link to the word before: a run of them is stepped over by comparison
      * (both branches below would go to p - 1 for these) */
     const int ram_window = head_window == ((u32)psx_ram & 0xFF000000);
+    /* (the markers' range, set before the walk: a marker is a packet of no words) */
+    const uintptr_t marker_lo = (uintptr_t)psx_ot_marker_lo, marker_size = (uintptr_t)psx_ot_marker_hi - marker_lo;
     while (((u32)p & 0xFFFFFF) != OT_END) {
         if (ram_window && (unsigned char *)p > psx_ram && (unsigned char *)p < psx_ram + PSX_RAM_SIZE)
             while ((unsigned char *)p > psx_ram && *p == (((u32)(p - 1)) & 0xFFFFFF)) --p;
         if ((unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n) psx_ot_slot = (unsigned int)((unsigned int *)p - psx_main_ot);
         u32 addr = *p & 0xFFFFFF;
-        if ((uintptr_t)p - (uintptr_t)psx_ot_marker_lo < (uintptr_t)psx_ot_marker_hi - (uintptr_t)psx_ot_marker_lo) {
-            port_ot_marker(p);
-        } else if (((P_TAG *)p)->len) {
+        if (((P_TAG *)p)->len)
             draw_packet(p);
-        }
+        else if ((uintptr_t)p - marker_lo < marker_size)
+            port_ot_marker(p);
         if (addr == OT_END) {
             break;
         }
@@ -635,7 +636,7 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
         else {
             p = link_ptr(addr);
             if (((unsigned char *)p < psx_ram || (unsigned char *)p >= psx_ram + PSX_RAM_SIZE) &&
-                (uintptr_t)p - (uintptr_t)psx_ot_marker_lo >= (uintptr_t)psx_ot_marker_hi - (uintptr_t)psx_ot_marker_lo)
+                (uintptr_t)p - marker_lo >= marker_size)
                 port_fatal("DrawOTag: link 0x%06X outside known buffers", addr);
         }
         if (++guard > 1000000) {
