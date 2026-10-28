@@ -1082,3 +1082,9 @@ groups declined after the work, Thumb 64-bit products); and ovl_0a's native area
 of room at slot 0's end, the second buffer stays in ovl_0a's MIPS range and the models' ring no longer fits (no
 native models at all: fields in software, 90 ms). Any growth of ovl_0a's native code (debug included) does that
 silently; worth an assert (gen_link.py: slot 0's end less ovl_0a's native size >= OVL0A_FIELD_PRIMS x 48).
+Follow-up (2026-10-28): with the field scene buffer threshold lowered to 1,200 primitives on the branch (room for
+debugging in ovl_0a), the group's projection read back sane (d4_f2110's first group: H 401, the view height 224, Z
+2,916-3,182, z = -0.345 - 283 / Z on the 3D engine's scale), and the orthographic projection the 3D engine holds
+(read back from the clip matrix) has the layout assumed (translation in the last row, 4096 = 1.0). Vertices given as
+their CPU view coordinates under one scale matrix (no bone matrices) still draw as huge garbage: the perspective
+projection itself, or how the 3D engine takes it, is what's wrong. Not taken further.
