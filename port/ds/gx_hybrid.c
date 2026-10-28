@@ -2396,6 +2396,7 @@ GXH_HOT static int translucent_id(const Prim *p, int polys) {
     int id = 1 + (polys & 31);
     const int n = p->n;
     u32 xy[4], bit[4];
+    xy[3] = 0; /* (a triangle's: never read) */
     for (int i = 0; i < n; ++i) {
         xy[i] = (u16)p->x[i] | (u32)(u16)p->y[i] << 16;
         bit[i] = (xy[i] * 0x9E3779B1u) >> 26;
@@ -2413,14 +2414,20 @@ GXH_HOT static int translucent_id(const Prim *p, int polys) {
         const int qn = recent_n[k];
         /* p and q share an edge with p's other vertices on one side of it and q's on the other: the first matching
          * vertex, then the first match of another of p's */
-        int pa = -1, pb = -1, qa = -1, qb = -1;
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j < qn; ++j)
-                if (xy[i] == qxy[j]) {
-                    if (pa < 0) { pa = i; qa = j; }
-                    else if (pb < 0 && i != pa) { pb = i; qb = j; }
-                }
-        if (pb < 0) continue;
+        u32 match[4]; /* (per vertex of p, the bits of q's equal to it) */
+        const u32 q0 = qxy[0], q1 = qxy[1], q2 = qxy[2], q3 = qxy[3], qmask = (1u << qn) - 1;
+#pragma GCC unroll 4
+        for (int i = 0; i < 4; ++i) {
+            const u32 v = xy[i];
+            match[i] = ((u32)(v == q0) | (u32)(v == q1) << 1 | (u32)(v == q2) << 2 | (u32)(v == q3) << 3) & qmask;
+        }
+        int pa = 0;
+        while (pa < n && !match[pa]) ++pa;
+        int pb = pa + 1;
+        while (pb < n && !match[pb]) ++pb;
+        if (pb >= n) continue;
+        const int qa = match[pa] & 1 ? 0 : match[pa] & 2 ? 1 : match[pa] & 4 ? 2 : 3;
+        const int qb = match[pb] & 1 ? 0 : match[pb] & 2 ? 1 : match[pb] & 4 ? 2 : 3;
         int ps = 0, qs = 0;
         for (int i = 0; i < n; ++i) if (i != pa && i != pb) ps += edge_side(p, pa, pb, p->x[i], p->y[i]);
         for (int j = 0; j < qn; ++j) if (j != qa && j != qb) qs += edge_side(p, pa, pb, q->x[j], q->y[j]);
