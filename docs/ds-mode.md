@@ -1066,3 +1066,19 @@ failed (the game's two halves of a layer's sprites keep culled tiles' old positi
 sprites' path (still scenes 0.9-1.3 ms slower than master), and d2_f0931 stays at 115 ms with no runs at frame 1500.
 Net: about 2 ms gained in the two moving-background fixtures, lost across the still ones. Not merged; the branch
 keeps it.
+
+### Field models through the 3D engine (branch gx-models, 2026-10-28): not working yet
+
+The user's choice of 2026-10-27 allows approximate depth for field models, for the 3D engine to transform them. On
+the branch: fldmdl_projectMesh keeps the bones' matrices (RT x bone, through the GTE as before) and defers the vertex
+pass (fm_flush_projection runs it for whatever reads g_vtxScreenXY: the packets' path, the mirrored draw); the
+renderer takes a group from the matrices (each vertex's view Z for its OT depth, the PS1's culling as the sign of the
+view-space determinant, the texture uses, the screen bounds from the view box) and emits it with a projection whose
+depth matches the OT scale at the group's nearest and farthest vertex (z = a + b / Z), the bones on the matrix stack.
+Measured: emitting every polygon (no culling) costs d4_f2110 only ~0.9 ms, so culling in hardware would have been
+affordable. What stopped it: groups with more than one bone draw as garbage (not from restoring matrices inside a
+polygon: one matrix a polygon is as wrong); every scene got slower (d4_f2110 26.4 -> 42.5, d2_f0955 32.8 -> 46.2:
+groups declined after the work, Thumb 64-bit products); and ovl_0a's native area grew 8 KB: with less than a buffer
+of room at slot 0's end, the second buffer stays in ovl_0a's MIPS range and the models' ring no longer fits (no
+native models at all: fields in software, 90 ms). Any growth of ovl_0a's native code (debug included) does that
+silently; worth an assert (gen_link.py: slot 0's end less ovl_0a's native size >= OVL0A_FIELD_PRIMS x 48).
