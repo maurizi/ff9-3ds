@@ -1301,3 +1301,14 @@ time (d4_f2110: ~3-5 ms of 24); the models (~32% there) animate every frame, and
 every frame. Its memory: an emitted command list for the sprites left in 3D is ~14 words each (300 sprites: ~17 KB a
 buffer), against 13-16 KB of free heap; slot 0 and the overlay data have ~4 KB. Not started: worth at most a few ms
 in still scenes and none walking.
+
+GTE NCLIP and AVSZ in 32 bits (gte.h, 2026-10-28): the inline forms computed in `long long`, so every Thumb caller
+(the decomp's mesh code, link_translucent, the clipping) called __aeabi_lmul six times an NCLIP; a fine sample
+(PCLO) gave __muldi3 2.5% of d3_f1818. When the coordinates lie within +-8192 (NCLIP as (x1-x0)(y2-y0) -
+(x2-x0)(y1-y0)) and AVSZ's depth sum is under 65536 the value fits 32 bits with no MAC0 flag, bit-exact against
+gte.c over 9M random cases: d3_f1818 48.2 -> 45.4, battles -0.2-0.3.
+Tried, not taken: the renderer's hot main-RAM functions as ARM (emit_scene, plan_runs, plan_prim, translucent_id,
+regions_touch, conv_choose, the recording): 0-0.2 ms (noise) for 6.8 KB. Its hottest overlay functions are ARM
+already; melonDS charges main-RAM ARM fetches as Thumb's, so ARM pays only where Thumb needs library calls.
+The sampler's main table has 2 KB buckets, split over the functions they overlap by bytes: small functions near hot
+code (dlmalloc's, the double-float helpers) show samples they never take; PCLO/PCSHIFT=4 resolves a range.
