@@ -12,6 +12,13 @@ unsigned int psx_gpu_scene_prims; /* primitives drawn since the display last mov
 __attribute__((section(".dtcm"))) /* read for every primitive (DS: beside the GTE's registers) */
 #endif
 Gp0State gp0_state = {0, 0, 1023, 511, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+/* DS mode: the decoder in ITCM (gx_hybrid.c GXH_HOT: what the software polygon rasteriser left) */
+#if defined(__arm__) && defined(PORT_DS_MODE) && defined(PORT_GX_HYBRID)
+#define GP0_HOT __attribute__((section(".itcm"), noinline))
+#else
+#define GP0_HOT
+#endif
+GP0_HOT void gp0_note_sprites(unsigned int texpage, unsigned int n);
 const Gp0Backend *gp0_backend;
 /* psx_display.h; weak here and in gpu.c, since unit tests link either file alone */
 __attribute__((weak)) unsigned int psx_vram_generation;
@@ -98,7 +105,7 @@ static unsigned int state_command(unsigned int w0) {
     return 1;
 }
 
-static unsigned int command(const unsigned int *w, unsigned int avail) {
+GP0_HOT static unsigned int command(const unsigned int *w, unsigned int avail) {
     unsigned int cmd = w[0] >> 24;
     if (cmd >= 0xE0) return state_command(w[0]);
     if ((cmd >= 0x20 && cmd < 0x80) || cmd == 2) {
@@ -277,7 +284,7 @@ static unsigned int command(const unsigned int *w, unsigned int avail) {
 /* A packet of exactly a texture page (E1) and a 16x16 sprite (SPRT_16, 7C-7F): a field background tile (BgSprt,
  * MargePrim'd). Both commands as command() runs them, without its dispatch; the font pages' sprites (their glyph
  * coverage, below) are left to it. 0: not run. */
-int gp0_tpage_sprite16(const unsigned int *w) {
+GP0_HOT int gp0_tpage_sprite16(const unsigned int *w) {
     unsigned int tp = w[0] & 0xFFFFFF, cmd = w[1] >> 24;
     if ((tp & 0x10) && (tp & 15) >= 14) return 0; /* (page 896 or 960, 256) */
     if (!gp0_backend || !gp0_backend->rect) return 0;
@@ -313,7 +320,7 @@ int gp0_tpage_sprite16(const unsigned int *w) {
 #ifdef PORT_FIELD_GX
 __attribute__((section(".psxovl_0a.port"), noinline)) /* (its only caller is ovl_0a's) */
 #endif
-void gp0_note_sprites(unsigned int texpage, unsigned int n) {
+GP0_HOT void gp0_note_sprites(unsigned int texpage, unsigned int n) {
     gp0_state.texpage = texpage & 0xFFFFFF;
     psx_display_drawing();
     psx_vram_generation += n;
