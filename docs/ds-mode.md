@@ -1154,3 +1154,18 @@ build/portified/src/ovl_XX/*.c).
 The renderer's profile is now flat in still fields (no function above 7% of busy time but the models' two passes,
 9-17%); d4_f2110 is mostly its models (2,714 polygons a scene). Battles: native_run and port_native_mesh ~9% each,
 emit_scene 7.6%, the software rasteriser's rows ~8% (the 2D layer and additive copies).
+
+Later the same day:
+- hybrid_sprite16 clips tiles crossing or outside the drawing area itself: d2_f0931 53.4 -> 50.5, d2_f1057 23.3 ->
+  22.4 (layers larger than the screen send many tiles outside it).
+- The additive light's per-primitive divisions by constants as multiplies (gx_hybrid.c is Thumb, which has no long
+  multiply: a constant division is a call): d2_f0931 -> 49.7.
+- The models' chunk-room check against a local end: within noise.
+- Tried without gain: the 2D layer's block hashes kept per buffer (fields alternate buffers, so every present
+  re-hashed its touched blocks; but the game redraws them every frame, so they are dirty anyway); the hash loop four
+  words a step.
+- The user chose approximate model shading (2026-10-28, over frame skipping and an early bottom-screen UI): in DS mode
+  the models' Gouraud polygons are drawn flat in their first vertex's colour (MODELGOURAUD=1 keeps them exact).
+  Battles d2_b0300 27.8 -> 27.5, d1_b0032 22.6 -> 22.3, fields about 0.1; the measured scenes' frames are unchanged
+  (their models' vertex colours are equal). Letting the DS cull instead of the PS1's NCLIP would emit every polygon
+  (the emit costs about six times the culling test), and one depth per group breaks the models' own occlusion.
