@@ -4876,11 +4876,14 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         /* also for a background that has held still a few frames (a still camera: composed once, its sprites then
          * neither planned nor sent to the 3D engine), dropped as soon as it moves (a scrolling scene would compose
          * every frame) */
+        /* (still: at most a few bands changed since the last scene, an animated tile's say, which the composite
+         * redraws alone; a moving camera changes them all) */
         static int bgc_keep, bg_still;
-        static u32 bg_last;
-        u32 bg_now = bgc_frame_hash = bgc_hash(b, display_h);
-        bg_still = bg_now == bg_last ? bg_still + 1 : 0;
-        bg_last = bg_now;
+        static u32 bg_last_bands[BGC_BANDS];
+        bgc_frame_hash = bgc_hash(b, display_h);
+        int bands_changed = 0;
+        for (int i = 0; i < BGC_BANDS; ++i) { bands_changed += bgc_bands_now[i] != bg_last_bands[i]; bg_last_bands[i] = bgc_bands_now[i]; }
+        bg_still = bands_changed <= BGC_BANDS / 2 ? bg_still + 1 : 0;
         if (polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) bgc_keep = 60;
         else if (bg_still >= 4) bgc_keep = bgc_keep > 1 ? bgc_keep : 1;
         else if (!bg_still) bgc_keep = bgc_keep > 1 ? bgc_keep - 1 : 0;
