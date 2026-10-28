@@ -1099,3 +1099,32 @@ debugging in ovl_0a), the group's projection read back sane (d4_f2110's first gr
 (read back from the clip matrix) has the layout assumed (translation in the last row, 4096 = 1.0). Vertices given as
 their CPU view coordinates under one scale matrix (no bone matrices) still draw as huge garbage: the perspective
 projection itself, or how the 3D engine takes it, is what's wrong. Not taken further.
+
+### What the background costs, and the composite under animated tiles (2026-10-28)
+
+Upper bounds, ms per VBlank: with fldbg_draw not called at all (no background), d4_f2110 26.5 -> 19.8, d4_f0351
+26.1 -> 17.5, d2_f0955 30.5 -> 21.8; with the game building and linking its tiles but the tiles unlinked before the
+walk (field_bg.c), 20.7, 16.7 (PS1 speed) and 24.1. So the game's own tile work is under 1 ms; the port's handling of
+400-480 tiles a scene is 6-9 ms, about 1,000 cycles a tile. Most of the still fields put one or two tiles at each OT
+entry (tiles at the heads of entries, d4_f0351: 335, none in runs of 4 or more; d4_f2110: 483, 120 in runs of 4 or
+more; d1_f0453: 470, 280; d2_f0955: 410, all in 3 runs), so the background runs (field_bg.c's markers) can't take a
+still field's tiles.
+
+d4_f0351's frame went to the 3D engine tile by tile: its fire (an animated layer, 9 of the 32 bands every fourth
+scene) reset the composite's stillness count, so the composite never held. The count now takes a scene as still when
+at most half its bands changed (the composite redraws the changed rows alone; a moving camera changes all of them):
+d4_f0351 26.1 -> 24.8, and its frame much nearer the software reference (blurred difference 8.17 -> 1.51: the
+composite draws the tiles as the PS1 does, the 3D engine samples them). The other seven of the 8-field set are
+unchanged, frames identical.
+
+The same scene's additive glow is approximated in 3D (its area past a sixth of the screen), from an A5I3 copy whose 8
+colours conv_choose picks from the texture's CLUT each time the texture is loaded (once a scene: the CLUT animates,
+so a cache of choices never hits). Its candidate dedupe was a linear search per CLUT entry and its code a second
+nearest-colour pass; now a hash in conv_scratch and the farthest-point search's own nearest: d4_f0351 24.85 -> 23.07,
+frames identical.
+
+With the composite holding, d4_f0351 (23.1) still spends ~6 ms on its tiles: recording (hybrid_rect and the GP0
+path, ~7% of its busy time), the composite's per-primitive passes (bgc_use, sources, row recomposes for the fire),
+the emit of the tiles in front of a model, and the planning. d4_f2110's frame is mostly its models: 9 groups, 3,334
+vertices and 2,714 polygons a scene (1,168 facing the camera), port_native_field_mesh 16.6% and fm_emit 15.5% of its
+busy time in a steady window (tools: build/validation/p3_window.sh, two states of one PROFILE=3 ROM subtracted).
