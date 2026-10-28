@@ -2379,23 +2379,6 @@ static inline int edge_side(const Prim *p, int a, int b, int x, int y) {
     return c > 0 ? 1 : c < 0 ? -1 : 0;
 }
 
-/* p and q share an edge with p's other vertices on one side of it and q's on the other */
-static int neighbours(const Prim *p, const Prim *q) {
-    int pa = -1, pb = -1, qa = -1, qb = -1;
-    for (int i = 0; i < p->n; ++i)
-        for (int j = 0; j < q->n; ++j)
-            if (p->x[i] == q->x[j] && p->y[i] == q->y[j]) {
-                if (pa < 0) { pa = i; qa = j; }
-                else if (pb < 0 && i != pa) { pb = i; qb = j; }
-            }
-    if (pb < 0) return 0;
-    int ps = 0, qs = 0;
-    for (int i = 0; i < p->n; ++i) if (i != pa && i != pb) ps += edge_side(p, pa, pb, p->x[i], p->y[i]);
-    for (int j = 0; j < q->n; ++j) if (j != qa && j != qb) qs += edge_side(p, pa, pb, q->x[j], q->y[j]);
-    (void)qb;
-    return (ps > 0 && qs < 0) || (ps < 0 && qs > 0);
-}
-
 static int translucent_id(const Prim *p, int polys) {
     int id = 1 + (polys & 31);
     const int n = p->n;
@@ -2413,10 +2396,22 @@ static int translucent_id(const Prim *p, int polys) {
     for (u32 cand = two | (any & recent_dups); cand; cand &= cand - 1) {
         const int k = debruijn_ctz[((cand & -cand) * 0x077CB531u) >> 27];
         const Prim *q = recent[k];
-        int shared = 0; /* two vertices in common before the side test */
+        const u32 *qxy = recent_xy[k];
+        const int qn = recent_n[k];
+        /* p and q share an edge with p's other vertices on one side of it and q's on the other: the first matching
+         * vertex, then the first match of another of p's */
+        int pa = -1, pb = -1, qa = -1, qb = -1;
         for (int i = 0; i < n; ++i)
-            for (int j = 0; j < recent_n[k]; ++j) shared += xy[i] == recent_xy[k][j];
-        if (shared >= 2 && neighbours(p, q)) { id = recent_id[k]; break; }
+            for (int j = 0; j < qn; ++j)
+                if (xy[i] == qxy[j]) {
+                    if (pa < 0) { pa = i; qa = j; }
+                    else if (pb < 0 && i != pa) { pb = i; qb = j; }
+                }
+        if (pb < 0) continue;
+        int ps = 0, qs = 0;
+        for (int i = 0; i < n; ++i) if (i != pa && i != pb) ps += edge_side(p, pa, pb, p->x[i], p->y[i]);
+        for (int j = 0; j < qn; ++j) if (j != qa && j != qb) qs += edge_side(p, pa, pb, q->x[j], q->y[j]);
+        if ((ps > 0 && qs < 0) || (ps < 0 && qs > 0)) { id = recent_id[k]; break; }
     }
     const int r = recent_at;
     const u16 keep = (u16)~(1u << r);
