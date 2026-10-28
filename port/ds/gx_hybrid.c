@@ -4011,13 +4011,15 @@ typedef struct {
 } FmTake;
 static inline __attribute__((always_inline)) void fm_take_kind(FmTake *k, FStore *st, u32 *const front, const s32 *const sxy,
                                                                const int nv, const int t, int count, const int *const sz,
-                                                               const int clip_y, const int mirror) {
-    const int quad = !(t & 1), flags_at = mesh_flags_at[t], textured = t < 4, nvp = quad ? 4 : 3;
+                                                               const int clip_y, const int mirror, const int quad) {
+    /* (quad constant, the kind's sizes and offsets from its tables: two copies, for slot 0's room) */
+    const int flags_at = mesh_flags_at[t], textured = t < 4, nvp = quad ? 4 : 3;
+    const int msize = mesh_size[t], psize = fm_size[t];
     const u8 *src = k->src, *pk = k->pk;
     int pi = k->pi, opaque = k->opaque, front_polys = k->front_polys, front_verts = k->front_verts;
     int lu0 = k->lu0, lv0 = k->lv0, lu1 = k->lu1, lv1 = k->lv1, gathering = k->gathering, last_use = k->last_use;
     u32 fw = k->fw;
-    for (; count > 0; --count, src += mesh_size[t], pk += fm_size[t], ++pi) {
+    for (; count > 0; --count, src += msize, pk += psize, ++pi) {
       do { /* (a continue leaves this, for the word's store below) */
         if (pk[7] & 2) continue;
         ++opaque;
@@ -4119,16 +4121,8 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     for (int t = 0; t < 8; ++t) {
         const int count = *(const u16 *)(g + 2 + 2 * t);
         if (!count) continue;
-        switch (t) { /* (each kind its own loop: its sizes, offsets and vertex count constant) */
-        case 0: fm_take_kind(&k, st, front, sxy, nv, 0, count, n->sz, n->clip_y, n->mirror); break;
-        case 1: fm_take_kind(&k, st, front, sxy, nv, 1, count, n->sz, n->clip_y, n->mirror); break;
-        case 2: fm_take_kind(&k, st, front, sxy, nv, 2, count, n->sz, n->clip_y, n->mirror); break;
-        case 3: fm_take_kind(&k, st, front, sxy, nv, 3, count, n->sz, n->clip_y, n->mirror); break;
-        case 4: fm_take_kind(&k, st, front, sxy, nv, 4, count, n->sz, n->clip_y, n->mirror); break;
-        case 5: fm_take_kind(&k, st, front, sxy, nv, 5, count, n->sz, n->clip_y, n->mirror); break;
-        case 6: fm_take_kind(&k, st, front, sxy, nv, 6, count, n->sz, n->clip_y, n->mirror); break;
-        default: fm_take_kind(&k, st, front, sxy, nv, 7, count, n->sz, n->clip_y, n->mirror); break;
-        }
+        if (t & 1) fm_take_kind(&k, st, front, sxy, nv, t, count, n->sz, n->clip_y, n->mirror, 0);
+        else fm_take_kind(&k, st, front, sxy, nv, t, count, n->sz, n->clip_y, n->mirror, 1);
     }
     pi = k.pi; fw = k.fw; last_use = k.last_use;
     const int opaque = k.opaque, front_polys = k.front_polys, front_verts = k.front_verts, gathering = k.gathering;
