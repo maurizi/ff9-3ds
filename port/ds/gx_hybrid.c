@@ -5089,7 +5089,8 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         /* (still: at most a few bands changed since the last scene, an animated tile's say, which the composite
          * redraws alone; a moving camera changes them all) */
         static int bgc_keep, bg_still;
-        /* (the changed rectangle: the changed bands' range by the changed columns'; still while it's at most half) */
+        /* (the changed rectangle: the changed bands' range by the changed columns'; still while it's at most a quarter:
+         * a larger one composed in software every scene costs more than the 3D engine's tiles, d1_f0056 37.3 -> 29.3) */
         static u32 bg_last_bands[BGC_BANDS], bg_last_cols[BGC_COLS];
         bgc_frame_hash = bgc_hash(b, display_h);
         int blo = BGC_BANDS, bhi = -1, clo = BGC_COLS, chi = -1;
@@ -5102,7 +5103,7 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
             bg_last_cols[i] = bgc_scols_now[i];
         }
         const int changed_area = bhi < 0 || chi < 0 ? 0 : (bhi - blo + 1) * (chi - clo + 1);
-        bg_still = changed_area * 2 <= BGC_BANDS * BGC_COLS ? bg_still + 1 : 0;
+        bg_still = changed_area * 4 <= BGC_BANDS * BGC_COLS ? bg_still + 1 : 0;
         /* (over the budget: the composite, kept a while, even for a moving background, composed in software every
          * scene. Without it a scrolling scene over the budget goes two-pass, whose banks C and D don't hold its
          * textures: walking in d4_f2110 then drew in software, 83 ms per VBlank against 31) */
