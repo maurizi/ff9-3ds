@@ -5030,7 +5030,9 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         int bands_changed = 0;
         for (int i = 0; i < BGC_BANDS; ++i) { bands_changed += bgc_bands_now[i] != bg_last_bands[i]; bg_last_bands[i] = bgc_bands_now[i]; }
         bg_still = bands_changed <= BGC_BANDS / 2 ? bg_still + 1 : 0;
-        if (polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) bgc_keep = 60;
+        /* (over the budget: the composite, kept a while, unless the background is moving, which would compose
+         * in software every scene: without it the background runs stay on, d2_f0931 then fits the 3D engine) */
+        if ((polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) && bg_still) bgc_keep = 60;
         else if (bg_still >= 4) bgc_keep = bgc_keep > 1 ? bgc_keep : 1;
         else if (!bg_still) bgc_keep = bgc_keep > 1 ? bgc_keep - 1 : 0;
         else if (bgc_keep) --bgc_keep;
