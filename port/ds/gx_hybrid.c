@@ -4158,6 +4158,7 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
         u32 uv[4] = {0, 0, 0, 0}, *header = wp++, ids = 0;
         int shift = 0, tu = 0, tv = 0;
         if (textured) {
+#pragma GCC unroll 4
             for (int i = 0; i < nv; ++i) uv[i] = *(const u32 *)(pk + fm_xy_at[t][i] + 4);
             u32 key = uv[0] >> 16 | (uv[1] & 0xFFFF0000);
             int u = last_use;
@@ -4176,6 +4177,7 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
         *header = ids | (u32)CMD_BEGIN << shift;
         *wp++ = quad ? 1 : 0;
         const int raw = pk[7] & 1;
+#pragma GCC unroll 4 /* (constant indices: the vertices' words stay in registers) */
         for (int j = 0; j < nv; ++j) {
             const int i = quad && j >= 2 ? 5 - j : j; /* (the 3D engine's quads go round: 0 1 3 2) */
             if (gouraud || j == 0) { /* (a flat polygon's colour holds for its vertices) */
