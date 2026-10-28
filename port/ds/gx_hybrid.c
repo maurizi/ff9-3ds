@@ -128,6 +128,7 @@ typedef struct {
     int mesh_drop;       /* plan_drops: the meshes' polygons below this (twice the area) are dropped, */
     int mesh_quota_bound, mesh_quota; /* and the first mesh_quota below mesh_quota_bound */
     int bg_runs, bg_run_tiles; /* its background runs (bg_runs_of) and their tiles */
+    int cap; /* prims_cap: prims_max less the runs' room (bg_runs_set) */
 } Buffer;
 
 static Buffer buffers[2];
@@ -195,7 +196,11 @@ static int bg_tile_prim(const Buffer *b, const BgRun *r, const u32 *pkt, u32 xy,
 static int prims_max;
 /* the primitives a buffer can record: its runs' tiles take the rest (their snapshots, and their plans' table rows) */
 #define BG_RUN_ROWS (int)((BG_RUNS * sizeof(BgRun) + sizeof(Prim) - 1) / sizeof(Prim))
-static inline int prims_cap(const Buffer *b) { return prims_max - (b->bg_runs ? BG_RUN_ROWS + b->bg_run_tiles : 0); }
+static inline int prims_cap(const Buffer *b) { return b->cap; }
+static inline void bg_runs_set(Buffer *b, int runs, int tiles) {
+    b->bg_runs = runs; b->bg_run_tiles = tiles;
+    b->cap = prims_max - (runs ? BG_RUN_ROWS + tiles : 0);
+}
 /* the buffer's runs, then their tiles downwards, at the end of its primitives' room */
 static inline BgRun *bg_runs_of(const Buffer *b) { return (BgRun *)(b->prims + prims_max) - BG_RUNS; }
 static inline BgTile *bg_tile(const Buffer *b, int i) { return (BgTile *)bg_runs_of(b) - 1 - i; }
@@ -273,7 +278,7 @@ static void note_buffer(int x, int y, int w, int h) {
     Buffer *b = !buffers[0].valid ? &buffers[0] : !buffers[1].valid ? &buffers[1] : NULL;
     if (!b) b = displayed() == &buffers[0] ? &buffers[1] : &buffers[0]; /* a third area replaces the hidden one */
     b->x = x; b->y = y; b->w = w; b->h = h; b->valid = 1; b->shown = 1; b->count = 0; b->submitted = 0;
-    b->bg_runs = b->bg_run_tiles = 0;
+    bg_runs_set(b, 0, 0);
 }
 
 /* Field: b's PS1 VRAM all the key colour */
@@ -292,7 +297,7 @@ static void key_fill(Buffer *b) { fill_buffer(b, FIELD_KEY); }
 static void start_scene(Buffer *b, int filled /* the game's fill is about to cover it */) {
     b->shown = 0;
     b->count = 0;
-    b->bg_runs = b->bg_run_tiles = 0;
+    bg_runs_set(b, 0, 0);
     b->last_bucket = RANK_BUCKETS;
     b->scene_gen = ~0u;
     b->submitted = 0;
@@ -1072,7 +1077,7 @@ static void go_software(Buffer *b) {
         }
     } else replay(b, 0, b->count, -1);
     b->count = 0;
-    b->bg_runs = b->bg_run_tiles = 0; /* (replayed with the primitives) */
+    bg_runs_set(b, 0, 0); /* (replayed with the primitives) */
     b->soft = 1;
     dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
 }
@@ -1851,7 +1856,7 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
      * ovl_0a's, like them */
     if (b->bg_runs) {
         if (ovl0a_resident()) bg_runs_plan(b, use_runs, &last_group, &last_palette);
-        else b->bg_runs = b->bg_run_tiles = 0;
+        else bg_runs_set(b, 0, 0);
     }
     /* the world terrain's textures: each page and CLUT as a primitive covering its texels */
     struct Terrain *tr = scene_terrain(b);
@@ -3765,8 +3770,7 @@ PORT_OVERLAY_CODE(0a) int gxh_bg_run(unsigned int *head, int count) {
     r->count = (u16)count; r->at = (u16)b->count; r->slot = (u16)world_entry_depth((int)psx_ot_slot);
     r->tiles_at = (u16)b->bg_run_tiles;
     r->x0 = (s16)x0; r->y0 = (s16)y0; r->x1 = (s16)x1; r->y1 = (s16)y1;
-    b->bg_runs++;
-    b->bg_run_tiles += count;
+    bg_runs_set(b, b->bg_runs + 1, b->bg_run_tiles + count);
     return 1;
 }
 
@@ -3840,7 +3844,7 @@ static void buffers_overwritten(uintptr_t at, unsigned int len) {
     if (place->world) { /* (the world's slots and terrain after the buffers, in the same code range) */
         uintptr_t lo = (uintptr_t)psx_ram + place->at + OVL0C_PRIMS_AT_0, hi = (uintptr_t)psx_ram + place->at + OVL0C_CODE_END;
         if (at < hi && lo < at + len)
-            for (int i = 0; i < 2; ++i) { buffers[i].count = 0; buffers[i].submitted = 0; buffers[i].bg_runs = buffers[i].bg_run_tiles = 0; }
+            for (int i = 0; i < 2; ++i) { buffers[i].count = 0; buffers[i].submitted = 0; bg_runs_set(&buffers[i], 0, 0); }
         if (at < hi && lo < at + len) for (int i = 0; i < 3; ++i) terrain_reset(terrain_ring[i]);
     }
     for (int i = 0; i < 2; ++i) {
@@ -3848,7 +3852,7 @@ static void buffers_overwritten(uintptr_t at, unsigned int len) {
         if (at < hi && lo < at + len) { buffers[i].count = 0; buffers[i].submitted = 0; buffers[i].meshes = 0; buffers[i].pool_used = 0; }
         for (int r = 0; r < buffers[i].bg_runs; ++r) /* (a run's tiles are the game's packets) */
             if (at < bg_runs_of(&buffers[i])[r].hi && bg_runs_of(&buffers[i])[r].lo < at + len) {
-                buffers[i].bg_runs = buffers[i].bg_run_tiles = 0;
+                bg_runs_set(&buffers[i], 0, 0);
                 break;
             }
     }
@@ -4231,7 +4235,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
 static void use_place(const Place *p) {
     place = p;
     bg_runs_off = 1; bg_runs_calm = 0; bg_runs_latched = 0;
-    for (int i = 0; i < 2; ++i) buffers[i].bg_runs = buffers[i].bg_run_tiles = 0;
+    for (int i = 0; i < 2; ++i) bg_runs_set(&buffers[i], 0, 0);
     { extern const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi; psx_ot_marker_lo = psx_ot_marker_hi = NULL; }
     for (int i = 0; i < 2; ++i) buffers[i].prims = (Prim *)(psx_ram + p->at + p->prims_at[i]);
     prims_max = (int)p->max_prims;
@@ -4252,6 +4256,7 @@ static void use_place(const Place *p) {
             prims_max = fit;
         }
     }
+    for (int i = 0; i < 2; ++i) bg_runs_set(&buffers[i], 0, 0); /* (the capacity) */
     for (int i = 0; i < 2; ++i) {
         buffers[i].pool = NULL; buffers[i].ranks = NULL; buffers[i].meshes = 0; buffers[i].pool_used = 0;
         buffers[i].slots = NULL;
@@ -4392,7 +4397,7 @@ void gxh_enable(int on) {
         ramp_written = 0;
         memset(palettes, 0, sizeof palettes);
         touch_stale = 1;
-        for (int i = 0; i < 2; ++i) { buffers[i].valid = 0; buffers[i].count = 0; buffers[i].bg_runs = buffers[i].bg_run_tiles = 0; }
+        for (int i = 0; i < 2; ++i) { buffers[i].valid = 0; buffers[i].count = 0; bg_runs_set(&buffers[i], 0, 0); }
         ++buffers_version;
         gp0_backend = &hybrid_backend;
     } else {
