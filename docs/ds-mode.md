@@ -1276,3 +1276,28 @@ The host sweep (1,131 field fixtures, 1,500 frames each, with counters) found 43
 native) and 3 drawing reflections (now native). The main executable's GTE calls (math_buildRotMatrixZYX's GPF) don't
 take gte.h's fast paths (DECOMP_GTE_BINS has the overlays only); adding main changed nothing measurable (~150 calls a
 frame), not kept.
+
+### Semi-transparent background sprites in the composite; the reuse cache's ceiling (2026-10-28, night)
+
+The user's choices of 2026-10-28: native translucent model polygons (approximate order) and research into reusing
+unchanged content between frames.
+
+What the effect-heavy fields' 450-540 semi-transparent primitives a scene are (counted by kind): in d4_f2904 and
+d1_f0604 none are model polygons: they are background sprites (d4_f2904's mist: 165 additive, 279 subtractive, about
+112,000 pixels; d1_f0604: 280 additive sprites and 260 effect polygons); d3_f1818's 1,414 translucent model polygons
+are all additive (mode 3) in 2 groups. So native translucent models would help few fields, and their blending would
+need the additive copies' machinery; not started.
+
+Semi-transparent background sprites now join the composite when they have held still 4 scenes (their own hash) and
+every one lies behind the scene's 3D primitives in its cells; their blending is then drawn exactly in software, and
+the opaque sprites behind them leave the 3D scene too. The composite's stillness counts the opaque sprites alone.
+d1_f0453 27.2 -> 23.4 standing, 27.1 -> 23.3 walking (its trees' shadows); d2_f1102 23.9 -> 21.5. Without the
+stillness condition, moving mist was composed in software every scene: d4_f2904 41 -> 86 ms (not kept). The room came
+from port_native_field_mesh's kinds in two copies instead of eight (the same speed, 3.9 KB).
+
+The reuse cache's ceiling, from the profiles: what a still scene redoes for unchanged content (recording the
+background's sprites, the composite's checks, planning, emitting the sprites left in 3D) is about 15-20% of its busy
+time (d4_f2110: ~3-5 ms of 24); the models (~32% there) animate every frame, and a walking scene's background changes
+every frame. Its memory: an emitted command list for the sprites left in 3D is ~14 words each (300 sprites: ~17 KB a
+buffer), against 13-16 KB of free heap; slot 0 and the overlay data have ~4 KB. Not started: worth at most a few ms
+in still scenes and none walking.
