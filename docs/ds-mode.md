@@ -1254,3 +1254,25 @@ translucent polygons) and the exact additive layer's software drawing (triangle,
 d3_f1551, d3_f1606, d3_f2055, d3_f2714, d4_f1911, d4_f1953, d4_f2934 (16.7-16.9), d1_f0205 17.3, d1_f0162 17.9;
 d2_f1425 19.0, d4_f2162 19.0, d4_f0351 21.2, d2_f1057 22.3, d2_f1102 23.9, d4_f2110 24.1, d3_f1811 24.4, d3_f1508
 25.5, d2_f1414 26.4, d1_f0453 26.9, d2_f0955 29.1, d4_f1706 31.0, d3_f1812 45.5, d2_f0931 46.2, d1_f0574 50.1.
+
+### Walking, a wider sample, and more slow paths (2026-10-28, night)
+
+The benchmark fixtures stand still (no input). With the player walking (scripted d-pad holds from frame 500,
+build/validation/dsmode_walk_w.sh, PROFWIN=128): d4_f2110 31.1 (24.1 standing), d4_f0351 25.0 (20.1), d1_f0453
+27.1, d1_f0162 19.6, d2_f1057 22.0, d2_f1102 21.4, d3_f1606 17.4, d1_f0110 17.0. Walking scrolls the camera, the
+composite can't hold, and d4_f2110 goes past the 3D engine's budget: the composite is then kept and recomposed in
+software every scene. Taking it away for a moving background (fbc3c31) sent walking d4_f2110 two-pass, its textures
+didn't fit banks C and D and it drew in software at 83 ms: reverted (1243743). Renderer changes are now checked
+walking as well as standing.
+
+A wider sample (every 19th of the 1,131 field fixtures, 60, standing): median 26.5 ms per VBlank, 9 at 16.7-17, 16 at
+or under 19.2; the worst d3_f1818 46.2, d1_f0604 43.6, d3_f0767 42.9, d1_f0501 41.5, d2_f0759 41.3, d4_f2904 40.9,
+d4_f0759 38.1, d1_f0056 37.3. All draw in 3D. Two slow paths found there and fixed exactly:
+- Lines wholly outside the drawing area: Burmecia's rain (d2_f0759) sent ~50,000 a run to the software rasteriser,
+  which stepped each pixel testing the area. Now nothing is drawn at once: d2_f0759 41.3 -> 23.6, d3_f0767 42.9 ->
+  38.6.
+- fldmdl_drawMeshMirrored had no native path (3 fixtures in the sweep): d3_f2602 17.3 -> 16.7.
+The host sweep (1,131 field fixtures, 1,500 frames each, with counters) found 43 fixtures drawing clip-Y groups (now
+native) and 3 drawing reflections (now native). The main executable's GTE calls (math_buildRotMatrixZYX's GPF) don't
+take gte.h's fast paths (DECOMP_GTE_BINS has the overlays only); adding main changed nothing measurable (~150 calls a
+frame), not kept.
