@@ -270,6 +270,19 @@ void port_scenario_bootstrap(void) {
         if(scenario.world_explicit) prepare_return_world(d); else prepare_return_field(d);
         prepare_battle_resources(d);d->battleId=(u16)scenario.battle;
     }
+#ifndef __arm__
+    { /* FF9_SCENARIO_EXPORT=DIR (host): the party and story as bootstrapped, for the original PS1 to take the same
+       * state (tools/psx_field_fixture.py, tools/psx_battle_fixture.py) */
+        const char *dir=getenv("FF9_SCENARIO_EXPORT");
+        if(dir&&*dir) {
+            char path[512];FILE *f;
+            snprintf(path,sizeof path,"%s/characters.bin",dir);
+            if((f=fopen(path,"wb"))) {fwrite(d->characters,1,sizeof d->characters,f);fclose(f);}
+            snprintf(path,sizeof path,"%s/events.bin",dir);
+            if((f=fopen(path,"wb"))) {fwrite(&g_evtGlobalVars,1,sizeof g_evtGlobalVars,f);fclose(f);}
+        }
+    }
+#endif
     port_log("scenario entered without title/intro: mode %d, disc %d, id %d\n",scenario.kind,scenario.disc,
              scenario.kind==1?scenario.field:scenario.kind==2?scenario.battle:scenario.world);
 }
