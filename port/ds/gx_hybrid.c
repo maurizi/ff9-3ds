@@ -1298,7 +1298,11 @@ static inline u32 whiten(u32 c) { return whiten_by(c, ADD_BASE); }
  * it, per channel (blue light on blue saturates blue, it doesn't whiten), kept per 16-pixel cell: a primitive adds
  * its light (hue x brightness) to every cell whose centre it covers. The texture palettes (shared) take the base only. */
 enum { LIGHT_W = 20, LIGHT_H = 15 };
-static u8 light_cells[LIGHT_H][LIGHT_W][3];
+static u32 light_cells[LIGHT_H][LIGHT_W]; /* r | g << 10 | b << 20, each at most 255 */
+#define LIGHT_LANES 0x0FF3FCFFu /* (the three 8-bit values' bits) */
+/* x / d for x up to 24 x 255, d up to 24, as x * (2^19 / d rounded up) >> 19 (exact over that range) */
+static const u32 light_recip[ADD_STACK_CELLS + 1] = {0, 524288, 262144, 174763, 131072, 104858, 87382, 74899, 65536,
+    58255, 52429, 47663, 43691, 40330, 37450, 34953, 32768, 30841, 29128, 27595, 26215, 24967, 23832, 22796, 21846};
 static u32 add_white = ADD_BASE; /* this primitive's, for rgb_for */
 /* whether (x, y) is inside triangle a b c (either winding) */
 static inline int inside(int x, int y, int ax, int ay, int bx, int by, int cx, int cy) {
@@ -1320,8 +1324,8 @@ static u32 light_under(const Prim *p, int alpha, u32 hue) {
     x1 = x1 < 0 ? -1 : x1 >> 4; y1 = y1 < 0 ? -1 : y1 >> 4;
     if (x1 >= LIGHT_W) x1 = LIGHT_W - 1;
     if (y1 >= LIGHT_H) y1 = LIGHT_H - 1;
-    u32 add[3] = {div31x(hue & 31, alpha), div31x(hue >> 5 & 31, alpha), div31x(hue >> 10 & 31, alpha)};
-    u32 sum[3] = {0, 0, 0}, cells = 0;
+    const u32 add = div31x(hue & 31, alpha) | div31x(hue >> 5 & 31, alpha) << 10 | div31x(hue >> 10 & 31, alpha) << 20;
+    u32 sum_r = 0, sum_g = 0, sum_b = 0, cells = 0;
     int rect = (p->flags & P_RECT) != 0;
     for (int y = y0; y <= y1; ++y)
         for (int x = x0; x <= x1; ++x) {
@@ -1331,17 +1335,19 @@ static u32 light_under(const Prim *p, int alpha, u32 hue) {
                      inside(cx, cy, p->x[0], p->y[0], p->x[1], p->y[1], p->x[2], p->y[2]) ||
                      (p->n == 4 && inside(cx, cy, p->x[1], p->y[1], p->x[2], p->y[2], p->x[3], p->y[3]));
             if (!in) continue;
-            u8 *l = light_cells[y][x];
-            for (int c = 0; c < 3; ++c) {
-                sum[c] += l[c];
-                u32 v = l[c] + add[c];
-                l[c] = (u8)(v > 255 ? 255 : v);
-            }
+            u32 *l = &light_cells[y][x];
+            const u32 v = *l;
+            sum_r += v & 0xFF;
+            sum_g += v >> 10 & 0xFF;
+            sum_b += v >> 20;
+            const u32 t = v + add, over = t & 0x10040100u; /* (a lane past 255: 255) */
+            *l = (t | (over - (over >> 8))) & LIGHT_LANES;
             ++cells;
         }
+    const u32 sum[3] = {sum_r, sum_g, sum_b};
     u32 w = 0;
     for (int c = 0; c < 3; ++c) {
-        u32 under = cells && cells <= ADD_STACK_CELLS ? sum[c] / cells : 0;
+        u32 under = cells && cells <= ADD_STACK_CELLS ? sum[c] * light_recip[cells] >> 19 : 0;
         u32 v = ADD_WHITEN + (under > ADD_STACK_MAX ? ADD_STACK_MAX : under);
         w |= (v > 31 ? 31 : v) << (5 * c);
     }
