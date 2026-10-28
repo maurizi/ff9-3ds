@@ -3623,6 +3623,52 @@ static int field_sprite(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int w, int
     return 1;
 }
 
+/* field_sprite from a texture page + SPRT_16 packet's own words (a field's background tile: gp0_tpage_sprite16), the
+ * same record without decoding them into a mode and a vertex first (0: left to hybrid_rect) */
+static int hybrid_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc) {
+    if (!place->field) return 0;
+    Buffer *shown, *b = target(&shown);
+    if (!b || b == shown || b->soft || gp0_state.twin_mask_x || gp0_state.twin_mask_y || gp0_state.set_mask ||
+        gp0_state.check_mask || b->count >= prims_cap(b))
+        return 0;
+    const int u = (int)(uvc & 0xFF), v = (int)(uvc >> 8 & 0xFF);
+    if (u > 240 || v > 240) return 0; /* (a page wrap) */
+    const int x = (int)(xy & 0x7FF) - (int)((xy & 0x400) << 1) + gp0_state.ofs_x;
+    const int y = (int)(xy >> 16 & 0x7FF) - (int)((xy >> 16 & 0x400) << 1) + gp0_state.ofs_y;
+    if (x < gp0_state.area_x0 || y < gp0_state.area_y0 || x + 16 > gp0_state.area_x1 + 1 || y + 16 > gp0_state.area_y1 + 1)
+        return 0;
+    ui_flush();
+    const u32 depth = tp >> 7 & 3, flags = P_TEXTURED | (cmd >> 24 & 1 ? P_RAW : 0) | (cmd >> 25 & 1 ? P_SEMI : 0) | P_RECT |
+                                           (tp & 0x200 ? P_DITHER : 0);
+    const u32 w0 = 4 | flags << 8 | (tp >> 5 & 3) << 16 | (depth == 3 ? 2 : depth) << 24;
+    const u32 w1 = (tp & 15) * 64 | (tp >> 4 & 1) * 256 << 16, w2 = (uvc >> 16 & 0x3F) * 16 | (uvc >> 22 & 0x1FF) << 16;
+    const int bx = x - b->x, by = y - b->y;
+    if (b->count) { /* extend_rect: the last record's row continued */
+        u32 *q = (u32 *)&b->prims[b->count - 1];
+        if (q[0] == w0 && q[1] == w1 && q[2] == w2 && (s16)(q[3] >> 16) == bx && (s16)q[5] == by && (s16)q[6] == by + 16 &&
+            ((q[7] ^ cmd) & 0xFF) == 0 && ((q[8] ^ cmd >> 8) & 0xFF) == 0 && ((q[9] ^ cmd >> 16) & 0xFF) == 0 &&
+            (int)(q[10] >> 8 & 0xFF) + 1 == u && (int)(q[11] & 0xFF) == v && (int)(q[11] >> 16 & 0xFF) == v + 15) {
+            Prim *p = (Prim *)q;
+            p->x[1] = p->x[3] = (s16)(bx + 16);
+            p->u[1] = p->u[3] = (u8)(u + 15);
+            return 1;
+        }
+    }
+    note_walk(b);
+    PrimCopy t;
+    const u32 x0 = (u16)bx, x1 = (u16)(bx + 16), y0 = (u16)by, y1 = (u16)(by + 16);
+    const u32 u0 = (u8)u, u1 = (u8)(u + 15), v0 = (u8)v, v1 = (u8)(v + 15);
+    t.w[0] = w0; t.w[1] = w1; t.w[2] = w2;
+    t.w[3] = t.w[4] = x0 | x1 << 16;
+    t.w[5] = y0 | y0 << 16; t.w[6] = y1 | y1 << 16;
+    t.w[7] = (cmd & 0xFF) * 0x01010101u; t.w[8] = (cmd >> 8 & 0xFF) * 0x01010101u; t.w[9] = (cmd >> 16 & 0xFF) * 0x01010101u;
+    t.w[10] = u0 | u1 << 8 | u0 << 16 | u1 << 24;
+    t.w[11] = v0 | v0 << 8 | v1 << 16 | v1 << 24;
+    note_depth(b);
+    store_prim(&b->prims[b->count++], &t);
+    return 1;
+}
+
 static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     Buffer *shown, *b = target(&shown);
     if (b && b != shown && place->field && field_sprite(b, m, v, w, h)) return;
@@ -3678,7 +3724,7 @@ static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     soft_touch(v->x, v->y, v->x + w - 1, v->y + h - 1);
 }
 
-static const Gp0Backend hybrid_backend = {hybrid_poly, hybrid_line, hybrid_rect, 0, 0};
+static const Gp0Backend hybrid_backend = {hybrid_poly, hybrid_line, hybrid_rect, 0, 0, hybrid_sprite16};
 
 /* ---- field background runs (port/game/field_bg.c) --------------------------------------------------------- */
 

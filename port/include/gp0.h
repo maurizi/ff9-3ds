@@ -38,6 +38,9 @@ typedef struct {
     void (*rect)(const Gp0Mode *m, const Gp0Vtx *v, int w, int h);
     void (*fill)(int x, int y, int w, int h, unsigned int rgb); /* fill command: VRAM coordinates, no offset */
     void (*frame)(void);  /* once per emulated VBlank, including waits between backbuffer updates */
+    /* optional: a texture page + SPRT_16 packet's words (gp0_tpage_sprite16, its bookkeeping done) taken as they are
+     * (0: given to rect) */
+    int (*sprite16)(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc);
 } Gp0Backend;
 
 extern const Gp0Backend *gp0_backend;

@@ -291,6 +291,8 @@ int gp0_tpage_sprite16(const unsigned int *w) {
         area_hits_valid = 1;
     }
     if (area_hits) psx_display_generation++;
+    ++psx_gpu_scene_prims;
+    if (gp0_backend->sprite16 && gp0_backend->sprite16(tp, w[1], w[2], w[3])) return 1;
     Gp0Mode m;
     m.textured = 1;
     m.raw = cmd & 1;
@@ -302,7 +304,6 @@ int gp0_tpage_sprite16(const unsigned int *w) {
     vtx(&v, w[2], w[1]);
     v.u = w[3] & 0xFF;
     v.v = (w[3] >> 8) & 0xFF;
-    ++psx_gpu_scene_prims;
     gp0_backend->rect(&m, &v, 16, 16);
     return 1;
 }
