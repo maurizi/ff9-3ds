@@ -1169,3 +1169,40 @@ Later the same day:
   Battles d2_b0300 27.8 -> 27.5, d1_b0032 22.6 -> 22.3, fields about 0.1; the measured scenes' frames are unchanged
   (their models' vertex colours are equal). Letting the DS cull instead of the PS1's NCLIP would emit every polygon
   (the emit costs about six times the culling test), and one depth per group breaks the models' own occlusion.
+
+### The original PS1's own speed in the benchmark fixtures (2026-10-28)
+
+The user asked for PS1 baselines (the game lags at times on a PS1). tools/psx_field_fixture.py and
+tools/psx_battle_perf.py put the original game (the decomp's PCSX-Redux, `tools/emu.py`) in the DS fixture's exact
+state: the host exports its bootstrapped party and story (`FF9_SCENARIO_EXPORT=DIR build/pc/ff9ds --scenario ...`
+writes characters.bin and events.bin), a field state on the same disc is loaded, the field is left through its own
+cleanup to main's dispatcher, the blobs and the target's CD extents (FF9.IMG directories 4 and 2, as
+opening_findSceneSectors finds them; battles through tools/psx_battle_fixture.py) are written, and the game's loader
+runs. Then, with no breakpoint set, a per-VBlank Lua listener counts VBlanks and GameData.unk8's flips (one per
+drawn frame) over 600 VBlanks after 900 to settle. Disc 4 had no field state: `ds_perf_disc4_treno` (card 1 FILE05,
+loaded through Continue) is new. The screenshots match the DS fixtures' scenes.
+
+VBlanks per game frame (fields pace at 2, battles at 4):
+
+| fixture | PS1 | PS1 ms per nominal VBlank | DS now |
+|---|---|---|---|
+| d1_f0110 | 1.99 | 16.6 | 16.7 |
+| d1_f0162 | 2.00 | 16.7 | 18.1 |
+| d1_f0453 | 1.99 | 16.6 | 27.0 |
+| d2_f0931 | 1.99 | 16.6 | 49.7 |
+| d2_f0955 | 2.00 | 16.7 | 29.1 |
+| d2_f1057 | 2.00 | 16.7 | 22.4 |
+| d4_f0351 | 2.00 | 16.7 | 21.2 |
+| d4_f1911 | 2.00 | 16.7 | 16.7 |
+| d4_f2110 | 2.00 | 16.7 | 24.2 |
+| d1_b0032 | 3.97 | 16.6 | 22.3 |
+| d1_b0071 | 4.00 | 16.7 | |
+| d2_b0128 | 3.97 | 16.6 | |
+| d2_b0300 | 3.97 | 16.6 | 27.5 |
+
+Every fixture runs at the PS1's full pace, so 16.7 ms stays the target for all of them. Caveat: Redux's interpreter
+charges a fixed cost per instruction and doesn't model the GPU's drawing time, so a PS1 slowdown that comes from the
+GPU (large translucent areas) or from cache misses wouldn't show; DuckStation models both more closely and would be
+the cross-check for a scene where the PS1 is suspected to lag. d2_f0931's fixture is a black screen with one line
+of text on both machines: the PS1 draws it at full pace while the DS spends 49.7 ms, so its hidden scene is the
+DS's waste to find.
