@@ -2366,8 +2366,12 @@ static void plan_drops(Buffer *b) {
 #define RECENT 16
 static const Prim *recent[RECENT];
 static u32 recent_xy[RECENT][4]; /* their vertices packed (x | y << 16), for the cheap shared-vertex test */
-static u64 recent_sig[RECENT];   /* a bit per vertex (a hash of its position): no common bit, no shared vertex */
-static u8 recent_id[RECENT], recent_dup[RECENT]; /* (a repeated vertex: one of p's can match two of its) */
+static u8 recent_bits[RECENT][4], recent_n[RECENT]; /* their vertices' hashes (6 bits of the position) */
+static u8 recent_id[RECENT];
+static u16 recent_by_bit[64]; /* the recent polygons with a vertex of each hash */
+static u16 recent_dups;       /* those with a repeated vertex (one of p's can match two of theirs) */
+static const u8 debruijn_ctz[32] = {0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8,
+                                    31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9};
 static int recent_at;
 
 static inline int edge_side(const Prim *p, int a, int b, int x, int y) {
@@ -2394,33 +2398,37 @@ static int neighbours(const Prim *p, const Prim *q) {
 
 static int translucent_id(const Prim *p, int polys) {
     int id = 1 + (polys & 31);
+    const int n = p->n;
     u32 xy[4], bit[4];
-    u64 sig = 0;
-    for (int i = 0; i < p->n; ++i) {
+    for (int i = 0; i < n; ++i) {
         xy[i] = (u16)p->x[i] | (u32)(u16)p->y[i] << 16;
         bit[i] = (xy[i] * 0x9E3779B1u) >> 26;
-        sig |= 1ull << bit[i];
     }
     int dup = 0;
-    for (int i = 1; i < p->n; ++i) for (int j = 0; j < i; ++j) dup |= xy[i] == xy[j];
-    for (int k = 0; k < RECENT; ++k) {
+    for (int i = 1; i < n; ++i) for (int j = 0; j < i; ++j) dup |= xy[i] == xy[j];
+    /* the recent polygons that can share two vertices with p: two of p's vertices' hashes among theirs, or a
+     * repeated vertex of theirs with one (the others share at most one); tested in their order, the first taken */
+    u32 any = 0, two = 0;
+    for (int i = 0; i < n; ++i) { const u32 m = recent_by_bit[bit[i]]; two |= any & m; any |= m; }
+    for (u32 cand = two | (any & recent_dups); cand; cand &= cand - 1) {
+        const int k = debruijn_ctz[((cand & -cand) * 0x077CB531u) >> 27];
         const Prim *q = recent[k];
-        if (!q || !(sig & recent_sig[k])) continue;
-        /* (two shared vertices: two of p's bits in its signature, or one of p's matching its repeated vertex) */
-        if (!recent_dup[k]) {
-            const u64 rs = recent_sig[k];
-            int in = 0;
-            for (int i = 0; i < p->n; ++i) in += (int)(rs >> bit[i]) & 1;
-            if (in < 2) continue;
-        }
         int shared = 0; /* two vertices in common before the side test */
-        for (int i = 0; i < p->n; ++i)
-            for (int j = 0; j < q->n; ++j) shared += xy[i] == recent_xy[k][j];
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < recent_n[k]; ++j) shared += xy[i] == recent_xy[k][j];
         if (shared >= 2 && neighbours(p, q)) { id = recent_id[k]; break; }
     }
-    recent[recent_at] = p; recent_id[recent_at] = (u8)id; recent_sig[recent_at] = sig; recent_dup[recent_at] = (u8)dup;
-    for (int i = 0; i < p->n; ++i) recent_xy[recent_at][i] = xy[i];
-    recent_at = (recent_at + 1) % RECENT;
+    const int r = recent_at;
+    const u16 keep = (u16)~(1u << r);
+    for (int j = 0; j < recent_n[r]; ++j) recent_by_bit[recent_bits[r][j]] &= keep; /* (its slot's last polygon) */
+    recent[r] = p; recent_id[r] = (u8)id; recent_n[r] = (u8)n;
+    recent_dups = (u16)((recent_dups & keep) | (dup ? 1u << r : 0));
+    for (int i = 0; i < n; ++i) {
+        recent_xy[r][i] = xy[i];
+        recent_bits[r][i] = (u8)bit[i];
+        recent_by_bit[bit[i]] |= (u16)(1u << r);
+    }
+    recent_at = (r + 1) % RECENT;
     return id;
 }
 
@@ -2926,6 +2934,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 glow_alpha[abr][m] = (u8)(a > 31 ? 31 : a);
             }
     memset(recent, 0, sizeof recent);
+    memset(recent_n, 0, sizeof recent_n); memset(recent_by_bit, 0, sizeof recent_by_bit); recent_dups = 0;
     for (int i = 0; i < PAL_SLOTS; ++i) /* (index0_transparent) */
         if (palettes[i].used) palettes[i].index0 = psx_vram[(palettes[i].y & 511) * 1024 + (palettes[i].x & 1023)] ? 0 : 1 << 29;
     u32 attr = INITIAL_ATTR, image = 0, palette = ~0u;
