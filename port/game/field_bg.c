@@ -17,9 +17,10 @@ s32 o0a_fldbg_draw(void);
 
 #if defined(PORT_GX_HYBRID) && defined(PORT_FIELD_GX)
 extern const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi;
-/* gx_hybrid.c: the run's tiles taken by the renderer (0: drawn as packets, one by one) */
+/* gx_hybrid.c: the run's tiles taken by the renderer (0: drawn as packets, one by one; 2: so, and holding still) */
 int gxh_bg_run(unsigned int *head, int count);
 void gxh_bg_runs_reset(void);
+int gxh_bg_runs_on(void);
 
 /* a run of one layer's tiles linked at one OT entry: its first (the walk's first: the newest linked) and how many */
 typedef struct { u32 tag; u32 *head; u16 count, entry; } BgMarker;
@@ -29,12 +30,20 @@ typedef struct { u32 tag; u32 *head; u16 count, entry; } BgMarker;
 #define BG_DATA __attribute__((section(".psxovl_0a.data")))
 static BgMarker bg_markers[2][BG_MARKERS] BG_DATA;
 static int bg_marker_count[2] BG_DATA;
+/* per draw buffer, runs (by first tile) the renderer found still: left linked, the walk's as they are, until the
+ * list clears (every BG_SKIP_FRAMES draws: a layer that starts moving is lifted again) */
+#define BG_SKIPS 16
+#define BG_SKIP_FRAMES 32
+static u32 *bg_skip[2][BG_SKIPS] BG_DATA;
+static int bg_skip_count[2] BG_DATA, bg_skip_age BG_DATA;
 
 static inline u32 *bg_link(u32 word) { return (u32 *)(((u32)(uintptr_t)bg_markers & 0xFF000000) | (word & 0xFFFFFF)); }
 
 /* a run of the layer's tiles at the head of entry d: lifted into a marker */
 PORT_OVERLAY_CODE(0a) static void bg_lift_entry(u32 *ot, int d, uintptr_t first, uintptr_t size, int buf) {
-    u32 *slot = &ot[d], *p = bg_link(*slot);
+    u32 *slot = &ot[d], *const head = bg_link(*slot), *p = head;
+    for (int i = 0; i < bg_skip_count[buf]; ++i)
+        if (bg_skip[buf][i] == head) return;
     u32 count = 0;
     while ((uintptr_t)p - first < size && ((uintptr_t)p - first) % sizeof(BgSprt) == 0) {
         ++count;
@@ -43,7 +52,7 @@ PORT_OVERLAY_CODE(0a) static void bg_lift_entry(u32 *ot, int d, uintptr_t first,
     if (count < BG_RUN_MIN || bg_marker_count[buf] == BG_MARKERS) return;
     BgMarker *m = &bg_markers[buf][bg_marker_count[buf]++];
     m->tag = (u32)(uintptr_t)p & 0xFFFFFF; /* (the entry's next packet after the run) */
-    m->head = bg_link(*slot);
+    m->head = head;
     m->count = (u16)count;
     m->entry = (u16)d;
     *slot = (*slot & 0xFF000000) | ((u32)(uintptr_t)m & 0xFFFFFF);
@@ -70,7 +79,12 @@ PORT_OVERLAY_CODE(0a) static void bg_lift(const BgOverlay *o, const BgFile *h, u
 /* gpu.c's walk at a marker: the run, the renderer's or drawn tile by tile in the walk's order */
 void port_ot_marker(unsigned int *marker) {
     const BgMarker *m = (const BgMarker *)marker;
-    if (psx_ovl_resident[0] == 0x0A && gxh_bg_run(m->head, m->count)) return; /* (its code is ovl_0a's) */
+    if (psx_ovl_resident[0] == 0x0A) { /* (its code is ovl_0a's) */
+        const int r = gxh_bg_run(m->head, m->count);
+        if (r == 1) return;
+        const int buf = m >= bg_markers[1];
+        if (r == 2 && bg_skip_count[buf] < BG_SKIPS) bg_skip[buf][bg_skip_count[buf]++] = m->head;
+    }
     u32 *p = m->head;
     for (u32 i = 0; i < m->count; ++i) {
         DrawPrim(p);
@@ -90,7 +104,9 @@ PORT_OVERLAY_CODE(0a) s32 o0a_fldbg_draw(void) {
     static u32 last_h BG_DATA; /* (the background file: its place and header, which another field's changes) */
     const u32 hs = (u32)(uintptr_t)h ^ (u32)h->overlayCount << 16 ^ (u32)h->overlayOffset ^ (u32)h->cameraOffset << 8 ^
                    (u32)h->orgX << 20 ^ (u32)h->orgY << 4;
-    if (hs != last_h) { last_h = hs; gxh_bg_runs_reset(); }
+    if (hs != last_h) { last_h = hs; gxh_bg_runs_reset(); bg_skip_count[0] = bg_skip_count[1] = 0; }
+    if (++bg_skip_age >= BG_SKIP_FRAMES) { bg_skip_age = 0; bg_skip_count[0] = bg_skip_count[1] = 0; }
+    if (!gxh_bg_runs_on()) return r; /* (the renderer takes none: the tiles stay linked) */
     const BgOverlay *o = (const BgOverlay *)((const u8 *)h + h->overlayOffset);
     /* (the last drawn first: an entry's run of a layer is at its head once the later layers' are lifted) */
     for (int j = h->overlayCount - 1; j >= 0; --j)

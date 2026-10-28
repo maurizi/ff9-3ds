@@ -3692,15 +3692,23 @@ PORT_OVERLAY_CODE(0a) static int bg_tile_prim(const Buffer *b, const BgRun *r, c
 }
 
 /* field_bg.c's walk at a run of a background layer's tiles at one OT entry: taken whole (1) if the scene is the
- * hybrid's and every tile is an opaque one hybrid_rect would record as a quad; else (0) drawn tile by tile */
-static int bg_runs_off; /* field_frame: a scene past the 3D engine's polygons with runs: none for the field */
+ * hybrid's and every tile is an opaque one hybrid_rect would record as a quad; else drawn tile by tile (0; 2: a run
+ * that holds still, which field_bg.c leaves linked a while) */
+/* field_frame: runs only in a field whose scenes have kept well inside the 3D engine's polygons (their tiles are quads
+ * of their own where recorded sprites merge, and stay out of the composite): off at a field's start, on after
+ * BG_RUNS_CALM scenes under BG_RUNS_ON, off for the field past BG_RUNS_OFF */
+#define BG_RUNS_ON 1500
+#define BG_RUNS_OFF 1700
+#define BG_RUNS_CALM 8
+static int bg_runs_off = 1, bg_runs_calm, bg_runs_latched;
 /* per buffer, the runs it met lately (by first tile): their tiles' positions' hash and how many scenes that held. A
  * run that holds still is left to the sprites' path: recorded, for the composite (which keeps a still background,
  * and would see it change each time a run went from one form to the other) */
 #define BG_SEEN 32
 #define BG_STILL_SCENES 8
 static struct { uintptr_t head; u32 hash; u8 still; } bg_seen[2][BG_SEEN] __attribute__((section(".psxovl_0a.data")));
-void gxh_bg_runs_reset(void) { bg_runs_off = 0; } /* (field_bg.c: another field's background) */
+void gxh_bg_runs_reset(void) { bg_runs_off = 1; bg_runs_calm = 0; bg_runs_latched = 0; } /* (field_bg.c: another field's background) */
+int gxh_bg_runs_on(void) { return !bg_runs_off; } /* (field_bg.c: none lifted while off) */
 PORT_OVERLAY_CODE(0a) int gxh_bg_run(unsigned int *head, int count) {
     if (!active || !place->field || gp0_backend != &hybrid_backend || bg_runs_off) return 0;
     if (gp0_state.twin_mask_x || gp0_state.twin_mask_y || gp0_state.set_mask || gp0_state.check_mask) return 0;
@@ -3741,7 +3749,7 @@ PORT_OVERLAY_CODE(0a) int gxh_bg_run(unsigned int *head, int count) {
         if (bg_seen[bi][s].head != (uintptr_t)head || bg_seen[bi][s].hash != hash) {
             bg_seen[bi][s].head = (uintptr_t)head; bg_seen[bi][s].hash = hash; bg_seen[bi][s].still = 0;
         } else if (bg_seen[bi][s].still < BG_STILL_SCENES) bg_seen[bi][s].still++;
-        if (bg_seen[bi][s].still >= BG_STILL_SCENES) return 0;
+        if (bg_seen[bi][s].still >= BG_STILL_SCENES) return 2;
     }
     p = (const u32 *)head;
     for (int i = 0; i < count; ++i, p = bg_next(p)) {
@@ -4222,7 +4230,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
 
 static void use_place(const Place *p) {
     place = p;
-    bg_runs_off = 0;
+    bg_runs_off = 1; bg_runs_calm = 0; bg_runs_latched = 0;
     for (int i = 0; i < 2; ++i) buffers[i].bg_runs = buffers[i].bg_run_tiles = 0;
     { extern const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi; psx_ot_marker_lo = psx_ot_marker_hi = NULL; }
     for (int i = 0; i < 2; ++i) buffers[i].prims = (Prim *)(psx_ram + p->at + p->prims_at[i]);
@@ -4847,11 +4855,10 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
             if (prim_layer[k] == L_ADD) { adds++; add_area2 += prim_area2(p); }
         }
         polys += b->bg_run_tiles; vertices += 4 * b->bg_run_tiles; /* (the background runs: quads in the 3D scene) */
-        /* (runs are quads of their own where the recorded sprites merge, and stay out of the composite: a scene past
-         * the 3D engine's polygons with them takes none for the rest of the field) */
-        if (b->bg_runs && (polys > MAX_POLYS || vertices > MAX_VERTICES)) bg_runs_off = 1;
         FStore *fst = scene_models(b); /* the native models (those facing the camera) */
         if (fst) { polys += fst->front_polys; vertices += fst->front_verts; } /* (its uses: taken with it) */
+        if (polys + adds > BG_RUNS_OFF) { bg_runs_off = 1; bg_runs_latched = 1; }
+        else if (!bg_runs_latched && polys + adds < BG_RUNS_ON && ++bg_runs_calm >= BG_RUNS_CALM) bg_runs_off = 0;
         /* the exact layer costs software drawing in proportion to the additive primitives' area (a sixth of the
          * screen: field 2162's lamp glows took it from 27 to 40 ms on DSi): beyond that, the 3D approximation */
         if (adds && add_area2 > 2 * 320 * 224 / 6) {
