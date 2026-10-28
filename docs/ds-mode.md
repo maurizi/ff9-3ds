@@ -1128,3 +1128,29 @@ path, ~7% of its busy time), the composite's per-primitive passes (bgc_use, sour
 the emit of the tiles in front of a model, and the planning. d4_f2110's frame is mostly its models: 9 groups, 3,334
 vertices and 2,714 polygons a scene (1,168 facing the camera), port_native_field_mesh 16.6% and fm_emit 15.5% of its
 busy time in a steady window (tools: build/validation/p3_window.sh, two states of one PROFILE=3 ROM subtracted).
+
+### Exact speed steps (2026-10-28, afternoon)
+
+All with frames identical to the previous step (8-field set, the world map, two battles). ms per VBlank:
+
+| step | d4_f2110 | d4_f0351 | d1_f0453 | d2_f0955 | d1_f0162 | d2_b0300 |
+|---|---|---|---|---|---|---|
+| start of day (master) | 26.4 | 25.3 | 28.5 | 32.8 | 19.3 | 28.3 |
+| background runs merged | 26.5 | 26.1 | 28.8 | 30.5 | 19.6 | |
+| composite under animated tiles, additive colour choice | 26.6 | 23.1 | 28.8 | 30.7 | 19.5 | |
+| sprite16 from the packet's words | 26.1 | 22.7 | 28.3 | 30.9 | 19.0 | |
+| emit_scene's visit order | 25.6 | 22.1 | 27.8 | 30.8 | 18.4 | |
+| fm_kind's vertex loops unrolled | 24.8 | 21.8 | 27.4 | 30.2 | | |
+| ovl_0a game code -Os (7.3 KB of slot 0) | 24.8 | 21.9 | 27.4 | 30.1 | 18.4 | |
+| port_native_field_mesh per kind | 24.3 | 21.8 | 27.1 | 29.7 | 18.3 | |
+| native_run's vertex loop unrolled | | | | | | 27.9 |
+
+Tried and not kept: caching the additive copies' colour choice (the CLUT animates: no hits); port_native_mesh per kind
+(battle: -0.3 ms for 7 KB less heap: ovl_0b sizes slot 0, so its growth is the heap's) and per vertex count (-0.12 ms
+for 1.4 KB). Slot 0's room after ovl_0a in a field build is now about 2.7 KB (gen_link's assert); the decomp's
+compile flags aren't dependencies of its objects, so a change to DECOMP_OPT_* needs its objects rebuilt (touch
+build/portified/src/ovl_XX/*.c).
+
+The renderer's profile is now flat in still fields (no function above 7% of busy time but the models' two passes,
+9-17%); d4_f2110 is mostly its models (2,714 polygons a scene). Battles: native_run and port_native_mesh ~9% each,
+emit_scene 7.6%, the software rasteriser's rows ~8% (the 2D layer and additive copies).
