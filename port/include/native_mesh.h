@@ -72,6 +72,8 @@ typedef struct {
     const int *sxy, *sz;           /* its vertices as fldmdl_projectMesh left them (g_vtxScreenXY, g_vtxScreenZ) */
     int nverts;
     int draw_x, draw_y;            /* the frame's drawing area */
+    int clip_y;                    /* fldmdl_drawMeshClipY's: a polygon with a vertex projectMeshClipY flagged (its
+                                    * depth word's high half) isn't drawn */
 } NativeFieldMesh;
 
 /* 1: the renderer took the group (nothing to link); 2: its opaque polygons (link the translucent ones); 0: link its

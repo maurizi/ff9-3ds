@@ -4008,7 +4008,8 @@ typedef struct {
     int opaque, front_polys, front_verts, lu0, lv0, lu1, lv1, gathering, last_use;
 } FmTake;
 static inline __attribute__((always_inline)) void fm_take_kind(FmTake *k, FStore *st, u32 *const front, const s32 *const sxy,
-                                                               const int nv, const int t, int count) {
+                                                               const int nv, const int t, int count, const int *const sz,
+                                                               const int clip_y) {
     const int quad = !(t & 1), flags_at = mesh_flags_at[t], textured = t < 4, nvp = quad ? 4 : 3;
     const u8 *src = k->src, *pk = k->pk;
     int pi = k->pi, opaque = k->opaque, front_polys = k->front_polys, front_verts = k->front_verts;
@@ -4022,6 +4023,9 @@ static inline __attribute__((always_inline)) void fm_take_kind(FmTake *k, FStore
         const u32 i0 = i01 & 0xFFFF, i1 = i01 >> 16, i2 = i23 & 0xFFFF;
         if (i0 >= (u32)nv || i1 >= (u32)nv || i2 >= (u32)nv || (quad && i23 >> 16 >= (u32)nv))
             continue; /* (a vertex past the group's: not drawn) */
+        if (clip_y && (u32)sz[i0] + (u32)sz[i1] + (u32)sz[i2] + (quad ? (u32)sz[i23 >> 16] : 0) >
+                          (quad ? 0x3FFFFFFFu : 0x2FFFFFFFu))
+            continue; /* (fldmdl_drawMeshClipY: a vertex flagged, the polygon not drawn) */
         if (!(src[flags_at] & 2)) {
             u32 s0 = (u32)sxy[i0], s1 = (u32)sxy[i1], s2 = (u32)sxy[i2];
             int x0 = (s16)s0, y0 = (s16)(s0 >> 16);
@@ -4088,7 +4092,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     int base = (int)((const u32 *)n->ot - (const u32 *)psx_main_ot);
     u32 nearest = ~0u, farthest = 0;
     for (int i = 0; i < nv; ++i) {
-        u32 z = (u32)n->sz[i];
+        u32 z = (u32)n->sz[i] & 0xFFFF; /* (fldmdl_projectMeshClipY flags the high half) */
         if (z < nearest) nearest = z;
         if (z > farthest) farthest = z;
     }
@@ -4112,14 +4116,14 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
         const int count = *(const u16 *)(g + 2 + 2 * t);
         if (!count) continue;
         switch (t) { /* (each kind its own loop: its sizes, offsets and vertex count constant) */
-        case 0: fm_take_kind(&k, st, front, sxy, nv, 0, count); break;
-        case 1: fm_take_kind(&k, st, front, sxy, nv, 1, count); break;
-        case 2: fm_take_kind(&k, st, front, sxy, nv, 2, count); break;
-        case 3: fm_take_kind(&k, st, front, sxy, nv, 3, count); break;
-        case 4: fm_take_kind(&k, st, front, sxy, nv, 4, count); break;
-        case 5: fm_take_kind(&k, st, front, sxy, nv, 5, count); break;
-        case 6: fm_take_kind(&k, st, front, sxy, nv, 6, count); break;
-        default: fm_take_kind(&k, st, front, sxy, nv, 7, count); break;
+        case 0: fm_take_kind(&k, st, front, sxy, nv, 0, count, n->sz, n->clip_y); break;
+        case 1: fm_take_kind(&k, st, front, sxy, nv, 1, count, n->sz, n->clip_y); break;
+        case 2: fm_take_kind(&k, st, front, sxy, nv, 2, count, n->sz, n->clip_y); break;
+        case 3: fm_take_kind(&k, st, front, sxy, nv, 3, count, n->sz, n->clip_y); break;
+        case 4: fm_take_kind(&k, st, front, sxy, nv, 4, count, n->sz, n->clip_y); break;
+        case 5: fm_take_kind(&k, st, front, sxy, nv, 5, count, n->sz, n->clip_y); break;
+        case 6: fm_take_kind(&k, st, front, sxy, nv, 6, count, n->sz, n->clip_y); break;
+        default: fm_take_kind(&k, st, front, sxy, nv, 7, count, n->sz, n->clip_y); break;
         }
     }
     pi = k.pi; fw = k.fw; last_use = k.last_use;
@@ -4139,7 +4143,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     u32 *vw = st->verts + st->nverts;
     int x0 = 0x7FFF, y0 = 0x7FFF, x1 = -0x8000, y1 = -0x8000;
     for (int i = 0; i < nv; ++i) {
-        u32 xy = (u32)n->sxy[i], rel = ((u32)n->sz[i] >> 2) - nearest;
+        u32 xy = (u32)n->sxy[i], rel = (((u32)n->sz[i] & 0xFFFF) >> 2) - nearest;
         if (rel > 1023) rel = 1023;
         vw[i] = ((xy + 1024) & 0x7FF) | (((xy >> 16) + 1024) & 0x7FF) << 11 | rel << 22;
         int x = (s32)(xy << 21) >> 21, y = (s32)(xy << 5) >> 21;

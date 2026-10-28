@@ -72,7 +72,7 @@ static const u8 kind_len[8] = {9, 7, 12, 9, 8, 6, 5, 4};
 static const u8 kind_xy[8][4] = {{0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18}, {0x08, 0x14, 0x20, 0x2C},
                                  {0x08, 0x14, 0x20}, {0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18},
                                  {0x08, 0x0C, 0x10, 0x14}, {0x08, 0x0C, 0x10}};
-PORT_OVERLAY_CODE(0a) static void link_translucent(u8 *grp, u8 *pkt, u32 *ot) {
+PORT_OVERLAY_CODE(0a) static void link_translucent(u8 *grp, u8 *pkt, u32 *ot, int clip_y) {
     u8 *poly = *(u8 **)(grp + 0x1C);
     for (int k = 0; k < 8; k++) {
         const int quad = !(k & 1);
@@ -81,6 +81,28 @@ PORT_OVERLAY_CODE(0a) static void link_translucent(u8 *grp, u8 *pkt, u32 *ot) {
             u32 i0 = *(u16 *)(poly + 0), i1 = *(u16 *)(poly + 2), i2 = *(u16 *)(poly + 4);
             u32 i3 = quad ? *(u16 *)(poly + 6) : 0;
             u32 xy0 = g_vtxScreenXY[i0], xy1 = g_vtxScreenXY[i1], xy2 = g_vtxScreenXY[i2], z;
+            if (clip_y) { /* (fldmdl_drawMeshClipY: a flagged vertex leaves it out; its entry from the low bits) */
+                u32 sum = (u32)g_vtxScreenZ[i0] + (u32)g_vtxScreenZ[i1] + (u32)g_vtxScreenZ[i2] + (quad ? (u32)g_vtxScreenZ[i3] : 0);
+                if (sum > (quad ? 0x3FFFFFFFu : 0x2FFFFFFFu)) continue;
+                if (!(poly[kind_flags[k]] & 2)) {
+                    s32 nclip;
+                    gte_ldsxy3(xy0, xy1, xy2);
+                    *(u32 *)pkt = (u32)kind_len[k] << 24;
+                    gte_nclip();
+                    gte_stopz(&nclip);
+                    if (nclip <= 0) continue;
+                }
+                *(u32 *)(pkt + kind_xy[k][0]) = xy0;
+                *(u32 *)(pkt + kind_xy[k][1]) = xy1;
+                *(u32 *)(pkt + kind_xy[k][2]) = xy2;
+                if (quad) *(u32 *)(pkt + kind_xy[k][3]) = g_vtxScreenXY[i3];
+                z = quad ? (sum & 0xFFFFF) >> 4 : (sum & 0xFFFFF) / 3 >> 2;
+                u32 *slot = &ot[z];
+                if (PSX_OT_OUTSIDE(slot)) continue;
+                *(u32 *)pkt = *slot | ((u32)kind_len[k] << 24);
+                *slot = (u32)pkt & 0xFFFFFF;
+                continue;
+            }
             if (!(poly[kind_flags[k]] & 2)) {
                 s32 nclip;
                 gte_ldsxy3(xy0, xy1, xy2);
@@ -124,8 +146,36 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     for (u32 i = 0; i < model->model->boneCount; ++i) n.nverts += ((u16 *)((WmModelGroup *)grp)->boneVertexCounts)[i];
     n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
     n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
+    n.clip_y = 0;
     int taken = port_native_field_mesh(&n);
-    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot);
+    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot, 0);
     if (taken) return;
     o0a_fldmdl_drawMesh_link(model, group);
+}
+
+/* fldmdl_drawMeshClipY (tu_800B61A4.c, renamed by config/renames.txt): a group cut at the model's clipY, as
+ * fldmdl_drawMesh but for the polygons with a flagged vertex, the OT without the group's bias, and the triangles'
+ * entries from their depths' sum / 3 */
+void o0a_fldmdl_drawMeshClipY_game(ModelObj *model, u8 group);
+PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshClipY(ModelObj *model, u8 group) {
+    GameData *gd = g_gameState->gameData;
+    u8 *grp = (u8 *)&model->model->groups[group];
+    u8 *pkt = *(u8 **)((u8 *)model->groupOut + group * 12 + 4);
+    if (gd->unk8 != 0) pkt += *(u16 *)grp;
+    NativeFieldMesh n;
+    n.model = model;
+    n.group = grp;
+    n.packets = pkt;
+    n.ot = (const unsigned int *)gd->unk10[gd->unk8];
+    n.sxy = g_vtxScreenXY;
+    n.sz = g_vtxScreenZ;
+    n.nverts = 0;
+    for (u32 i = 0; i < model->model->boneCount; ++i) n.nverts += ((u16 *)((WmModelGroup *)grp)->boneVertexCounts)[i];
+    n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
+    n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
+    n.clip_y = 1;
+    int taken = port_native_field_mesh(&n);
+    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot, 1);
+    if (taken) return;
+    o0a_fldmdl_drawMeshClipY_game(model, group);
 }
