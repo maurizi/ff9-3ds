@@ -72,7 +72,7 @@ static const u8 kind_len[8] = {9, 7, 12, 9, 8, 6, 5, 4};
 static const u8 kind_xy[8][4] = {{0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18}, {0x08, 0x14, 0x20, 0x2C},
                                  {0x08, 0x14, 0x20}, {0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18},
                                  {0x08, 0x0C, 0x10, 0x14}, {0x08, 0x0C, 0x10}};
-PORT_OVERLAY_CODE(0a) static void link_translucent(u8 *grp, u8 *pkt, u32 *ot, int clip_y) {
+PORT_OVERLAY_CODE(0a) static void link_translucent(u8 *grp, u8 *pkt, u32 *ot, int clip_y, int mirror) {
     u8 *poly = *(u8 **)(grp + 0x1C);
     for (int k = 0; k < 8; k++) {
         const int quad = !(k & 1);
@@ -109,7 +109,7 @@ PORT_OVERLAY_CODE(0a) static void link_translucent(u8 *grp, u8 *pkt, u32 *ot, in
                 *(u32 *)pkt = (u32)kind_len[k] << 24;
                 gte_nclip();
                 gte_stopz(&nclip);
-                if (nclip <= 0) continue;
+                if (mirror ? nclip >= 0 : nclip <= 0) continue; /* (a reflection keeps the other side) */
             }
             *(u32 *)(pkt + kind_xy[k][0]) = xy0;
             *(u32 *)(pkt + kind_xy[k][1]) = xy1;
@@ -147,8 +147,9 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
     n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
     n.clip_y = 0;
+    n.mirror = 0;
     int taken = port_native_field_mesh(&n);
-    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot, 0);
+    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot, 0, 0);
     if (taken) return;
     o0a_fldmdl_drawMesh_link(model, group);
 }
@@ -174,8 +175,36 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshClipY(ModelObj *model, u8 group) {
     n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
     n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
     n.clip_y = 1;
+    n.mirror = 0;
     int taken = port_native_field_mesh(&n);
-    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot, 1);
+    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot, 1, 0);
     if (taken) return;
     o0a_fldmdl_drawMeshClipY_game(model, group);
+}
+
+/* fldmdl_drawMeshMirrored (tu_800B61A4.c, renamed by config/renames.txt): a reflection's group, the PS1's culling
+ * reversed (NCLIP >= 0 culled), otherwise as fldmdl_drawMesh */
+void o0a_fldmdl_drawMeshMirrored_game(ModelObj *model, u8 group);
+PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshMirrored(ModelObj *model, u8 group) {
+    GameData *gd = g_gameState->gameData;
+    u8 *grp = (u8 *)&model->model->groups[group];
+    u8 *pkt = *(u8 **)((u8 *)model->groupOut + group * 12 + 4);
+    if (gd->unk8 != 0) pkt += *(u16 *)grp;
+    NativeFieldMesh n;
+    n.model = model;
+    n.group = grp;
+    n.packets = pkt;
+    n.ot = (const unsigned int *)(gd->unk10[gd->unk8] - (s8)grp[0x13]);
+    n.sxy = g_vtxScreenXY;
+    n.sz = g_vtxScreenZ;
+    n.nverts = 0;
+    for (u32 i = 0; i < model->model->boneCount; ++i) n.nverts += ((u16 *)((WmModelGroup *)grp)->boneVertexCounts)[i];
+    n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
+    n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
+    n.clip_y = 0;
+    n.mirror = 1;
+    int taken = port_native_field_mesh(&n);
+    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot, 0, 1);
+    if (taken) return;
+    o0a_fldmdl_drawMeshMirrored_game(model, group);
 }

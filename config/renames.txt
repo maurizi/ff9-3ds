@@ -9,5 +9,7 @@ src_equiv/ovl_0b/background o0b_btlbg_drawRecord o0b_btlbg_drawRecord_packets
 src_equiv/ovl_0a/model_link o0a_fldmdl_drawMesh o0a_fldmdl_drawMesh_link
 # Field model groups cut at a height (fldmdl_drawMeshClipY): the same (port/game/field_mesh.c).
 src/ovl_0a/tu_800B61A4 o0a_fldmdl_drawMeshClipY o0a_fldmdl_drawMeshClipY_game
+# Field model reflections (fldmdl_drawMeshMirrored): the same, culled the other way (port/game/field_mesh.c).
+src/ovl_0a/tu_800B61A4 o0a_fldmdl_drawMeshMirrored o0a_fldmdl_drawMeshMirrored_game
 # Field background layers: their tiles' runs lifted into markers for the hybrid renderer (port/game/field_bg.c).
 src/ovl_0a/tu_800B61A4 o0a_fldbg_draw o0a_fldbg_draw_game

@@ -4010,7 +4010,7 @@ typedef struct {
 } FmTake;
 static inline __attribute__((always_inline)) void fm_take_kind(FmTake *k, FStore *st, u32 *const front, const s32 *const sxy,
                                                                const int nv, const int t, int count, const int *const sz,
-                                                               const int clip_y) {
+                                                               const int clip_y, const int mirror) {
     const int quad = !(t & 1), flags_at = mesh_flags_at[t], textured = t < 4, nvp = quad ? 4 : 3;
     const u8 *src = k->src, *pk = k->pk;
     int pi = k->pi, opaque = k->opaque, front_polys = k->front_polys, front_verts = k->front_verts;
@@ -4030,7 +4030,9 @@ static inline __attribute__((always_inline)) void fm_take_kind(FmTake *k, FStore
         if (!(src[flags_at] & 2)) {
             u32 s0 = (u32)sxy[i0], s1 = (u32)sxy[i1], s2 = (u32)sxy[i2];
             int x0 = (s16)s0, y0 = (s16)(s0 >> 16);
-            if (((s16)s1 - x0) * ((s16)(s2 >> 16) - y0) - ((s16)s2 - x0) * ((s16)(s1 >> 16) - y0) <= 0) continue;
+            int nclip = ((s16)s1 - x0) * ((s16)(s2 >> 16) - y0) - ((s16)s2 - x0) * ((s16)(s1 >> 16) - y0);
+            if (mirror) nclip = -nclip; /* (a reflection: NCLIP >= 0 culled) */
+            if (nclip <= 0) continue;
         }
         fw |= 1u << (pi & 31);
         front_polys++;
@@ -4117,14 +4119,14 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
         const int count = *(const u16 *)(g + 2 + 2 * t);
         if (!count) continue;
         switch (t) { /* (each kind its own loop: its sizes, offsets and vertex count constant) */
-        case 0: fm_take_kind(&k, st, front, sxy, nv, 0, count, n->sz, n->clip_y); break;
-        case 1: fm_take_kind(&k, st, front, sxy, nv, 1, count, n->sz, n->clip_y); break;
-        case 2: fm_take_kind(&k, st, front, sxy, nv, 2, count, n->sz, n->clip_y); break;
-        case 3: fm_take_kind(&k, st, front, sxy, nv, 3, count, n->sz, n->clip_y); break;
-        case 4: fm_take_kind(&k, st, front, sxy, nv, 4, count, n->sz, n->clip_y); break;
-        case 5: fm_take_kind(&k, st, front, sxy, nv, 5, count, n->sz, n->clip_y); break;
-        case 6: fm_take_kind(&k, st, front, sxy, nv, 6, count, n->sz, n->clip_y); break;
-        default: fm_take_kind(&k, st, front, sxy, nv, 7, count, n->sz, n->clip_y); break;
+        case 0: fm_take_kind(&k, st, front, sxy, nv, 0, count, n->sz, n->clip_y, n->mirror); break;
+        case 1: fm_take_kind(&k, st, front, sxy, nv, 1, count, n->sz, n->clip_y, n->mirror); break;
+        case 2: fm_take_kind(&k, st, front, sxy, nv, 2, count, n->sz, n->clip_y, n->mirror); break;
+        case 3: fm_take_kind(&k, st, front, sxy, nv, 3, count, n->sz, n->clip_y, n->mirror); break;
+        case 4: fm_take_kind(&k, st, front, sxy, nv, 4, count, n->sz, n->clip_y, n->mirror); break;
+        case 5: fm_take_kind(&k, st, front, sxy, nv, 5, count, n->sz, n->clip_y, n->mirror); break;
+        case 6: fm_take_kind(&k, st, front, sxy, nv, 6, count, n->sz, n->clip_y, n->mirror); break;
+        default: fm_take_kind(&k, st, front, sxy, nv, 7, count, n->sz, n->clip_y, n->mirror); break;
         }
     }
     pi = k.pi; fw = k.fw; last_use = k.last_use;
