@@ -4833,7 +4833,7 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
         }
     /* the semi-transparent sprites: all in the composite if they have held still and every one is behind the rest
      * in its cells, else none (then they cover the opaque ones behind them, as any 3D primitive) */
-    int back_polys = 0, back_vertices = 0, semi_ok = nsemi > 0 && bgc_semi_still >= 4;
+    int back_polys = 0, back_vertices = 0, semi_ok = nsemi > 0 && bgc_semi_still >= 30;
     for (int k = 0; k < b->count && semi_ok; ++k) {
         const Prim *p = &b->prims[k];
         if (prim_layer[k] != L_3D || !semi_sprite(p)) continue;
@@ -4844,6 +4844,10 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
         for (int cy = y0; cy <= y1; ++cy) for (int cx = x0; cx <= x1; ++cx) if (cell_far[cy][cx] < far) far = cell_far[cy][cx];
         if (b->slots[k] >= far) semi_ok = 0;
     }
+    /* (once one wasn't behind, none for a while: each change of the composite's content composes it whole) */
+    static int semi_hold;
+    if (nsemi && bgc_semi_still >= 30 && !semi_ok) semi_hold = 60;
+    else if (semi_hold) { semi_hold--; semi_ok = 0; }
     for (int k = 0; k < b->count && nsemi; ++k) {
         const Prim *p = &b->prims[k];
         if (prim_layer[k] != L_3D || !semi_sprite(p)) continue;
@@ -5103,7 +5107,11 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
             bg_last_cols[i] = bgc_scols_now[i];
         }
         const int changed_area = bhi < 0 || chi < 0 ? 0 : (bhi - blo + 1) * (chi - clo + 1);
-        bg_still = changed_area * 4 <= BGC_BANDS * BGC_COLS ? bg_still + 1 : 0;
+        /* (and its average over the last scenes at most a quarter: an animation changing a large area now and then
+         * is still composed, one changing it every scene isn't) */
+        static int area_avg;
+        area_avg = (area_avg * 3 + changed_area * 16) / 4; /* (x16, a scene's weight a quarter) */
+        bg_still = changed_area * 2 <= BGC_BANDS * BGC_COLS && area_avg * 4 <= BGC_BANDS * BGC_COLS * 16 ? bg_still + 1 : 0;
         /* (over the budget: the composite, kept a while, even for a moving background, composed in software every
          * scene. Without it a scrolling scene over the budget goes two-pass, whose banks C and D don't hold its
          * textures: walking in d4_f2110 then drew in software, 83 ms per VBlank against 31) */
