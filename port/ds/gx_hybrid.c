@@ -70,6 +70,15 @@ enum { P_TEXTURED = 1, P_RAW = 2, P_SEMI = 4, P_GOURAUD = 8,
        P_DITHER = 64, /* field: drawn with dithering on (E1 bit 9), for the software replays */
        P_TWIN = 128   /* field: a UI primitive drawn through a texture window (its buffer's twins[]) */ };
 
+/* DS mode: the models' (field groups, battle meshes) Gouraud polygons drawn flat, in their first vertex's colour, as
+ * the PS1 draws a flat one (the user's choice of 2026-10-28: approximate model shading for speed); MODELGOURAUD=1
+ * keeps them exact */
+#if defined(PORT_DS_MODE) && !defined(PORT_MODEL_GOURAUD)
+#define MODEL_GOURAUD 0
+#else
+#define MODEL_GOURAUD 1
+#endif
+
 typedef struct {
     u8 n, flags, abr, depth;
     u16 tx, ty, clut_x, clut_y;
@@ -2631,7 +2640,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
             s = model_poly(mi, pi, &t);
             if (t >= 4 || (MB(s, mesh_flags_at[t]) & 1)) break; /* untextured; translucent */
             n = t & 1 ? 3 : 4;
-            gouraud = t >= 2;
+            gouraud = MODEL_GOURAUD && t >= 2;
         }
         const MeshUse *u = &mi->uses[(inf >> 3) & 15];
         if (u != last_u) {
@@ -2664,9 +2673,12 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
             mesh_uvs(mi->uvs, t, s, uv);
             if (t < 2) col[0] = MW(s, t == 0 ? 0x10 : 8);
             else {
-                col[0] = mi->colors[MW(s, 0x10) & 0xFFFF]; col[1] = mi->colors[MW(s, 0x10) >> 16];
-                if (t == 2) { col[2] = mi->colors[MW(s, 0x14) & 0xFFFF]; col[3] = mi->colors[MW(s, 0x14) >> 16]; }
-                else col[2] = mi->colors[MH(s, 0x14)];
+                col[0] = mi->colors[MW(s, 0x10) & 0xFFFF];
+                if (MODEL_GOURAUD) {
+                    col[1] = mi->colors[MW(s, 0x10) >> 16];
+                    if (t == 2) { col[2] = mi->colors[MW(s, 0x14) & 0xFFFF]; col[3] = mi->colors[MW(s, 0x14) >> 16]; }
+                    else col[2] = mi->colors[MH(s, 0x14)];
+                }
             }
         }
         pack_begin();
@@ -4180,7 +4192,7 @@ static inline __attribute__((always_inline)) u32 fm_colour(u32 c, const int text
 /* one kind's polygons of a group (t constant: the offsets and branches fold) */
 static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *es, u32 *wp, const int t, const FGroup *fg,
                                                           const u8 *src, const u8 *pk, int pi, int count) {
-    const int quad = !(t & 1), nv = quad ? 4 : 3, textured = t < 4, gouraud = t >= 2 && t <= 5;
+    const int quad = !(t & 1), nv = quad ? 4 : 3, textured = t < 4, gouraud = MODEL_GOURAUD && t >= 2 && t <= 5;
     const u32 *vw = c->fst->verts + fg->vert0, *front = c->fst->front;
     const int depth0 = fg->depth0;
     const u32 nverts = fg->verts;
