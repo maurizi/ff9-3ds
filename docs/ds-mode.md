@@ -1235,3 +1235,22 @@ runs is the lead for d2_f0931.
 
 Measurement pitfall: a GP0 command histogram counted over packets' words counts data words (image uploads') as
 commands; counted at packets' starts, d2_f0931 has no POLY_GT4 packets (its models are all native).
+
+### Models that fell back to packets (2026-10-28, evening)
+
+Counting port_native_field_mesh's refusals over the 29-field set (a debug build): d1_f0574's close-up models passed
+FM_POLYS (4096 polygons a scene, culled ones included), so whole groups went through their packets (GP0 decoding,
+recording, planning): FM_POLYS 6144 (768 bytes of the stores' vertex room) took it from 68.8 to 50.1 ms (8 pixels
+differ: the groups now native). Its two-pass histogram also divided in 64 bits per polygon (Thumb: a library call):
+75.2 -> 68.8 before that. d3_f1812's characters are drawn by fldmdl_drawMeshClipY (cut at a height: Alexandria's
+courtyard), which had no native path: now the same wrapper as fldmdl_drawMesh with the clip rules (a polygon with a
+vertex fldmdl_projectMeshClipY flagged in its depth word's high half is left out, the OT without the group's bias,
+triangles' entries from the depths' sum / 3): 55.6 -> 45.5 ms, frames identical. No fixture of the set uses
+fldmdl_drawMeshMirrored (counted on the host); its native path is the same pattern with the culling's sign reversed.
+What's left in d3_f1812: its fountain's groups have no opaque polygon (they keep their packets, the PS1's order for
+translucent polygons) and the exact additive layer's software drawing (triangle, window_rows, tile_semi: ~8%).
+
+29-field set now (ms per VBlank, PS1 16.7): at or within 1 ms: d1_f0110, d1_f0158, d1_f0306, d1_f0615, d2_f1203,
+d3_f1551, d3_f1606, d3_f2055, d3_f2714, d4_f1911, d4_f1953, d4_f2934 (16.7-16.9), d1_f0205 17.3, d1_f0162 17.9;
+d2_f1425 19.0, d4_f2162 19.0, d4_f0351 21.2, d2_f1057 22.3, d2_f1102 23.9, d4_f2110 24.1, d3_f1811 24.4, d3_f1508
+25.5, d2_f1414 26.4, d1_f0453 26.9, d2_f0955 29.1, d4_f1706 31.0, d3_f1812 45.5, d2_f0931 46.2, d1_f0574 50.1.
