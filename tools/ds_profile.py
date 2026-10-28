@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -87,11 +88,21 @@ def main():
         p.error('ELF has no frames counter')
     backup = out.with_suffix('.melonDS.toml')
     shutil.copy(CONFIG, backup)
+    # (a SIGTERM, from timeout(1) say, exits through the finally below: the emulator closed, the configuration back)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit('terminated'))
     if a.gdb:
-        import re
+        # (melonDS writes a section's keys in any order: the key is set wherever it is in its section)
+        def set_key(text, section, key, value):
+            start = text.index(f'[{section}]\n')
+            end = text.find('\n[', start + 1)
+            end = len(text) if end < 0 else end
+            lines = text[start:end].split('\n')
+            lines = [ln for ln in lines if not ln.startswith(f'{key} = ')]
+            lines.insert(1, f'{key} = {value}')
+            return text[:start] + '\n'.join(lines) + text[end:]
         text = CONFIG.read_text()
-        text = re.sub(r'(\[Instance0\.Gdb\]\nEnabled = )\w+', r'\1true', text)
-        text = re.sub(r'(\[JIT\]\nEnable = )\w+', r'\1false', text)
+        text = set_key(text, 'Instance0.Gdb', 'Enabled', 'true')
+        text = set_key(text, 'JIT', 'Enable', 'false')
         CONFIG.write_text(text)
     if a.ds_mode:
         import re
