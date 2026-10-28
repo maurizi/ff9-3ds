@@ -2366,8 +2366,8 @@ static void plan_drops(Buffer *b) {
 #define RECENT 16
 static const Prim *recent[RECENT];
 static u32 recent_xy[RECENT][4]; /* their vertices packed (x | y << 16), for the cheap shared-vertex test */
-static u32 recent_sig[RECENT];   /* a bit per vertex (a hash of its position): no common bit, no shared vertex */
-static u8 recent_id[RECENT];
+static u64 recent_sig[RECENT];   /* a bit per vertex (a hash of its position): no common bit, no shared vertex */
+static u8 recent_id[RECENT], recent_dup[RECENT]; /* (a repeated vertex: one of p's can match two of its) */
 static int recent_at;
 
 static inline int edge_side(const Prim *p, int a, int b, int x, int y) {
@@ -2394,20 +2394,31 @@ static int neighbours(const Prim *p, const Prim *q) {
 
 static int translucent_id(const Prim *p, int polys) {
     int id = 1 + (polys & 31);
-    u32 xy[4], sig = 0;
+    u32 xy[4], bit[4];
+    u64 sig = 0;
     for (int i = 0; i < p->n; ++i) {
         xy[i] = (u16)p->x[i] | (u32)(u16)p->y[i] << 16;
-        sig |= 1u << ((xy[i] * 0x9E3779B1u) >> 27);
+        bit[i] = (xy[i] * 0x9E3779B1u) >> 26;
+        sig |= 1ull << bit[i];
     }
+    int dup = 0;
+    for (int i = 1; i < p->n; ++i) for (int j = 0; j < i; ++j) dup |= xy[i] == xy[j];
     for (int k = 0; k < RECENT; ++k) {
         const Prim *q = recent[k];
         if (!q || !(sig & recent_sig[k])) continue;
+        /* (two shared vertices: two of p's bits in its signature, or one of p's matching its repeated vertex) */
+        if (!recent_dup[k]) {
+            const u64 rs = recent_sig[k];
+            int in = 0;
+            for (int i = 0; i < p->n; ++i) in += (int)(rs >> bit[i]) & 1;
+            if (in < 2) continue;
+        }
         int shared = 0; /* two vertices in common before the side test */
         for (int i = 0; i < p->n; ++i)
             for (int j = 0; j < q->n; ++j) shared += xy[i] == recent_xy[k][j];
         if (shared >= 2 && neighbours(p, q)) { id = recent_id[k]; break; }
     }
-    recent[recent_at] = p; recent_id[recent_at] = (u8)id; recent_sig[recent_at] = sig;
+    recent[recent_at] = p; recent_id[recent_at] = (u8)id; recent_sig[recent_at] = sig; recent_dup[recent_at] = (u8)dup;
     for (int i = 0; i < p->n; ++i) recent_xy[recent_at][i] = xy[i];
     recent_at = (recent_at + 1) % RECENT;
     return id;
