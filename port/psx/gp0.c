@@ -307,6 +307,25 @@ int gp0_tpage_sprite16(const unsigned int *w) {
     return 1;
 }
 
+/* gp0_tpage_sprite16's bookkeeping for n such sprites drawn at once (a field background's run, gx_hybrid.c
+ * gxh_bg_run), the texture page left as the last one's */
+#ifdef PORT_FIELD_GX
+__attribute__((section(".psxovl_0a.port"), noinline)) /* (its only caller is ovl_0a's) */
+#endif
+void gp0_note_sprites(unsigned int texpage, unsigned int n) {
+    gp0_state.texpage = texpage & 0xFFFFFF;
+    psx_display_drawing();
+    psx_vram_generation += n;
+    if (!area_hits_valid || area_hits_version != psx_display_watch_version) {
+        area_hits = psx_display_hits(gp0_state.area_x0, gp0_state.area_y0, gp0_state.area_x1 - gp0_state.area_x0 + 1,
+                                     gp0_state.area_y1 - gp0_state.area_y0 + 1);
+        area_hits_version = psx_display_watch_version;
+        area_hits_valid = 1;
+    }
+    if (area_hits) psx_display_generation += n;
+    psx_gpu_scene_prims += n;
+}
+
 /* The commands from w on that are drawing primitives (polygons, lines, rectangles) or drawing state (E0 up), up to
  * the first other one: their words used. One loop for a packet's run of them (gpu.c draw_packet). */
 unsigned int gp0_run_plain(const unsigned int *w, unsigned int len) {
