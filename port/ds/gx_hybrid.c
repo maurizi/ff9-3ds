@@ -87,6 +87,12 @@ typedef struct {
 } Prim;
 /* a field's background sprite: an opaque textured sprite, not a UI page's (the composite's, bgc_use) */
 static inline int bg_prim(const Prim *p) { return (p->flags & (P_RECT | P_TEXTURED | P_SEMI | P_UI | P_TWIN)) == (P_RECT | P_TEXTURED); }
+/* a field's semi-transparent background sprite (mist, glows): in the composite too once they have all held still a
+ * few scenes and every one of them is behind the scene's 3D primitives in its cells (bgc_use: bgc_semi), their
+ * blending then drawn exactly; moving ones (scrolling mist) would be composed in software every scene */
+static inline int semi_sprite(const Prim *p) { return (p->flags & (P_RECT | P_TEXTURED | P_SEMI | P_UI | P_TWIN)) == (P_RECT | P_TEXTURED | P_SEMI); }
+static int bgc_semi, bgc_semi_still; /* the composite holds the semi-transparent sprites; scenes they held still */
+static u32 bgc_semi_hash;
 
 /* field: a background run taken whole (gxh_bg_run, from port/game/field_bg.c's markers): its tiles aren't recorded but
  * read from the game's packets (planned into prim_group[count + tiles_at...], emitted between the opaque and the
@@ -145,6 +151,7 @@ static Buffer buffers[2];
 #define BGC_COLS 5   /* and 64-pixel columns: the changed bands' rows within the changed columns (a waterfall's strip) */
 static struct { int valid; u32 hash, key, bands[BGC_BANDS], cols[BGC_COLS]; unsigned tex; } bgc; /* a field's background composite in bank A (bgc_use) */
 static u32 bgc_bands_now[BGC_BANDS], bgc_cols_now[BGC_COLS]; /* (bgc_hash's, this scene's) */
+static u32 bgc_sbands_now[BGC_BANDS], bgc_scols_now[BGC_COLS]; /* (its opaque sprites' alone: the stillness) */
 /* A field scene past the 3D engine's RAM in two passes (tp_*): the polygons emitted are those at depths in
  * [tp_zlo, tp_zhi); tp_counting notes them instead (tp_note) */
 static int tp_zlo = -0x7FFFFFFF, tp_zhi = 0x7FFFFFFF, tp_counting;
@@ -1031,7 +1038,7 @@ static void replay_clip(Buffer *b, int from, int to, int layer /* -1: all, -2: t
     for (int k = from; k < to; ++k) {
         if (layer == -1 && b->bg_runs && ovl0a_resident()) bg_runs_replay(b, k); /* (the background runs met here) */
         const Prim *p = &b->prims[k];
-        if (layer >= 0 ? prim_layer[k] != layer : layer == -2 && !bg_prim(p)) continue;
+        if (layer >= 0 ? prim_layer[k] != layer : layer == -2 && !bg_prim(p) && !(bgc_semi && semi_sprite(p))) continue;
         if (clip) { /* (most miss a small area: their bounds first) */
             int px0 = p->x[0], px1 = px0, py0 = p->y[0], py1 = py0;
             for (int i = 1; i < p->n; ++i) {
@@ -4635,7 +4642,7 @@ PORT_OVERLAY_CODE(0a) static void bgc_sources(const Buffer *b) {
     u32 last_src = ~0u; int last_clut_y = -1, last_v0 = 0, last_v1 = 0; /* (the last sprite's: most share it) */
     for (int k = 0; k < b->count; ++k) {
         const Prim *p = &b->prims[k];
-        if (!bg_prim(p)) continue;
+        if (!bg_prim(p) && !(bgc_semi && semi_sprite(p))) continue;
         { /* (what it reads: its page, 1, 2 or 4 columns wide by depth, its rows, and its CLUT) */
             int v0 = p->v[0], v1 = p->v[2]; /* (its top row and the bottom's next, inclusive: one more) */
             if (v1 < v0) v0 = 0, v1 = 255; /* (wrapping past row 255) */
@@ -4668,22 +4675,30 @@ PORT_OVERLAY_CODE(0a) static void bgc_sources(const Buffer *b) {
 
 PORT_OVERLAY_CODE(0a) static u32 bgc_hash(const Buffer *b, int display_h) {
     u32 h = 2166136261u ^ (u32)display_h ^ b->clear << 12; /* (not the buffer's place: the sprites are relative) */
-    for (int i = 0; i < BGC_BANDS; ++i) bgc_bands_now[i] = 2166136261u + (u32)i;
-    for (int i = 0; i < BGC_COLS; ++i) bgc_cols_now[i] = 2166136261u + (u32)i;
+    for (int i = 0; i < BGC_BANDS; ++i) bgc_bands_now[i] = bgc_sbands_now[i] = 2166136261u + (u32)i;
+    for (int i = 0; i < BGC_COLS; ++i) bgc_cols_now[i] = bgc_scols_now[i] = 2166136261u + (u32)i;
+    u32 hs = 2166136261u;
     for (int k = 0; k < b->count; ++k) {
         const Prim *p = &b->prims[k];
-        if (!bg_prim(p)) continue;
+        const int opaque = bg_prim(p), semi = !opaque && semi_sprite(p);
+        if (!opaque && !semi) continue;
         const u32 *w = (const u32 *)p;
         u32 s = (w[0] ^ w[1] * 31u ^ w[2] * 961u) + (w[3] ^ w[5] * 31u ^ w[7] * 961u) * 7u + (w[10] ^ w[11] * 31u) * 49u;
+        if (semi) { hs = (hs ^ s) * 16777619u; if (!bgc_semi) continue; }
         h = (h ^ s) * 16777619u;
         /* (its rows' bands: sprites, so y[0] the top and y[2] the bottom's next) */
         int y0 = p->y[0] < 0 ? 0 : p->y[0], y1 = p->y[2] - 1;
         if (y1 > BGC_BANDS * 8 - 1) y1 = BGC_BANDS * 8 - 1;
-        for (int band = y0 >> 3; band <= y1 >> 3; ++band) bgc_bands_now[band] = (bgc_bands_now[band] ^ s) * 16777619u;
         int x0 = p->x[0] < 0 ? 0 : p->x[0], x1 = p->x[1] - 1;
         if (x1 > BGC_COLS * 64 - 1) x1 = BGC_COLS * 64 - 1;
+        for (int band = y0 >> 3; band <= y1 >> 3; ++band) bgc_bands_now[band] = (bgc_bands_now[band] ^ s) * 16777619u;
         for (int col = x0 >> 6; col <= x1 >> 6; ++col) bgc_cols_now[col] = (bgc_cols_now[col] ^ s) * 16777619u;
+        if (!opaque) continue;
+        for (int band = y0 >> 3; band <= y1 >> 3; ++band) bgc_sbands_now[band] = (bgc_sbands_now[band] ^ s) * 16777619u;
+        for (int col = x0 >> 6; col <= x1 >> 6; ++col) bgc_scols_now[col] = (bgc_scols_now[col] ^ s) * 16777619u;
     }
+    bgc_semi_still = hs == bgc_semi_hash ? bgc_semi_still + 1 : 0;
+    bgc_semi_hash = hs;
     return h;
 }
 
@@ -4780,7 +4795,7 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
      * background sprite farther than all of them in its cells covers none (the buffer's coordinates) */
     static u16 cell_far[16][24];
     memset(cell_far, 0xFF, sizeof cell_far);
-    int any = 0;
+    int any = 0, nsemi = 0;
 #define BGC_MARK(X0, Y0, X1, Y1, D) do { \
         int cx0 = (X0) < 0 ? 0 : (X0) >> 4, cy0 = (Y0) < 0 ? 0 : (Y0) >> 4, cx1 = (X1) >> 4, cy1 = (Y1) >> 4; \
         if (cx1 > 23) cx1 = 23; \
@@ -4791,6 +4806,7 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
         if (prim_layer[k] == L_3D) {
             const Prim *p = &b->prims[k];
             if (bg_prim(p)) { any = 1; continue; }
+            if (semi_sprite(p)) { nsemi++; continue; } /* (decided below) */
             int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
             for (int i = 1; i < p->n; ++i) {
                 if (p->x[i] < x0) x0 = p->x[i];
@@ -4815,9 +4831,27 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
             if (x1 < 0 || y1 < 0) continue;
             BGC_MARK(x0, y0, x1, y1, d);
         }
+    /* the semi-transparent sprites: all in the composite if they have held still and every one is behind the rest
+     * in its cells, else none (then they cover the opaque ones behind them, as any 3D primitive) */
+    int back_polys = 0, back_vertices = 0, semi_ok = nsemi > 0 && bgc_semi_still >= 4;
+    for (int k = 0; k < b->count && semi_ok; ++k) {
+        const Prim *p = &b->prims[k];
+        if (prim_layer[k] != L_3D || !semi_sprite(p)) continue;
+        int x0 = p->x[0] < 0 ? 0 : p->x[0] >> 4, x1 = (p->x[1] - 1) >> 4, y0 = p->y[0] < 0 ? 0 : p->y[0] >> 4;
+        int y1 = (p->y[2] - 1) >> 4, far = 0xFFFF;
+        if (x1 > 23) x1 = 23;
+        if (y1 > 15) y1 = 15;
+        for (int cy = y0; cy <= y1; ++cy) for (int cx = x0; cx <= x1; ++cx) if (cell_far[cy][cx] < far) far = cell_far[cy][cx];
+        if (b->slots[k] >= far) semi_ok = 0;
+    }
+    for (int k = 0; k < b->count && nsemi; ++k) {
+        const Prim *p = &b->prims[k];
+        if (prim_layer[k] != L_3D || !semi_sprite(p)) continue;
+        if (semi_ok) { prim_layer[k] = L_BACK; back_polys++; back_vertices += p->n; }
+        else if (p->x[1] > 0 && p->y[2] > 0) BGC_MARK(p->x[0], p->y[0], p->x[1] - 1, p->y[2] - 1, b->slots[k]);
+    }
 #undef BGC_MARK
     /* the sprites behind everything in their cells: only worth it if the rest then fits the 3D engine */
-    int back_polys = 0, back_vertices = 0;
     for (int k = 0; k < b->count; ++k) {
         const Prim *p = &b->prims[k];
         if (prim_layer[k] != L_3D || !bg_prim(p)) continue;
@@ -4830,8 +4864,10 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
     }
     if (*polys - back_polys > MAX_POLYS || *vertices - back_vertices > MAX_VERTICES) {
         for (int k = 0; k < b->count; ++k) if (prim_layer[k] == L_BACK) prim_layer[k] = L_3D;
+        bgc_semi = 0;
         return 0;
     }
+    if (semi_ok != bgc_semi) { bgc_semi = semi_ok; bgc.valid = 0; } /* (another content: composed again whole) */
     *polys -= back_polys;
     *vertices -= back_vertices;
     u32 hash = bgc_frame_hash; /* (field_frame's, this scene's) */
@@ -5058,12 +5094,12 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         bgc_frame_hash = bgc_hash(b, display_h);
         int blo = BGC_BANDS, bhi = -1, clo = BGC_COLS, chi = -1;
         for (int i = 0; i < BGC_BANDS; ++i) {
-            if (bgc_bands_now[i] != bg_last_bands[i]) { if (i < blo) blo = i; bhi = i; }
-            bg_last_bands[i] = bgc_bands_now[i];
+            if (bgc_sbands_now[i] != bg_last_bands[i]) { if (i < blo) blo = i; bhi = i; }
+            bg_last_bands[i] = bgc_sbands_now[i];
         }
         for (int i = 0; i < BGC_COLS; ++i) {
-            if (bgc_cols_now[i] != bg_last_cols[i]) { if (i < clo) clo = i; chi = i; }
-            bg_last_cols[i] = bgc_cols_now[i];
+            if (bgc_scols_now[i] != bg_last_cols[i]) { if (i < clo) clo = i; chi = i; }
+            bg_last_cols[i] = bgc_scols_now[i];
         }
         const int changed_area = bhi < 0 || chi < 0 ? 0 : (bhi - blo + 1) * (chi - clo + 1);
         bg_still = changed_area * 2 <= BGC_BANDS * BGC_COLS ? bg_still + 1 : 0;
@@ -5099,6 +5135,7 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         }
         int composite = tp_state == TP_OFF && bgc_keep && (!adds || bgc_texmode) && bgc_use(b, fst, display_h, &polys, &vertices);
         bgc_quad = composite && bgc_texmode;
+        if (!composite) bgc_semi = 0; /* (the semi-transparent sprites only in a composite in use) */
         /* (a scene the composite holds is one the runs would only take from it: none for the field) */
         if (composite) { bg_runs_off = 1; bg_runs_latched = 1; }
         /* the 3D engine's polygon and vertex RAM (2048, 6144 a frame): a scene past them goes in two passes (tp_*),
