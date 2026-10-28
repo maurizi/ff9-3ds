@@ -65,7 +65,7 @@ src/ovl_0a/tu_800B0124.c | (u32 *)g_gameState->gameData->unk10[g_gameState->game
 # Script values are 26 bits; on the PS1 a RAM pointer popped back (0x00xxxxxx, the RAM mirror) works as is. DS
 # pointers (0x02xxxxxx) set bit 25, which the 26-bit sign extension turns into 0xFExxxxxx: mask it back.
 # (func_80037ACC opcodes 0x70/0x71; reported by the decomp, 2026-10-11)
-src/main/evt_object.c | o = (Unk8004AB64 *)evt_popResult(); | o = (Unk8004AB64 *)PORT_SCRIPT_PTR(evt_popResult()); | 2
+src/main/evt_object.c | o = (EvtObject *)evt_popResult(); | o = (EvtObject *)PORT_SCRIPT_PTR(evt_popResult()); | 2
 
 # "This header field is already a RAM pointer (relocated from a file offset)": on the PS1 that's > 0x80000000,
 # in the port it's an address inside psx_ram.
@@ -83,9 +83,9 @@ src/ovl_0b/btlfx_heap.c | owner->unk68 | PSX_NZ(owner->unk68) | 5
 # Found by wandering the fields on the host (20,000 frames of walking and confirm from each field, 2026-10-27):
 # script opcodes 0x95/0x96 and the 0x2F store take an object id that names no object (evt_getObjectArg NULL);
 # btl_rollAmbush reads a party slot that is empty after a party change (gd->party[i] NULL).
-src/main/event.c | evt_execInstr_window(po, c, D_8007B704->unk10); | evt_execInstr_window(PSX_NZ(po), c, D_8007B704->unk10); | 2
-src/main/event.c | po->unk2F = b; | PSX_NZ(po)->unk2F = b; | 1
-src/main/event.c | WinLayout *evt_getMsgLayout(Unk8004AB64 *obj, s32 id, s32 flags) { | WinLayout *evt_getMsgLayout(Unk8004AB64 *obj, s32 id, s32 flags) { obj = PSX_NZ(obj); | 1
+src/main/event.c | evt_execInstr_window(po, c, g_evtActor->windowId); | evt_execInstr_window(PSX_NZ(po), c, g_evtActor->windowId); | 2
+src/main/event.c | po->scale = b; | PSX_NZ(po)->scale = b; | 1
+src/main/event.c | WinLayout *evt_getMsgLayout(EvtObject *obj, s32 id, s32 flags) { | WinLayout *evt_getMsgLayout(EvtObject *obj, s32 id, s32 flags) { obj = PSX_NZ(obj); | 1
 src/ovl_0b/btl_cmd.c | gd->party[i]->supportAbilities[arg0] & arg1 | PSX_NZ(gd->party[i])->supportAbilities[arg0] & arg1 | 1
 # btl_clearCmdQueue from a battle script (btl_setBattleVar 32) while no command is current (curCmd NULL, d1_f0761
 # wandered with the drive at its own rate)
@@ -128,11 +128,11 @@ src/main/tu_80021640.c | ((u16 *)db_lookupRegistered( | ((u16 *)PSX_NZ(db_lookup
 src/main/tu_80021640.c | DB_ANIM, 0))[1] | DB_ANIM, 0)))[1] | 1
 # Angle/distance opcodes restore the PSX KSEG0 base even for an absent object.
 # 80052640..54 reads its position at physical +14/+1C without a NULL guard.
-src_equiv/main/script_text.c | q = (Unk8004AB64 *)SCRIPT_PTR_RESTORE(evt_popValue()); | q = PSX_NZ((Unk8004AB64 *)SCRIPT_PTR_RESTORE(evt_popValue())); | 1
+src_equiv/main/script_text.c | q = (EvtObject *)SCRIPT_PTR_RESTORE(evt_popValue()); | q = PSX_NZ((EvtObject *)SCRIPT_PTR_RESTORE(evt_popValue())); | 1
 
 # Field movement collision query can return NULL. The PS1 still reads byte 0x0F (assembly 0x800478D8)
 # before checking the pointer at 0x800478FC. Preserve that low-RAM read without faulting on ARM/PC.
-src/main/event.c | ((o->unkF >> 4) ^ 1) & 1 | ((PSX_NZ(o)->unkF >> 4) ^ 1) & 1 | 1
+src/main/event.c | ((o->flags >> 4) ^ 1) & 1 | ((PSX_NZ(o)->flags >> 4) ^ 1) & 1 | 1
 
 # Cached mode overlays can arrive through StoreImage or a RAM copy, bypassing CD_getsector's relocation.
 # Patch only the restored prefix; trailing disc sectors still use psx_overlay_patch in the CD layer.
