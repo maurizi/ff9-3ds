@@ -3965,6 +3965,72 @@ static inline void fuse_bounds(FUse *fu, int u0, int v0, int u1, int v1) {
     if (v1 > fu->v1) fu->v1 = (u8)v1;
 }
 
+/* port_native_field_mesh's pass over one kind's polygons of a group (t constant: its offsets and branches fold) */
+typedef struct {
+    const u8 *src, *pk;
+    int pi;
+    u32 fw;
+    int opaque, front_polys, front_verts, lu0, lv0, lu1, lv1, gathering, last_use;
+} FmTake;
+static inline __attribute__((always_inline)) void fm_take_kind(FmTake *k, FStore *st, u32 *const front, const s32 *const sxy,
+                                                               const int nv, const int t, int count) {
+    const int quad = !(t & 1), flags_at = mesh_flags_at[t], textured = t < 4, nvp = quad ? 4 : 3;
+    const u8 *src = k->src, *pk = k->pk;
+    int pi = k->pi, opaque = k->opaque, front_polys = k->front_polys, front_verts = k->front_verts;
+    int lu0 = k->lu0, lv0 = k->lv0, lu1 = k->lu1, lv1 = k->lv1, gathering = k->gathering, last_use = k->last_use;
+    u32 fw = k->fw;
+    for (; count > 0; --count, src += mesh_size[t], pk += fm_size[t], ++pi) {
+      do { /* (a continue leaves this, for the word's store below) */
+        if (pk[7] & 2) continue;
+        ++opaque;
+        const u32 i01 = *(const u32 *)src, i23 = *(const u32 *)(src + 4); /* (the records are word aligned) */
+        const u32 i0 = i01 & 0xFFFF, i1 = i01 >> 16, i2 = i23 & 0xFFFF;
+        if (i0 >= (u32)nv || i1 >= (u32)nv || i2 >= (u32)nv || (quad && i23 >> 16 >= (u32)nv))
+            continue; /* (a vertex past the group's: not drawn) */
+        if (!(src[flags_at] & 2)) {
+            u32 s0 = (u32)sxy[i0], s1 = (u32)sxy[i1], s2 = (u32)sxy[i2];
+            int x0 = (s16)s0, y0 = (s16)(s0 >> 16);
+            if (((s16)s1 - x0) * ((s16)(s2 >> 16) - y0) - ((s16)s2 - x0) * ((s16)(s1 >> 16) - y0) <= 0) continue;
+        }
+        fw |= 1u << (pi & 31);
+        front_polys++;
+        front_verts += nvp;
+        if (!textured) continue;
+        u32 uv[4];
+#pragma GCC unroll 4
+        for (int i = 0; i < nvp; ++i) uv[i] = *(const u32 *)(pk + fm_xy_at[t][i] + 4);
+        u16 clut = (u16)(uv[0] >> 16), tpage = (u16)(uv[1] >> 16);
+        int u = last_use;
+        if (!gathering || st->uses[u].tpage != tpage || st->uses[u].clut != clut) {
+            if (gathering) fuse_bounds(&st->uses[last_use], lu0, lv0, lu1, lv1);
+            gathering = 0;
+            if (u >= st->nuses || st->uses[u].tpage != tpage || st->uses[u].clut != clut)
+                for (u = 0; u < st->nuses; ++u) if (st->uses[u].tpage == tpage && st->uses[u].clut == clut) break;
+            if (u == st->nuses) {
+                if (u == FM_USES) continue;
+                st->uses[u] = (FUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF};
+                st->nuses++;
+            }
+            last_use = u;
+            gathering = 1;
+            lu0 = lv0 = 255; lu1 = lv1 = 0;
+        }
+#pragma GCC unroll 4
+        for (int i = 0; i < nvp; ++i) {
+            int cu = uv[i] & 0xFF, cv = uv[i] >> 8 & 0xFF;
+            if (cu < lu0) lu0 = cu;
+            if (cu > lu1) lu1 = cu;
+            if (cv < lv0) lv0 = cv;
+            if (cv > lv1) lv1 = cv;
+        }
+      } while (0);
+        if ((pi & 31) == 31) { front[pi >> 5] = fw; fw = 0; }
+    }
+    k->src = src; k->pk = pk; k->pi = pi; k->fw = fw; k->opaque = opaque; k->front_polys = front_polys;
+    k->front_verts = front_verts; k->lu0 = lu0; k->lv0 = lv0; k->lu1 = lu1; k->lv1 = lv1; k->gathering = gathering;
+    k->last_use = last_use;
+}
+
 PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(const NativeFieldMesh *n) {
     /* (not the GPU's backend: a scene gone software keeps the software renderer until it's shown, after this) */
     if (!active || !place->field || !fm_ring[0] || soft_hold) return 0;
@@ -4001,61 +4067,29 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
      * culling of them (model_link: NCLIP <= 0 unless double-sided; the budget counts what's drawn), and the drawn
      * ones' texture uses (plan_textures plans each). A group with no opaque polygon isn't taken: nothing it marked
      * counts (its range is the next group's), and it has no use. */
-    int opaque = 0, front_polys = 0, front_verts = 0;
     const u8 *src = *(const u8 *const *)(g + 0x1C);
     int pi = st->npolys;
     /* the drawn polygons' bits, a word at a time in a register (the word's earlier bits are earlier groups') */
     u32 *const front = st->front, fw = front[pi >> 5] & ~(~0u << (pi & 31));
     const s32 *const sxy = (const s32 *)n->sxy;
-    int lu0 = 255, lv0 = 255, lu1 = 0, lv1 = 0, gathering = 0; /* last_use's bounds, gathered in registers */
+    FmTake k = {src, pk, pi, fw, 0, 0, 0, 255, 255, 0, 0, 0, last_use}; /* (last_use's bounds gathered in registers) */
     for (int t = 0; t < 8; ++t) {
-        const int quad = !(t & 1), flags_at = mesh_flags_at[t], textured = t < 4, nvp = quad ? 4 : 3;
-        for (int k = *(const u16 *)(g + 2 + 2 * t); k > 0; --k, src += mesh_size[t], pk += fm_size[t], ++pi) {
-          do { /* (a continue leaves this, for the word's store below) */
-            if (pk[7] & 2) continue;
-            ++opaque;
-            const u32 i01 = *(const u32 *)src, i23 = *(const u32 *)(src + 4); /* (the records are word aligned) */
-            const u32 i0 = i01 & 0xFFFF, i1 = i01 >> 16, i2 = i23 & 0xFFFF;
-            if (i0 >= (u32)nv || i1 >= (u32)nv || i2 >= (u32)nv || (quad && i23 >> 16 >= (u32)nv))
-                continue; /* (a vertex past the group's: not drawn) */
-            if (!(src[flags_at] & 2)) {
-                u32 s0 = (u32)sxy[i0], s1 = (u32)sxy[i1], s2 = (u32)sxy[i2];
-                int x0 = (s16)s0, y0 = (s16)(s0 >> 16);
-                if (((s16)s1 - x0) * ((s16)(s2 >> 16) - y0) - ((s16)s2 - x0) * ((s16)(s1 >> 16) - y0) <= 0) continue;
-            }
-            fw |= 1u << (pi & 31);
-            front_polys++;
-            front_verts += nvp;
-            if (!textured) continue;
-            u32 uv[4];
-            for (int i = 0; i < nvp; ++i) uv[i] = *(const u32 *)(pk + fm_xy_at[t][i] + 4);
-            u16 clut = (u16)(uv[0] >> 16), tpage = (u16)(uv[1] >> 16);
-            int u = last_use;
-            if (!gathering || st->uses[u].tpage != tpage || st->uses[u].clut != clut) {
-                if (gathering) fuse_bounds(&st->uses[last_use], lu0, lv0, lu1, lv1);
-                gathering = 0;
-                if (u >= st->nuses || st->uses[u].tpage != tpage || st->uses[u].clut != clut)
-                    for (u = 0; u < st->nuses; ++u) if (st->uses[u].tpage == tpage && st->uses[u].clut == clut) break;
-                if (u == st->nuses) {
-                    if (u == FM_USES) continue;
-                    st->uses[u] = (FUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF};
-                    st->nuses++;
-                }
-                last_use = u;
-                gathering = 1;
-                lu0 = lv0 = 255; lu1 = lv1 = 0;
-            }
-            for (int i = 0; i < nvp; ++i) {
-                int cu = uv[i] & 0xFF, cv = uv[i] >> 8 & 0xFF;
-                if (cu < lu0) lu0 = cu;
-                if (cu > lu1) lu1 = cu;
-                if (cv < lv0) lv0 = cv;
-                if (cv > lv1) lv1 = cv;
-            }
-          } while (0);
-            if ((pi & 31) == 31) { front[pi >> 5] = fw; fw = 0; }
+        const int count = *(const u16 *)(g + 2 + 2 * t);
+        if (!count) continue;
+        switch (t) { /* (each kind its own loop: its sizes, offsets and vertex count constant) */
+        case 0: fm_take_kind(&k, st, front, sxy, nv, 0, count); break;
+        case 1: fm_take_kind(&k, st, front, sxy, nv, 1, count); break;
+        case 2: fm_take_kind(&k, st, front, sxy, nv, 2, count); break;
+        case 3: fm_take_kind(&k, st, front, sxy, nv, 3, count); break;
+        case 4: fm_take_kind(&k, st, front, sxy, nv, 4, count); break;
+        case 5: fm_take_kind(&k, st, front, sxy, nv, 5, count); break;
+        case 6: fm_take_kind(&k, st, front, sxy, nv, 6, count); break;
+        default: fm_take_kind(&k, st, front, sxy, nv, 7, count); break;
         }
     }
+    pi = k.pi; fw = k.fw; last_use = k.last_use;
+    const int opaque = k.opaque, front_polys = k.front_polys, front_verts = k.front_verts, gathering = k.gathering;
+    const int lu0 = k.lu0, lv0 = k.lv0, lu1 = k.lu1, lv1 = k.lv1;
     if (pi & 31) front[pi >> 5] = fw;
     if (gathering) fuse_bounds(&st->uses[last_use], lu0, lv0, lu1, lv1);
     if (!opaque) return 0;
