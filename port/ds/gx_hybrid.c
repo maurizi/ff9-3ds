@@ -2265,6 +2265,9 @@ static void fm_emit(const Buffer *b, const FStore *fst, EmitState *es);
 static u32 recip24[256];
 static inline u32 div31(u32 c, u32 d) {
     if (!recip24[1]) for (u32 k = 1; k < 256; ++k) recip24[k] = (u32)(((1ull << 24) + k - 1) / k);
+    /* (c <= d, as hue_of's callers give it: the product fits 32 bits, checked exact for every pair; Thumb's 64-bit
+     * multiply is a library call) */
+    if (c <= d) return c * 31 * recip24[d] >> 24;
     return (u32)(((unsigned long long)(c * 31) * recip24[d]) >> 24);
 }
 /* vertex i's colour at full brightness: each channel x 31 / m (m its brightest channel or more) */
