@@ -54,14 +54,28 @@ static inline __attribute__((always_inline)) void gte_mac0_flags(long long m, gt
 static inline __attribute__((always_inline)) void gte_cmd_inline(gte_u32 op) {
     if (__builtin_constant_p(op) && (op & 0x3F) == 0x06) { /* NCLIP */
         const gte_u32 *d = psx_gte.d;
-        long long x0 = (short)d[12], y0 = (short)(d[12] >> 16), x1 = (short)d[13], y1 = (short)(d[13] >> 16);
-        long long x2 = (short)d[14], y2 = (short)(d[14] >> 16);
-        gte_mac0_flags(x0 * y1 + x1 * y2 + x2 * y0 - x0 * y2 - x1 * y0 - x2 * y1, 0);
+        int x0 = (short)d[12], y0 = (short)(d[12] >> 16), x1 = (short)d[13], y1 = (short)(d[13] >> 16);
+        int x2 = (short)d[14], y2 = (short)(d[14] >> 16);
+        /* (coordinates within +-8192, as on screen: (x1-x0)(y2-y0) - (x2-x0)(y1-y0), the same value, fits 32
+         * bits with no MAC0 flag; Thumb code has no long multiply, each 64-bit product a library call) */
+        if ((unsigned)(x0 + 8192) < 16384u && (unsigned)(y0 + 8192) < 16384u && (unsigned)(x1 + 8192) < 16384u &&
+            (unsigned)(y1 + 8192) < 16384u && (unsigned)(x2 + 8192) < 16384u && (unsigned)(y2 + 8192) < 16384u) {
+            psx_gte.d[24] = (gte_u32)((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0));
+            psx_gte.c[31] = 0;
+        } else
+            gte_mac0_flags((long long)x0 * y1 + (long long)x1 * y2 + (long long)x2 * y0 - (long long)x0 * y2 -
+                           (long long)x1 * y0 - (long long)x2 * y1, 0);
     } else if (__builtin_constant_p(op) && ((op & 0x3F) == 0x2D || (op & 0x3F) == 0x2E)) { /* AVSZ3, AVSZ4 */
         const gte_u32 *d = psx_gte.d;
         unsigned int sum = (unsigned short)d[17] + (unsigned short)d[18] + (unsigned short)d[19];
         short zsf = (short)psx_gte.c[29];
         if ((op & 0x3F) == 0x2E) { sum += (unsigned short)d[16]; zsf = (short)psx_gte.c[30]; }
+        if (sum < 0x10000u) { /* (|zsf * sum| < 2^31: 32 bits, no MAC0 flag) */
+            int m = zsf * (int)sum, z = m >> 12;
+            if (z > 0xFFFF || z < 0) { psx_gte.d[7] = z < 0 ? 0 : 0xFFFF; psx_gte.d[24] = (gte_u32)m; psx_gte.c[31] = 0x80000000u | 1u << 18; }
+            else { psx_gte.d[7] = (gte_u32)z; psx_gte.d[24] = (gte_u32)m; psx_gte.c[31] = 0; }
+            return;
+        }
         long long m = (long long)zsf * sum, z = m >> 12;
         gte_u32 flag = 0;
         if (z > 0xFFFF) { z = 0xFFFF; flag = 1u << 18; } else if (z < 0) { z = 0; flag = 1u << 18; }
