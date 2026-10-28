@@ -2668,21 +2668,26 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
         if (attr != INITIAL_ATTR) { pack(CMD_POLYATTR); put(INITIAL_ATTR); attr = INITIAL_ATTR; }
         pack(CMD_BEGIN); put(n == 4 ? 1 : 0);
         pack_end();
-        static const u8 quad_order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
-        for (int j = 0; j < n; ++j) {
-            int i = n == 4 ? quad_order[j] : j;
-            u32 pos = ((xy[i] + ofs_x) & 0xFFFF) | ((xy[i] & 0xFFFF0000) + ofs_y);
-            u32 tc = (u32)(u16)(((uv[i] & 0xFF) - tu) * 16) | (u32)(u16)(((uv[i] >> 8) - tv) * 16) << 16;
-            if (j == 0 || gouraud) {
-                u32 c = col[gouraud ? i : 0];
-                put(j == 0 ? CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTX16 << 16 : CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTXXY << 16);
-                put(TEX_TINT(c & 0xFF) | TEX_TINT(c >> 8 & 0xFF) << 5 | TEX_TINT(c >> 16 & 0xFF) << 10);
-            } else {
-                put(CMD_TEXCOORD | CMD_VTXXY << 8);
-            }
-            put(tc); put(pos);
-            if (j == 0) put((u32)(u16)z);
+        /* (PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2; each count's loop unrolled: constant indices, the vertices'
+         * words out of the stack) */
+#define NATIVE_VERTS(N) \
+        _Pragma("GCC unroll 4") \
+        for (int j = 0; j < (N); ++j) { \
+            const int i = (N) == 4 && j >= 2 ? 5 - j : j; \
+            u32 pos = ((xy[i] + ofs_x) & 0xFFFF) | ((xy[i] & 0xFFFF0000) + ofs_y); \
+            u32 tc = (u32)(u16)(((uv[i] & 0xFF) - tu) * 16) | (u32)(u16)(((uv[i] >> 8) - tv) * 16) << 16; \
+            if (j == 0 || gouraud) { \
+                u32 c = col[gouraud ? i : 0]; \
+                put(j == 0 ? CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTX16 << 16 : CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTXXY << 16); \
+                put(TEX_TINT(c & 0xFF) | TEX_TINT(c >> 8 & 0xFF) << 5 | TEX_TINT(c >> 16 & 0xFF) << 10); \
+            } else { \
+                put(CMD_TEXCOORD | CMD_VTXXY << 8); \
+            } \
+            put(tc); put(pos); \
+            if (j == 0) put((u32)(u16)z); \
         }
+        if (n == 4) { NATIVE_VERTS(4) } else { NATIVE_VERTS(3) }
+#undef NATIVE_VERTS
         ++polys;
         vertices += n;
     }
