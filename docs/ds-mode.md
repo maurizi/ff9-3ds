@@ -1021,7 +1021,7 @@ Out of the measurement: the d2_f0955 kind (a moving background, 423 sprites a fr
 VBlank); still scenes ~5. Budget for the lists: the sprites no longer recorded free most of the primitive buffers
 (ovl_0a's range), where the lists would live.
 
-What the first step found (branch bg-layers, not merged): wrapping fldbg_draw (config/renames.txt) and lifting each
+What the first step found (branch bg-layers): wrapping fldbg_draw (config/renames.txt) and lifting each
 layer's run of tiles at an OT entry into a port marker (gpu.c walks markers in place; exact, identical frames) gains
 nothing as such, because the still fields put nearly every tile at its own OT entry (d4_f2110: 396 tiles over more
 than 64 entries; d2_f0955's moving layers: 410 tiles in 3 runs). Grouping by layer instead (one unit, tiles at their
@@ -1045,7 +1045,7 @@ d4_boss_tiamat) that walked onto the world map in a story state whose world data
 (wm_loadWorldData read through file_find's NULL). These now stop with a message (a counted patch in wm_main.c), as
 the other fixture limits do. d3_f2750 passed the earlier sweep: loads in PS1 time change where the wander goes.
 
-### Background runs (branch bg-layers, 2026-10-27): what they gave, why not merged
+### Background runs (branch bg-layers, 2026-10-27; merged 2026-10-28)
 
 A moving layer's run of tiles at one OT entry (port/game/field_bg.c lifts it into a marker; gx_hybrid.c gxh_bg_run
 takes it whole) is not recorded tile by tile: its tiles' positions and packets are snapshotted at the walk (the game
@@ -1066,6 +1066,17 @@ failed (the game's two halves of a layer's sprites keep culled tiles' old positi
 sprites' path (still scenes 0.9-1.3 ms slower than master), and d2_f0931 stays at 115 ms with no runs at frame 1500.
 Net: about 2 ms gained in the two moving-background fixtures, lost across the still ones. Not merged; the branch
 keeps it.
+Merged 2026-10-28 with three gates, frames identical to master in the 8-field set and two battles:
+- runs only in a field whose scenes keep well inside the 3D engine's polygons (off at a field's start, on after 8
+  scenes under 1,500, off for the field past 1,700 or once the composite holds a scene: d2_f0931 115 -> 54.6 ms,
+  master 54.1);
+- a run found still is left linked by field_bg.c (a per-buffer list cleared every 32 frames), and nothing is lifted
+  while runs are off;
+- the buffers' primitive capacity is kept per buffer (bg_runs_set), not computed per recorded sprite.
+d2_f0955 32.79 -> 30.52 (a moving camera, the walking case that was slowest on hardware); the still fields stay
+0.1-0.8 ms over master (d4_f0351 +0.8 with no runs taken). Builds that differ only in where code lies differ by a
+few tenths of a ms in melonDS (the same work: the no-lift build 25.85, the gated 26.11), so differences under ~0.5
+ms between two builds are not measured effects.
 
 ### Field models through the 3D engine (branch gx-models, 2026-10-28): not working yet
 
