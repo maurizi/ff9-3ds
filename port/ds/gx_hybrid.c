@@ -142,8 +142,9 @@ typedef struct {
 
 static Buffer buffers[2];
 #define BGC_BANDS 32 /* 8-row bands of the buffer, each with its sprites' hash: a change redraws its rows alone */
-static struct { int valid; u32 hash, key, bands[BGC_BANDS]; unsigned tex; } bgc; /* a field's background composite in bank A (bgc_use) */
-static u32 bgc_bands_now[BGC_BANDS]; /* (bgc_hash's, this scene's) */
+#define BGC_COLS 5   /* and 64-pixel columns: the changed bands' rows within the changed columns (a waterfall's strip) */
+static struct { int valid; u32 hash, key, bands[BGC_BANDS], cols[BGC_COLS]; unsigned tex; } bgc; /* a field's background composite in bank A (bgc_use) */
+static u32 bgc_bands_now[BGC_BANDS], bgc_cols_now[BGC_COLS]; /* (bgc_hash's, this scene's) */
 /* A field scene past the 3D engine's RAM in two passes (tp_*): the polygons emitted are those at depths in
  * [tp_zlo, tp_zhi); tp_counting notes them instead (tp_note) */
 static int tp_zlo = -0x7FFFFFFF, tp_zhi = 0x7FFFFFFF, tp_counting;
@@ -4671,6 +4672,7 @@ PORT_OVERLAY_CODE(0a) static void bgc_sources(const Buffer *b) {
 PORT_OVERLAY_CODE(0a) static u32 bgc_hash(const Buffer *b, int display_h) {
     u32 h = 2166136261u ^ (u32)display_h ^ b->clear << 12; /* (not the buffer's place: the sprites are relative) */
     for (int i = 0; i < BGC_BANDS; ++i) bgc_bands_now[i] = 2166136261u + (u32)i;
+    for (int i = 0; i < BGC_COLS; ++i) bgc_cols_now[i] = 2166136261u + (u32)i;
     for (int k = 0; k < b->count; ++k) {
         const Prim *p = &b->prims[k];
         if (!bg_prim(p)) continue;
@@ -4681,6 +4683,9 @@ PORT_OVERLAY_CODE(0a) static u32 bgc_hash(const Buffer *b, int display_h) {
         int y0 = p->y[0] < 0 ? 0 : p->y[0], y1 = p->y[2] - 1;
         if (y1 > BGC_BANDS * 8 - 1) y1 = BGC_BANDS * 8 - 1;
         for (int band = y0 >> 3; band <= y1 >> 3; ++band) bgc_bands_now[band] = (bgc_bands_now[band] ^ s) * 16777619u;
+        int x0 = p->x[0] < 0 ? 0 : p->x[0], x1 = p->x[1] - 1;
+        if (x1 > BGC_COLS * 64 - 1) x1 = BGC_COLS * 64 - 1;
+        for (int col = x0 >> 6; col <= x1 >> 6; ++col) bgc_cols_now[col] = (bgc_cols_now[col] ^ s) * 16777619u;
     }
     return h;
 }
@@ -4714,19 +4719,33 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void bgc_scale(const
 
 /* Rows [ry0, ry1] of the buffer only: the sprites over them drawn (clipped to them), the output rows that sample
  * only them scaled (the others keep theirs), the rows their clear value again. */
-PORT_OVERLAY_CODE(0a) static void bgc_compose_rows(Buffer *b, int display_h, int ry0, int ry1) {
+PORT_OVERLAY_CODE(0a) static void bgc_compose_rows(Buffer *b, int display_h, int ry0, int ry1, int rx0, int rx1) {
     int h = display_h > 0 ? display_h : 224, out_h = h * 4 / 5, top;
     if (ry1 > b->h - 1) ry1 = b->h - 1;
-    if (ry0 > ry1) return;
+    if (rx1 > b->w - 1) rx1 = b->w - 1;
+    if (ry0 > ry1 || rx0 > rx1) return;
     Buffer rows = *b;
     rows.y = b->y + ry0; rows.h = ry1 - ry0 + 1;
+    rows.x = b->x + rx0; rows.w = rx1 - rx0 + 1;
     fill_buffer(&rows, b->clear == FIELD_KEY ? 0 : b->clear);
-    int clip[4] = {b->x, b->y + ry0, b->x + b->w - 1, b->y + ry1};
+    int clip[4] = {b->x + rx0, b->y + ry0, b->x + rx1, b->y + ry1};
     replay_clip(b, 0, b->count, -2, clip);
     int oy0 = (4 * ry0 + 4) / 5, oy1 = (4 * ry1 + 3) / 5; /* (output row oy samples row 5 oy / 4) */
     if (ry0 == 0) oy0 = 0;
     if (oy1 > out_h - 1) oy1 = out_h - 1;
     u16 *band = scaled_block(), *bitmap = bgc_target(out_h, &top);
+    if (rx0 > 0 || rx1 < b->w - 1) { /* (some columns: the output columns that sample only them, pixel by pixel) */
+        int ox0 = rx0 ? (4 * rx0 + 4) / 5 : 0, ox1 = (4 * rx1 + 3) / 5;
+        if (ox1 > 255) ox1 = 255;
+        for (int oy = oy0; oy <= oy1; ++oy) {
+            const u16 *src = psx_vram + ((b->y + ((5 * oy) >> 2)) & 511) * 1024 + b->x;
+            u16 *out = bitmap + (top + oy) * 256;
+            for (int ox = ox0; ox <= ox1; ++ox) out[ox] = src[(5 * ox) >> 2] | 0x8000;
+        }
+        fill_buffer(&rows, b->clear);
+        dirty_cells(b->x + rx0, b->y + ry0, b->x + rx1, b->y + ry1);
+        return;
+    }
     for (int oy = oy0; oy <= oy1; oy += BLOCK) {
         int n = oy1 + 1 - oy < BLOCK ? oy1 + 1 - oy : BLOCK;
         for (int r = 0; r < n; ++r) {
@@ -4830,18 +4849,21 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
         bgc_sources(b);
         bgc_compose(b, display_h);
         gxh_stats_bgc++;
-    } else if (bgc.hash != hash) { /* the bands that changed (animated tiles, say): their rows alone */
-        int lo = BGC_BANDS, hi = -1;
+    } else if (bgc.hash != hash) { /* the bands and columns that changed (animated tiles, say): that rectangle alone */
+        int lo = BGC_BANDS, hi = -1, clo = BGC_COLS, chi = -1;
         for (int i = 0; i < BGC_BANDS; ++i)
             if (bgc.bands[i] != bgc_bands_now[i]) { if (i < lo) lo = i; hi = i; }
+        for (int i = 0; i < BGC_COLS; ++i)
+            if (bgc.cols[i] != bgc_cols_now[i]) { if (i < clo) clo = i; chi = i; }
         bgc_sources(b);
-        if (hi >= 0) bgc_compose_rows(b, display_h, lo * 8, hi * 8 + 7);
+        if (hi >= 0 && chi >= 0) bgc_compose_rows(b, display_h, lo * 8, hi * 8 + 7, clo * 64, chi * 64 + 63);
         else bgc_compose(b, display_h); /* (the same bands, another order: all of it) */
         gxh_stats_bgc++;
     }
     bgc.valid = 1; bgc.hash = hash; bgc.tex = bgc_tex; bgc.key = key;
 
     memcpy(bgc.bands, bgc_bands_now, sizeof bgc.bands);
+    memcpy(bgc.cols, bgc_cols_now, sizeof bgc.cols);
     if (bgc_texmode) {
         DC_FlushAll();
         vramSetBankC(VRAM_C_TEXTURE_SLOT2);
@@ -5034,11 +5056,20 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         /* (still: at most a few bands changed since the last scene, an animated tile's say, which the composite
          * redraws alone; a moving camera changes them all) */
         static int bgc_keep, bg_still;
-        static u32 bg_last_bands[BGC_BANDS];
+        /* (the changed rectangle: the changed bands' range by the changed columns'; still while it's at most half) */
+        static u32 bg_last_bands[BGC_BANDS], bg_last_cols[BGC_COLS];
         bgc_frame_hash = bgc_hash(b, display_h);
-        int bands_changed = 0;
-        for (int i = 0; i < BGC_BANDS; ++i) { bands_changed += bgc_bands_now[i] != bg_last_bands[i]; bg_last_bands[i] = bgc_bands_now[i]; }
-        bg_still = bands_changed <= BGC_BANDS / 2 ? bg_still + 1 : 0;
+        int blo = BGC_BANDS, bhi = -1, clo = BGC_COLS, chi = -1;
+        for (int i = 0; i < BGC_BANDS; ++i) {
+            if (bgc_bands_now[i] != bg_last_bands[i]) { if (i < blo) blo = i; bhi = i; }
+            bg_last_bands[i] = bgc_bands_now[i];
+        }
+        for (int i = 0; i < BGC_COLS; ++i) {
+            if (bgc_cols_now[i] != bg_last_cols[i]) { if (i < clo) clo = i; chi = i; }
+            bg_last_cols[i] = bgc_cols_now[i];
+        }
+        const int changed_area = bhi < 0 || chi < 0 ? 0 : (bhi - blo + 1) * (chi - clo + 1);
+        bg_still = changed_area * 2 <= BGC_BANDS * BGC_COLS ? bg_still + 1 : 0;
         /* (over the budget: the composite, kept a while, unless the background is moving, which would compose
          * in software every scene: without it the background runs stay on, d2_f0931 then fits the 3D engine) */
         if ((polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) && bg_still) bgc_keep = 60;
