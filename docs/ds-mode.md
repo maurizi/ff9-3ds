@@ -1206,3 +1206,18 @@ GPU (large translucent areas) or from cache misses wouldn't show; DuckStation mo
 the cross-check for a scene where the PS1 is suspected to lag. d2_f0931's fixture is a black screen with one line
 of text on both machines: the PS1 draws it at full pace while the DS spends 49.7 ms, so its hidden scene is the
 DS's waste to find.
+
+### d2_f0931: why 50 ms (2026-10-28)
+
+The fixture's screen is black with one line of text, on the PS1 as on the DS, but the scene under it is a large dark
+field whose camera scrolls: every scene its background sprites' positions and texture words change (colours don't),
+675 of them after merging, 1,073 primitives recorded, 1,608 polygons in 3D (no UI window covers it: its UI is 26
+glyphs). PROFILE=1: the submit (planning, emission) 26 ms per VBlank and the walk 12 ms, against 13 and 2 in
+d2_f0955. The scene is under the 3D engine's polygons but over its vertices (about 6,430 of 6,144), so field_frame
+keeps the composite (bgc_keep 60); with the camera moving, 18 of the 32 bands change each scene and the composite
+is recomposed in software every time: about 200 sprites drawn by the software rasteriser per frame (row_direct8,
+rect_rows, poly_row_*: about 20% of the samples). Letting such a scene (over budget, background moving) go two-pass
+instead hangs it at frame 445 every time (a latent bug of the two-pass path, not yet found; the change is not kept).
+
+Measurement pitfall: a GP0 command histogram counted over packets' words counts data words (image uploads') as
+commands; counted at packets' starts, d2_f0931 has no POLY_GT4 packets (its models are all native).
