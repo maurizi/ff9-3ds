@@ -5070,9 +5070,10 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         }
         const int changed_area = bhi < 0 || chi < 0 ? 0 : (bhi - blo + 1) * (chi - clo + 1);
         bg_still = changed_area * 2 <= BGC_BANDS * BGC_COLS ? bg_still + 1 : 0;
-        /* (over the budget: the composite, kept a while, unless the background is moving, which would compose
-         * in software every scene: without it the background runs stay on, d2_f0931 then fits the 3D engine) */
-        if ((polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) && bg_still) bgc_keep = 60;
+        /* (over the budget: the composite, kept a while, even for a moving background, composed in software every
+         * scene. Without it a scrolling scene over the budget goes two-pass, whose banks C and D don't hold its
+         * textures: walking in d4_f2110 then drew in software, 83 ms per VBlank against 31) */
+        if (polys + adds > MAX_POLYS || vertices + adds * 4 > MAX_VERTICES) bgc_keep = 60;
         else if (bg_still >= 4) bgc_keep = bgc_keep > 1 ? bgc_keep : 1;
         else if (!bg_still) bgc_keep = bgc_keep > 1 ? bgc_keep - 1 : 0;
         else if (bgc_keep) --bgc_keep;
