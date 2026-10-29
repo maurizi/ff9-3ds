@@ -16,7 +16,8 @@ static struct {
     int enabled,consumed,kind,disc,field,battle,world,world_explicit,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil,tetra;
     unsigned seed;
     int party[4],hp[4],enemy_hp[4],trance[4],preset[4],equip[4][5];
-    s16 events[0x800],items[256]; /* -1: unset */
+    u8 events[0x800],events_set[0x800/8]; /* (bytes and a bit each: the heap is tight) */
+    s8 items[256]; /* -1: unset (counts 0-99) */
     char characters[256],event_blob[256];
 } scenario;
 static int number(const char *s,int low,int high) {
@@ -31,7 +32,6 @@ void port_scenario_load(const char *path) {
     scenario.disc=1;scenario.field=70;scenario.battle=-1;scenario.world=0x2331;
     scenario.level=-1;scenario.story=-1;scenario.gil=-1;scenario.seed=1;
     for(int i=0;i<4;++i) {scenario.party[i]=i;scenario.hp[i]=scenario.enemy_hp[i]=scenario.trance[i]=scenario.preset[i]=-1;for(int j=0;j<5;++j) scenario.equip[i][j]=-1;}
-    for(int i=0;i<0x800;++i) scenario.events[i]=-1;
     for(int i=0;i<256;++i) scenario.items[i]=-1;
     char line[512];
     while(fgets(line,sizeof line,f)) {
@@ -77,8 +77,8 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strncmp(s,"trance.",7)) scenario.trance[number(s+7,0,3)]=number(eq,0,255);
         else if(!__builtin_strncmp(s,"preset.",7)) scenario.preset[number(s+7,0,3)]=number(eq,0,19);
         else if(!__builtin_strncmp(s,"hp.",3)) scenario.hp[number(s+3,0,3)]=number(eq,0,9999);
-        else if(!__builtin_strncmp(s,"event.",6)) scenario.events[number(s+6,0,0x7ff)]=number(eq,0,255);
-        else if(!__builtin_strncmp(s,"item.",5)) scenario.items[number(s+5,0,255)]=number(eq,0,99);
+        else if(!__builtin_strncmp(s,"event.",6)) {int e=number(s+6,0,0x7ff);scenario.events[e]=(u8)number(eq,0,255);scenario.events_set[e>>3]|=(u8)(1u<<(e&7));}
+        else if(!__builtin_strncmp(s,"item.",5)) scenario.items[number(s+5,0,255)]=(s8)number(eq,0,99);
         else if(!__builtin_strncmp(s,"equip.",6)) {
             int slot=number(s+6,0,3),used=0,*v=scenario.equip[slot];
             if(sscanf(eq,"%d,%d,%d,%d,%d%n",v,v+1,v+2,v+3,v+4,&used)!=5 || eq[used]) port_fatal("scenario: equipment needs five IDs");
@@ -231,7 +231,7 @@ void port_scenario_bootstrap(void) {
     load_blob(scenario.characters,d->characters,sizeof d->characters);
     load_blob(scenario.event_blob,&g_evtGlobalVars,sizeof g_evtGlobalVars);
     if(scenario.story>=0) g_evtGlobalVars.h[0]=(s16)scenario.story;
-    for(int i=0;i<0x800;++i) if(scenario.events[i]>=0) g_evtGlobalVars.b[i]=(u8)scenario.events[i];
+    for(int i=0;i<0x800;++i) if(scenario.events_set[i>>3]&(1u<<(i&7))) g_evtGlobalVars.b[i]=scenario.events[i];
     for(int id=0;id<256;++id) if(scenario.items[id]>=0) {
         ItemSlot *slot=item_findSlot_inline(id);
         if(!slot && scenario.items[id]) {

@@ -1392,3 +1392,10 @@ As stored, the lists' order strips 15-21% of the heavy enemies' drawn vertices (
 the lists into strips would make it 27-30%). Dropped polygons over a run: d1_b0228 7,943 -> 0, d3_b0232 19,435 -> 0,
 d4_b0678 3,408 -> 1,566, d2_b0135 17,302 -> 6,826; time 25.1 -> 28.8, 25.5 -> 29.2, 36.6 -> 33.7, 32.4 -> 36.8 ms
 (the scenes are now drawn whole).
+Then (same day) the lists in strip order: a battle unit's model (party, enemy, weapon: not an effect's, whose split
+vertices modules index in list order, nor the Zombie's, model 14, whose polygons effect 0x17F numbers) has its FT3
+lists reordered once, at its first btl_projectMesh (mesh_native.c strip_order: greedy strips, each next triangle
+searched 16 records either side; scratch in the projection's screen arrays). The PS1 output changes only in which of
+two polygons at one OT entry is drawn first. d4_b0678's drops 1,566 -> 804; times 28.4, 28.8, 33.2, 36.3 ms. The
+1.4 KB of ovl_0b code costs heap byte for byte (ovl_0b sizes slot 0): scenario.c's fixture state shrank by 2 KB to
+make room (the encounter metadata's 10 KB temporary buffer at bootstrap had failed).

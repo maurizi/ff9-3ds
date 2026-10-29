@@ -13,8 +13,142 @@
 
 void o0b_btl_projectMesh(BtlUnit9C *arg0, u8 arg1);
 
+/* A battle unit's model (party, enemy, weapon) has its triangle lists put in strip order once (strip_order): the
+ * hybrid renderer draws a model's opaque triangles as the 3D engine's triangle strips (gx_hybrid.c native_strips),
+ * where a triangle sharing an edge with the one before costs one vertex instead of three. The order only decides
+ * which of two polygons at the same OT entry the PS1 draws first. Not effect models (modules index their split
+ * vertices in list order) nor the Zombie's (model 14: effect 0x17F numbers its polygons, docs R26). */
+#define STRIP_ORDERED 0x8000 /* BtlUnit9C8.flags: done (the game reads bit 0 only; a reloaded file starts clear) */
+#ifdef __arm__
+#define STRIP_COLD __attribute__((target("thumb")))
+#else
+#define STRIP_COLD
+#endif
+#define STRIP_WINDOW 16      /* records searched each side of the last one (the lists are mostly in surface order) */
+
+/* the FT3 at r shares the edge a-b (those uvs) and has a third vertex: it (the vertices compared first, the uvs only
+ * then) */
+PORT_OVERLAY_CODE(0b) STRIP_COLD static int strip_next(const u8 *r, const u16 *uvs, u32 a, u32 b, u16 ua, u16 ub, u32 *c, u16 *uc) {
+    const u32 v0 = *(const u16 *)r, v1 = *(const u16 *)(r + 2), v2 = *(const u16 *)(r + 4);
+    const int ia = v0 == a ? 0 : v1 == a ? 1 : v2 == a ? 2 : -1;
+    if (ia < 0) return 0;
+    const int ib = v0 == b ? 0 : v1 == b ? 1 : v2 == b ? 2 : -1;
+    if (ib < 0 || ib == ia) return 0;
+    const int ic = 3 - ia - ib;
+    const u32 vc = ic == 0 ? v0 : ic == 1 ? v1 : v2;
+    if (vc == a || vc == b) return 0;
+    const u16 *ui = (const u16 *)(r + 0xC);
+    if (uvs[ui[ia]] != ua || uvs[ui[ib]] != ub) return 0;
+    *c = vc; *uc = uvs[ui[ic]];
+    return 1;
+}
+
+/* the same texture, flags and colour */
+PORT_OVERLAY_CODE(0b) STRIP_COLD static int strip_same(const u8 *r, const u8 *q) {
+    return r[6] == q[6] && r[0x12] == q[0x12] && r[8] == q[8] && r[9] == q[9] && r[10] == q[10];
+}
+
+/* from record s (rotation rot), the strip greedily: the records it takes marked `mark` in used[], their count; with
+ * order, appended there */
+PORT_OVERLAY_CODE(0b) STRIP_COLD static int strip_follow(const u8 *list, int n, const u16 *uvs, u8 *used, int s, int rot, u8 mark, u16 *order) {
+    const u8 *r = list + s * 0x14;
+    const u32 w[3] = {*(const u16 *)r, *(const u16 *)(r + 2), *(const u16 *)(r + 4)};
+    const u16 wu[3] = {uvs[*(const u16 *)(r + 0xC)], uvs[*(const u16 *)(r + 0xE)], uvs[*(const u16 *)(r + 0x10)]};
+    u32 a = w[(rot + 1) % 3], b = w[(rot + 2) % 3];
+    u16 ua = wu[(rot + 1) % 3], ub = wu[(rot + 2) % 3];
+    int cur = s, len = 0;
+    for (;;) {
+        int lo = cur - STRIP_WINDOW < 0 ? 0 : cur - STRIP_WINDOW, hi = cur + STRIP_WINDOW > n ? n : cur + STRIP_WINDOW;
+        int found = -1;
+        u32 c = 0;
+        u16 uc = 0;
+        for (int j = lo; j < hi; ++j)
+            if (!used[j] && strip_same(list + j * 0x14, r) && strip_next(list + j * 0x14, uvs, a, b, ua, ub, &c, &uc)) {
+                found = j;
+                break;
+            }
+        if (found < 0) break;
+        used[found] = mark;
+        if (order) *order++ = (u16)found;
+        ++len;
+        a = b; ua = ub; b = c; ub = uc; cur = found;
+    }
+    return len;
+}
+
+PORT_OVERLAY_CODE(0b) STRIP_COLD static void strip_order(BtlUnit9C8 *h) {
+    h->flags |= STRIP_ORDERED;
+    for (u32 g = 0; g < h->meshCount; ++g) {
+        BtlMesh *m = &h->meshes[g];
+        const int n = m->nFT3;
+        /* scratch: the projection's screen arrays (filled again before anything reads them) */
+        u16 *order = (u16 *)g_vtxScreenZ;
+        u8 *used = (u8 *)g_vtxScreenXY;
+        if (n < 3 || n > 1600) continue; /* (both arrays hold 0x321 words) */
+        u8 *list = (u8 *)m->prims + m->nFT4 * 0x18;
+        const u16 *uvs = (const u16 *)m->uvs;
+        for (int k = 0; k < n; ++k) used[k] = 0;
+        int out = 0;
+        for (int s = 0; s < n; ++s) {
+            if (used[s]) continue;
+            used[s] = 1;
+            order[out++] = (u16)s;
+            /* the rotation whose last edge a record near it shares (none: as stored) */
+            int best = 0;
+            {
+                const u8 *r = list + s * 0x14;
+                const u32 w[3] = {*(const u16 *)r, *(const u16 *)(r + 2), *(const u16 *)(r + 4)};
+                const u16 *ui = (const u16 *)(r + 0xC);
+                const int lo = s - STRIP_WINDOW < 0 ? 0 : s - STRIP_WINDOW, hi = s + STRIP_WINDOW > n ? n : s + STRIP_WINDOW;
+                for (int j = lo; j < hi && !best; ++j) {
+                    if (used[j] || !strip_same(list + j * 0x14, r)) continue;
+                    for (int rot = 0; rot < 3; ++rot) {
+                        u32 c;
+                        u16 uc;
+                        if (strip_next(list + j * 0x14, uvs, w[(rot + 1) % 3], w[(rot + 2) % 3], uvs[ui[(rot + 1) % 3]],
+                                       uvs[ui[(rot + 2) % 3]], &c, &uc)) { best = rot ? rot : 3; break; }
+                    }
+                }
+                if (best == 3) best = 0;
+            }
+            out += strip_follow(list, n, uvs, used, s, best, 1, order + out);
+        }
+        /* the records into that order, cycle by cycle (one record of room) */
+        for (int k = 0; k < n; ++k) used[k] = 0;
+        for (int i = 0; i < n; ++i) {
+            if (used[i] || order[i] == i) { used[i] = 1; continue; }
+            u32 tmp[5];
+            u32 *ri = (u32 *)(list + i * 0x14);
+            for (int w = 0; w < 5; ++w) tmp[w] = ri[w];
+            int j = i;
+            for (;;) {
+                const int k = order[j];
+                used[j] = 1;
+                u32 *rj = (u32 *)(list + j * 0x14);
+                if (k == i) { for (int w = 0; w < 5; ++w) rj[w] = tmp[w]; break; }
+                const u32 *rk = (const u32 *)(list + k * 0x14);
+                for (int w = 0; w < 5; ++w) rj[w] = rk[w];
+                j = k;
+            }
+        }
+    }
+}
+
+/* a battle unit's own model or weapon (not an effect's, not the Zombie's) */
+PORT_OVERLAY_CODE(0b) STRIP_COLD static int strip_unit_model(const BtlUnit9C *m) {
+    Battle *bt = g_gameState->gameData->unk8E4.battle;
+    if (!bt) return 0;
+    for (int i = 0; i < 8; ++i) {
+        const BtlUnit *u = &bt->units[i];
+        if (u->weaponModel == m) return 1;
+        if (u->model == m) return !(i >= 4 && u->modelId == 14);
+    }
+    return 0;
+}
+
 void o0b_btl_projectMesh(BtlUnit9C *arg0, u8 arg1) {
     MATRIX m;
+    if (!(arg0->header->flags & STRIP_ORDERED) && strip_unit_model(arg0)) strip_order(arg0->header);
     BtlMesh *g = &arg0->header->meshes[arg1];
     gte_SetGeomScreen(g_gameState->gameData->unkA);
     s32 k = 0;
