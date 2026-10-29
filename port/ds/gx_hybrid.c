@@ -1743,6 +1743,11 @@ static void upload_run(const Run *r, u8 *base) {
             else for (int k = 0; k < wh; ++k) { u16 c = src[(x + k) & 1023]; out[2 * k] = pair4[c & 255]; out[2 * k + 1] = pair4[c >> 8]; }
         } else if (depth == 2) {
             for (int k = 0; k < wh; ++k) { u16 c = src[(x + k) & 1023]; out[k] = c ? c | 0x8000 : 0; }
+        } else if (!(x & 1) && !(wh & 1) && x + wh <= 1024 && !((uintptr_t)out & 2)) {
+            /* (whole words: an animated page's runs are copied again each frame it changes) */
+            const u32 *in = (const u32 *)(src + x);
+            u32 *o = (u32 *)out;
+            for (int k = 0; k < wh / 2; ++k) o[k] = in[k];
         } else {
             for (int k = 0; k < wh; ++k) out[k] = src[(x + k) & 1023];
         }
