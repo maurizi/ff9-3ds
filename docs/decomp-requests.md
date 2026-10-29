@@ -222,6 +222,23 @@ them like the overlays (one binary per module, all linked at 0x801E7700), even a
 to behave the same. The port would then compile them like the overlays and load the native code with the module.
 If (b) is out of scope, the port can instead translate MIPS to ARM when a module loads, and (a) is enough.
 
+### R26. Battle model files: their format and which encounters use which (2026-10-29)
+DS battles past the 3D engine's 6144 vertices now draw in two passes (exact, but 15-21 ms per VBlank slower). The
+user chose to simplify the few models that tip a battle over, at build time, from the disc's files (outputs only in
+the port's build data, never committed). A survey of 18 battles: the party (~2,400 front-facing vertices) and the
+arena (~2,300) are about the same everywhere; the enemy decides it. Over budget: Hecteyes (1,276 front-facing
+polygons), Ochu (1,066), Bandersnatch (1,041), Grand Dragon (974), Wyerd (925), Abadon, Adamantoise, Whale
+Zombie, Zaghnol, Clipper. Asked, to make the list complete from the disc and to write the simplifier:
+- **Which model file each enemy type loads**: the field of the encounter's enemy records (`unk20[6]`, "file ids",
+  in the record `btl_initEnemyType` reads) that holds it, and how a file id maps to its FF9.IMG directory and
+  entry. With it, `tools/scenario_catalog.py` can list every encounter's enemy models and their polygon counts.
+- **The battle model file's layout** as loaded (`BtlModel`/`BtlUnit9C8` header, `BtlMesh` groups, per-bone vertex
+  counts, the eight polygon lists, uvs, colours, texture words), including what is relocated at load (unk0 bit 1)
+  and any data the motions or effects index by polygon or vertex number. A simplified file must keep every index
+  the game or its effects use (bones, hidden-mesh bits, effect anchors) valid.
+- Whether anything other than `btl_drawMesh` reads a model's polygon lists (effects that draw a model's polygons
+  themselves, `hi_model.c`'s callers, shadows, Trance or petrify recolours).
+
 ### R25. The last code without C or a port equivalent (2026-10-24)
 **Done** (decomp 1e155f14): C for all 11 world-map routines (the world map runs on the host), the two cross-binary
 calls named, the 24 main routines audited as unreachable PsyQ internals (they stay link stubs), C for ovl_0b's 46
