@@ -2388,15 +2388,22 @@ static void plan_drops(Buffer *b) {
  * overlap (a closed mesh's back faces folding behind its front ones at the silhouette) and keep their own IDs, so
  * both layers blend as on the PS1. */
 #define RECENT 16
-static const Prim *recent[RECENT];
-static u32 recent_xy[RECENT][4]; /* their vertices packed (x | y << 16), for the cheap shared-vertex test */
-static u8 recent_bits[RECENT][4], recent_n[RECENT]; /* their vertices' hashes (6 bits of the position) */
-static u8 recent_id[RECENT];
-static u16 recent_by_bit[64]; /* the recent polygons with a vertex of each hash */
-static u16 recent_dups;       /* those with a repeated vertex (one of p's can match two of theirs) */
-static const u8 debruijn_ctz[32] = {0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8,
-                                    31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9};
-static int recent_at;
+/* (DS mode: in DTCM, read for every translucent primitive: main RAM's data take three cycles, DTCM's one; ~600
+ * bytes of the 9 KB of stack no scene has reached) */
+#if defined(__arm__) && defined(PORT_DS_MODE)
+#define GXH_DTCM __attribute__((section(".dtcm")))
+#else
+#define GXH_DTCM
+#endif
+GXH_DTCM static const Prim *recent[RECENT];
+GXH_DTCM static u32 recent_xy[RECENT][4]; /* their vertices packed (x | y << 16), for the cheap shared-vertex test */
+GXH_DTCM static u8 recent_bits[RECENT][4], recent_n[RECENT]; /* their vertices' hashes (6 bits of the position) */
+GXH_DTCM static u8 recent_id[RECENT];
+GXH_DTCM static u16 recent_by_bit[64]; /* the recent polygons with a vertex of each hash */
+GXH_DTCM static u16 recent_dups;       /* those with a repeated vertex (one of p's can match two of theirs) */
+GXH_DTCM static u8 debruijn_ctz[32] = {0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8,
+                                       31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9};
+GXH_DTCM static int recent_at;
 
 static inline int edge_side(const Prim *p, int a, int b, int x, int y) {
     long c = (long)(p->x[b] - p->x[a]) * (y - p->y[a]) - (long)(p->y[b] - p->y[a]) * (x - p->x[a]);
