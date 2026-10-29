@@ -1364,3 +1364,16 @@ Later on 2026-10-28, each exact (identical frames) unless said:
 The 60-field sample: median 26.5 -> 23.2 ms per VBlank over the day; 13 fields at full speed, 20 within 15%.
 Where the worst now go: d1_f0501 (39: a dialog's UI work, ~12%), d1_f0604 and d4_f2904 (translucent sprites: their
 polygon IDs, light and emission), d3_f2402 and d2_f0356 (the exact additive layer in software: ~15-30%).
+
+### Battle two passes: the texture fit (2026-10-29)
+A per-scene log over 32 over-budget battles (each mesh's culled vertices, the recorded primitives', a histogram of the
+overage) showed that two passes rarely run: in d1_b0228 and d3_b0232, 216 of 221 and 230 of 232 over-budget scenes
+found no split whose two texture sets each fit banks C and D (large first passes: the first pass's don't fit; small
+ones: the second's), so they dropped their smallest polygons as before, after up to eight texture plans a scene
+(the 15-20 ms the two passes seemed to cost). The earlier "no drops where two passes ran" was the captured frame only.
+battle_two now skips the tries for 0, 1, 3 ... 31 scenes after each failure in a row (reset when a split fits) and tries
+the last split that fitted first: d1_b0228 35.7 -> 25.1, d3_b0232 36.2 -> 25.5, d4_b0678 41.8 -> 36.6, d2_b0135 47.4
+-> 32.4 ms (its splits mostly fit). Frames identical where the state is (d2_b0135's capture differs in a toad's pose).
+Where the vertices go (average scene): the party ~2,300-2,600, the heavy enemy ~2,000-3,000, the recorded primitives
+(the background's layers 8/4/2, linked into the second OT, which port_native_bg leaves to GP0; effects; UI)
+~900-1,700; the over-budget scenes are 100-1,000 vertices over on average.

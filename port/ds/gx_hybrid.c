@@ -5598,6 +5598,7 @@ static void terrain_fog_setup(Buffer *b) {
  * its smallest polygons (plan_drops, now only if the textures don't fit banks C and D): a battle's are drawn in OT
  * order, each at Z_STEP x its place in it (emit_scene), so the split is a place: the first half farther. */
 static void battle_label(Buffer *b);
+static int battle_hold, battle_fails, battle_try; /* (battle_two: the scenes it skips; failures in a row; the last split that fitted) */
 /* a battle scene in one pass (its bank A textures again, its blending as gxh_enable sets it) */
 static void battle_one(Buffer *b) {
     tp_plan_pass = 0; tp_battle = 0;
@@ -5613,6 +5614,9 @@ static void battle_two(Buffer *b) {
     seq = prims; /* (each recorded primitive in the scene takes a place, as each native polygon) */
     for (int m = 0; m < b->meshes; ++m) { const MeshInst *mi = mesh_at(b, m); prims += mi->polys; vertices += mi->vertices; seq += mi->polys; }
     if (prims <= MAX_POLYS && vertices <= MAX_VERTICES) { tp_leave(); goto bank_a; }
+    /* after no split fitted the textures, the next scenes go straight to one pass, more of them each time it fails
+     * again (a battle's textures stay as big: each try is two texture plans) */
+    if (battle_hold) { --battle_hold; battle_one(b); return; }
     if (back_bg < 0) { /* (the first pass's capture behind the second: BG3, as a field's) */
         back_bg = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 8, 0);
         bgSetPriority(back_bg, 3);
@@ -5632,7 +5636,8 @@ static void battle_two(Buffer *b) {
     cap -= cap / 32;
     const int lo = seq - cap > 0 ? seq - cap : 0, hi = seq / 2 < cap ? seq / 2 : cap; /* (first-pass places) */
     if (lo > hi) { battle_one(b); return; }
-    for (int i = 0; i < 4; ++i) {
+    for (int n = 0; n < 4; ++n) {
+        const int i = (battle_try + n) & 3; /* (the last split that fitted first) */
         const int first = hi - (hi - lo) * i / 3;
         tp_split = Z_STEP * (first + 1); /* (places 1..first the first pass) */
         battle_label(b);
@@ -5641,8 +5646,10 @@ static void battle_two(Buffer *b) {
         if (gxh_stats_unplaced) continue;
         tp_plan_pass = 1;
         plan_textures(b);
-        if (!gxh_stats_unplaced) { tp_planned = 1; return; } /* (the first pass's planned) */
+        if (!gxh_stats_unplaced) { tp_planned = 1; battle_try = i; battle_fails = 0; return; } /* (the first pass's planned) */
     }
+    battle_hold = battle_fails < 5 ? (1 << battle_fails) - 1 : 31;
+    ++battle_fails;
     battle_one(b);
     return;
 bank_a:
