@@ -2460,9 +2460,36 @@ static inline int edge_side(const Prim *p, int a, int b, int x, int y) {
     return c > 0 ? 1 : c < 0 ? -1 : 0;
 }
 
+/* translucent sprites (axis-aligned rectangles: mist, glows) against the recent ones only: two share an edge when
+ * they touch along a whole side, the case the general test finds for them, without its vertex hashing (a field's
+ * mist is hundreds a scene). (A sprite and a polygon don't take each other's ID: rare.) */
+GXH_DTCM static s16 rect_box[RECENT][4];
+GXH_DTCM static u8 rect_id[RECENT];
+GXH_DTCM static int rect_at;
+/* (in main RAM, ARM: ITCM is full) */
+__attribute__((noinline, target("arm"), long_call)) static int translucent_rect(const Prim *p, int id) {
+    int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
+    for (int i = 1; i < 4; ++i) {
+        if (p->x[i] < x0) x0 = p->x[i];
+        if (p->x[i] > x1) x1 = p->x[i];
+        if (p->y[i] < y0) y0 = p->y[i];
+        if (p->y[i] > y1) y1 = p->y[i];
+    }
+    for (int k = 0; k < RECENT; ++k) {
+        const s16 *q = rect_box[k];
+        if ((y0 == q[1] && y1 == q[3] && (x1 == q[0] || x0 == q[2])) ||
+            (x0 == q[0] && x1 == q[2] && (y1 == q[1] || y0 == q[3]))) { id = rect_id[k]; break; }
+    }
+    const int r = rect_at;
+    rect_box[r][0] = (s16)x0; rect_box[r][1] = (s16)y0; rect_box[r][2] = (s16)x1; rect_box[r][3] = (s16)y1;
+    rect_id[r] = (u8)id;
+    rect_at = (r + 1) % RECENT;
+    return id;
+}
 GXH_HOT static int translucent_id(const Prim *p, int polys) {
     int id = 1 + (polys & 31);
     const int n = p->n;
+    if (p->flags & P_RECT) return translucent_rect(p, id);
     u32 xy[4], bit[4];
     xy[3] = 0; /* (a triangle's: never read) */
     for (int i = 0; i < n; ++i) {
