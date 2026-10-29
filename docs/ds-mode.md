@@ -1464,3 +1464,11 @@ Per VBlank (fields run the game at 30 fps: one submit per two VBlanks): d4_f2904
 d1_f0604 37.5 = field_frame 7.9 + emit_scene 11.2 + OT walk 7.3 + game. d2_f0356 30.2 = field_frame 15.6 (of it the
 exact additive layer's software raster 7.8) + emit 1.5 + OT walk 5.2. d4_f2904 records ~946 primitives a scene:
 emission is on the order of 1,000+ cycles each, the field's largest single cost after field_frame.
+Next structural lever for fields (measured 2026-10-29, d4_f2904): with the background composite in use (601 of 608
+scenes there) every tile is still recorded through GP0 one by one each frame (hybrid_sprite16 6.3%,
+gp0_tpage_sprite16 2.3%, target 1.2%, record 1.1%: bg runs are off while the composite holds the scene) and then
+hashed and sorted by the composite's passes (bgc_hash/sources/use ~8%), only to find most of it unchanged. Plan: a
+per-run summary (its tiles' rectangles, slots and hash) cached by field_bg.c's markers; a still run's tiles taken
+from the summary (the composite's per-tile behind/in-front decision made from it, the tiles in front of a model
+recorded as now), skipping their packets. Estimated 10-15% in composite fields. The emission side (d4_f2904: ~390
+translucent mist sprites and ~300 opaque sprites a scene in front, ~110 model polygons) is already on fast paths.
