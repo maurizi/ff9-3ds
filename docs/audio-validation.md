@@ -698,3 +698,21 @@ Tried and dropped (same day): the envelope baked into the samples (ramped per bl
 voice's): the bass excess stayed (+10..+16 dB) and the level fell to 0.63x, so the per-frame envelope steps aren't
 the cause. Still open: the excess's odd harmonics of 60 Hz (60.8, 180.3 Hz) point at the rings' per-frame writes or
 the channels' restarts; next is instrumenting the ARM7 path (read position against writes, restarts per voice).
+
+Found (2026-10-29): the bass excess was two things.
+- The recordings: melonDS repeats its last output sample when its audio buffer runs dry (underruns on this machine,
+  ~25-120 per capture, up to ~4 ms each). Each hold is a step, a broadband thump: +15..+20 dB at 60-180 Hz. The host
+  recordings have none. tools/compare_audio_wav.py now leaves the windows touching a hold out of the spectra and
+  prints their count. (The level ratio is now taken over the shared music: 1.44x, melonDS's output gain.)
+- The port: LEAD was defined and never applied. The samples reach the rings a frame's worth at a time (the frame's
+  advances, then the channels' update), and a channel started on whatever was written. A note keyed on partway
+  through a frame started with a fraction of a frame written, so the channel read past it into the ring's old
+  contents and crossed the writes every frame. A channel now starts once LEAD + 1/4 frames of its samples are
+  written (1-2 frames of latency). Each channel's read position is then tracked on the ARM7's timers 0/1 at its
+  actual timer value, and its rate nudged (at most 2%, over ~4 s, the 59.83/60 VBlank ratio fed forward) to stay
+  1.5 frames behind the writes: timer values round by up to ±0.13% and the DS's VBlank is 0.3% slow, either of which
+  catches the writes within seconds on a long note. A channel that gets under a frame or over a ring behind anyway
+  (an over-budget stretch) starts over from its next samples: a gap, not the buzz.
+With both, d3_f2305 (holds left out): 60-240 Hz from +8..+14 dB to -1..+3 dB; 300 Hz-6 kHz within ~2 dB; 8-12 kHz
+still +6..+16 (the channels' imaging above the voices' rates). The earlier rate experiment changed nothing because the
+start bug dominated.

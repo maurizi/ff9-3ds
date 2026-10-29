@@ -3,5 +3,6 @@
 /* DS hardware mixing for the emulated SPU (audio_hw.c, docs/design.md §7.0). */
 void port_hw_sound_init(void);
 void port_hw_sound_frame(void); /* once per emulated frame, after the SPU advanced */
-extern int port_hw_sound_stats[4]; /* channel starts, voices waiting for a channel, voices sounding */
+extern int port_hw_sound_stats[4]; /* channel starts, voices waiting for a channel, voices sounding, channels started
+                                        * over (behind their writes by under a frame or over a ring) */
 #endif
