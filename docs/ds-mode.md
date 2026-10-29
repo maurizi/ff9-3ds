@@ -1331,3 +1331,17 @@ is the packets' and vertices' reads from main RAM, which ITCM doesn't change; tr
 polygon) now go through link_translucent in ITCM instead (d3_f1818 -0.5, d4_f2904 -0.6).
 Profiling note: DS-mode window builds (PCLO) have 1280 buckets, not 2560: PCSHIFT=8 from 0x02004000 covers the main
 text (320 KB), PCSHIFT=8 from 0x02258000 the overlay slot; samples past the window count as "outside".
+
+Native translucent model polygons (2026-10-28, the user's approved approximate blend order). A model group's
+additive translucent polygons (modes 1 and 3, textured: glows) are taken by port_native_field_mesh (fm_take_semi)
+while the scene's additive area takes the 3D approximation anyway (over a sixth of the screen, counted with theirs:
+fm_semi_ok), and drawn by fm_semi_emit as emit_scene draws a recorded additive polygon (brightness as alpha,
+light_under's whitening, the converted texture, from the group's vertex snapshot), with one polygon ID per group
+instead of translucent_id's shared-edge IDs: where a group's own layers overlap only one blends. Smaller additive
+areas keep the exact software layer from the linked packets; a scene gone software draws them from the packets
+(fm_soft_draw). d3_f1818 39.1 -> 30.1 standing, 37.2 -> 31.3 walking; 2,360 pixels of its water glow differ slightly.
+Linking its translucent model polygons cost ~10 ms a VBlank there (they went through GP0, recording, planning,
+translucent_id and light_under one by one).
+d4_f2404 (30 ms) loses 10 ms without its translucent model polygons too, but they are mode 0 (50%): with them the
+scene passes the 3D engine's 6144 vertices, two passes don't fit its textures, and it is drawn in software. Taking
+them natively wouldn't change the count: it needs the two-pass texture fit (banks C-D).
