@@ -66,6 +66,7 @@ typedef struct {
     u16 freq;
     int flush_from;        /* first ring sample not yet flushed from the data cache */
     int lost;              /* sounding but without a channel (quieter than 16 others) */
+    s16 h1, h2;            /* its last two samples (gauss_like's) */
 } Voice;
 
 static Voice voices[VOICES];
@@ -96,18 +97,32 @@ static void key_on(unsigned v, void *user) {
     p->flush_from = 0;
     p->restart = 1;
     p->lost = 0;
+    p->h1 = p->h2 = 0;
     ring_take(p);
     if (!p->ring) p->lost = 1; /* none free: it plays from later samples once it gets one */
 }
 
+/* The PS1 plays a voice through a 4-point Gaussian interpolation, which also filters it: on average over its phases
+ * -3.3 dB at a quarter of the voice's sample rate, -11.8 dB at a half (docs/audio-validation.md). A DS channel plays
+ * its samples as they are, so they get that filter first, as the three-tap [a, 1 - 2a, a] with a = 46/256 (-3.9 and
+ * -11.1 dB there), a sample late. (What it can't do: the DS's playback still images above the voice's rate.) */
 static void block(unsigned v, const int16_t *samples, void *user) {
     (void)user;
     Voice *p = &voices[v];
     if (!p->ring) return;
+    int16_t out[28];
+    int h1 = p->h1, h2 = p->h2;
+    for (int i = 0; i < 28; ++i) {
+        const int x = samples[i];
+        int y = (46 * (h2 + x) + 164 * h1) >> 8;
+        out[i] = (int16_t)(y > 32767 ? 32767 : y < -32768 ? -32768 : y);
+        h2 = h1; h1 = x;
+    }
+    p->h1 = (s16)h1; p->h2 = (s16)h2;
     unsigned at = p->write % RING;
     unsigned first = RING - at < 28 ? RING - at : 28;
-    memcpy(p->ring + at, samples, first * 2);
-    if (first < 28) memcpy(p->ring, samples + first, (28 - first) * 2);
+    memcpy(p->ring + at, out, first * 2);
+    if (first < 28) memcpy(p->ring, out + first, (28 - first) * 2);
     p->write += 28;
 }
 

@@ -673,3 +673,10 @@ slower, but the game holds one emulated VBlank per DS VBlank there and the captu
 real time on this host is the likely cause, so the tempo isn't measured reliably by a wall-clock capture yet.
 Next: the high-frequency excess (a pre-filter or 2x Gaussian upsampling of the samples the channels play, against the
 4 MB budget), and a tempo measure in emulated time.
+The hardware channels' samples now go through a three-tap low-pass first (audio_hw.c block: [a, 1-2a, a], a =
+46/256), standing in for the Gaussian interpolation's filtering (its average response over its 256 phases: -3.3 dB
+at a quarter of the voice's rate, -11.8 dB at a half; the three taps give -3.9 and -11.1). d1_f0755, DS minus host:
+3-5 kHz from +1.1..+3.0 dB to within 1 dB, 6.3 kHz +5.2 -> +0.9, 8 kHz +8.9 -> +5.7, 10 kHz +13.8 -> +11.1 (the rest:
+the channels' imaging above the voices' rates). d3_f2305: tempo 1.005, envelope correlation 0.93, 0.4-6 kHz within
+~2 dB, but its bass is far louder on the DS: +8 to +14 dB at 60-150 Hz (to investigate: a voice's volume on its
+channel, or the reverb approximation).
