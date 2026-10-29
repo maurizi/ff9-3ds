@@ -466,7 +466,6 @@ typedef struct {
     u8 nuses, pad;
     u16 polys, vertices; /* after the PS1's culling (plan_drops); a model's with its triangle strips (strip_saved) */
     u16 strip_saved;     /* a model: the vertices its opaque triangles' strips save (native_strips) */
-    const u16 *ve;       /* a model: per vertex, its own OT entry (as a quad of four of it would have) */
     u8 untex_abr;        /* a model's untextured polygons' blend mode: the last textured one's (the GPU's mode) */
     const u8 *info;      /* per polygon: 0xFF not drawn, else translucent << 7 | its use << 3 (15: untextured) | size tier */
     u16 tier_polys[6], tier_vertices[6]; /* by size (drop_bounds) */
@@ -584,21 +583,18 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
     if (b->mesh_gen != psx_ot_generation) { b->mesh_gen = psx_ot_generation; b->pool_used = 0; b->meshes = 0; }
     unsigned npolys = 0;
     for (int t = 0; t < 8; ++t) npolys += nm->count[t];
-    unsigned need = (sizeof(MeshInst) + (unsigned)nm->nverts * 6 + npolys * 3 + 3) & ~3u;
+    unsigned need = (sizeof(MeshInst) + (unsigned)nm->nverts * 4 + npolys * 3 + 3) & ~3u;
     if (b->meshes >= MAX_MESHES || b->pool_used + need > POOL_BYTES) { gxh_stats_mesh_fallback++; return 0; }
     MeshInst *mi = (MeshInst *)(b->pool + b->pool_used);
     u32 *xy = (u32 *)(mi + 1);
     u16 *z = (u16 *)(xy + nm->nverts); /* per polygon drawn: its OT entry (collect_native) */
-    u16 *ve = z + npolys;               /* per vertex: its own (native_strips' depths) */
-    u8 *info = (u8 *)(ve + nm->nverts);
+    u8 *info = (u8 *)(z + npolys);
     const unsigned *sz = nm->sz;
     const int zsf3 = (s16)psx_gte.c[29], ebias = 8 - (int)nm->ot_bias;
     int bx0 = 1 << 30, by0 = 1 << 30, bx1 = -(1 << 30), by1 = -(1 << 30);
     for (int i = 0; i < nm->nverts; ++i) {
         u32 w = nm->sxy[i];
         xy[i] = w;
-        int e = (int)((u16)sz[i] >> 4) + ebias;
-        ve[i] = (u16)(e < 0 ? 0 : e > 0x100F ? 0x100F : e);
         int x = (s16)w, y = (s16)(w >> 16);
         if (x < bx0) bx0 = x;
         if (x > bx1) bx1 = x;
@@ -608,7 +604,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
     /* (a model all inside the buffer needs no test per polygon) */
     int inside = bx0 + b->ofs_x >= 0 && bx1 + b->ofs_x < b->w && by0 + b->ofs_y >= 0 && by1 + b->ofs_y < b->h;
     mi->src = nm->src; mi->uvs = nm->uvs; mi->colors = (const u32 *)nm->colors; mi->bias = (s16)nm->ot_bias;
-    mi->xy = xy; mi->z = z; mi->ve = ve; mi->info = info; mi->nuses = 0; mi->kind = MESH_MODEL; mi->untex_abr = 0;
+    mi->xy = xy; mi->z = z; mi->info = info; mi->nuses = 0; mi->kind = MESH_MODEL; mi->untex_abr = 0;
     mi->strip_saved = 0;
     for (int t = 0; t < 8; ++t) mi->count[t] = nm->count[t];
     /* each polygon once: the PS1's culling (NCLIP <= 0 unless double-sided), no area or off the buffer (as
@@ -776,7 +772,7 @@ int port_native_bg(const NativeBg *r) {
     const u32 *col = (const u32 *)(rec + MH(rec, 6));
     const u8 *idx = rec + MH(rec, 8), *uv = rec + MH(rec, 0xA);
     mi->src = rec; mi->uvs = NULL; mi->colors = col; mi->xy = xy; mi->z = oti; mi->kind = MESH_BG;
-    mi->ve = NULL; mi->strip_saved = 0;
+    mi->strip_saved = 0;
     mi->bright = (u16)r->bright; mi->bias = 0; mi->nuses = 0; mi->info = info;
     memset(mi->count, 0, sizeof mi->count);
     mi->count[0] = (u16)nquad; mi->count[1] = (u16)ntri;
@@ -2937,7 +2933,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_strips(B
         const int n = mi->count[1], base = mi->count[0];
         const u8 *s0 = mi->src + base * 0x18;
         const u32 *xy = mi->xy;
-        const u16 *ve = mi->ve, *uvs = mi->uvs;
+        const u16 *uvs = mi->uvs;
         const MeshUse *use = NULL, *last_u = NULL;
         int open = 0, tu = 0, tv = 0;
         u32 a = 0, bb = 0, col = 0, want_image = 0, want_palette = ~0u;
@@ -2945,7 +2941,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_strips(B
 #define STRIP_VERTEX(V, UV) do { \
             const u32 p_ = xy[V]; \
             put(((p_ + ofs_x) & 0xFFFF) | ((p_ & 0xFFFF0000) + ofs_y)); \
-            put((u32)(u16)(Z_STEP * pl[ve[V] >> 2] + 1)); \
+            put(zt); \
         } while (0)
 #define STRIP_TC(UV) put((u32)(u16)((((UV) & 0xFF) - tu) * 16) | (u32)(u16)((((UV) >> 8) - tv) * 16) << 16)
         for (int k = 0; k < n; ++k) {
@@ -2954,6 +2950,8 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_strips(B
             if (mesh_dropped(b, inf & 7)) { gxh_stats_dropped++; open = 0; continue; }
             const MeshUse *u = &mi->uses[(inf >> 3) & 15];
             const u32 c = MW(s, 8) & 0xFFFFFF;
+            /* the vertices it brings at its own drawing place (that of its OT entry) */
+            const u32 zt = (u32)(u16)(Z_STEP * pl[mi->z[base + k] >> 2] + 1);
             if (wp > wend) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; wend = wp + (CHUNK_WORDS - PRIM_WORDS); }
             u32 nc;
             u16 nuc;

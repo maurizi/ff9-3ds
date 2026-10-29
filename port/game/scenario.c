@@ -187,6 +187,16 @@ void port_scenario_validate_return(void) {
     if(scenario.enabled && scenario.consumed && scenario.kind==2 && !scenario.return_field_ready)
         port_fatal("scenario: battle returned to field %d without valid return-field context; set field= to an on-disc field",scenario.field);
 }
+/* Bytes of a CD extent read a sector at a time into one sector of stack (port_scenario's bundle lookups) */
+typedef struct { int sector,size,cached; u8 buf[2048]; } SectorCursor;
+static u8 cur_u8(SectorCursor *c,int off) {
+    if(off<0 || off>=c->size) port_fatal("scenario: encounter bundle read past its extent (%d)",off);
+    int s=off>>11;
+    if(s!=c->cached) {cd_readAsync(c->sector+s,2048,c->buf,NULL);while(cd_getState()) {}c->cached=s;}
+    return c->buf[off&2047];
+}
+static u32 cur_u16(SectorCursor *c,int off) {return cur_u8(c,off)|(u32)cur_u8(c,off+1)<<8;}
+static u32 cur_u32(SectorCursor *c,int off) {return cur_u16(c,off)|cur_u16(c,off+2)<<16;}
 static void prepare_battle_resources(GameData *d) {
     /* The ordinary field/world transition supplies these two CD ranges.
      * Resolve the encounter's bundle and its background dependency directly
@@ -200,21 +210,26 @@ static void prepare_battle_resources(GameData *d) {
     d->sceneSectors[0]=entries[found+1].unk4-entries[found].unk4;
     int size=d->sceneSectors[0]<<11;if(size>0x2800) size=0x2800;
     if(size<=0) port_fatal("scenario: invalid encounter bundle extent");
-    u8 *buffer=malloc((unsigned)size);
-    if(!buffer) port_fatal("scenario: no memory for encounter metadata");
-    cd_readAsync(g_gameState->imgSector+d->sceneSector[0],size,buffer,NULL);
-    while(cd_getState()) {}
-    FileTable *table=(FileTable *)db_lookup((s32)buffer,4,0x140000,0);
-    if((u8 *)table<buffer || (u8 *)table+4>buffer+size ||
-       (u8 *)(table->unk4+table->unk2)>buffer+size)
-        port_fatal("scenario: encounter dependency table outside metadata");
-    found=0;
-    for(int i=0;i<table->unk2;++i) if((table->unk4[i].unk0&0xff0000)==0xc0000) {
-        if(found++) port_fatal("scenario: multiple backgrounds require explicit selection");
-        d->sceneSector[1]=table->unk4[i].unk4;
-        d->sceneSectors[1]=table->unk4[i].unk8;
+    /* the bundle's DB container read a sector at a time (the heap has no room for its 10 KB head at bootstrap):
+     * block 0x14's item 0, the dependency table {u16 ?, u16 n, n x {key, sector, sectors, split}} */
+    SectorCursor c={.sector=g_gameState->imgSector+d->sceneSector[0],.size=size,.cached=-1};
+    if(cur_u8(&c,0)!=0xdb) port_fatal("scenario: encounter bundle is not a DB container");
+    int table=-1;
+    for(int i=0,n=cur_u8(&c,1);i<n && table<0;++i) {
+        int ent=4+i*4;u32 v=cur_u32(&c,ent);
+        if(((v>>24)&0x7f)!=0x14) continue;
+        int blk=ent+(int)(v&0xffffff),cnt=cur_u8(&c,blk+1),ofs=(blk+4+cnt*2+3)&~3;
+        for(int j=0;j<cnt;++j) if(cur_u16(&c,blk+4+2*j)==0) {int o=ofs+4*j;table=o+(int)(cur_u32(&c,o)&0xffffff);break;}
     }
-    free(buffer);
+    if(table<0) port_fatal("scenario: encounter dependency table missing");
+    found=0;
+    for(int i=0,n=cur_u16(&c,table+2);i<n;++i) {
+        int e=table+4+16*i;
+        if((cur_u32(&c,e)&0xff0000)!=0xc0000) continue;
+        if(found++) port_fatal("scenario: multiple backgrounds require explicit selection");
+        d->sceneSector[1]=cur_u32(&c,e+4);
+        d->sceneSectors[1]=cur_u32(&c,e+8);
+    }
     if(!found || d->sceneSectors[1]<=0) port_fatal("scenario: encounter background dependency missing");
 }
 void port_scenario_bootstrap(void) {

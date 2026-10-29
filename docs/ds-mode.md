@@ -1383,10 +1383,10 @@ The 3D engine's 6144 vertices are what battles run out of, and the models' trian
 cost three each. In one pass, native_strips draws each model's opaque textured triangles before the walk, in its FT3
 list's order, as triangle strips: a triangle sharing an edge with the last one (same texture use and colour, the
 edge's uvs the same; the strip's first triangle turned so that the edge the next one shares is last) costs one
-vertex. Each vertex sits at its own depth: its OT entry (port_native_mesh keeps one per vertex, as a quad of four of
-it would have) mapped to the walk's drawing place there (strip_places, per 4 entries, in ovl_0b's dead code after
-the entry heads), so the models' order among the arena's and effects' primitives stays about the PS1's (approximate
-depth, approved for models). The walk skips those triangles but counts their places. The budget counts strips
+vertex. The vertices a triangle brings to its strip sit at its own drawing place: its OT entry mapped to the walk's place
+there (strip_places, per 4 entries, in ovl_0b's dead code after the entry heads), so the models' order among the
+arena's and effects' primitives stays about the PS1's (approximate depth, approved for models). (A depth per vertex
+took 2 bytes a vertex of the mesh pool, which then had no room for the walk's lists: d3_b0037 dropped 2,216.) The walk skips those triangles but counts their places. The budget counts strips
 (strip_count: the same rules); two passes don't use them (their split is by place) and count every vertex.
 As stored, the lists' order strips 15-21% of the heavy enemies' drawn vertices (offline, eight views each; reordering
 the lists into strips would make it 27-30%). Dropped polygons over a run: d1_b0228 7,943 -> 0, d3_b0232 19,435 -> 0,
@@ -1399,3 +1399,7 @@ searched 16 records either side; scratch in the projection's screen arrays). The
 two polygons at one OT entry is drawn first. d4_b0678's drops 1,566 -> 804; times 28.4, 28.8, 33.2, 36.3 ms. The
 1.4 KB of ovl_0b code costs heap byte for byte (ovl_0b sizes slot 0): scenario.c's fixture state shrank by 2 KB to
 make room (the encounter metadata's 10 KB temporary buffer at bootstrap had failed).
+Fixture loading: scenario.c reads the encounter bundle's dependency table a sector at a time into one sector of stack
+(its 10 KB temporary buffer no longer fit in the heap at bootstrap: 5 of 32 battle fixtures stopped). 32 over-budget
+battles all run; 21 drop nothing or under 1,000 polygons a run; the rest are heavy enemies (Ochu, Bandersnatch,
+Grand Dragon, Gigan Toad, Red Dragon, Zuu, Axe Beak x2), the simplification candidates.
