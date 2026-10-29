@@ -127,11 +127,11 @@ static int palette_ready;
 /* prepare_palette's cache of tinted palettes, 256 entries each: taken at start-up on the DS (display.c) */
 #define PALETTE_SLOTS 16
 static u32 (*cached)[256];
+#ifndef PORT_SOFTGPU_REFERENCE /* (the differential test links the reference build beside this one) */
 void psx_softgpu_spare_init(void) {
-#ifndef PORT_SOFTGPU_REFERENCE
     if (!cached) cached = psx_spare_alloc(PALETTE_SLOTS * 256 * sizeof(u32));
-#endif
 }
+#endif
 
 static __attribute__((noinline)) void prepare_palette(const Gp0Mode *m, const Gp0Vtx *v,
                             int x0, int y0, int x1, int y1) {
@@ -1174,10 +1174,35 @@ static __attribute__((noinline)) int window_rows(const Gp0Mode *m, int u0, int v
     return 1;
 }
 
+/* row_semi_direct through prepare_palette's shaded palette (a tinted semi-transparent sprite: the texel's own
+ * value low, its tinted colour high), as sprite_pixel draws it with effects (in main RAM: ITCM is full) */
+static __attribute__((noinline)) void row_semi_palette(const u16 *src, const u32 *pal, u16 *dst, unsigned lead,
+                                                       unsigned width, u16 mask, int depth, int abr) {
+    const unsigned per = depth ? 1 : 2, low = depth ? 1 : 3, bits = depth ? 3 : 2, entries = depth ? 255 : 15;
+    for (unsigned k = lead; width; --width, ++k, ++dst) {
+        const u32 sample = pal[(src[k >> per] >> ((k & low) << bits)) & entries];
+        const u16 t = (u16)sample;
+        if (!t) continue;
+        u16 c = (u16)(sample >> 16);
+        if (t & 0x8000) c = (u16)(blend(*dst, c, abr) | (c & 0x8000));
+        *dst = c | mask;
+    }
+}
+
+/* rect_rows' semi-transparent rows (out of ITCM) */
+static __attribute__((noinline)) void rect_rows_semi(const u16 *src, const u16 *cl, u16 *dst, unsigned lead, unsigned width,
+                                                     unsigned rows, u16 mask, int depth, int abr, int direct) {
+    for (; rows; --rows, src += 1024, dst += 1024) {
+        if (direct) row_semi_direct(src, cl, dst, lead, width, mask, depth, abr);
+        else row_semi_palette(src, shaded_palette, dst, lead, width, mask, depth, abr);
+    }
+}
+
 static SG_HW_HOT __attribute__((noinline)) int rect_rows(const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int direct) {
     if (x1 <= x0 || y1 <= y0) return 0;
-    if (gp0_state.check_mask || (m->semi && !direct)) return 0; /* semi-transparent: unmodulated ones only */
-    if (gp0_state.twin_mask_x || gp0_state.twin_mask_y) return window_rows(m, u0, v0, x0, y0, x1, y1, direct);
+    if (gp0_state.check_mask) return 0;
+    if (gp0_state.twin_mask_x | gp0_state.twin_mask_y) /* (window_rows: semi-transparent ones unmodulated) */
+        return m->semi && !direct ? 0 : window_rows(m, u0, v0, x0, y0, x1, y1, direct);
     unsigned u = (unsigned)(u0 + x0) & 255, tv = (unsigned)(v0 + y0) & 255;
     unsigned width = (unsigned)(x1 - x0), rows = (unsigned)(y1 - y0);
     if (u + width > 256 || tv + rows > 256) return 0;
@@ -1194,10 +1219,7 @@ static SG_HW_HOT __attribute__((noinline)) int rect_rows(const Gp0Mode *m, int u
     u16 *dst = psx_vram + y0 * 1024 + x0;
     u16 mask = gp0_state.set_mask ? 0x8000 : 0;
     unsigned lead = u & (m->depth ? 1 : 3);
-    if (m->semi) {
-        for (; rows; --rows, src += 1024, dst += 1024) row_semi_direct(src, cl, dst, lead, width, mask, m->depth, m->abr);
-        return 1;
-    }
+    if (m->semi) { rect_rows_semi(src, cl, dst, lead, width, rows, mask, m->depth, m->abr, direct); return 1; }
     for (; rows; --rows, src += 1024, dst += 1024) {
         if (direct) {
             if (m->depth) row_direct8(src, cl, dst, lead, width, mask);
