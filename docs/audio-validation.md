@@ -654,3 +654,22 @@ SFX and scene/bank changes against synchronized original PSX recordings. Improve
 bus/key timing and verify unresolved silicon edge cases. Exercise late-game
 actions and multi-voice effects directly through the scenario harness; original
 timing, sound-output performance and complete audio fidelity remain unproven.
+
+## DS hardware-channel output against the host (2026-10-29)
+The user's suggestion: validate audio on scenes that already run at the PS1's speed (the AKAO sequencer ticks 4
+times per emulated VBlank, so a slow scene plays its music slow). `tools/ds_audio_capture.sh OUT.wav FIELD` runs a
+DS-mode bench of a field fixture in melonDS with its frame limiter on and its stream moved to a null PulseAudio sink
+(`ff9_emu`; melonDS's flatpak ignores PULSE_SINK, and needs SDL_AUDIODRIVER=pulseaudio to open a stream at all),
+recording the sink's monitor; the melonDS configuration is restored after. `tools/compare_audio_wav.py HOST DS`
+aligns it with the host build's exact output (`--audio`) for the same fixture. Of the 16 sampled fields at or under
+17 ms per VBlank, 12 have music in their fixtures (d2_f1556, d2_f0661, d3_f2506, d1_f0755, d2_f1256, d3_f2305,
+d4_f0352, d3_f1551, d1_f0303, d3_f1451, d1_f0652; d3_f2221, d3_f2150, d4_f2508 are silent there).
+First comparison, d1_f0755 (HWSOUND/SPU7 build): the same music (envelope correlation 0.87 aligned); pitch
+-0.05 semitones (0.9972: the DS's 59.83 Hz frames against 60, as the mixer is clocked per frame); level 1.31x the
+host's; the DS's spectrum matches within 1 dB below 3 kHz but is brighter above it: +3 dB at 5 kHz, +5 at 6.3,
++9 at 8, +14 at 10 kHz. That is the hardware channels' missing interpolation (no Gaussian filter: nearest-neighbour
+playback images the samples' spectrum upward), as real hardware would play it. The envelopes put the DS 2-4%
+slower, but the game holds one emulated VBlank per DS VBlank there and the capture has no gaps: melonDS not holding
+real time on this host is the likely cause, so the tempo isn't measured reliably by a wall-clock capture yet.
+Next: the high-frequency excess (a pre-filter or 2x Gaussian upsampling of the samples the channels play, against the
+4 MB budget), and a tempo measure in emulated time.

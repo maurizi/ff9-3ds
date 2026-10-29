@@ -139,7 +139,10 @@ def main():
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(1)
     env = dict(os.environ, DISPLAY=a.display, XAUTHORITY='/dev/null')
-    emu = subprocess.Popen(([MELON_BIN] if MELON_BIN else ['flatpak', 'run', 'net.kuribo64.melonDS']) + [str(rom)], env=env,
+    # MELON_FLATPAK_ARGS: extra `flatpak run` options, e.g. "--env=SDL_AUDIODRIVER=pulseaudio" for an audio capture
+    # (tools/ds_audio_capture.sh routes the stream to a null sink)
+    extra = os.environ.get('MELON_FLATPAK_ARGS', '').split()
+    emu = subprocess.Popen(([MELON_BIN] if MELON_BIN else ['flatpak', 'run'] + extra + ['net.kuribo64.melonDS']) + [str(rom)], env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         deadline = time.monotonic() + a.timeout
