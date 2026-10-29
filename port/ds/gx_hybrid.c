@@ -452,7 +452,7 @@ GXH_HOT static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) 
 #define POOL_BYTES ((MAX_PRIMS - BATTLE_PRIMS) * (int)sizeof(Prim))
 /* a texture word and blend mode a mesh uses: its key (tex, mode), the tpage bits the game ors in, its texels' bounds,
  * and its plan */
-typedef struct { u32 page; u8 tex, mode, orbits, semi, u0, v0, u1, v1, group, palette, passes; } MeshUse; /* passes: a battle's two (bits 1, 2: battle_label) */
+typedef struct { u32 page; u8 tex, mode, orbits, semi, u0, v0, u1, v1, group, palette, passes, sok; } MeshUse; /* passes: a battle's two (bits 1, 2: battle_label); sok: native_strips can draw it (strip_uses) */
 typedef struct {
     const u8 *src;       /* a model mesh's source lists; a background record (BtlBgRec) */
     const u16 *uvs;
@@ -2625,7 +2625,7 @@ static void decode_model(const Buffer *b, const MeshInst *mi, int t, const u8 *s
  * their entry), each at a depth above the last: the 3D engine draws them in the PS1's order, opaque or not, the depth
  * test ordering them as the OT did. (Per-vertex depths had sorted their pixels instead: a wing tip behind a wall
  * where the PS1 drew the whole wing over it.) The references sit in the buffer's pool after the snapshots. */
-typedef struct { u8 m, pad; u16 pi, next; } NativeRef; /* instance, polygon, the next in its entry's list */
+typedef struct { u8 m, strip; u16 pi, next; } NativeRef; /* instance, a strip candidate (native_strips'), polygon, the next in its entry's list */
 #define NO_REF 0xFFFF
 static u16 *native_heads; /* per main-OT entry: its newest native polygon (NO_REF: none), in ovl_0b's dead code */
 static NativeRef *native_refs;
@@ -2662,11 +2662,15 @@ static int collect_native(Buffer *b) {
         const MeshInst *mi = mesh_at(b, m);
         int np = mi->kind == MESH_BG ? mi->count[0] + mi->count[1] : 0;
         if (mi->kind != MESH_BG) for (int t = 0; t < 8; ++t) np += mi->count[t];
+        /* (a strip model's opaque FT3s: the walk skips them without looking them up when native_strips draws them) */
+        const int ft3_lo = mi->kind == MESH_MODEL && mi->strips ? mi->count[0] : np, ft3_hi = ft3_lo + mi->count[1];
         for (int pi = 0; pi < np; ++pi) {
-            if (mi->info[pi] == 0xFF) continue;
+            const u8 inf = mi->info[pi];
+            if (inf == 0xFF) continue;
             int e = mi->z[pi]; /* (both kinds: the entry per polygon) */
             if (n == cap) { gxh_stats_dropped++; continue; }
-            native_refs[n] = (NativeRef){(u8)m, 0, (u16)pi, native_heads[e]}; /* (an entry's list starts at its newest) */
+            const u8 cand = pi >= ft3_lo && pi < ft3_hi && !(inf & 0x80);
+            native_refs[n] = (NativeRef){(u8)m, cand, (u16)pi, native_heads[e]}; /* (an entry's list starts at its newest) */
             native_heads[e] = (u16)n++;
             native_bits[e >> 5] |= 1u << (e & 31);
         }
@@ -2720,7 +2724,15 @@ static inline __attribute__((always_inline)) int strip_use_ok(const MeshUse *u) 
 }
 /* a model's FT3 (its info byte inf) native_strips draws */
 static inline __attribute__((always_inline)) int strip_tri(const MeshInst *mi, u8 inf) {
-    return mi->strips && inf != 0xFF && !(inf & 0x80) && strip_use_ok(&mi->uses[(inf >> 3) & 15]);
+    return mi->strips && inf != 0xFF && !(inf & 0x80) && mi->uses[(inf >> 3) & 15].sok;
+}
+/* each strip model's texture uses: whether native_strips can draw them (once a scene, after the textures' plan) */
+PORT_OVERLAY_CODE(0b) static void strip_uses(Buffer *b) {
+    for (int m = 0; m < b->meshes; ++m) {
+        MeshInst *mi = mesh_at(b, m);
+        if (mi->kind == MESH_MODEL && mi->strips)
+            for (int i = 0; i < mi->nuses; ++i) mi->uses[i].sok = (u8)strip_use_ok(&mi->uses[i]);
+    }
 }
 
 /* Battle: the native polygons due before recorded primitive k, opaque and textured ones straight from their meshes
@@ -2756,6 +2768,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
         const MeshInst *mi = mesh_at(b, r->m);
         int pi = r->pi, n, t = 0, gouraud;
         u8 inf = mi->info[pi];
+        if (r->strip && strips_on && mi->uses[(inf >> 3) & 15].sok) { walk.ri = r->next; ++walk.zc; continue; } /* (native_strips') */
         const u8 *s = NULL, *ix = NULL, *uw = NULL;
         u32 col[4], xy[4];
         u16 uv[4];
@@ -2778,7 +2791,6 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
             gouraud = 0;
         } else {
             s = model_poly(mi, pi, &t);
-            if (t == 1 && strips_on && strip_tri(mi, inf)) { walk.ri = r->next; ++walk.zc; continue; } /* (native_strips') */
             if (t >= 4 || (MB(s, mesh_flags_at[t]) & 1)) break; /* untextured; translucent */
             n = t & 1 ? 3 : 4;
             gouraud = MODEL_GOURAUD && t >= 2;
@@ -3202,6 +3214,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     strips_on = 0;
     if (nw.ne >= 0 && !tp_battle && strip_places) { /* the models' opaque triangles in strips first (one pass only) */
         build_places(b);
+        strip_uses(b);
         strips_on = 1;
         EmitState es = {wp, attr, image, palette, polys, vertices};
         native_strips(b, &es);
