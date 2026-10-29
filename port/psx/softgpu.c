@@ -572,8 +572,8 @@ static __attribute__((noinline)) int semi4_setup(const Gp0Mode *m, int r, int g,
     s4.opaque = opaque; s4.r = r; s4.g = g; s4.b = b; s4.abr = m->abr;
     return 1;
 }
-static __attribute__((noinline)) void poly_row_semi4(u16 *dst, int width, unsigned u, unsigned v, unsigned dudx,
-                                                     unsigned dvdx, u16 mask, int y) {
+static inline __attribute__((always_inline)) void semi4_loop(u16 *dst, int width, unsigned u, unsigned v, unsigned dudx,
+                                                            unsigned dvdx, u16 mask, int y, const int abr) {
     static const signed char offsets[16]={-4,0,-3,1,2,-2,3,-1,-3,1,-4,0,3,-1,2,-2};
     const u16 *const tex = s4.tex;
     const u32 opaque = s4.opaque;
@@ -591,8 +591,18 @@ static __attribute__((noinline)) void poly_row_semi4(u16 *dst, int width, unsign
         cg = cg < 0 ? 0 : cg > 255 ? 255 : cg;
         cb = cb < 0 ? 0 : cb > 255 ? 255 : cb;
         c = (u16)((cr >> 3) | (cg >> 3) << 5 | (cb >> 3) << 10 | (t & 0x8000));
-        if (t & 0x8000) c = blend(*dst, c, s4.abr) | 0x8000;
+        if (t & 0x8000) c = blend(*dst, c, abr) | 0x8000;
         *dst = c | mask;
+    }
+}
+/* (one loop per mode: blend's switch folded) */
+static __attribute__((noinline)) void poly_row_semi4(u16 *dst, int width, unsigned u, unsigned v, unsigned dudx,
+                                                     unsigned dvdx, u16 mask, int y) {
+    switch (s4.abr) {
+    case 0: semi4_loop(dst, width, u, v, dudx, dvdx, mask, y, 0); break;
+    case 1: semi4_loop(dst, width, u, v, dudx, dvdx, mask, y, 1); break;
+    case 2: semi4_loop(dst, width, u, v, dudx, dvdx, mask, y, 2); break;
+    default: semi4_loop(dst, width, u, v, dudx, dvdx, mask, y, 3); break;
     }
 }
 #endif
