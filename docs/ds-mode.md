@@ -1472,3 +1472,12 @@ per-run summary (its tiles' rectangles, slots and hash) cached by field_bg.c's m
 from the summary (the composite's per-tile behind/in-front decision made from it, the tiles in front of a model
 recorded as now), skipping their packets. Estimated 10-15% in composite fields. The emission side (d4_f2904: ~390
 translucent mist sprites and ~300 opaque sprites a scene in front, ~110 model polygons) is already on fast paths.
+Per-field background path by measure (same day): whether the composite pays depends on the field (with it, a still
+background's sprites are recorded one by one and composed; without it its runs are quads in the 3D scene: d4_f2904
+25 ms per VBlank without, 33 with; d2_f1215 26 without, 23 with). After TUNE_SETTLE scenes, a field's scenes
+alternate the two (TUNE_SCENES each, twice) counting real VBlanks; the one without stays if it took 10% fewer,
+measured again every TUNE_AGAIN scenes. Without the composite only within the 3D engine's budget (past it the
+composite keeps the scene in one pass: d4_f2101 went 30 -> 83 otherwise), and back to it once the budget latches the
+runs off (d3_f1818). 60-field sample: median 23.1 -> 22.5 ms (d4_f2904 35.4 -> 25.0, d3_f2402 32.3 -> 25.8,
+d3_f2173 25.7 -> 23.3), no field worse by more than 0.9 ms (noise). A first attempt at making the composite take
+the runs themselves (run summaries) cost 3 ms in other fields (their runs moved, or the paths fought) and was dropped.

@@ -4125,7 +4125,40 @@ static int bg_runs_off = 1, bg_runs_calm, bg_runs_latched;
 #define BG_SEEN 32
 #define BG_STILL_SCENES 8
 static struct { uintptr_t head; u32 hash; u8 still; } bg_seen[2][BG_SEEN] __attribute__((section(".psxovl_0a.data")));
-void gxh_bg_runs_reset(void) { bg_runs_off = 1; bg_runs_calm = 0; bg_runs_latched = 0; } /* (field_bg.c: another field's background) */
+/* A field's background path, chosen by measure: the composite (a still background in software, its sprites recorded
+ * one by one) or not (its runs drawn as quads in the 3D scene). Which is faster depends on the field (d4_f2904: 25 ms
+ * per VBlank without, 33 with; d2_f1215: 26 without, 23 with): its first scenes alternate the two (TUNE_SCENES each,
+ * twice), and the one that took fewer VBlanks (by 10%) stays for the field. Both are the renderer's ordinary paths. */
+#define TUNE_SCENES 32
+#define TUNE_SETTLE 64   /* (scenes first: a field's first composes, its fade-in) */
+#define TUNE_AGAIN 1024  /* (scenes between measures: a field's scenes change) */
+unsigned int display_vblanks(void);
+static struct { int phase, n, wait; unsigned t0, vbl[2]; } bg_tune;
+static int bg_no_composite; /* (the tuning's: the composite off, the runs on) */
+void gxh_bg_runs_reset(void) { /* (field_bg.c: another field's background) */
+    bg_runs_off = 1; bg_runs_calm = 0; bg_runs_latched = 0;
+    bg_tune.phase = 0; bg_tune.n = 0; bg_tune.wait = TUNE_SETTLE; bg_tune.vbl[0] = bg_tune.vbl[1] = 0; bg_no_composite = 0;
+}
+/* field_frame, each scene: the tuning's next step */
+PORT_OVERLAY_CODE(0a) static void bg_tune_scene(void) {
+    if (bg_tune.wait) { --bg_tune.wait; return; }
+    if (bg_tune.phase >= 4) { /* (measured: again in a while, from the composite) */
+        bg_tune.phase = 0; bg_tune.n = 0; bg_tune.vbl[0] = bg_tune.vbl[1] = 0; bg_no_composite = 0;
+    }
+    const unsigned now = display_vblanks();
+    if (bg_tune.n == 0) bg_tune.t0 = now;
+    if (++bg_tune.n <= TUNE_SCENES) return;
+    bg_tune.vbl[bg_tune.phase & 1] += now - bg_tune.t0;
+    bg_tune.n = 0;
+    if (++bg_tune.phase < 4) {
+        bg_no_composite = bg_tune.phase & 1;
+        if (bg_no_composite) { bg_runs_latched = 0; bg_runs_off = 0; } /* (the other phase's composite latched them off) */
+        return;
+    }
+    bg_no_composite = bg_tune.vbl[1] * 10 < bg_tune.vbl[0] * 9; /* (by 10%: measures of a few dozen scenes are noisy) */
+    bg_tune.wait = TUNE_AGAIN;
+    if (bg_no_composite) { bg_runs_latched = 0; bg_runs_calm = 0; }
+}
 int gxh_bg_runs_on(void) { return !bg_runs_off; } /* (field_bg.c: none lifted while off) */
 PORT_OVERLAY_CODE(0a) int gxh_bg_run(unsigned int *head, int count) {
     if (!active || !place->field || gp0_backend != &hybrid_backend || bg_runs_off) return 0;
@@ -4167,7 +4200,7 @@ PORT_OVERLAY_CODE(0a) int gxh_bg_run(unsigned int *head, int count) {
         if (bg_seen[bi][s].head != (uintptr_t)head || bg_seen[bi][s].hash != hash) {
             bg_seen[bi][s].head = (uintptr_t)head; bg_seen[bi][s].hash = hash; bg_seen[bi][s].still = 0;
         } else if (bg_seen[bi][s].still < BG_STILL_SCENES) bg_seen[bi][s].still++;
-        if (bg_seen[bi][s].still >= BG_STILL_SCENES) return 2;
+        if (bg_seen[bi][s].still >= BG_STILL_SCENES && !bg_no_composite) return 2;
     }
     p = (const u32 *)head;
     for (int i = 0; i < count; ++i, p = bg_next(p)) {
@@ -5639,7 +5672,13 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
                             free_run(i);
             }
         }
-        int composite = tp_state == TP_OFF && bgc_keep && (!adds || bgc_texmode) && bgc_use(b, fst, display_h, &polys, &vertices);
+        bg_tune_scene();
+        /* (without the composite the runs are the point: once the 3D engine's budget has latched them off, the
+         * composite again) */
+        if (bg_no_composite && bg_runs_off && bg_runs_latched && bg_tune.phase >= 4) bg_no_composite = 0;
+        /* (without the composite only within the 3D engine's budget: past it the composite keeps the scene in one pass) */
+        int composite = tp_state == TP_OFF && bgc_keep && (!bg_no_composite || over) && (!adds || bgc_texmode) &&
+                        bgc_use(b, fst, display_h, &polys, &vertices);
         bgc_quad = composite && bgc_texmode;
         if (!composite) bgc_semi = 0; /* (the semi-transparent sprites only in a composite in use) */
         /* (a scene the composite holds is one the runs would only take from it: none for the field) */

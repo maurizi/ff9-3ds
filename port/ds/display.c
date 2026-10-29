@@ -95,6 +95,9 @@ void display_init(void) {
 #define MAX_LAG 8
 static volatile int queued_buffer = -1, queued_scroll;
 
+/* (gx_hybrid.c: how long a field's scenes take, to choose its background path) */
+unsigned int display_vblanks(void) { return real_vblanks; }
+
 static void vblank_irq(void) {
     real_vblanks++;
     movie_fv_vblank();
