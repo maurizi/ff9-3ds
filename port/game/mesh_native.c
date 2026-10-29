@@ -235,8 +235,8 @@ u8 *o0b_btlbg_drawRecord(BtlBgRec *rec, u8 *out, u32 *ot, BtlBgGroup *grp);
 u8 *o0b_btlbg_drawRecord(BtlBgRec *rec, u8 *out, u32 *ot, BtlBgGroup *grp) {
     NativeBg n;
     n.rec = (const unsigned char *)rec;
-    n.verts = (const unsigned char *)grp + grp->unkE + rec->unk4 * 6;
-    n.textab = (const unsigned int *)((u8 *)grp + grp->unkA);
+    n.verts = (const unsigned char *)grp + grp->vertexOfs + rec->firstVertex * 6;
+    n.textab = (const unsigned int *)((u8 *)grp + grp->texOfs);
     n.ot = (const unsigned int *)ot;
     n.bright = *(u16 *)&g_btlbgBrightness;
     n.shift = *(u16 *)&g_btlbgOtShift & 31;
