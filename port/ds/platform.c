@@ -142,6 +142,9 @@ void plat_wait_frame(void) {
         { extern volatile u32 port_pc_from_frame; port_pc_from_frame = ~0u; } /* (the wait for the state isn't the scene) */
 #endif
         status_row(19,"capture frame %ld",frames);
+#ifdef PORT_GX_HYBRID
+        { extern void gxh_capture_settle(void); gxh_capture_settle(); } /* (two passes under way: finished) */
+#endif
         for(;;) swiWaitForVBlank();
     }
 #endif

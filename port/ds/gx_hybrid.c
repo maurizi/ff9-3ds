@@ -168,6 +168,13 @@ static int tp_zlo = -0x7FFFFFFF, tp_zhi = 0x7FFFFFFF, tp_counting;
 enum { TP_OFF, TP_IDLE, TP_P1_LISTED, TP_P1_SHOWN, TP_P2_LISTED, TP_P2_SHOWN };
 static volatile int tp_state = TP_OFF;
 static int tp_split, tp_final;  /* the depth between the passes; bank B holds a whole frame */
+/* a battle's two passes: each its own textures in banks C and D (battle_label; 0: the scene's, 1 or 2: a pass's) */
+static int tp_plan_pass, tp_battle;
+static int tp_planned; /* (battle_two planned the first pass's textures last: submit needn't again) */
+/* the scene as its first pass saw it: a battle's second pass comes at a later present, after the UI has recorded
+ * into the shown buffer (note_walk's generation, its count, its offset) */
+static unsigned tp_gen;
+static int tp_count, tp_ofs_x, tp_ofs_y;
 static u32 tp_dispcnt;          /* REG_DISPCNT while the first pass shows bank B */
 static u16 tp_clear;            /* the scene's clear colour (the passes' alpha: 31, then 0) */
 static Buffer *tp_b;            /* (the scene's buffer, for the second pass) */
@@ -445,7 +452,7 @@ GXH_HOT static void record(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int n) 
 #define POOL_BYTES ((MAX_PRIMS - BATTLE_PRIMS) * (int)sizeof(Prim))
 /* a texture word and blend mode a mesh uses: its key (tex, mode), the tpage bits the game ors in, its texels' bounds,
  * and its plan */
-typedef struct { u32 page; u8 tex, mode, orbits, semi, u0, v0, u1, v1, group, palette; } MeshUse;
+typedef struct { u32 page; u8 tex, mode, orbits, semi, u0, v0, u1, v1, group, palette, passes; } MeshUse; /* passes: a battle's two (bits 1, 2: battle_label) */
 typedef struct {
     const u8 *src;       /* a model mesh's source lists; a background record (BtlBgRec) */
     const u16 *uvs;
@@ -1745,9 +1752,7 @@ static void upload_run(const Run *r, u8 *base) {
             for (int k = 0; k < wh; ++k) { u16 c = src[(x + k) & 1023]; out[k] = c ? c | 0x8000 : 0; }
         } else if (!(x & 1) && !(wh & 1) && x + wh <= 1024 && !((uintptr_t)out & 2)) {
             /* (whole words: an animated page's runs are copied again each frame it changes) */
-            const u32 *in = (const u32 *)(src + x);
-            u32 *o = (u32 *)out;
-            for (int k = 0; k < wh / 2; ++k) o[k] = in[k];
+            dmaCopyWords(3, src + x, out, (u32)wh * 2); /* (upload cleaned the data cache) */
         } else {
             for (int k = 0; k < wh; ++k) out[k] = src[(x + k) & 1023];
         }
@@ -1761,6 +1766,7 @@ static Group groups[MAX_GROUPS];
 static int group_count;
 /* per recorded primitive (prim_tables: in the resident mode overlay's dead range, use_place) */
 static u8 *prim_group, *prim_palette;
+static u8 *prim_drop; /* (plan_drops' verdicts; a battle's two passes: bit 1 the second's, battle_label) */
 
 /* hints for plan_textures' searches: the group or palette slot a key's hash last found (checked before use) */
 static u8 group_hash[256], palette_hash[256];
@@ -1892,6 +1898,7 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
     for (int k = 0; k < b->count; ++k) {
         prim_group[k] = 0xFF;
         if (!(b->prims[k].flags & P_TEXTURED) || !in_scene(&b->prims[k], k)) continue;
+        if (tp_plan_pass && (prim_drop[k] >> 1) + 1 != tp_plan_pass) continue; /* (the other pass's) */
         PrimCopy local; /* (the stores below can't alias it: emit_scene) */
         copy_prim(&local, &b->prims[k]);
         plan_prim(&local.p, use_runs, &last_group, &last_palette, &prim_group[k], &prim_palette[k]);
@@ -1933,6 +1940,7 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
             MeshInst *mi = mesh_at(b, m);
             for (int i = 0; i < mi->nuses; ++i) {
                 MeshUse *u = &mi->uses[i];
+                if (tp_plan_pass && !(u->passes & tp_plan_pass)) { u->group = u->palette = 0xFF; continue; }
                 Prim q;
                 q.n = 4; q.flags = (u8)(P_TEXTURED | (u->semi ? P_SEMI : 0));
                 use_page(u, &q);
@@ -1952,7 +1960,10 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
     }
     if (need_count && plan_runs(0)) missing = 1;
     if (!missing) { gxh_stats_unplaced = 0; return 1; }
-    for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used && !regions[i].wanted) free_region(&regions[i]);
+    /* (a battle's two passes: the other pass's regions given up one by one as room is needed, below, so what both use
+     * or still fits stays: each pass's uploads are only what the other displaced) */
+    if (!tp_battle)
+        for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used && !regions[i].wanted) free_region(&regions[i]);
     if (use_runs) for (int i = 0; i < MAX_RUNS; ++i) if (runs[i].flags && !(runs[i].flags & RUN_WANTED)) free_run(i);
     for (int attempt = 0; attempt < 2; ++attempt) {
         int failed = 0;
@@ -1971,6 +1982,14 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
             int wh = q->x1 - q->x0 + 1, h = q->y1 - q->y0 + 1;
             q->region = region_containing(q->depth, q->conv, q->cx, q->cy, q->x0, q->y0, wh, h);
             if (!q->region) q->region = place_region(q->depth, q->conv, q->cx, q->cy, q->x0, q->y0, wh, h);
+            while (!q->region && tp_battle) { /* (the largest unwanted region given up, then again) */
+                Region *v = NULL;
+                for (int i = 0; i < MAX_REGIONS; ++i)
+                    if (regions[i].used && !regions[i].wanted && (!v || regions[i].units > v->units)) v = &regions[i];
+                if (!v) break;
+                free_region(v);
+                q->region = place_region(q->depth, q->conv, q->cx, q->cy, q->x0, q->y0, wh, h);
+            }
             if (q->region) q->region->wanted = 1;
             else failed = 1;
         }
@@ -2167,6 +2186,7 @@ int gxh_stats_upload_bytes, gxh_stats_upload_regions, gxh_stats_upload_palettes;
 
 static __attribute__((noinline)) void upload(void) {
     u8 *base = (u8 *)VRAM_A;
+    DC_FlushAll(); /* (the rows' DMA reads PS1 VRAM from the RAM: what the CPU wrote is there first) */
     gxh_stats_upload_bytes = gxh_stats_upload_regions = gxh_stats_upload_palettes = 0;
     if (!ramp_written) {
         u16 *ramp = (u16 *)(base + RAMP_UNIT * TEX_UNIT);
@@ -2197,6 +2217,10 @@ static __attribute__((noinline)) void upload(void) {
                     for (; k < n; ++k) out[k] = in[k];
                 } else {
                     if ((uintptr_t)out & 2) { out[0] = in[0]; k = 1; }
+                    const int words = (n - k) >> 1;
+                    /* (whole words by DMA: several times the CPU's rate from main RAM; the data cache cleaned at
+                     * the start of upload, as DMA reads the RAM) */
+                    if (words >= 8) { dmaCopyWords(3, in + k, out + k, (u32)words * 4); k += words * 2; }
                     for (; k + 2 <= n; k += 2) *(u32 *)(out + k) = *(const u32 *)(in + k);
                     if (k < n) out[k] = in[k];
                 }
@@ -2343,7 +2367,6 @@ static int prim_area2(const Prim *p) {
  * primitives from the start of the drawing order: in painter's order that is the far scene, whose small pieces are
  * the least visible and often covered later. Size alone would take the nearest characters, whose models are many
  * tiny triangles drawn last. The size bound grows only while the budget isn't met. */
-static u8 *prim_drop;
 static void plan_drops(Buffer *b) {
     int vertices = 0, prims = 0;
     for (int k = 0; k < b->count; ++k) if (in_scene(&b->prims[k], k)) vertices += b->prims[k].n, ++prims;
@@ -2676,6 +2699,10 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
         native_next(b, &walk);
         if (walk.ri == NO_REF || (k < count && walk.erank > k)) break;
         const NativeRef *r = &native_refs[walk.ri];
+        if (tp_battle) { /* (the other pass's: its texture isn't planned; no drops in two passes) */
+            const int zn = Z_STEP * (walk.zc + 1);
+            if (zn < tp_zlo || zn >= tp_zhi) { walk.ri = r->next; ++walk.zc; continue; }
+        }
         const MeshInst *mi = mesh_at(b, r->m);
         int pi = r->pi, n, t = 0, gouraud;
         u8 inf = mi->info[pi];
@@ -2722,6 +2749,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
         walk.ri = r->next;
         if (mesh_dropped(b, inf & 7)) { gxh_stats_dropped++; continue; }
         int z = Z_STEP * ++walk.zc;
+        if (z < tp_zlo || z >= tp_zhi) continue; /* (the other pass's) */
         if (wp > wend) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; wend = wp + (CHUNK_WORDS - PRIM_WORDS); }
         if (polys >= MAX_POLYS || vertices + n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
         if (mi->kind == MESH_BG) {
@@ -3012,7 +3040,8 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         polys++;
         vertices += 4;
     }
-    if (tp_state != TP_OFF) memset(prim_drop, 0, b->count); /* (two passes: each fits) */
+    if (tp_state != TP_OFF) { if (!tp_battle) memset(prim_drop, 0, b->count); } /* (two passes: each fits; a battle's
+                                                                                       * keep their pass, battle_label) */
     else plan_drops(b);
     memset(light_cells, 0, sizeof light_cells);
     FStore *fst = scene_models(b);
@@ -3067,6 +3096,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             if (!native_poly(b, r, &local.p, &grp, &pal)) continue; /* a native polygon, in OT order */
             native = 1;
             z = Z_STEP * ++nw.zc;
+            if (z < tp_zlo || z >= tp_zhi) continue; /* (the other pass's) */
         } else if (order ? k < norder : k < (b->slots ? 2 * b->count : b->count)) {
             int kk = k++;
             if (order) kk = order[kk];
@@ -3081,7 +3111,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             }
             src = &b->prims[kk];
             if (!in_scene(src, kk)) continue;
-            if (prim_drop[kk]) { gxh_stats_dropped++; continue; }
+            if (prim_drop[kk] & 1) { gxh_stats_dropped++; continue; }
             reserve();
             if (polys >= MAX_POLYS || vertices + src->n > MAX_VERTICES) { gxh_stats_dropped++; continue; }
             /* (a field's buffers hold more than 2047; the world map's at their OT entries' depths) */
@@ -5218,8 +5248,8 @@ PORT_OVERLAY_CODE(0a) static int tp_choose(Buffer *b, const FStore *fst) {
     return 1;
 }
 /* banks A (the first pass's capture, then BG3) and B (the whole frame, shown during the first pass) leave the
- * textures */
-PORT_OVERLAY_CODE(0a) static int tp_enter(void) {
+ * textures (resident: battles' two passes too) */
+static int tp_enter(void) {
     if (movie_banks) return 0;
     if (tp_state != TP_OFF) return 1;
     bank_a_as_bg(1);
@@ -5249,18 +5279,34 @@ static void tp_leave(void) {
 void gxh_tp_tick(void) {
     if (tp_state != TP_P1_SHOWN) return;
     while (dmaBusy(0)) {}
+    if (tp_battle) { /* the second pass's textures over the first's, once it is drawn and captured (the 3D engine
+                      * reads them through the frame after its swap: the capture ends with it) */
+        for (int n = 0; (REG_DISPCAPCNT & DCAP_ENABLE) && n < 4; ++n) swiWaitForVBlank();
+        tp_plan_pass = 2;
+        plan_textures(tp_b);
+        vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); vramSetBankF(VRAM_F_LCD); vramSetBankG(VRAM_G_LCD);
+        upload();
+        vramSetBankC(VRAM_C_TEXTURE_SLOT2); vramSetBankD(VRAM_D_TEXTURE_SLOT3);
+        vramSetBankF(VRAM_F_TEX_PALETTE_SLOT0); vramSetBankG(VRAM_G_TEX_PALETTE_SLOT1);
+    }
     tp_zlo = tp_split;
+    const unsigned gen = tp_b->scene_gen;
+    const int count = tp_b->count, ofs_x = tp_b->ofs_x, ofs_y = tp_b->ofs_y;
+    if (tp_battle) { tp_b->scene_gen = tp_gen; tp_b->count = tp_count; tp_b->ofs_x = tp_ofs_x; tp_b->ofs_y = tp_ofs_y; }
     emit_scene(tp_b);
+    tp_b->scene_gen = gen; tp_b->count = count; tp_b->ofs_x = ofs_x; tp_b->ofs_y = ofs_y;
     flush_chunk();
     tp_zlo = -0x7FFFFFFF;
     while (dmaBusy(0)) {}
     tp_state = TP_P2_LISTED;
+    tp_plan_pass = 0;
 }
 /* the second pass as soon as the first is on screen, before the game goes on (display.c, after gxh_present): the
  * models' packets change with its next frame (texture animation), and the passes must see the same */
 void gxh_tp_finish(void) {
     for (int n = 0; tp_state == TP_P1_LISTED && n < 4; ++n) swiWaitForVBlank();
-    gxh_tp_tick();
+    gxh_tp_tick(); /* (a battle's waits for its first pass's capture: the game's next frame redraws its meshes into
+                    * the buffer, so its second pass can't come later) */
 }
 /* wait for the passes under way (a scene is about to be submitted over them) */
 static void tp_settle(void) {
@@ -5269,6 +5315,8 @@ static void tp_settle(void) {
         if (tp_state != TP_IDLE) swiWaitForVBlank();
     }
 }
+/* a capture build's freeze (platform.c): the passes under way finished first, so the frame shown is whole */
+void gxh_capture_settle(void) { tp_settle(); }
 /* display.c's VBlank interrupt: each pass's list swapped in (the geometry engine idle again) */
 void gxh_vblank(void) {
     int s = tp_state;
@@ -5508,13 +5556,105 @@ static void terrain_fog_setup(Buffer *b) {
 }
 
 /* Send a buffer's scene to the 3D engine; it is shown from the next frame on. */
+/* A battle scene past the 3D engine's polygons or vertices in two passes (the fields' tp_* mode) instead of dropping
+ * its smallest polygons (plan_drops, now only if the textures don't fit banks C and D): a battle's are drawn in OT
+ * order, each at Z_STEP x its place in it (emit_scene), so the split is a place: the first half farther. */
+static void battle_label(Buffer *b);
+/* a battle scene in one pass (its bank A textures again, its blending as gxh_enable sets it) */
+static void battle_one(Buffer *b) {
+    tp_plan_pass = 0; tp_battle = 0;
+    memset(prim_drop, 0, b->count);
+    tp_leave();
+    if (bank_a_bg && !place->field) { bank_a_as_bg(0); REG_BLDCNT = 0; REG_BLDALPHA = 0; }
+}
+static void battle_two(Buffer *b) {
+    tp_plan_pass = 0; tp_battle = 0;
+    if (place->field || place->world || movie_banks || !b->meshes || b->mesh_gen != b->scene_gen) { tp_leave(); goto bank_a; }
+    int prims = 0, vertices = 0, seq = 0;
+    for (int k = 0; k < b->count; ++k) if (in_scene(&b->prims[k], k)) { vertices += b->prims[k].n; ++prims; }
+    seq = prims; /* (each recorded primitive in the scene takes a place, as each native polygon) */
+    for (int m = 0; m < b->meshes; ++m) { const MeshInst *mi = mesh_at(b, m); prims += mi->polys; vertices += mi->vertices; seq += mi->polys; }
+    if (prims <= MAX_POLYS && vertices <= MAX_VERTICES) { tp_leave(); goto bank_a; }
+    if (back_bg < 0) { /* (the first pass's capture behind the second: BG3, as a field's) */
+        back_bg = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 8, 0);
+        bgSetPriority(back_bg, 3);
+        bgHide(back_bg);
+    }
+    if (!tp_enter()) goto bank_a;
+    /* (the second pass's translucent pixels over it by their alpha: a battle's blending is off, gxh_enable) */
+    REG_BLDCNT = BLEND_ALPHA | BLEND_SRC_BG0 | BLEND_DST_BG3;
+    REG_BLDALPHA = 16;
+    b->mesh_drop = 0; b->mesh_quota = 0; b->mesh_quota_bound = 0;
+    tp_battle = 1;
+    /* the split: the places a pass holds (the 3D engine's polygons, or its vertices at the scene's average, less 3%),
+     * the first pass from half the scene down to the least the second leaves it, the first whose two texture sets
+     * each fit banks C and D (a battle's background is far and holds most pages: a smaller first pass, fewer) */
+    int cap = vertices ? (int)((long long)MAX_VERTICES * prims / vertices) : MAX_POLYS;
+    if (cap > MAX_POLYS) cap = MAX_POLYS;
+    cap -= cap / 32;
+    const int lo = seq - cap > 0 ? seq - cap : 0, hi = seq / 2 < cap ? seq / 2 : cap; /* (first-pass places) */
+    if (lo > hi) { battle_one(b); return; }
+    for (int i = 0; i < 4; ++i) {
+        const int first = hi - (hi - lo) * i / 3;
+        tp_split = Z_STEP * (first + 1); /* (places 1..first the first pass) */
+        battle_label(b);
+        tp_plan_pass = 2; /* (each pass's textures must fit: planned now as a check, again before it) */
+        plan_textures(b);
+        if (gxh_stats_unplaced) continue;
+        tp_plan_pass = 1;
+        plan_textures(b);
+        if (!gxh_stats_unplaced) { tp_planned = 1; return; } /* (the first pass's planned) */
+    }
+    battle_one(b);
+    return;
+bank_a:
+    if (bank_a_bg && !place->field) { /* (a battle's bank A back to textures, its blending as gxh_enable sets it) */
+        bank_a_as_bg(0);
+        REG_BLDCNT = 0; REG_BLDALPHA = 0;
+    }
+}
+
+/* each recorded primitive's and native polygon's pass (their places in emit_scene's order, as it walks them: every
+ * one takes a place, none dropped in two passes): a primitive of the second has prim_drop bit 1, a texture use the
+ * bits of the passes that use it */
+static void battle_label(Buffer *b) {
+    for (int m = 0; m < b->meshes; ++m) {
+        MeshInst *mi = mesh_at(b, m);
+        for (int i = 0; i < mi->nuses; ++i) mi->uses[i].passes = 0;
+    }
+    memset(prim_drop, 0, b->count);
+    NativeWalk nw = {-1, NO_REF, 0, 0};
+    if (collect_native(b)) nw.ne = 0x100F;
+    for (int k = 0;;) {
+        native_next(b, &nw);
+        if (nw.ri != NO_REF && (k >= b->count || nw.erank <= k)) {
+            const NativeRef *r = &native_refs[nw.ri];
+            nw.ri = r->next;
+            MeshInst *mi = mesh_at(b, r->m);
+            mi->uses[(mi->info[r->pi] >> 3) & 15].passes |= (u8)(Z_STEP * ++nw.zc >= tp_split ? 2 : 1);
+        } else if (k < b->count) {
+            const int kk = k++;
+            if (!in_scene(&b->prims[kk], kk)) continue;
+            if (Z_STEP * ++nw.zc >= tp_split) prim_drop[kk] = 2;
+        } else break;
+    }
+}
+
 static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
     BB(0x47580001, b->count);
     unsigned int profile = port_profile_begin();
     while (dmaBusy(0)) {} /* the previous scene's list */
     tp_settle(); /* (and a two-pass scene's second pass, its capture) */
+    if (place->field) { tp_plan_pass = 0; tp_battle = 0; }
     if (place->field && ovl0a_resident()) field_frame(b, display_h); /* (ovl_0a's: see ovl0a_resident) */
-    else { memset(prim_layer, L_3D, b->count); plan_textures(b); }
+    else {
+        memset(prim_layer, L_3D, b->count);
+        tp_planned = 0;
+        battle_two(b); /* (a battle past the 3D engine's RAM: two passes, the user's choice of 2026-10-29) */
+        if (!tp_planned) plan_textures(b); /* (in two passes the first pass's: battle_two's) */
+        if (tp_state == TP_IDLE && gxh_stats_unplaced) { battle_one(b); plan_textures(b); } /* (C and D too small: one
+                                                                                                  * pass, drops) */
+    }
     const int two = tp_state == TP_IDLE; /* (field_frame: this scene in two passes) */
     gxh_stats_regions = gxh_stats_units = 0;
     for (int i = 0; i < MAX_REGIONS; ++i) if (regions[i].used) { gxh_stats_regions++; gxh_stats_units += regions[i].units; }
@@ -5561,6 +5701,7 @@ static __attribute__((noinline)) void submit(Buffer *b, int display_h) {
         tp_zhi = 0x7FFFFFFF;
         while (dmaBusy(0)) {}
         tp_b = b; tp_display_h = display_h;
+        tp_gen = b->scene_gen; tp_count = b->count; tp_ofs_x = b->ofs_x; tp_ofs_y = b->ofs_y;
         tp_state = TP_P1_LISTED; /* (the second pass: gxh_tp_finish, after the rest of the present) */
     }
     b->submitted = 1;
