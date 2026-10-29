@@ -184,11 +184,12 @@ static int last_oy0, last_oy1; /* the additive layer's last band (output rows) *
 #define FM_POLYS 6144       /* polygons a scene (its culling bits; d1_f0574's close-ups pass 4096) */
 /* (src, polys and verts as taken: the game may have freed or reused the group by the time the scene is sent, two
  * frames later; fm_live checks) */
-typedef struct { const u8 *group, *packets, *src; u16 vert0, poly0, polys, verts; s32 depth0, depth_far; } FGroup;
+typedef struct { const u8 *group, *packets, *src; u16 vert0, poly0, polys, verts; s32 depth0, depth_far; u8 semi; } FGroup;
 typedef struct { u16 tpage, clut; u8 u0, v0, u1, v1, group, palette; } FUse;
 typedef struct {
     unsigned gen; int ngroups, nverts, nuses;
     int npolys, front_polys, front_verts; /* its polygons, those facing the camera and their vertices */
+    int semi_area2; /* the translucent polygons taken (FGroup.semi): twice their area (field_frame's additive layer) */
     FGroup groups[FM_GROUPS];
     u32 front[FM_POLYS / 32]; /* a bit a polygon: drawn (NCLIP > 0, or double-sided) */
     FUse uses[FM_USES];
@@ -197,6 +198,11 @@ typedef struct {
     u32 *verts;
 } FStore;
 static FStore *fm_ring[3];         /* by generation (use_place: after the field's depths) */
+/* Field models' additive translucent polygons (modes 1, 3, textured: glows) taken natively (FGroup.semi), drawn as the
+ * 3D approximation draws the recorded ones but a polygon ID a group (where a group's layers overlap, one shows: the
+ * user's choice of 2026-10-28, native translucent models with an approximate blend order); only while the scene's
+ * additive area takes the 3D approximation (field_frame: the exact layer otherwise, from the linked packets) */
+static int fm_semi_ok;
 static s16 fm_bounds[3][FM_GROUPS][4]; /* each store's groups' vertex bounds: x0 y0 x1 y1 (bgc_use) */
 static int fm_cap;                 /* vertices a scene */
 /* packet sizes and xy offsets per source type (FT4, FT3, GT4, GT3, G4, G3, F4, F3: model_link.c's kinds) */
@@ -1909,9 +1915,9 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
     if (fst)
         for (int i = 0; i < fst->nuses; ++i) {
             FUse *u = &fst->uses[i];
-            MeshUse mu = {(u32)u->tpage | (u32)u->clut << 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            MeshUse mu = {(u32)(u->tpage & 0x7FFF) | (u32)u->clut << 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
             Prim q;
-            q.n = 4; q.flags = P_TEXTURED;
+            q.n = 4; q.flags = (u8)(P_TEXTURED | (u->tpage & 0x8000 ? P_SEMI : 0)); /* (bit 15: additive, converted) */
             use_page(&mu, &q);
             q.u[0] = q.u[2] = u->u0; q.u[1] = q.u[3] = u->u1; q.v[0] = q.v[1] = u->v0; q.v[2] = q.v[3] = u->v1;
             plan_prim(&q, 0, &last_group, &last_palette, &u->group, &u->palette);
@@ -4118,6 +4124,75 @@ static inline __attribute__((always_inline)) void fm_take_kind(FmTake *k, FStore
     k->last_use = last_use;
 }
 
+/* A group's translucent polygons natively (fm_semi_ok), if all are textured and additive (modes 1, 3): the PS1's
+ * culling (link_translucent's), each drawn one's bit with the opaque ones', its texture use (tpage bit 15: planned
+ * converted, plan_textures) and twice its area (st->semi_area2). 0: some aren't, all left to the linker. */
+PORT_OVERLAY_CODE(0a) __attribute__((noinline)) static int fm_take_semi(FStore *st, const NativeFieldMesh *n,
+                                                                                      int pi, int nv) {
+    const u8 *g = n->group;
+    for (int t = 0, at = 0; t < 8; ++t) { /* (nothing taken from a group that keeps some for the linker) */
+        const u8 *pk = n->packets + at;
+        const int count = *(const u16 *)(g + 2 + 2 * t);
+        at += count * fm_size[t];
+        for (int k = 0; k < count; ++k, pk += fm_size[t]) {
+            if (!(pk[7] & 2)) continue;
+            if (t >= 4) return 0;
+            const u32 abr = *(const u16 *)(pk + fm_xy_at[t][1] + 6) >> 5 & 3;
+            if (abr != 1 && abr != 3) return 0;
+        }
+    }
+    const s32 *const sxy = (const s32 *)n->sxy;
+    const int *const sz = n->sz;
+    u32 *const front = st->front;
+    const u8 *src = *(const u8 *const *)(g + 0x1C), *pk = n->packets;
+    int polys = 0, verts = 0, area = 0, u = 0;
+    for (int t = 0; t < 8; ++t) {
+        const int quad = !(t & 1), nvp = quad ? 4 : 3, flags_at = mesh_flags_at[t];
+        for (int count = *(const u16 *)(g + 2 + 2 * t); count > 0; --count, src += mesh_size[t], pk += fm_size[t], ++pi) {
+            if (!(pk[7] & 2)) continue;
+            const u32 i01 = *(const u32 *)src, i23 = *(const u32 *)(src + 4);
+            const u32 i0 = i01 & 0xFFFF, i1 = i01 >> 16, i2 = i23 & 0xFFFF, i3 = i23 >> 16;
+            if (i0 >= (u32)nv || i1 >= (u32)nv || i2 >= (u32)nv || (quad && i3 >= (u32)nv)) continue;
+            if (n->clip_y && (u32)sz[i0] + (u32)sz[i1] + (u32)sz[i2] + (quad ? (u32)sz[i3] : 0) >
+                                 (quad ? 0x3FFFFFFFu : 0x2FFFFFFFu))
+                continue; /* (fldmdl_drawMeshClipY: a vertex flagged, the polygon not drawn) */
+            const u32 s0 = (u32)sxy[i0], s1 = (u32)sxy[i1], s2 = (u32)sxy[i2];
+            const int x0 = (s16)s0, y0 = (s16)(s0 >> 16);
+            int nclip = ((s16)s1 - x0) * ((s16)(s2 >> 16) - y0) - ((s16)s2 - x0) * ((s16)(s1 >> 16) - y0);
+            if (n->mirror) nclip = -nclip; /* (a reflection: NCLIP >= 0 culled) */
+            if (!(src[flags_at] & 2) && nclip <= 0) continue;
+            front[pi >> 5] |= 1u << (pi & 31);
+            polys++;
+            verts += nvp;
+            area += (nclip < 0 ? -nclip : nclip) * (quad ? 2 : 1);
+            const u32 uv0 = *(const u32 *)(pk + fm_xy_at[t][0] + 4), uv1 = *(const u32 *)(pk + fm_xy_at[t][1] + 4);
+            const u16 clut = (u16)(uv0 >> 16), tpage = (u16)(uv1 >> 16 | 0x8000);
+            if (u >= st->nuses || st->uses[u].tpage != tpage || st->uses[u].clut != clut) {
+                for (u = 0; u < st->nuses; ++u) if (st->uses[u].tpage == tpage && st->uses[u].clut == clut) break;
+                if (u == st->nuses) {
+                    if (u == FM_USES) { u = 0; continue; } /* (not drawable: fm_semi_emit finds no use) */
+                    st->uses[u] = (FUse){tpage, clut, 255, 255, 0, 0, 0xFF, 0xFF};
+                    st->nuses++;
+                }
+            }
+            int lu0 = 255, lv0 = 255, lu1 = 0, lv1 = 0;
+            for (int i = 0; i < nvp; ++i) {
+                const u32 w = *(const u32 *)(pk + fm_xy_at[t][i] + 4);
+                const int cu = w & 0xFF, cv = w >> 8 & 0xFF;
+                if (cu < lu0) lu0 = cu;
+                if (cu > lu1) lu1 = cu;
+                if (cv < lv0) lv0 = cv;
+                if (cv > lv1) lv1 = cv;
+            }
+            fuse_bounds(&st->uses[u], lu0, lv0, lu1, lv1);
+        }
+    }
+    st->front_polys += polys;
+    st->front_verts += verts;
+    st->semi_area2 += area;
+    return 1;
+}
+
 PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(const NativeFieldMesh *n) {
     /* (not the GPU's backend: a scene gone software keeps the software renderer until it's shown, after this) */
     if (!active || !place->field || !fm_ring[0] || soft_hold) return 0;
@@ -4128,7 +4203,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     static int last_use;
     if (st->gen != psx_ot_generation) {
         st->gen = psx_ot_generation; st->ngroups = 0; st->nverts = 0; st->npolys = 0;
-        st->front_polys = 0; st->front_verts = 0; st->nuses = 0;
+        st->front_polys = 0; st->front_verts = 0; st->nuses = 0; st->semi_area2 = 0;
         last_use = 0;
     }
     int nv = n->nverts, np = 0;
@@ -4171,8 +4246,10 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     const int lu0 = k.lu0, lv0 = k.lv0, lu1 = k.lu1, lv1 = k.lv1;
     if (pi & 31) front[pi >> 5] = fw;
     if (gathering) fuse_bounds(&st->uses[last_use], lu0, lv0, lu1, lv1);
-    if (!opaque) return 3; /* (all translucent: its caller links them, link_translucent as for a taken group's) */
+    const int semi = opaque < np && fm_semi_ok && fm_take_semi(st, n, st->npolys, nv);
+    if (!opaque && !semi) return 3; /* (all translucent: its caller links them, link_translucent as for a taken group's) */
     FGroup *fg = &st->groups[st->ngroups++];
+    fg->semi = (u8)semi;
     fg->group = g; fg->packets = n->packets; fg->vert0 = (u16)st->nverts; fg->poly0 = (u16)st->npolys;
     fg->src = *(const u8 *const *)(g + 0x1C); fg->polys = (u16)np; fg->verts = (u16)nv;
     st->front_polys += front_polys;
@@ -4197,7 +4274,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     fg->depth_far = depth_far;
     st->nverts += nv;
     gxh_stats_fm = st->ngroups;
-    return opaque == np ? 1 : 2;
+    return opaque == np || semi ? 1 : 2;
 }
 
 static FStore *scene_models(const Buffer *b) {
@@ -4220,6 +4297,7 @@ static inline int fm_live(const FGroup *fg) {
 typedef struct {
     const FStore *fst;
     u32 key[FM_USES], image[FM_USES], palette[FM_USES]; /* key: tpage << 16 | clut; image 0: not drawable */
+    u16 hue[FM_USES]; /* an additive (converted) use's colour (light_under) */
     s16 tu[FM_USES], tv[FM_USES];
     int last_use, ofs_x, ofs_y;
     int zlo, zhi, count; /* two passes (tp_*): only the polygons whose first vertex's depth is in [zlo, zhi); count:
@@ -4241,7 +4319,7 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
                                                           const u8 *src, const u8 *pk, int pi, int count) {
     const int quad = !(t & 1), nv = quad ? 4 : 3, textured = t < 4, gouraud = MODEL_GOURAUD && t >= 2 && t <= 5;
     const u32 *vw = c->fst->verts + fg->vert0, *front = c->fst->front;
-    const int depth0 = fg->depth0;
+    const int depth0 = fg->depth0, semi = fg->semi;
     const u32 nverts = fg->verts;
     /* (in locals: with -fno-strict-aliasing every store through wp would reload them from c and es) */
     const int counting = c->count, zlo = c->zlo, zhi = c->zhi, nuses = c->fst->nuses;
@@ -4257,6 +4335,7 @@ static inline __attribute__((always_inline)) u32 *fm_kind(FmCtx *c, EmitState *e
             count -= skip; src += skip * mesh_size[t]; pk += skip * fm_size[t]; pi += skip;
             continue;
         }
+        if (semi && (pk[7] & 2)) continue; /* (a translucent one: fm_semi_emit) */
         /* the vertex indices once (two words: the records are word aligned), then their packed vertices */
         const u32 i01 = *(const u32 *)src, i23 = *(const u32 *)(src + 4);
         const u32 vi[4] = {i01 & 0xFFFF, i01 >> 16, i23 & 0xFFFF, quad ? i23 >> 16 : 0};
@@ -4365,6 +4444,90 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_soft_draw(Bu
 }
 
 /* the scene's field models, before its primitives (depth tested: any order) */
+/* A group's translucent polygons taken natively (fm_take_semi): as emit_scene draws a recorded additive textured
+ * polygon (its brightness the alpha, the light under it whitening its colours, the converted texture) from the
+ * group's vertices and packets, with one polygon ID for the group */
+PORT_OVERLAY_CODE(0a) __attribute__((noinline)) static u32 *fm_semi_emit(FmCtx *c, EmitState *es, u32 *wp,
+                                                                                       const FGroup *fg, int gi) {
+    const u32 *vw = c->fst->verts + fg->vert0, *front = c->fst->front;
+    const u8 *g = fg->group, *src = fg->src, *pk = fg->packets;
+    const u32 nverts = fg->verts, id = 33 + (u32)gi % 31; /* (the recorded ones' IDs are 1-32) */
+    const int depth0 = fg->depth0, nuses = c->fst->nuses;
+    u32 image = es->image, palette = es->palette, attr = es->attr;
+    int polys = es->polys, vertices = es->vertices, pi = fg->poly0, u = 0;
+    for (int t = 0; t < 8; ++t) {
+        const int count0 = *(const u16 *)(g + 2 + 2 * t);
+        if (t >= 4) { src += count0 * mesh_size[t]; pk += count0 * fm_size[t]; pi += count0; continue; } /* (none: textured) */
+        const int quad = !(t & 1), nv = quad ? 4 : 3, gouraud = t >= 2;
+        for (int count = count0; count > 0; --count, src += mesh_size[t], pk += fm_size[t], ++pi) {
+            if (!(pk[7] & 2) || !(front[pi >> 5] >> (pi & 31) & 1)) continue;
+            const u32 i01 = *(const u32 *)src, i23 = *(const u32 *)(src + 4);
+            const u32 vi[4] = {i01 & 0xFFFF, i01 >> 16, i23 & 0xFFFF, quad ? i23 >> 16 : 0};
+            if (vi[0] >= nverts || vi[1] >= nverts || vi[2] >= nverts || (quad && vi[3] >= nverts)) continue;
+            const u32 w[4] = {vw[vi[0]], vw[vi[1]], vw[vi[2]], quad ? vw[vi[3]] : 0};
+            const int pz = depth0 - (int)(w[0] >> 22) * 4;
+            if (c->count) { tp_note(pz, nv); continue; }
+            if (pz < c->zlo || pz >= c->zhi) continue;
+            if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
+            if (polys >= MAX_POLYS || vertices + nv > MAX_VERTICES) { gxh_stats_dropped++; continue; }
+            u32 uv[4];
+            for (int i = 0; i < nv; ++i) uv[i] = *(const u32 *)(pk + fm_xy_at[t][i] + 4);
+            const u32 key = uv[0] >> 16 | (uv[1] & 0xFFFF0000) | 0x80000000u;
+            if (c->key[u] != key) {
+                for (u = 0; u < nuses && c->key[u] != key; ++u) {}
+                if (u == nuses) { u = 0; gxh_stats_texture_fail++; continue; }
+            }
+            if (!c->image[u]) { gxh_stats_texture_fail++; continue; }
+            /* the polygon as recorded (light_under, hue_of: its corners, colours and flags) */
+            Prim q;
+            const int raw = pk[7] & 1;
+            q.n = (u8)nv;
+            q.flags = (u8)(P_TEXTURED | P_SEMI | (gouraud ? P_GOURAUD : 0) | (raw ? P_RAW : 0));
+            int m = 0;
+            for (int i = 0; i < nv; ++i) {
+                q.x[i] = (s16)((int)(w[i] & 0x7FF) - 1024 + c->ofs_x);
+                q.y[i] = (s16)((int)(w[i] >> 11 & 0x7FF) - 1024 + c->ofs_y);
+                const u32 col = *(const u32 *)(pk + (gouraud ? fm_xy_at[t][i] - 4 : 4));
+                q.r[i] = (u8)col; q.g[i] = (u8)(col >> 8); q.b[i] = (u8)(col >> 16);
+                if (i == 0 || gouraud) { /* (the source's brightness: a flat one's first colour) */
+                    const int v = q.r[i] > q.g[i] ? (q.r[i] > q.b[i] ? q.r[i] : q.b[i]) : (q.g[i] > q.b[i] ? q.g[i] : q.b[i]);
+                    if (v > m) m = v;
+                }
+            }
+            if (raw) m = 128;
+            const int abr = *(const u16 *)(pk + fm_xy_at[t][1] + 6) >> 5 & 3;
+            int alpha = m * 31 >> (abr == 3 ? 9 : 7);
+            if (alpha > 31) alpha = 31;
+            if (!alpha) continue; /* (adds nothing; alpha 0 would be wireframe) */
+            const u32 white = light_under(&q, alpha, modulate(c->hue[u], raw ? 0x7FFF : hue_of(&q, 0, (u32)m)));
+            const u32 want_attr = 3u << 6 | (u32)alpha << 16 | id << 24;
+            const int tu = c->tu[u], tv = c->tv[u];
+            u32 *header = wp++, ids = 0;
+            int shift = 0;
+            if (c->palette[u] != palette) { ids |= (u32)CMD_PLTTBASE << shift; shift += 8; *wp++ = palette = c->palette[u]; }
+            if (c->image[u] != image) { ids |= (u32)CMD_TEXIMAGE << shift; shift += 8; *wp++ = image = c->image[u]; }
+            if (want_attr != attr) { ids |= (u32)CMD_POLYATTR << shift; shift += 8; *wp++ = attr = want_attr; }
+            *header = ids | (u32)CMD_BEGIN << shift;
+            *wp++ = quad ? 1 : 0;
+            for (int j = 0; j < nv; ++j) {
+                const int i = quad && j >= 2 ? 5 - j : j; /* (the 3D engine's quads go round: 0 1 3 2) */
+                if (gouraud || j == 0) {
+                    *wp++ = CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTX16 << 16;
+                    *wp++ = raw ? 0x7FFF : whiten_by(hue_of(&q, i, (u32)m), white);
+                } else *wp++ = CMD_TEXCOORD | CMD_VTX16 << 8;
+                *wp++ = (u32)(u16)(((int)(uv[i] & 0xFF) - tu) * 16) | (u32)(u16)(((int)(uv[i] >> 8 & 0xFF) - tv) * 16) << 16;
+                const u32 wv = w[i]; /* (the group's matrix: x - 1024 + ofs_x, y - 1024 + ofs_y, depth0 - 4 z) */
+                *wp++ = (wv & 0x7FF) | (wv << 5 & 0x07FF0000);
+                *wp++ = wv >> 22;
+            }
+            polys++;
+            vertices += nv;
+        }
+    }
+    es->image = image; es->palette = palette; es->attr = attr; es->polys = polys; es->vertices = vertices;
+    return wp;
+}
+
 PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const Buffer *b, const FStore *fst, EmitState *es) {
     FmCtx c;
     c.fst = fst; c.last_use = 0; c.ofs_x = b->ofs_x; c.ofs_y = b->ofs_y;
@@ -4376,6 +4539,15 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
         int depth = (fu->tpage >> 7) & 3;
         if (depth == 3) depth = 2;
         c.key[u] = (u32)fu->tpage << 16 | fu->clut;
+        if (fu->tpage & 0x8000) { /* additive (fm_take_semi): the converted copy, as emit_scene's conv */
+            if (!r || !r->conv) continue;
+            c.tu[u] = (s16)((r->x - (fu->tpage & 15) * 64) * texels_per_halfword(depth));
+            c.tv[u] = (s16)(r->y - ((fu->tpage >> 4) & 1) * 256);
+            c.image[u] = (u32)(r->unit * TEX_UNIT / 8) | r->size_bits | 6u << 26;
+            c.palette[u] = (u32)(ADD_SLOT * 512 + r->cpal * 16) / 16;
+            c.hue[u] = cpal_hue[r->cpal & 63];
+            continue;
+        }
         if (!r || (depth < 2 && fu->palette == 0xFF)) continue;
         c.tu[u] = (s16)((r->x - (fu->tpage & 15) * 64) * texels_per_halfword(depth));
         c.tv[u] = (s16)(r->y - ((fu->tpage >> 4) & 1) * 256);
@@ -4419,6 +4591,11 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
             }
             src += count * mesh_size[t]; pk += count * fm_size[t]; pi += count;
         }
+        if (fg->semi) {
+            EmitState e2 = {wp, es->attr, es->image, es->palette, es->polys, es->vertices};
+            wp = fm_semi_emit(&c, &e2, wp, fg, gi);
+            es->attr = e2.attr; es->image = e2.image; es->palette = e2.palette; es->polys = e2.polys; es->vertices = e2.vertices;
+        }
     }
     if (c.count) return;
     if (wp - chunks[chunk] > CHUNK_WORDS - PRIM_WORDS) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; }
@@ -4428,6 +4605,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
 
 static void use_place(const Place *p) {
     place = p;
+    fm_semi_ok = 0;
     bg_runs_off = 1; bg_runs_calm = 0; bg_runs_latched = 0;
     for (int i = 0; i < 2; ++i) bg_runs_set(&buffers[i], 0, 0);
     { extern const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi; psx_ot_marker_lo = psx_ot_marker_hi = NULL; }
@@ -5115,7 +5293,10 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
         if (polys + adds > BG_RUNS_OFF) { bg_runs_off = 1; bg_runs_latched = 1; }
         else if (!bg_runs_latched && polys + adds < BG_RUNS_ON && ++bg_runs_calm >= BG_RUNS_CALM) bg_runs_off = 0;
         /* the exact layer costs software drawing in proportion to the additive primitives' area (a sixth of the
-         * screen: field 2162's lamp glows took it from 27 to 40 ms on DSi): beyond that, the 3D approximation */
+         * screen: field 2162's lamp glows took it from 27 to 40 ms on DSi): beyond that, the 3D approximation (the
+         * models' additive polygons taken natively count: the next scene's are taken so while it lasts) */
+        if (fst) add_area2 += fst->semi_area2;
+        fm_semi_ok = add_area2 > 2 * 320 * 224 / 6;
         if (adds && add_area2 > 2 * 320 * 224 / 6) {
             for (int k = 0; k < b->count; ++k) if (prim_layer[k] == L_ADD) { prim_layer[k] = L_3D; polys++; vertices += b->prims[k].n; }
             adds = 0;
