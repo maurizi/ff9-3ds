@@ -92,18 +92,35 @@ def q_cost(q, p):
     return sum(q[i * 4 + j] * v[i] * v[j] for i in range(4) for j in range(4))
 
 
-def simplify(g, ratio, max_error=1e9, sharp=40.0):
+def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False):
     """Remove about `ratio` of the group's triangles. Returns (removed triangles, max error, collapses)."""
     nv = len(g.V)
     P = [v[:3] for v in g.V]
+    # the quads as their two triangles (the GPU draws an FT4 as (0, 1, 2) and (1, 2, 3)); pairs that come through
+    # untouched are quads again at the end
+    n_tris = len(g.tris)
+    halves = []
+    for q in g.quads:
+        v4 = struct.unpack_from('<4H', q, 0)
+        uv4 = struct.unpack_from('<4H', q, 8)
+        for order in ((0, 1, 2), (1, 3, 2)):
+            t = bytearray(FT3)
+            struct.pack_into('<3H', t, 0, *[v4[k] for k in order])
+            t[6] = q[0x13]
+            t[8:11] = q[0x10:0x13]
+            struct.pack_into('<3H', t, 0xC, *[uv4[k] for k in order])
+            t[0x12] = q[0x15]
+            g.tris.append(t)
+            halves.append(bytes(t))
+    quads0 = g.quads
+    g.quads = []
+    orig_bytes = [bytes(t) for t in g.tris]  # (each triangle as it was, quads' halves included: changed ones are baked)
     alive = [True] * len(g.tris)
     vt = [set() for _ in range(nv)]
     for i, t in enumerate(g.tris):
         for v in g.tv(t):
             vt[v].add(i)
     in_quad = set()
-    for q in g.quads:
-        in_quad.update(struct.unpack_from('<4H', q, 0))
     Q = [[0.0] * 16 for _ in range(nv)]
     for t in g.tris:
         a, b, c = g.tv(t)
@@ -117,17 +134,20 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0):
         vs = g.tv(t)
         return g.tuv(t)[vs.index(v)]
 
+    def chart(t, v):
+        return g.attr(t), g.uvs[corner_uv(t, v)]
+
     def candidate(u):
         """The best collapse of u: (cost, v, uv index for u's corners) or None."""
         if removed_v[u] or u in in_quad or not vt[u]:
             return None
         fan = [g.tris[i] for i in vt[u]]
-        a0 = g.attr(fan[0])
-        uv0 = g.uvs[corner_uv(fan[0], u)]
+        # the texture charts around u (texture, colour, flags and u's uv): a seam's vertex has several, and moves along
+        # it (each chart's corners at u take that chart's uv at v; the baking redraws the texels that moved)
+        if not bake and len({chart(t, u) for t in fan}) > 1:
+            return None
         edges = {}
         for t in fan:
-            if g.attr(t) != a0 or g.uvs[corner_uv(t, u)] != uv0:
-                return None
             vs = g.tv(t)
             if any(g.bone[x] != g.bone[u] for x in vs):
                 return None
@@ -148,13 +168,19 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0):
         if any(dot(a, b) < cos_sharp for i, a in enumerate(ns) for b in ns[i + 1:]):
             return None
         best = None
+        charts = {chart(t, u) for t in fan}
         for v in edges:
-            # v's uv where u's triangles touch it must be one value (the corners moving onto v take it)
-            uvs_v = {g.uvs[corner_uv(t, v)] for t in fan if v in g.tv(t)}
-            if len(uvs_v) != 1:
-                continue
-            uvi = next(corner_uv(t, v) for t in fan if v in g.tv(t))
+            # in each chart, v's uv where u's triangles touch it: one value (the corners moving onto v take it)
+            uvi = {}
             ok = True
+            for c in charts:
+                vals = {g.uvs[corner_uv(t, v)] for t in fan if chart(t, u) == c and v in g.tv(t)}
+                if len(vals) != 1:
+                    ok = False
+                    break
+                uvi[c] = next(corner_uv(t, v) for t in fan if chart(t, u) == c and v in g.tv(t))
+            if not ok:
+                continue
             for t in fan:
                 vs = g.tv(t)
                 if v in vs:
@@ -209,8 +235,9 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0):
                     touched.add(x)
                 continue
             k = vs.index(u)
+            ui = uvi[chart(t, u)]
             struct.pack_into('<H', t, 2 * k, v)
-            struct.pack_into('<H', t, 0xC + 2 * k, uvi)
+            struct.pack_into('<H', t, 0xC + 2 * k, ui)
             vt[v].add(i)
             touched.update(vs)
         vt[u] = set()
@@ -232,12 +259,20 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0):
                     cy = candidate(y)
                     if cy:
                         heapq.heappush(heap, (cy[0], y, stamp[y]))
+    # the quads whose two triangles are as they were
+    for qi, q in enumerate(quads0):
+        a, b = n_tris + 2 * qi, n_tris + 2 * qi + 1
+        if alive[a] and alive[b] and bytes(g.tris[a]) == halves[2 * qi] and bytes(g.tris[b]) == halves[2 * qi + 1]:
+            alive[a] = alive[b] = False
+            g.quads.append(bytearray(q))
+    g.changed = [bytes(t) != orig_bytes[i] for i, (t, a) in enumerate(zip(g.tris, alive)) if a]
     g.tris = [t for t, a in zip(g.tris, alive) if a]
     # the vertices still used, in bone order (vertexCounts per bone), and the polygons' indices remapped
-    used = set(x for t in g.tris for x in g.tv(t)) | in_quad
+    used = set(x for t in g.tris for x in g.tv(t)) | set(x for q in g.quads for x in struct.unpack_from('<4H', q, 0))
     keep = [k for k in range(nv) if k in used]
     remap = {k: i for i, k in enumerate(keep)}
     g.vcounts = [sum(1 for k in keep if g.bone[k] == b) for b in range(len(g.vcounts))]
+    g.bone_of = [g.bone[k] for k in keep]
     g.V = [g.V[k] for k in keep]
     for t in g.tris:
         struct.pack_into('<3H', t, 0, *[remap[x] for x in g.tv(t)])
@@ -247,7 +282,192 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0):
     return gone, max_err, collapses
 
 
-def rewrite(data, mid, ratio, report, max_error=1e9, sharp=40.0):
+
+def load_tims(data):
+    """The model file's textures (block 0x1B item 1: TIMs 0x04xxxx in key order; texture index t is the t-th): per
+    texture its CLUT (and where it is), where its 8-bit pixels are, and the CLUT entries no pixel uses."""
+    tims = []
+    for k, o in ec.db_items(data):
+        if k >> 16 != bm.KIND_PACK:
+            continue
+        for kk, oo in sorted(ec.db_items(data, o)):
+            if kk >> 16 != 4:
+                continue
+            flag = u32(data, oo + 4)
+            p = oo + 8
+            if (flag & 3) != 1 or not flag & 8:
+                tims.append(None)  # (not 8-bit with a CLUT: never baked)
+                continue
+            n, _, _, cw, ch = struct.unpack_from('<IHHHH', data, p)
+            clut_at = p + 12
+            clut = list(struct.unpack_from(f'<{cw}H', data, clut_at))
+            p += n
+            n, _, _, w, h = struct.unpack_from('<IHHHH', data, p)
+            used = set(data[p + 12:p + 12 + w * 2 * h])
+            tims.append({'clut': clut, 'clut_at': clut_at, 'pix': p + 12, 'w': w * 2, 'h': h, 'near': {},
+                         'free': [i for i in range(1, cw) if i not in used], 'dirty': set()})
+    return tims
+
+
+def rgb(c):
+    return (c & 31, (c >> 5) & 31, (c >> 10) & 31)
+
+
+FAR = 6  # (squared 5-bit RGB distance past which a colour gets a free CLUT entry)
+
+
+def nearest_index(tim, colour):
+    """The CLUT index whose colour is nearest (the same semi-transparency bit; colour 0, transparent, only as itself);
+    a colour far from all of them takes an entry no pixel uses, while there is one."""
+    if colour in tim['near']:
+        return tim['near'][colour]
+    best, best_d = None, None
+    r, g_, b = rgb(colour)
+    for i, c in enumerate(tim['clut']):
+        if (c == 0) != (colour == 0) or (c >> 15) != (colour >> 15):
+            continue
+        cr, cg, cb = rgb(c)
+        d = (cr - r) ** 2 + (cg - g_) ** 2 + (cb - b) ** 2
+        if best_d is None or d < best_d:
+            best, best_d = i, d
+    if colour and (best_d is None or best_d > FAR) and tim['free']:
+        best = tim['free'].pop(0)
+        tim['clut'][best] = colour
+        tim['dirty'].add(best)
+        tim['near'] = {}  # (earlier choices could now be nearer: start over)
+    tim['near'][colour] = best
+    return best
+
+
+def tri_texels(uv):
+    """The texels a triangle with these (u, v) corners covers (centres within half a texel of it)."""
+    (u0, v0), (u1, v1), (u2, v2) = uv
+    area = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0)
+    if not area:
+        return []
+    out = []
+    edges = [((u1, v1), (u2, v2)), ((u2, v2), (u0, v0)), ((u0, v0), (u1, v1))]
+    lens = [math.hypot(b[0] - a[0], b[1] - a[1]) or 1.0 for a, b in edges]
+    for y in range(min(v0, v1, v2), max(v0, v1, v2) + 1):
+        for x in range(min(u0, u1, u2), max(u0, u1, u2) + 1):
+            px, py = x + 0.5, y + 0.5
+            bary = []
+            inside = True
+            for (a, b), l in zip(edges, lens):
+                w = ((b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0])) / area
+                if w * abs(area) / l < -0.5:  # (more than half a texel outside that edge)
+                    inside = False
+                    break
+                bary.append(w)
+            if inside:
+                sb = sum(bary)
+                out.append((x, y, [max(0.0, w) / sb if sb else 1 / 3 for w in bary]))
+    return out
+
+
+def ray_tri(o, d, p0, p1, p2):
+    """Möller-Trumbore: (t, b1, b2) where o + t d meets the triangle, or None."""
+    e1, e2 = sub(p1, p0), sub(p2, p0)
+    pv = cross(d, e2)
+    det = dot(e1, pv)
+    if abs(det) < 1e-9:
+        return None
+    tv = sub(o, p0)
+    b1 = dot(tv, pv) / det
+    if b1 < -1e-6 or b1 > 1 + 1e-6:
+        return None
+    qv = cross(tv, e1)
+    b2 = dot(d, qv) / det
+    if b2 < -1e-6 or b1 + b2 > 1 + 1e-6:
+        return None
+    return dot(e2, qv) / det, b1, b2
+
+
+def bake(out, data, orig, g, tims, reach):
+    """Redraw the texels of the triangles the collapses changed from the original surface: for each, the point of the
+    simplified triangle it shows, along that triangle's normal the outermost original triangle of the same bone within
+    `reach`, the nearest one (the same surface, or a removed feature in front of it), its texel there in the target
+    texture's nearest colour (a colour far from all of them gets a CLUT entry no texel uses). Texels an unchanged triangle also shows stay.
+    Returns the texels redrawn."""
+    P0 = [v[:3] for v in orig.V]
+    # the original surface: every triangle (quads as two), by bone, with what it shows
+    src = []
+    for t in orig.tris:
+        src.append((g.tv(t), g.tuv(t), t[6]))
+    for q in orig.quads:
+        v4, uv4 = struct.unpack_from('<4H', q, 0), struct.unpack_from('<4H', q, 8)
+        for order in ((0, 1, 2), (1, 2, 3)):
+            src.append(([v4[k] for k in order], [uv4[k] for k in order], q[0x13]))
+    by_bone = {}
+    for vs, uvs, tex in src:
+        b = orig.bone[vs[0]]
+        if all(orig.bone[x] == b for x in vs):
+            ps = [P0[x] for x in vs]
+            c = tuple(sum(p[i] for p in ps) / 3 for i in range(3))
+            r = max(math.dist(c, p) for p in ps)
+            by_bone.setdefault(b, []).append((ps, uvs, tex, c, r))
+    # the simplified triangles' positions: g's vertices (remapped) and quads
+    P = [v[:3] for v in g.V]
+    cover = {}
+    for i, t in enumerate(g.tris):
+        if tims[t[6]] is None:
+            continue
+        for x, y, _ in tri_texels([(g.uvs[k] & 0xFF, g.uvs[k] >> 8) for k in g.tuv(t)]):
+            cover.setdefault((t[6], x, y), []).append(i)
+    for q in g.quads:
+        uv4 = struct.unpack_from('<4H', q, 8)
+        for order in ((0, 1, 2), (1, 2, 3)):
+            for x, y, _ in tri_texels([(g.uvs[uv4[k]] & 0xFF, g.uvs[uv4[k]] >> 8) for k in order]):
+                cover.setdefault((q[0x13], x, y), []).append(-1)
+    changed = g.changed
+    done = 0
+    for i, t in enumerate(g.tris):
+        if not changed[i] or tims[t[6]] is None:
+            continue
+        tim = tims[t[6]]
+        vs = g.tv(t)
+        ps = [P[x] for x in vs]
+        n = cross(sub(ps[1], ps[0]), sub(ps[2], ps[0]))
+        nl = math.sqrt(dot(n, n))
+        if not nl:
+            continue
+        n = (n[0] / nl, n[1] / nl, n[2] / nl)
+        c = tuple(sum(p[k] for p in ps) / 3 for k in range(3))
+        r = max(math.dist(c, p) for p in ps) + reach
+        near = [s_ for s_ in by_bone.get(g.bone_of[vs[0]], []) if math.dist(s_[3], c) <= r + s_[4]]
+        for x, y, bary in tri_texels([(g.uvs[k] & 0xFF, g.uvs[k] >> 8) for k in g.tuv(t)]):
+            owners = cover.get((t[6], x, y), [])
+            if any(j < 0 or not changed[j] for j in owners) or owners[:1] != [i]:
+                continue  # (an unchanged triangle shows this texel too; or another changed one bakes it)
+            o = tuple(sum(bary[k] * ps[k][a] for k in range(3)) for a in range(3))
+            hit = None
+            for sps, suv, stex, _, _ in near:
+                rt = ray_tri(o, n, *sps)
+                if rt and -reach <= rt[0] <= reach and (hit is None or abs(rt[0]) < abs(hit[0])):
+                    hit = (rt[0], rt[1], rt[2], suv, stex)
+            if not hit or tims[hit[4]] is None:
+                continue
+            _, b1, b2, suv, stex = hit
+            uvc = [(g.uvs[k] & 0xFF, g.uvs[k] >> 8) for k in suv]
+            su = int((1 - b1 - b2) * uvc[0][0] + b1 * uvc[1][0] + b2 * uvc[2][0] + 0.5)
+            sv = int((1 - b1 - b2) * uvc[0][1] + b1 * uvc[1][1] + b2 * uvc[2][1] + 0.5)
+            st = tims[stex]
+            su = min(max(su, 0), st['w'] - 1); sv = min(max(sv, 0), st['h'] - 1)
+            colour = st['clut'][data[st['pix'] + sv * st['w'] + su]]
+            idx = nearest_index(tim, colour)
+            if idx is None or not (0 <= x < tim['w'] and 0 <= y < tim['h']):
+                continue
+            out[tim['pix'] + y * tim['w'] + x] = idx
+            done += 1
+    for tim in tims:
+        if tim:
+            for i in tim['dirty']:
+                struct.pack_into('<H', out, tim['clut_at'] + 2 * i, tim['clut'][i])
+            tim['dirty'] = set()
+    return done
+
+
+def rewrite(data, mid, ratio, report, max_error=1e9, sharp=40.0, do_bake=False):
     """The model file with its groups simplified in place (same size); per-group stats."""
     out = bytearray(data)
     pack = ec.db_find(data, bm.KIND_PACK << 16)
@@ -256,12 +476,15 @@ def rewrite(data, mid, ratio, report, max_error=1e9, sharp=40.0):
     mesh_o = h + u32(data, h + 0x10)
     total_packet = 0
     stats = []
+    tims = load_tims(data) if do_bake else None
     for i in range(nmesh):
         m = mesh_o + i * 0x28
         g = Group(data, h, m, nbones)
         before = (len(g.quads), len(g.tris), len(g.V))
-        gone, err, n = simplify(g, ratio, max_error, sharp)
-        stats.append((i, before, (len(g.quads), len(g.tris), len(g.V)), err))
+        orig = Group(data, h, m, nbones) if do_bake else None
+        gone, err, n = simplify(g, ratio, max_error, sharp, do_bake)
+        baked = bake(out, data, orig, g, tims, max(2.0, 2 * err)) if do_bake and tims else 0
+        stats.append((i, before, (len(g.quads), len(g.tris), len(g.V)), err, baked))
         # counts and packet size
         struct.pack_into('<H', out, m + 2, len(g.quads))
         struct.pack_into('<H', out, m + 4, len(g.tris))
@@ -283,6 +506,8 @@ def rewrite(data, mid, ratio, report, max_error=1e9, sharp=40.0):
             p += FT3
         assert p <= g.uv_o
         out[p:g.uv_o] = bytes(g.uv_o - p)
+    if total_packet > u16(data, h + 4):
+        raise ValueError(f'model {mid}: packets {total_packet:#x} past the original {u16(data, h + 4):#x}')
     struct.pack_into('<H', out, h + 4, total_packet)
     return bytes(out), stats
 
@@ -304,6 +529,7 @@ def main():
     ap.add_argument('--ratio', type=float, default=0.15, help='share of each group\'s triangles to remove')
     ap.add_argument('--out', help='directory for discN.bin sector patches (under ff9ds/ or build/)')
     ap.add_argument('--report', action='store_true')
+    ap.add_argument('--bake', action='store_true', help='redraw the textures where collapses moved or removed surface')
     ap.add_argument('--sharp', type=float, default=40.0, help='a vertex whose triangles bend more (degrees) stays')
     ap.add_argument('--max-error', type=float, default=1e9, help='largest collapse error (model units) taken')
     a = ap.parse_args()
@@ -318,6 +544,8 @@ def main():
                 a.models = val.strip()
             elif key in ('ratio', 'sharp', 'max_error'):
                 setattr(a, key, float(val))
+            elif key == 'bake':
+                a.bake = val.strip() == '1'
             elif re.fullmatch(r'disc[1-4]', key):
                 expect[key] = val.strip()
     if not a.models:
@@ -336,11 +564,12 @@ def main():
                 continue
             sec, n = files[mid]
             data = img.read(sec * SECTOR, n * SECTOR)
-            new, stats = rewrite(data, mid, a.ratio, a.report, a.max_error, a.sharp)
+            new, stats = rewrite(data, mid, a.ratio, a.report, a.max_error, a.sharp, a.bake)
             if a.report or disc == 1:
-                for i, b, c, err in stats:
-                    print(f'disc {disc} model {mid} group {i}: FT4 {b[0]}, FT3 {b[1]} -> {c[1]}, vertices {b[2]} -> {c[2]}, '
-                          f'max error {err:.1f}')
+                for i, b, c, err, baked in stats:
+                    c0, c1 = 4 * b[0] + 3 * b[1], 4 * c[0] + 3 * c[1]
+                    print(f'disc {disc} model {mid} group {i}: FT4 {b[0]} -> {c[0]}, FT3 {b[1]} -> {c[1]}, vertices {b[2]} -> '
+                          f'{c[2]}, polygon vertices {c0} -> {c1} ({100 * (c0 - c1) / c0:.0f}%), max error {err:.1f}, texels baked {baked}')
             for k in range(n):
                 if new[k * SECTOR:(k + 1) * SECTOR] != data[k * SECTOR:(k + 1) * SECTOR]:
                     patches.append((sec + k, new[k * SECTOR:(k + 1) * SECTOR]))
@@ -350,7 +579,10 @@ def main():
             # "FF9P", run count, {IMG sector, sectors, file offset} per run of consecutive sectors, then the sectors
             runs = []
             for s_, d_ in patches:
-                if runs and runs[-1][0] + len(runs[-1][1]) == s_:
+                end = runs[-1][0] + len(runs[-1][1]) if runs else None
+                if runs and s_ - end <= 8:  # (a short gap: the image's own sectors in between, one run fewer)
+                    for k in range(end, s_):
+                        runs[-1][1].append(img.read(k * SECTOR, SECTOR))
                     runs[-1][1].append(d_)
                 else:
                     runs.append((s_, [d_]))

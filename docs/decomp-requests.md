@@ -222,6 +222,20 @@ them like the overlays (one binary per module, all linked at 0x801E7700), even a
 to behave the same. The port would then compile them like the overlays and load the native code with the module.
 If (b) is out of scope, the port can instead translate MIPS to ARM when a module loads, and (a) is enough.
 
+### R27. Battle model rest pose: a model's bone transforms from its motions (2026-10-29)
+After R26 (thanks: docs/battle-models.md, tools/battle_models.py, tools/battle_budget.py), the port draws battle
+models' triangles as strips and simplifies the heaviest enemies at build time (tools/simplify_battle_models.py,
+config/model_patches.txt; only vertices whose triangles all sit on one bone collapse, since vertex positions are
+bone-local). Grand Dragon (model 355) and Red Dragon (610) barely simplify (2-8%): most of their vertices lie in
+triangles that span bones. Asked, to judge those collapses in one frame:
+- **The motion key format** (items 0x03xxxx in the model file, one key per bone per frame, read by
+  `btl_calcBoneMatrices`, asm; `src_equiv/ovl_0b/bones.c`): what each key holds (rotation angles and their order and
+  units, any translation or scale), and how a bone's matrix follows from its parent's, `BtlBoneDef.length` and the
+  key (the order of the rotations and the z offset), so a script can pose the model.
+- Which motion and frame is the enemy's idle stance (`motionIds[0]`, frame 0?), to pose it as it is mostly seen.
+- Python in tools/ (as battle_models.py) that returns each vertex's model-space position for a given motion and
+  frame would be ideal.
+
 ### R26. Battle model files: their format and which encounters use which (2026-10-29)
 DS battles past the 3D engine's 6144 vertices now draw in two passes (exact, but 15-21 ms per VBlank slower). The
 user chose to simplify the few models that tip a battle over, at build time, from the disc's files (outputs only in

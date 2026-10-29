@@ -1418,3 +1418,12 @@ Bandersnatch 20,766 -> 817, Gigan Toad 6,826 -> 514, Zuu 3,366 -> 1, Axe Beak x2
 Dragon barely simplify that way (2-4%: 18,249 -> 13,443, 6,806 -> 6,186). Known: a notch at the Ochu's front petal and
 some texture shift where corners take a neighbour's uv. Next (the user's suggestion): bake removed and moved surface
 into the textures behind, which also lets features like teeth go.
+Then (the user's suggestion) texture baking: a seam's vertex may collapse along the seam (each texture chart around it
+takes that chart's uv at the target), and the texels of every triangle a collapse changed are redrawn from the
+original surface (from the simplified triangle's point along its normal, the nearest original triangle of the same
+bone; that texel's colour, the target CLUT's nearest, or a CLUT entry no pixel uses when none is near). Quads are
+simplified as their two triangles and are quads again where both come through unchanged. Patch runs within 8 sectors
+of each other are merged (the image's own sectors between) to stay within cd.c's 32. At 15% with sharp features
+kept, Ochu's close-ups are near the original (a notch and a faint mark on its front petal). Dropped polygons over a
+run: Ochu 638, Bandersnatch 189, Gigan Toad 586, Zuu 0, Axe Beak 236; Grand Dragon 8,215 and 2,619, Red Dragon 6,136:
+most of their vertices are in triangles across bones, which needs their pose (R27).
