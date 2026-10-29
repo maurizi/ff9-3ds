@@ -380,7 +380,8 @@ def tri_texels(uv):
                 bary.append(w)
             if inside:
                 sb = sum(bary)
-                out.append((x, y, [max(0.0, w) / sb if sb else 1 / 3 for w in bary]))
+                out.append((x, y, [w / sb if sb else 1 / 3 for w in bary]))  # (unclamped: an edge texel's centre
+                                                                                # lies just outside)
     return out
 
 
@@ -460,7 +461,10 @@ def bake(out, data, orig, g, tims, reach):
                 continue  # (an unchanged triangle shows this texel too; or another changed one bakes it)
             o = tuple(sum(bary[k] * ps[k][a] for k in range(3)) for a in range(3))
             hit = None
+            edge = min(bary) < 0  # (its centre outside: only a triangle of the same texture may show it)
             for sps, suv, stex, _, _ in near:
+                if edge and stex != t[6]:
+                    continue
                 sn = cross(sub(sps[1], sps[0]), sub(sps[2], sps[0]))
                 if dot(sn, n) <= 0:
                     continue  # (a surface facing the other way: an inside, never what the outside showed)
@@ -471,8 +475,9 @@ def bake(out, data, orig, g, tims, reach):
                 continue
             _, b1, b2, suv, stex = hit
             uvc = [(g.uvs[k] & 0xFF, g.uvs[k] >> 8) for k in suv]
-            su = int((1 - b1 - b2) * uvc[0][0] + b1 * uvc[1][0] + b2 * uvc[2][0] + 0.5)
-            sv = int((1 - b1 - b2) * uvc[0][1] + b1 * uvc[1][1] + b2 * uvc[2][1] + 0.5)
+            # (texel centres were sampled at x + 0.5: the texel a point lies in is the floor)
+            su = math.floor((1 - b1 - b2) * uvc[0][0] + b1 * uvc[1][0] + b2 * uvc[2][0])
+            sv = math.floor((1 - b1 - b2) * uvc[0][1] + b1 * uvc[1][1] + b2 * uvc[2][1])
             st = tims[stex]
             su = min(max(su, 0), st['w'] - 1); sv = min(max(sv, 0), st['h'] - 1)
             colour = st['clut'][data[st['pix'] + sv * st['w'] + su]]

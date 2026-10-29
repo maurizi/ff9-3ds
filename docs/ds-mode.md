@@ -1433,3 +1433,8 @@ wrong somewhere; the code stays behind the option. A collapse may no longer chan
 more than 1.5x, and a group whose split quads don't fit its lists is redone with its quads whole. Dropped polygons
 over a run, no baking: Ochu 2,037, Bandersnatch 153, Gigan Toad 529, Zuu 0, Axe Beak 258; Grand Dragon 9,497 and
 3,348, Red Dragon 6,231 (R27).
+The baking bug: texel centres were sampled at x + 0.5 and the source texel taken as the rounded coordinate (one
+texel off everywhere: darker edges, the toad's nostrils spread into a block). A self-test that re-bakes an untouched
+model as if every triangle had changed now reproduces 98.5% of its texels' colours (the rest along edges; it used to
+change most). Baking is back on: the toad matches the original, the Ochu's petals keep their centre stripe; the
+notch in its front petal (geometry) remains. Drops: Ochu 656, Bandersnatch 215, Gigan Toad 605, Zuu 0, Axe Beak 258.
