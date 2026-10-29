@@ -1345,3 +1345,11 @@ translucent_id and light_under one by one).
 d4_f2404 (30 ms) loses 10 ms without its translucent model polygons too, but they are mode 0 (50%): with them the
 scene passes the 3D engine's 6144 vertices, two passes don't fit its textures, and it is drawn in software. Taking
 them natively wouldn't change the count: it needs the two-pass texture fit (banks C-D).
+
+d4_f2904 (36 ms): its composite holds every scene but takes 82 of its 454 background sprites; the rest lie in front
+of its far moving mist (semi-transparent sprites) and must be drawn over it, so they stay in 3D. Tried, not taken:
+letting semi-transparent sprites not keep the background out of the composite (30.8 ms, but the mist then covered
+the foreground bridge: blurred difference 12.9). Taking those sprites out of the 3D scene would need a 2D layer in
+front of the 3D one (no VRAM bank left for it).
+Also measured, not taken: LoadImage skipping unchanged rows (d3_f2402's animated pages do change every frame) and
+dirty-row uploads of regions (its writes cover whole regions).
