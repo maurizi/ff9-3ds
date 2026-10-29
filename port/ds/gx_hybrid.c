@@ -2621,6 +2621,12 @@ static const u8 *model_poly(const MeshInst *mi, int pi, int *type) {
 static int collect_native(Buffer *b) {
     unsigned at = (b->pool_used + 3) & ~3u;
     native_refs = (NativeRef *)(b->pool + at);
+    /* (the lists of the meshes as they were last collected: a battle's two passes and its labelling collect them
+     * three times a scene) */
+    static const Buffer *last_b;
+    static unsigned last_gen, last_used;
+    static int last_meshes, last_n;
+    if (b == last_b && b->mesh_gen == last_gen && b->pool_used == last_used && b->meshes == last_meshes) return last_n;
     int cap = at < POOL_BYTES ? (int)((POOL_BYTES - at) / sizeof(NativeRef)) : 0, n = 0;
     if (cap > NO_REF) cap = NO_REF;
     memset(native_heads, 0xFF, 0x1010 * sizeof *native_heads);
@@ -2638,6 +2644,7 @@ static int collect_native(Buffer *b) {
             native_bits[e >> 5] |= 1u << (e & 31);
         }
     }
+    last_b = b; last_gen = b->mesh_gen; last_used = b->pool_used; last_meshes = b->meshes; last_n = n;
     return n;
 }
 
