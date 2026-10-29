@@ -680,3 +680,8 @@ at a quarter of the voice's rate, -11.8 dB at a half; the three taps give -3.9 a
 the channels' imaging above the voices' rates). d3_f2305: tempo 1.005, envelope correlation 0.93, 0.4-6 kHz within
 ~2 dB, but its bass is far louder on the DS: +8 to +14 dB at 60-150 Hz (to investigate: a voice's volume on its
 channel, or the reverb approximation).
+d3_f2305's bass (+12 to +18 dB at 60-150 Hz in absolute level, against +3 to +6 dB through the mid-range) is not
+the echo approximation (unchanged with it off) nor phase inversion. Negative voice volumes (FF9's pseudo-surround
+copies: voice 22 there, L -3356 R -38) are now played inverted (the samples negated after the low-pass, the louder
+side's sign: one channel plays both sides), which didn't change the bass. Still to find, per voice (soloed on both
+sides): pitch modulation, the envelope's per-frame steps, or a voice the DS keeps after the PS1 released it.

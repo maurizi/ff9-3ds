@@ -67,6 +67,7 @@ typedef struct {
     int flush_from;        /* first ring sample not yet flushed from the data cache */
     int lost;              /* sounding but without a channel (quieter than 16 others) */
     s16 h1, h2;            /* its last two samples (gauss_like's) */
+    int invert;            /* its louder side's volume is negative (the PS1 inverts the wave: written negated) */
 } Voice;
 
 static Voice voices[VOICES];
@@ -115,6 +116,7 @@ static void block(unsigned v, const int16_t *samples, void *user) {
     for (int i = 0; i < 28; ++i) {
         const int x = samples[i];
         int y = (46 * (h2 + x) + 164 * h1) >> 8;
+        if (p->invert) y = -y;
         out[i] = (int16_t)(y > 32767 ? 32767 : y < -32768 ? -32768 : y);
         h2 = h1; h1 = x;
     }
@@ -255,6 +257,9 @@ void port_hw_sound_frame(void) {
         }
         ++granted;
         int l = out->left < 0 ? -out->left : out->left, r = out->right < 0 ? -out->right : out->right;
+        /* a negative volume inverts the voice on that side (pseudo-surround copies): one channel plays both sides,
+         * so its samples follow the louder side's sign (from the next samples written) */
+        p->invert = (l >= r ? out->left : out->right) < 0;
         int vol = (amps[v] - 1) * 127 / 0x4000;
         if (vol > 127) vol = 127;
         int pan = l + r ? 64 + 63 * (r - l) / (l + r) : 64;
