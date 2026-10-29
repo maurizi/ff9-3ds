@@ -4852,10 +4852,10 @@ void gxh_enable(int on) {
 }
 
 /* Field: the background layer (bank A, 16-bit with bit 15 set) from b's PS1 VRAM, scaled like the software display */
-static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1);
-static void scale_back(Buffer *b, int display_h) { add_rows_clear = 0; scale_back_rows(b, display_h, 0, 1 << 30); }
-/* output rows [oy0, oy1) only (in 32-row bands) */
-static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1) {
+static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1, int ox0, int ox1);
+static void scale_back(Buffer *b, int display_h) { add_rows_clear = 0; scale_back_rows(b, display_h, 0, 1 << 30, 0, 256); }
+/* output rows [oy0, oy1) only (in 32-row bands), and of them columns [ox0, ox1) (multiples of 4; the others black) */
+static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1, int ox0, int ox1) {
     if (!bgc_texmode) bgc.valid = 0; /* (bank A's bitmap is now the software frame's; bank C's texture stays) */
     int h = display_h > 0 ? display_h : 224;
     int out_h = h * 4 / 5, top = (192 - out_h) / 2;
@@ -4863,10 +4863,15 @@ static void scale_back_rows(Buffer *b, int display_h, int oy0, int oy1) {
     if (oy1 > out_h) oy1 = out_h;
     for (int oy = oy0 & ~(BLOCK - 1); oy < oy1; oy += BLOCK) {
         int rows = out_h - oy < BLOCK ? out_h - oy : BLOCK, sy = b->y + oy * 5 / 4;
-        scale_fn(band, b->x, sy, 320, rows * 5 / 4);
+        scale_fn(band + ox0, b->x + ox0 * 5 / 4, sy, (ox1 - ox0) * 5 / 4, rows * 5 / 4);
         /* opaque (bit 15) in cached RAM, then DMA: the ARM9's own stores to VRAM are slow */
-        u32 *words = (u32 *)band;
-        for (int k = 0; k < rows * 128; ++k) words[k] |= 0x80008000u;
+        for (int r = 0; r < rows; ++r) {
+            u32 *words = (u32 *)(band + r * 256);
+            int k = 0;
+            for (; k < ox0 / 2; ++k) words[k] = 0x80008000u;
+            for (; k < ox1 / 2; ++k) words[k] |= 0x80008000u;
+            for (; k < 128; ++k) words[k] = 0x80008000u;
+        }
         DC_FlushRange(band, rows * 512);
         dmaCopyWords(3, band, bitmap + (top + oy) * 256, rows * 512);
     }
@@ -5489,15 +5494,25 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
             }
             if (!gxh_stats_unplaced && adds) {
                 /* only the rows the additive primitives cover (and those the last scene's covered, cleared) */
-                int y0 = b->h, y1 = 0;
+                int y0 = b->h, y1 = 0, x0 = b->w, x1 = 0;
                 for (int k = 0; k < b->count; ++k) {
                     if (prim_layer[k] != L_ADD) continue;
                     const Prim *p = &b->prims[k];
                     for (int i = 0; i < p->n; ++i) {
                         if (p->y[i] < y0) y0 = p->y[i];
                         if (p->y[i] > y1) y1 = p->y[i];
+                        if (p->x[i] < x0) x0 = p->x[i];
+                        if (p->x[i] > x1) x1 = p->x[i];
                     }
                 }
+                /* and only the columns they cover (the others black: they add nothing) */
+                if (x0 < 0) x0 = 0;
+                if (x1 >= 320) x1 = 319;
+                if (x0 > x1) x0 = x1 = 0;
+                int ox0 = x0 * 4 / 5 & ~7 /* (even buffer columns: fill_buffer's pairs) */, ox1 = ((x1 + 1) * 4 / 5 + 4) & ~3;
+                if (ox1 > 256) ox1 = 256;
+                int rx0 = ox0 * 5 / 4, rx1 = (ox1 * 5 / 4 + 3) & ~1; /* the buffer columns those sample */
+                if (rx1 > b->w) rx1 = b->w;
                 if (y0 < 0) y0 = 0;
                 if (y1 >= b->h) y1 = b->h - 1;
                 if (y0 > y1) y0 = y1 = 0;
@@ -5516,11 +5531,12 @@ PORT_OVERLAY_CODE(0a) static void field_frame(Buffer *b, int display_h) {
                 if (ry1 > b->h) ry1 = b->h;
                 Buffer band = *b;
                 band.y = b->y + ry0; band.h = ry1 - ry0;
+                band.x = b->x + rx0; band.w = rx1 - rx0;
                 fill_buffer(&band, 0);
                 psx_softgpu_row_skip = b->y; /* (the rows scale_back_rows doesn't sample: not drawn) */
                 replay(b, 0, b->count, L_ADD);
                 psx_softgpu_row_skip = -1;
-                scale_back_rows(b, display_h, oy0, oy1);
+                scale_back_rows(b, display_h, oy0, oy1, ox0, ox1);
                 fill_buffer(&band, b->clear); /* as it was: the key, or the game's clear (the 2D layer's "nothing") */
                 back_mode(1);
                 gxh_stats_soft |= 512;
