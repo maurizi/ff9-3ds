@@ -3614,6 +3614,14 @@ static void hybrid_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
 
 /* Line a-b clipped to the drawing area (Liang-Barsky; colours interpolated): 0 when it lies outside */
 static int clip_line(const Gp0Vtx *a, const Gp0Vtx *b, Gp0Vtx *ca, Gp0Vtx *cb) {
+    if (a->x >= gp0_state.area_x0 && a->x <= gp0_state.area_x1 && a->y >= gp0_state.area_y0 && a->y <= gp0_state.area_y1 &&
+        b->x >= gp0_state.area_x0 && b->x <= gp0_state.area_x1 && b->y >= gp0_state.area_y0 && b->y <= gp0_state.area_y1) {
+        *ca = *a; *cb = *a; /* (inside: the end points as they are) */
+        cb->x = b->x; cb->y = b->y; cb->r = b->r; cb->g = b->g; cb->b = b->b;
+        return 1;
+    }
+    /* (coordinates within +-2048 (11 bits and a drawing offset), colours 8 bits: the products fit 32 bits; Thumb's
+     * 64-bit products and divisions are library calls) */
     int dx = b->x - a->x, dy = b->y - a->y;
     int p[4] = {-dx, dx, -dy, dy};
     int q[4] = {a->x - gp0_state.area_x0, gp0_state.area_x1 - a->x, a->y - gp0_state.area_y0, gp0_state.area_y1 - a->y};
@@ -3621,12 +3629,12 @@ static int clip_line(const Gp0Vtx *a, const Gp0Vtx *b, Gp0Vtx *ca, Gp0Vtx *cb) {
     for (int i = 0; i < 4; ++i) {
         if (!p[i]) { if (q[i] < 0) return 0; continue; }
         int n = q[i], d = p[i];
-        if (d < 0) { n = -n; d = -d; if ((long long)n * t1d > (long long)t1n * d) return 0; /* entering */
-                     if ((long long)n * t0d > (long long)t0n * d) t0n = n, t0d = d; }
-        else { if ((long long)n * t0d < (long long)t0n * d) return 0; /* leaving */
-               if ((long long)n * t1d < (long long)t1n * d) t1n = n, t1d = d; }
+        if (d < 0) { n = -n; d = -d; if (n * t1d > t1n * d) return 0; /* entering */
+                     if (n * t0d > t0n * d) t0n = n, t0d = d; }
+        else { if (n * t0d < t0n * d) return 0; /* leaving */
+               if (n * t1d < t1n * d) t1n = n, t1d = d; }
     }
-#define AT(v, n, d, f) (v.f + (int)((long long)(b->f - a->f) * (n) / (d)))
+#define AT(v, n, d, f) (v.f + (b->f - a->f) * (n) / (d))
     *ca = *a; *cb = *a;
     ca->x = AT((*a), t0n, t0d, x); ca->y = AT((*a), t0n, t0d, y);
     ca->r = AT((*a), t0n, t0d, r); ca->g = AT((*a), t0n, t0d, g); ca->b = AT((*a), t0n, t0d, b);
