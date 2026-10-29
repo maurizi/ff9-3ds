@@ -72,7 +72,13 @@ static const u8 kind_len[8] = {9, 7, 12, 9, 8, 6, 5, 4};
 static const u8 kind_xy[8][4] = {{0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18}, {0x08, 0x14, 0x20, 0x2C},
                                  {0x08, 0x14, 0x20}, {0x08, 0x10, 0x18, 0x20}, {0x08, 0x10, 0x18},
                                  {0x08, 0x0C, 0x10, 0x14}, {0x08, 0x0C, 0x10}};
-PORT_OVERLAY_CODE(0a) static void link_translucent(u8 *grp, u8 *pkt, u32 *ot, int clip_y, int mirror) {
+/* (DS mode: in ITCM as ARM, every scene's translucent model polygons through it) */
+#if defined(__arm__) && defined(PORT_DS_MODE) && defined(PORT_GX_HYBRID)
+__attribute__((section(".itcm"), long_call, target("arm"), noinline))
+#else
+PORT_OVERLAY_CODE(0a)
+#endif
+static void link_translucent(u8 *grp, u8 *pkt, u32 *ot, int clip_y, int mirror) {
     u8 *poly = *(u8 **)(grp + 0x1C);
     for (int k = 0; k < 8; k++) {
         const int quad = !(k & 1);
@@ -149,7 +155,7 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     n.clip_y = 0;
     n.mirror = 0;
     int taken = port_native_field_mesh(&n);
-    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot, 0, 0);
+    if (taken >= 2) link_translucent(grp, pkt, (u32 *)n.ot, 0, 0);
     if (taken) return;
     o0a_fldmdl_drawMesh_link(model, group);
 }
@@ -177,7 +183,7 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshClipY(ModelObj *model, u8 group) {
     n.clip_y = 1;
     n.mirror = 0;
     int taken = port_native_field_mesh(&n);
-    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot, 1, 0);
+    if (taken >= 2) link_translucent(grp, pkt, (u32 *)n.ot, 1, 0);
     if (taken) return;
     o0a_fldmdl_drawMeshClipY_game(model, group);
 }
@@ -204,7 +210,7 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshMirrored(ModelObj *model, u8 group
     n.clip_y = 0;
     n.mirror = 1;
     int taken = port_native_field_mesh(&n);
-    if (taken == 2) link_translucent(grp, pkt, (u32 *)n.ot, 0, 1);
+    if (taken >= 2) link_translucent(grp, pkt, (u32 *)n.ot, 0, 1);
     if (taken) return;
     o0a_fldmdl_drawMeshMirrored_game(model, group);
 }

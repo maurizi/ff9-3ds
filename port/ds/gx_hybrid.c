@@ -4171,7 +4171,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(
     const int lu0 = k.lu0, lv0 = k.lv0, lu1 = k.lu1, lv1 = k.lv1;
     if (pi & 31) front[pi >> 5] = fw;
     if (gathering) fuse_bounds(&st->uses[last_use], lu0, lv0, lu1, lv1);
-    if (!opaque) return 0;
+    if (!opaque) return 3; /* (all translucent: its caller links them, link_translucent as for a taken group's) */
     FGroup *fg = &st->groups[st->ngroups++];
     fg->group = g; fg->packets = n->packets; fg->vert0 = (u16)st->nverts; fg->poly0 = (u16)st->npolys;
     fg->src = *(const u8 *const *)(g + 0x1C); fg->polys = (u16)np; fg->verts = (u16)nv;
