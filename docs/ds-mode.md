@@ -1427,3 +1427,9 @@ of each other are merged (the image's own sectors between) to stay within cd.c's
 kept, Ochu's close-ups are near the original (a notch and a faint mark on its front petal). Dropped polygons over a
 run: Ochu 638, Bandersnatch 189, Gigan Toad 586, Zuu 0, Axe Beak 236; Grand Dragon 8,215 and 2,619, Red Dragon 6,136:
 most of their vertices are in triangles across bones, which needs their pose (R27).
+Baking is off in the manifest for now (bake 0): on the Gigan Toad it darkened the back and spread its nostrils' dark
+texels into a block (no-bake renders match the original closely), so its colour mapping or source choice is still
+wrong somewhere; the code stays behind the option. A collapse may no longer change a triangle's texture stretch by
+more than 1.5x, and a group whose split quads don't fit its lists is redone with its quads whole. Dropped polygons
+over a run, no baking: Ochu 2,037, Bandersnatch 153, Gigan Toad 529, Zuu 0, Axe Beak 258; Grand Dragon 9,497 and
+3,348, Red Dragon 6,231 (R27).

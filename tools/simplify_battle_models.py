@@ -92,7 +92,7 @@ def q_cost(q, p):
     return sum(q[i * 4 + j] * v[i] * v[j] for i in range(4) for j in range(4))
 
 
-def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False):
+def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False, split_quads=True):
     """Remove about `ratio` of the group's triangles. Returns (removed triangles, max error, collapses)."""
     nv = len(g.V)
     P = [v[:3] for v in g.V]
@@ -100,7 +100,7 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False):
     # untouched are quads again at the end
     n_tris = len(g.tris)
     halves = []
-    for q in g.quads:
+    for q in (g.quads if split_quads else []):
         v4 = struct.unpack_from('<4H', q, 0)
         uv4 = struct.unpack_from('<4H', q, 8)
         for order in ((0, 1, 2), (1, 3, 2)):
@@ -112,7 +112,8 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False):
             t[0x12] = q[0x15]
             g.tris.append(t)
             halves.append(bytes(t))
-    quads0 = g.quads
+    quads0 = g.quads if split_quads else []
+    kept_quads = [] if split_quads else g.quads
     g.quads = []
     orig_bytes = [bytes(t) for t in g.tris]  # (each triangle as it was, quads' halves included: changed ones are baked)
     alive = [True] * len(g.tris)
@@ -120,7 +121,7 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False):
     for i, t in enumerate(g.tris):
         for v in g.tv(t):
             vt[v].add(i)
-    in_quad = set()
+    in_quad = set(x for q in kept_quads for x in struct.unpack_from('<4H', q, 0))  # (quads kept whole: theirs stay)
     Q = [[0.0] * 16 for _ in range(nv)]
     for t in g.tris:
         a, b, c = g.tv(t)
@@ -191,6 +192,23 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False):
                 if dot(old, new) <= 0.2 * math.sqrt(dot(old, old) * dot(new, new)):
                     ok = False
                     break
+                # its texture's stretch (surface per texel) kept within 1.5x: a small texture area spread over more
+                # surface (a nostril's dark texels over the back) is beyond what baking can redraw
+                uvs_t = [g.uvs[k] for k in g.tuv(t)]
+                nuv = [g.uvs[uvi[chart(t, u)]] if x == u else uvs_t[j] for j, x in enumerate(vs)]
+                def uv_area(w):
+                    return abs(((w[1] & 0xFF) - (w[0] & 0xFF)) * ((w[2] >> 8) - (w[0] >> 8)) -
+                               ((w[2] & 0xFF) - (w[0] & 0xFF)) * ((w[1] >> 8) - (w[0] >> 8)))
+                a_old, a_new = math.sqrt(dot(old, old)), math.sqrt(dot(new, new))
+                t_old, t_new = uv_area(uvs_t), uv_area(nuv)
+                if t_old and t_new:
+                    ratio = (a_new / t_new) / (a_old / t_old)
+                    if ratio > 1.5 or ratio < 1 / 1.5:
+                        ok = False
+                        break
+                elif t_old != t_new:
+                    ok = False
+                    break
             if not ok:
                 continue
             cost = q_cost(q_add(Q[u], Q[v]), P[v])
@@ -259,6 +277,7 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False):
                     cy = candidate(y)
                     if cy:
                         heapq.heappush(heap, (cy[0], y, stamp[y]))
+    g.quads = [bytearray(q) for q in kept_quads]
     # the quads whose two triangles are as they were
     for qi, q in enumerate(quads0):
         a, b = n_tris + 2 * qi, n_tris + 2 * qi + 1
@@ -442,6 +461,9 @@ def bake(out, data, orig, g, tims, reach):
             o = tuple(sum(bary[k] * ps[k][a] for k in range(3)) for a in range(3))
             hit = None
             for sps, suv, stex, _, _ in near:
+                sn = cross(sub(sps[1], sps[0]), sub(sps[2], sps[0]))
+                if dot(sn, n) <= 0:
+                    continue  # (a surface facing the other way: an inside, never what the outside showed)
                 rt = ray_tri(o, n, *sps)
                 if rt and -reach <= rt[0] <= reach and (hit is None or abs(rt[0]) < abs(hit[0])):
                     hit = (rt[0], rt[1], rt[2], suv, stex)
@@ -483,6 +505,10 @@ def rewrite(data, mid, ratio, report, max_error=1e9, sharp=40.0, do_bake=False):
         before = (len(g.quads), len(g.tris), len(g.V))
         orig = Group(data, h, m, nbones) if do_bake else None
         gone, err, n = simplify(g, ratio, max_error, sharp, do_bake)
+        if g.v_o + 8 * len(g.V) + FT4 * len(g.quads) + FT3 * len(g.tris) > g.uv_o:
+            # (quads that stayed two triangles take more room than the lists had: this group with its quads whole)
+            g = Group(data, h, m, nbones)
+            gone, err, n = simplify(g, ratio, max_error, sharp, do_bake, split_quads=False)
         baked = bake(out, data, orig, g, tims, max(2.0, 2 * err)) if do_bake and tims else 0
         stats.append((i, before, (len(g.quads), len(g.tris), len(g.V)), err, baked))
         # counts and packet size
