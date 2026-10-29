@@ -1325,3 +1325,9 @@ lost its 16-slot scan: the recent polygons indexed by vertex hash, the same IDs 
 What stays in ITCM and is worth weighing next: emit_scene (8.5 KB Thumb, ~10% of a field) doesn't fit;
 ds_scale_display_text_pair (2 KB, the top-screen text) is 0.4-2% (battles), interpolate and light (2.9 KB, the GTE's
 lighting) under 0.4%.
+Tried, not taken: port_native_field_mesh (9.8% of d3_f1818, 4 KB of ARM) in ITCM, with gte_cmd out (d4_f2110 +0.5)
+or with ds_scale_display_text_pair, mat_mul and hue_of out instead: -0.3 on d3_f1818, +0.35 on d4_f2110. Its time
+is the packets' and vertices' reads from main RAM, which ITCM doesn't change; translucent model groups (no opaque
+polygon) now go through link_translucent in ITCM instead (d3_f1818 -0.5, d4_f2904 -0.6).
+Profiling note: DS-mode window builds (PCLO) have 1280 buckets, not 2560: PCSHIFT=8 from 0x02004000 covers the main
+text (320 KB), PCSHIFT=8 from 0x02258000 the overlay slot; samples past the window count as "outside".
