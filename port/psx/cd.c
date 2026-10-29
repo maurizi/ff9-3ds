@@ -176,6 +176,7 @@ static int open_disc(void) {
     return 1;
 }
 
+static void patch_apply(unsigned int lba, u8 *raw);
 static void read_raw(unsigned int lba, u8 *buf) {
     unsigned int t = port_profile_begin();
     open_disc();
@@ -189,6 +190,7 @@ static void read_raw(unsigned int lba, u8 *buf) {
         port_fatal("disc %d: can't read sector %u", disc_no, lba);
     }
     next_lba = lba + 1;
+    patch_apply(lba, buf);
     port_profile_detail_end(PORT_PROFILE_CD_READ, t);
 }
 
@@ -198,6 +200,52 @@ static void read_user(unsigned int lba, u8 *buf2048) {
     static u8 raw[RAW_SECTOR] __attribute__((aligned(32)));
     read_raw(lba, raw);
     __builtin_memcpy(buf2048, raw + USER_OFFSET, 2048);
+}
+
+/* ---- sector patches ------------------------------------------------------------------------------------
+ * Sectors of FF9.IMG served from <data>/patches/disc<N>.bin instead of the image (tools/simplify_battle_models.py:
+ * the heaviest battle enemies' models, simplified at build time): "FF9P", a run count, then {IMG sector, sectors,
+ * file offset} per run; each sector's 2048 bytes of user data. No file: none. */
+#define PATCH_RUNS 32
+static struct { unsigned int lba, count, off; } runs[PATCH_RUNS];
+static int n_runs = -1, runs_disc;
+static FILE *patch_file;
+
+static int iso_lookup(const char *name, unsigned int *lba, unsigned int *size);
+static unsigned int le32(const u8 *p);
+static void patch_load(void) {
+    n_runs = 0; /* (iso_lookup below reads sectors: none patched meanwhile) */
+    runs_disc = disc_no;
+    if (patch_file) { fclose(patch_file); patch_file = NULL; }
+    char path[512];
+    snprintf(path, sizeof path, "%s/patches/disc%d.bin", plat_data_dir(), disc_no);
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    u8 h[12];
+    unsigned int base, size;
+    if (fread(h, 1, 8, f) != 8 || __builtin_memcmp(h, "FF9P", 4) != 0 || le32(h + 4) > PATCH_RUNS ||
+        !iso_lookup("\\FF9.IMG;1", &base, &size)) {
+        fclose(f);
+        return;
+    }
+    const int n = (int)le32(h + 4);
+    for (int i = 0; i < n; i++) {
+        if (fread(h, 1, 12, f) != 12) { fclose(f); return; }
+        runs[i].lba = base + le32(h); runs[i].count = le32(h + 4); runs[i].off = le32(h + 8);
+    }
+    patch_file = f;
+    n_runs = n;
+}
+
+static void patch_apply(unsigned int lba, u8 *raw) {
+    if (n_runs < 0 || runs_disc != disc_no) patch_load();
+    for (int i = 0; i < n_runs; i++)
+        if (lba - runs[i].lba < runs[i].count) {
+            if (fseek(patch_file, (long)(runs[i].off + (lba - runs[i].lba) * 2048), SEEK_SET) != 0 ||
+                fread(raw + USER_OFFSET, 1, 2048, patch_file) != 2048)
+                port_fatal("disc %d: can't read patched sector %u", disc_no, lba);
+            return;
+        }
 }
 
 /* ---- positions ------------------------------------------------------------------------------------------ */

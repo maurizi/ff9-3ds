@@ -1,0 +1,13 @@
+# Battle enemy models simplified at build time (tools/simplify_battle_models.py; the user's choice of 2026-10-29:
+# simplify the few enemies that still put battles past the DS 3D engine's 6144 vertices, never the party). The patches
+# are game data (never committed): `make model-patches` regenerates build/patches/discN.bin from the disc images and
+# checks each against the SHA-256 recorded here; the CD layer (port/psx/cd.c) serves them from ff9ds/patches/.
+# Models (FF9.IMG dir 7 file ids): Ochu 95, Bandersnatch 145, Grand Dragon 355, Gigan Toad 137/663, Red Dragon 610,
+# Zuu 87, Axe Beak 97, Worm Hydra 340, Zaghnol 163.
+models 95,145,355,137,663,610,87,97,340,163
+ratio 0.15
+sharp 60
+disc1 40231827939d636bc46680f9ba2ca4348e9d473120b020273774154e9ea47f26
+disc2 75dc266287336cd7742d228b1311427afb4340903cdd569a9e9c60b8690adda3
+disc3 b2ec974551b2eb65a9d40a030c297084a53ec504ad36585e89a45f7aa43c9296
+disc4 3c8b157ddaed401157e15a3e5e8e98fddd4c7b24cb62799db45d521180ed189b

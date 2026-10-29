@@ -1403,3 +1403,18 @@ Fixture loading: scenario.c reads the encounter bundle's dependency table a sect
 (its 10 KB temporary buffer no longer fit in the heap at bootstrap: 5 of 32 battle fixtures stopped). 32 over-budget
 battles all run; 21 drop nothing or under 1,000 polygons a run; the rest are heavy enemies (Ochu, Bandersnatch,
 Grand Dragon, Gigan Toad, Red Dragon, Zuu, Axe Beak x2), the simplification candidates.
+
+### Simplified battle enemy models (2026-10-29)
+After the strips, only battles with the heaviest enemies still dropped polygons. The user chose to simplify those
+enemies outright (protecting small features), never the party. tools/simplify_battle_models.py rewrites a model file
+in place (same size and split: per mesh group only the vertex and FT3 arrays shrink; uvs, colours, motions and TIMs
+stay) by half-edge collapses, cheapest first by quadric error, where the vertex's triangles are all on its bone, one
+texture/colour/flags, seamless at it, a closed fan, in no quad, and bend less than 60 degrees (teeth and folds stay).
+The patched sectors go to build/patches/discN.bin ("FF9P", runs of {IMG sector, sectors, offset}); port/psx/cd.c
+serves them from ff9ds/patches/ in place of the image's. config/model_patches.txt lists the models and options and
+each disc's SHA-256: `make model-patches` (part of `make ds`) regenerates them from the disc images and fails on a
+mismatch; the patches themselves are game data and never committed. Dropped polygons over a run: Ochu 23,822 -> 1,680,
+Bandersnatch 20,766 -> 817, Gigan Toad 6,826 -> 514, Zuu 3,366 -> 1, Axe Beak x2 4,818 -> 240; Grand Dragon and Red
+Dragon barely simplify that way (2-4%: 18,249 -> 13,443, 6,806 -> 6,186). Known: a notch at the Ochu's front petal and
+some texture shift where corners take a neighbour's uv. Next (the user's suggestion): bake removed and moved surface
+into the textures behind, which also lets features like teeth go.

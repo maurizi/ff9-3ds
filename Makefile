@@ -420,7 +420,21 @@ $(BUILD)/arm7/ff9ds_arm7.elf: port/arm7/main.c $(if $(SPU7_ON),$(SPU7_SRCS) port
 		-Wl,--start-group -lnds7 -lc -Wl,--end-group -Wl,--gc-sections -Wl,--defsym=__shared_wram_size=0 -o $@
 NDSTOOL  := $(BLOCKSDS)/tools/ndstool/ndstool
 
-ds: $(BUILD)/ff9ds.nds $(BUILD)/fxmods.bin $(BUILD)/ovls.bin
+ds: $(BUILD)/ff9ds.nds $(BUILD)/fxmods.bin $(BUILD)/ovls.bin model-patches
+
+# The simplified battle enemy models (config/model_patches.txt): sector patches the CD layer serves from
+# ff9ds/patches/ (port/psx/cd.c), rebuilt from the disc images and checked against the manifest's SHA-256; game data,
+# never committed. Copied into the test SD folders like ovls.bin. No disc images (DISKS): skipped.
+DISKS ?= disks
+.PHONY: model-patches
+model-patches: $(BUILD)/patches/.stamp
+$(BUILD)/patches/.stamp: config/model_patches.txt tools/simplify_battle_models.py
+	@if [ -d $(DISKS)/us/disc1 ] || [ -d $(DISKS)/disc1 ]; then \
+		echo "PATCH $(BUILD)/patches"; \
+		$(PYTHON) tools/simplify_battle_models.py --img $(DISKS) --manifest config/model_patches.txt --out $(BUILD)/patches > $(BUILD)/patches.log || { cat $(BUILD)/patches.log; exit 1; }; \
+		for d in $(BUILD)/sdroot*/ff9ds; do [ -d $$d ] && mkdir -p $$d/patches && cp $(BUILD)/patches/disc*.bin $$d/patches/; done; \
+		touch $@; \
+	else echo "PATCH skipped: no disc images in $(DISKS)"; fi
 
 # Effect modules on the DS: each is linked on its own at psx_fx_area against the main executable's symbols, and
 # the pack (fxmods.bin, derived from game data: never commit it) goes next to the disc images in ff9ds/; the
