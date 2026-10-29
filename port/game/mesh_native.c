@@ -76,6 +76,43 @@ PORT_OVERLAY_CODE(0b) STRIP_COLD static int strip_follow(const u8 *list, int n, 
     return len;
 }
 
+/* each FT3's link in its last byte (padding the game never reads), for the renderer's strips (gx_hybrid.c
+ * strip_perm): bit 0 it continues the one before (the strips as the list now runs, all of them drawn), bits 1-3 its
+ * corners in strip order (the edge it shares first, the vertex it brings last; a strip's first triangle turned so that
+ * the edge the next one shares is last) */
+static const u8 link_perm[6][3] = {{0, 1, 2}, {1, 2, 0}, {2, 0, 1}, {0, 2, 1}, {1, 0, 2}, {2, 1, 0}};
+PORT_OVERLAY_CODE(0b) STRIP_COLD static void strip_links(u8 *list, int n, const u16 *uvs) {
+    u32 a = 0, b = 0;
+    u16 ua = 0, ub = 0;
+    for (int k = 0; k < n; ++k) {
+        u8 *r = list + k * 0x14;
+        const u32 w[3] = {*(const u16 *)r, *(const u16 *)(r + 2), *(const u16 *)(r + 4)};
+        u32 c;
+        u16 uc;
+        if (k && strip_same(r, r - 0x14) && strip_next(r, uvs, a, b, ua, ub, &c, &uc)) {
+            const int ia = w[0] == a ? 0 : w[1] == a ? 1 : 2, ib = w[0] == b ? 0 : w[1] == b ? 1 : 2, ic = 3 - ia - ib;
+            int p = 0;
+            while (link_perm[p][0] != ia || link_perm[p][1] != ib || link_perm[p][2] != ic) ++p;
+            r[0x13] = (u8)(1 | p << 1);
+            a = b; ua = ub; b = c; ub = uc;
+            continue;
+        }
+        int rot = 0; /* (a strip's first: the rotation whose last edge the next one shares) */
+        if (k + 1 < n && strip_same(r + 0x14, r)) {
+            const u16 *ui = (const u16 *)(r + 0xC);
+            for (int i = 0; i < 3; ++i)
+                if (strip_next(r + 0x14, uvs, w[(i + 1) % 3], w[(i + 2) % 3], uvs[ui[(i + 1) % 3]], uvs[ui[(i + 2) % 3]], &c, &uc)) {
+                    rot = i;
+                    break;
+                }
+        }
+        r[0x13] = (u8)(rot << 1); /* (rotations 0-2 are link_perm 0-2) */
+        const u16 *ui = (const u16 *)(r + 0xC);
+        a = w[(rot + 1) % 3]; ua = uvs[ui[(rot + 1) % 3]];
+        b = w[(rot + 2) % 3]; ub = uvs[ui[(rot + 2) % 3]];
+    }
+}
+
 PORT_OVERLAY_CODE(0b) STRIP_COLD static void strip_order(BtlUnit9C8 *h) {
     h->flags |= STRIP_ORDERED;
     for (u32 g = 0; g < h->meshCount; ++g) {
@@ -84,8 +121,9 @@ PORT_OVERLAY_CODE(0b) STRIP_COLD static void strip_order(BtlUnit9C8 *h) {
         /* scratch: the projection's screen arrays (filled again before anything reads them) */
         u16 *order = (u16 *)g_vtxScreenZ;
         u8 *used = (u8 *)g_vtxScreenXY;
-        if (n < 3 || n > 1600) continue; /* (both arrays hold 0x321 words) */
         u8 *list = (u8 *)m->prims + m->nFT4 * 0x18;
+        for (int k = 0; k < n; ++k) list[k * 0x14 + 0x13] = 0; /* (no links until they are worked out) */
+        if (n < 3 || n > 1600) continue; /* (both arrays hold 0x321 words) */
         const u16 *uvs = (const u16 *)m->uvs;
         for (int k = 0; k < n; ++k) used[k] = 0;
         int out = 0;
@@ -131,6 +169,7 @@ PORT_OVERLAY_CODE(0b) STRIP_COLD static void strip_order(BtlUnit9C8 *h) {
                 j = k;
             }
         }
+        strip_links(list, n, uvs);
     }
 }
 
@@ -217,6 +256,7 @@ u8 *o0b_btl_drawMesh(BtlUnit9C *m, u8 meshIdx, u8 *out) {
     n.sxy = (const unsigned int *)g_vtxScreenXY;
     n.sz = (const unsigned int *)g_vtxScreenZ;
     n.nverts = 0;
+    n.strips = (m->header->flags & STRIP_ORDERED) != 0;
     for (u32 i = 0; i < m->header->boneCount; ++i) n.nverts += g->vertexCounts[i];
     /* the buffer this frame's OT is drawn into (btl_endFrame: shown until then) */
     n.draw_x = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.x;

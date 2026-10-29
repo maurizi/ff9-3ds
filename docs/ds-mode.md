@@ -1447,3 +1447,8 @@ moved chest from picking up an arm's texels. Dropped polygons over a run: Ochu 1
 Per-model options in the manifest ("model 610 sharp 75"): the Red Dragon at 20% with folds up to 75 degrees
 collapsible (close-ups checked) drops 3,617 (from 5,067). Still over now and then: Red Dragon x2 (d3_b0194), Grand
 Dragon (d4_b0617: 2,703), Gigan Toad (776).
+Strip links at load (same day): the strips' structure is fixed once a model's lists are in strip order, so
+strip_order also writes each FT3's link into its last byte (padding: bit 0 it continues the one before, bits 1-3 its
+corners in strip order), and the per-frame count and the emitter only read it (no edge or uv search per triangle,
+which was 14% of d1_b0228's busy time). Only meshes whose header carries the flag (NativeMesh.strips) draw strips.
+d1_b0228 28.4 -> 26.0, d3_b0232 28.8 -> 26.4, d4_b0678 33.2 -> 30.8, d2_b0135 36.3 -> 33.7 ms; no more drops.

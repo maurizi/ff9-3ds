@@ -463,7 +463,7 @@ typedef struct {
     u16 bright;          /* a record's brightness (0x80: as is) */
     u16 count[8];        /* a record: [0] quads, [1] triangles */
     s16 bias;
-    u8 nuses, pad;
+    u8 nuses, strips; /* strips: a model whose FT3s carry strip links (mesh_native.c strip_order) */
     u16 polys, vertices; /* after the PS1's culling (plan_drops); a model's with its triangle strips (strip_saved) */
     u16 strip_saved;     /* a model: the vertices its opaque triangles' strips save (native_strips) */
     u8 untex_abr;        /* a model's untextured polygons' blend mode: the last textured one's (the GPU's mode) */
@@ -491,72 +491,25 @@ static inline __attribute__((always_inline)) int mesh_uvs(const u16 *uvs, int ty
     }
 }
 
-/* Model triangle strips: a model's opaque triangles (its FT3 list, in its order) drawn as the 3D engine's triangle
- * strips, each vertex at its own depth, so a triangle that shares an edge with the last one (the same texture use and
- * colour, the edge's uvs the same) costs one vertex instead of three (native_strips). */
-/* the FT3 at s shares the edge a-b (with those uvs) and has a third vertex: it (*c, *uc) */
-static inline __attribute__((always_inline)) int strip_link(const u8 *s, const u16 *uvs, u32 a, u32 b, u16 ua, u16 ub, u32 *c, u16 *uc) {
-    const u32 v[3] = {MW(s, 0) & 0xFFFF, MW(s, 0) >> 16, MH(s, 4)};
-    u16 uv[3];
-    mesh_uvs(uvs, 1, s, uv);
-    int ia = -1, ib = -1;
-    for (int i = 0; i < 3; ++i) {
-        if (v[i] == a && uv[i] == ua) ia = i;
-        else if (v[i] == b && uv[i] == ub) ib = i;
-    }
-    if (ia < 0 || ib < 0) return 0;
-    const int ic = 3 - ia - ib;
-    if (v[ic] == a || v[ic] == b) return 0;
-    *c = v[ic]; *uc = uv[ic];
-    return 1;
-}
-/* a strip's first triangle s: its vertices in the order that leaves the edge the next triangle (s2, if any) shares
- * last */
-static inline __attribute__((always_inline)) void strip_first(const u8 *s, const u8 *s2, const u16 *uvs, u32 *v, u16 *uv) {
-    const u32 w[3] = {MW(s, 0) & 0xFFFF, MW(s, 0) >> 16, MH(s, 4)};
-    u16 wu[3];
-    mesh_uvs(uvs, 1, s, wu);
-    int r = 0;
-    if (s2) {
-        u32 c;
-        u16 uc;
-        for (int i = 0; i < 3; ++i)
-            if (strip_link(s2, uvs, w[(i + 1) % 3], w[(i + 2) % 3], wu[(i + 1) % 3], wu[(i + 2) % 3], &c, &uc)) { r = i; break; }
-    }
-    for (int i = 0; i < 3; ++i) { v[i] = w[(r + i) % 3]; uv[i] = wu[(r + i) % 3]; }
-}
+/* Model triangle strips: a battle unit's model's opaque triangles (its FT3 list, put in strip order at load:
+ * mesh_native.c strip_order) drawn as the 3D engine's triangle strips, each vertex at its own depth, so a triangle that
+ * continues the strip costs one vertex instead of three (native_strips). Each FT3's last byte (unused padding) holds
+ * its link: bit 0 it continues the one before (an edge, its uvs, texture, colour and flags the same), bits 1-3 its
+ * corners in strip order (strip_perm): the first two the edge it shares, the third the vertex it brings. */
+static const u8 strip_perm[6][3] = {{0, 1, 2}, {1, 2, 0}, {2, 0, 1}, {0, 2, 1}, {1, 0, 2}, {2, 1, 0}};
 /* the vertices a model's strips save (port_native_mesh: the budget), as native_strips draws them when every texture
  * use has its region */
 PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static unsigned strip_count(const MeshInst *mi) {
     const int n = mi->count[1], base = mi->count[0];
-    if (n < 2) return 0;
-    const u8 *s0 = mi->src + base * 0x18;
+    if (!mi->strips || n < 2) return 0;
+    const u8 *s = mi->src + base * 0x18 + 0x13, *info = mi->info + base;
     unsigned saved = 0;
-    int open = 0, use = 0;
-    u32 a = 0, b = 0, col = 0;
-    u16 ua = 0, ub = 0;
-    for (int k = 0; k < n; ++k) {
-        const u8 *s = s0 + k * 0x14, inf = mi->info[base + k];
+    int open = 0;
+    for (int k = 0; k < n; ++k, s += 0x14) {
+        const u8 inf = info[k];
         if (inf == 0xFF || (inf & 0x80)) { open = 0; continue; }
-        const int u = (inf >> 3) & 15;
-        const u32 c = MW(s, 8) & 0xFFFFFF;
-        u32 nc;
-        u16 nuc;
-        if (open && u == use && c == col && strip_link(s, mi->uvs, a, b, ua, ub, &nc, &nuc)) {
-            saved += 2;
-            a = b; ua = ub; b = nc; ub = nuc;
-            continue;
-        }
-        const u8 *s2 = NULL;
-        if (k + 1 < n) {
-            const u8 i2 = mi->info[base + k + 1];
-            if (i2 != 0xFF && !(i2 & 0x80) && ((i2 >> 3) & 15) == u && (MW(s + 0x14, 8) & 0xFFFFFF) == c) s2 = s + 0x14;
-        }
-        u32 v[3];
-        u16 uv[3];
-        strip_first(s, s2, mi->uvs, v, uv);
-        open = 1; use = u; col = c;
-        a = v[1]; ua = uv[1]; b = v[2]; ub = uv[2];
+        if (open && (*s & 1)) saved += 2;
+        open = 1;
     }
     return saved;
 }
@@ -605,7 +558,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
     int inside = bx0 + b->ofs_x >= 0 && bx1 + b->ofs_x < b->w && by0 + b->ofs_y >= 0 && by1 + b->ofs_y < b->h;
     mi->src = nm->src; mi->uvs = nm->uvs; mi->colors = (const u32 *)nm->colors; mi->bias = (s16)nm->ot_bias;
     mi->xy = xy; mi->z = z; mi->info = info; mi->nuses = 0; mi->kind = MESH_MODEL; mi->untex_abr = 0;
-    mi->strip_saved = 0;
+    mi->strip_saved = 0; mi->strips = (u8)nm->strips;
     for (int t = 0; t < 8; ++t) mi->count[t] = nm->count[t];
     /* each polygon once: the PS1's culling (NCLIP <= 0 unless double-sided), no area or off the buffer (as
      * hybrid_poly), its size for the budget, the texture word and blend mode it uses and their texels' bounds */
@@ -772,7 +725,7 @@ int port_native_bg(const NativeBg *r) {
     const u32 *col = (const u32 *)(rec + MH(rec, 6));
     const u8 *idx = rec + MH(rec, 8), *uv = rec + MH(rec, 0xA);
     mi->src = rec; mi->uvs = NULL; mi->colors = col; mi->xy = xy; mi->z = oti; mi->kind = MESH_BG;
-    mi->strip_saved = 0;
+    mi->strip_saved = 0; mi->strips = 0;
     mi->bright = (u16)r->bright; mi->bias = 0; mi->nuses = 0; mi->info = info;
     memset(mi->count, 0, sizeof mi->count);
     mi->count[0] = (u16)nquad; mi->count[1] = (u16)ntri;
@@ -2767,7 +2720,7 @@ static inline __attribute__((always_inline)) int strip_use_ok(const MeshUse *u) 
 }
 /* a model's FT3 (its info byte inf) native_strips draws */
 static inline __attribute__((always_inline)) int strip_tri(const MeshInst *mi, u8 inf) {
-    return inf != 0xFF && !(inf & 0x80) && strip_use_ok(&mi->uses[(inf >> 3) & 15]);
+    return mi->strips && inf != 0xFF && !(inf & 0x80) && strip_use_ok(&mi->uses[(inf >> 3) & 15]);
 }
 
 /* Battle: the native polygons due before recorded primitive k, opaque and textured ones straight from their meshes
@@ -2929,38 +2882,37 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_strips(B
     const u16 *const pl = strip_places;
     for (int m = 0; m < b->meshes; ++m) {
         const MeshInst *mi = mesh_at(b, m);
-        if (mi->kind != MESH_MODEL || !mi->count[1]) continue;
+        if (mi->kind != MESH_MODEL || !mi->strips || !mi->count[1]) continue;
         const int n = mi->count[1], base = mi->count[0];
         const u8 *s0 = mi->src + base * 0x18;
         const u32 *xy = mi->xy;
         const u16 *uvs = mi->uvs;
         const MeshUse *use = NULL, *last_u = NULL;
         int open = 0, tu = 0, tv = 0;
-        u32 a = 0, bb = 0, col = 0, want_image = 0, want_palette = ~0u;
-        u16 ua = 0, ub = 0;
+        u32 col = 0, want_image = 0, want_palette = ~0u;
 #define STRIP_VERTEX(V, UV) do { \
             const u32 p_ = xy[V]; \
+            put((u32)(u16)((((UV) & 0xFF) - tu) * 16) | (u32)(u16)((((UV) >> 8) - tv) * 16) << 16); \
             put(((p_ + ofs_x) & 0xFFFF) | ((p_ & 0xFFFF0000) + ofs_y)); \
             put(zt); \
         } while (0)
-#define STRIP_TC(UV) put((u32)(u16)((((UV) & 0xFF) - tu) * 16) | (u32)(u16)((((UV) >> 8) - tv) * 16) << 16)
         for (int k = 0; k < n; ++k) {
             const u8 *s = s0 + k * 0x14, inf = mi->info[base + k];
             if (!strip_tri(mi, inf)) { open = 0; continue; }
             if (mesh_dropped(b, inf & 7)) { gxh_stats_dropped++; open = 0; continue; }
             const MeshUse *u = &mi->uses[(inf >> 3) & 15];
-            const u32 c = MW(s, 8) & 0xFFFFFF;
+            const u32 c = MW(s, 8) & 0xFFFFFF, link = MB(s, 0x13);
+            const u8 *o = strip_perm[(link >> 1) & 7];
+            const u32 v[3] = {MW(s, 0) & 0xFFFF, MW(s, 0) >> 16, MH(s, 4)};
+            u16 uv[3];
+            mesh_uvs(uvs, 1, s, uv);
             /* the vertices it brings at its own drawing place (that of its OT entry) */
             const u32 zt = (u32)(u16)(Z_STEP * pl[mi->z[base + k] >> 2] + 1);
             if (wp > wend) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; wend = wp + (CHUNK_WORDS - PRIM_WORDS); }
-            u32 nc;
-            u16 nuc;
-            if (open && u == use && c == col && strip_link(s, uvs, a, bb, ua, ub, &nc, &nuc)) {
+            if (open && (link & 1) && u == use && c == col) {
                 if (polys >= MAX_POLYS || vertices + 1 > MAX_VERTICES) { gxh_stats_dropped++; open = 0; continue; }
                 pack_begin(); pack(CMD_TEXCOORD); pack(CMD_VTX16); pack_end();
-                STRIP_TC(nuc);
-                STRIP_VERTEX(nc, nuc);
-                a = bb; ua = ub; bb = nc; ub = nuc;
+                STRIP_VERTEX(v[o[2]], uv[o[2]]);
                 ++polys; ++vertices;
                 continue;
             }
@@ -2976,35 +2928,22 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_strips(B
                 if (depth < 2) { want_image |= index0_transparent(u->palette); want_palette = (u32)u->palette * 512 / 16; }
                 last_u = u;
             }
-            const u8 *s2 = NULL;
-            if (k + 1 < n) {
-                const u8 i2 = mi->info[base + k + 1];
-                if (strip_tri(mi, i2) && &mi->uses[(i2 >> 3) & 15] == u && (MW(s + 0x14, 8) & 0xFFFFFF) == c) s2 = s + 0x14;
-            }
-            u32 v[3];
-            u16 uv[3];
-            strip_first(s, s2, uvs, v, uv);
             pack_begin();
             if (want_palette != ~0u && want_palette != palette) { pack(CMD_PLTTBASE); put(want_palette); palette = want_palette; }
             if (want_image != image) { pack(CMD_TEXIMAGE); put(want_image); image = want_image; }
             if (attr != INITIAL_ATTR) { pack(CMD_POLYATTR); put(INITIAL_ATTR); attr = INITIAL_ATTR; }
             pack(CMD_BEGIN); put(2); /* (a triangle strip) */
             pack_end();
-            pack_begin(); pack(CMD_COLOR); pack(CMD_TEXCOORD); pack(CMD_VTX16); pack_end();
+            pack_begin(); pack(CMD_COLOR); pack_end();
             put(TEX_TINT(c & 0xFF) | TEX_TINT(c >> 8 & 0xFF) << 5 | TEX_TINT(c >> 16 & 0xFF) << 10);
-            STRIP_TC(uv[0]);
-            STRIP_VERTEX(v[0], uv[0]);
-            for (int i = 1; i < 3; ++i) {
+            for (int i = 0; i < 3; ++i) {
                 pack_begin(); pack(CMD_TEXCOORD); pack(CMD_VTX16); pack_end();
-                STRIP_TC(uv[i]);
-                STRIP_VERTEX(v[i], uv[i]);
+                STRIP_VERTEX(v[o[i]], uv[o[i]]);
             }
             open = 1; use = u; col = c;
-            a = v[1]; ua = uv[1]; bb = v[2]; ub = uv[2];
             ++polys; vertices += 3;
         }
 #undef STRIP_VERTEX
-#undef STRIP_TC
     }
     es->wp = wp; es->image = image; es->palette = palette; es->attr = attr; es->polys = polys; es->vertices = vertices;
 }

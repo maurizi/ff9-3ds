@@ -22,6 +22,7 @@ typedef struct {
     const unsigned int *sz;        /* g_vtxScreenZ */
     int nverts;
     int draw_x, draw_y;            /* the frame's drawing area (its scene's buffer) */
+    int strips;                    /* its FT3s carry strip links (mesh_native.c strip_order) */
 } NativeMesh;
 
 /* 1: the renderer took the mesh for the scene being drawn (DS hybrid battle); 0: draw its packets */
