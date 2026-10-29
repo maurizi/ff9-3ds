@@ -694,3 +694,7 @@ the channels' rates to the DS's 59.83 Hz frames (a drift between the rings' writ
 Proposed: the envelope baked into the samples as the rings are written (ramped from block to block), the channel's
 volume only the voice's volume and pan. The capture now also sets melonDS's AudioSync, so the recording follows
 emulated time when the emulator can't hold full speed on this machine.
+Tried and dropped (same day): the envelope baked into the samples (ramped per block, the channel volume only the
+voice's): the bass excess stayed (+10..+16 dB) and the level fell to 0.63x, so the per-frame envelope steps aren't
+the cause. Still open: the excess's odd harmonics of 60 Hz (60.8, 180.3 Hz) point at the rings' per-frame writes or
+the channels' restarts; next is instrumenting the ARM7 path (read position against writes, restarts per voice).
