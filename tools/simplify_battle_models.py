@@ -592,6 +592,7 @@ def main():
     ap.add_argument('--max-error', type=float, default=1e9, help='largest collapse error (model units) taken')
     a = ap.parse_args()
     expect = {}
+    override = {}  # model id -> {option: value} ("model 610 sharp 75")
     if a.manifest:
         for line in open(a.manifest):
             line = line.split('#', 1)[0].strip()
@@ -606,6 +607,9 @@ def main():
                 a.bake = val.strip() == '1'
             elif key == 'pose':
                 a.pose = val.strip() == '1'
+            elif key == 'model':
+                mid_, opt, v_ = val.split()
+                override.setdefault(int(mid_), {})[opt] = float(v_)
             elif re.fullmatch(r'disc[1-4]', key):
                 expect[key] = val.strip()
     if not a.models:
@@ -625,7 +629,9 @@ def main():
             sec, n = files[mid]
             data = img.read(sec * SECTOR, n * SECTOR)
             key = battle_pose.motion_key(mid, 0, disc, a.img) if a.pose else None
-            new, stats = rewrite(data, mid, a.ratio, a.report, a.max_error, a.sharp, a.bake, key)
+            o = override.get(mid, {})
+            new, stats = rewrite(data, mid, o.get('ratio', a.ratio), a.report, o.get('max_error', a.max_error),
+                                 o.get('sharp', a.sharp), a.bake, key)
             if a.report or disc == 1:
                 for i, b, c, err, baked in stats:
                     c0, c1 = 4 * b[0] + 3 * b[1], 4 * c[0] + 3 * c[1]

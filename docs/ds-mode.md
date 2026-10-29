@@ -1444,3 +1444,6 @@ vertex of its own bone; flips are checked in all three frames), and baking sampl
 from the original triangles the simplified one took over (its provenance: a collapse merges its fan's), which keeps a
 moved chest from picking up an arm's texels. Dropped polygons over a run: Ochu 153, Bandersnatch 34, Grand Dragon
 22 / 127 / 282 / 2,703, Gigan Toad 776, Zuu 0, Axe Beak 0, Red Dragon x2 5,067 (it reaches only 6%: sharp folds).
+Per-model options in the manifest ("model 610 sharp 75"): the Red Dragon at 20% with folds up to 75 degrees
+collapsible (close-ups checked) drops 3,617 (from 5,067). Still over now and then: Red Dragon x2 (d3_b0194), Grand
+Dragon (d4_b0617: 2,703), Gigan Toad (776).
