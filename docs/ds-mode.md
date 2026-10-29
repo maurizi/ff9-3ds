@@ -1353,3 +1353,14 @@ the foreground bridge: blurred difference 12.9). Taking those sprites out of the
 front of the 3D one (no VRAM bank left for it).
 Also measured, not taken: LoadImage skipping unchanged rows (d3_f2402's animated pages do change every frame) and
 dirty-row uploads of regions (its writes cover whole regions).
+
+Later on 2026-10-28, each exact (identical frames) unless said:
+- clip_line: a line inside the drawing area unchanged, the rest clipped in 32 bits (Burmecia's rain: ten 64-bit
+  divisions a line before): d3_f0767 35.9 -> 33.5.
+- Software raster: a tinted semi-transparent sprite through the shaded palette (row_semi_palette), and it and
+  poly_row_semi4 one loop per blend mode: d3_f2402 34.8 -> 33.8, d2_f0356 31.5 -> 31.3. test-raster links again.
+- upload_run in whole words (an animated background page's runs are copied every frame it changes): d3_f2402 -> 33.4.
+- translucent_id's tables in DTCM (584 bytes of the ~9 KB of stack no run has reached): d1_f0604 37.2 -> 36.8.
+The 60-field sample: median 26.5 -> 23.2 ms per VBlank over the day; 13 fields at full speed, 20 within 15%.
+Where the worst now go: d1_f0501 (39: a dialog's UI work, ~12%), d1_f0604 and d4_f2904 (translucent sprites: their
+polygon IDs, light and emission), d3_f2402 and d2_f0356 (the exact additive layer in software: ~15-30%).
