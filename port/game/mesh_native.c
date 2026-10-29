@@ -18,7 +18,7 @@ void o0b_btl_projectMesh(BtlUnit9C *arg0, u8 arg1) {
     BtlMesh *g = &arg0->header->meshes[arg1];
     gte_SetGeomScreen(g_gameState->gameData->unkA);
     s32 k = 0;
-    u32 cnt = arg0->header->unk2;
+    u32 cnt = arg0->header->boneCount;
     MATRIX *bone = (MATRIX *)arg0->bones;
     SVECTOR *last = NULL;
     s32 last_k = 0;
@@ -79,11 +79,11 @@ u8 *o0b_btl_drawMesh(BtlUnit9C *m, u8 meshIdx, u8 *out) {
     n.uvs = (const unsigned short *)g->uvs;
     n.colors = (const unsigned int *)g->colors;
     n.tex = (const unsigned int *)m->texPages;
-    n.ot_bias = g->unk13;
+    n.ot_bias = g->otBias;
     n.sxy = (const unsigned int *)g_vtxScreenXY;
     n.sz = (const unsigned int *)g_vtxScreenZ;
     n.nverts = 0;
-    for (u32 i = 0; i < m->header->unk2; ++i) n.nverts += g->vertexCounts[i];
+    for (u32 i = 0; i < m->header->boneCount; ++i) n.nverts += g->vertexCounts[i];
     /* the buffer this frame's OT is drawn into (btl_endFrame: shown until then) */
     n.draw_x = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.x;
     n.draw_y = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.y;
