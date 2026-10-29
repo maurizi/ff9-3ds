@@ -176,10 +176,14 @@ static int open_disc(void) {
     return 1;
 }
 
+static void patch_load(void);
 static void patch_apply(unsigned int lba, u8 *raw);
+static int n_runs = -1, runs_disc;
 static void read_raw(unsigned int lba, u8 *buf) {
     unsigned int t = port_profile_begin();
     open_disc();
+    /* (before this sector's read: loading the table reads others through read_user's buffer, which may be buf) */
+    if (n_runs < 0 || runs_disc != disc_no) patch_load();
     BB(0x43440001, lba); BB(0x43440002, buf);
     /* (no seek for the next sector: on the DS a seek behind the file system's read-ahead walks the image's cluster
      * chain from its start, which costs more the further into the disc) */
@@ -208,7 +212,6 @@ static void read_user(unsigned int lba, u8 *buf2048) {
  * file offset} per run; each sector's 2048 bytes of user data. No file: none. */
 #define PATCH_RUNS 32
 static struct { unsigned int lba, count, off; } runs[PATCH_RUNS];
-static int n_runs = -1, runs_disc;
 static FILE *patch_file;
 
 static int iso_lookup(const char *name, unsigned int *lba, unsigned int *size);
@@ -238,7 +241,6 @@ static void patch_load(void) {
 }
 
 static void patch_apply(unsigned int lba, u8 *raw) {
-    if (n_runs < 0 || runs_disc != disc_no) patch_load();
     for (int i = 0; i < n_runs; i++)
         if (lba - runs[i].lba < runs[i].count) {
             if (fseek(patch_file, (long)(runs[i].off + (lba - runs[i].lba) * 2048), SEEK_SET) != 0 ||
