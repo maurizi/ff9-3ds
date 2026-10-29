@@ -464,7 +464,9 @@ typedef struct {
     u16 count[8];        /* a record: [0] quads, [1] triangles */
     s16 bias;
     u8 nuses, pad;
-    u16 polys, vertices; /* after the PS1's culling (plan_drops) */
+    u16 polys, vertices; /* after the PS1's culling (plan_drops); a model's with its triangle strips (strip_saved) */
+    u16 strip_saved;     /* a model: the vertices its opaque triangles' strips save (native_strips) */
+    const u16 *ve;       /* a model: per vertex, its own OT entry (as a quad of four of it would have) */
     u8 untex_abr;        /* a model's untextured polygons' blend mode: the last textured one's (the GPU's mode) */
     const u8 *info;      /* per polygon: 0xFF not drawn, else translucent << 7 | its use << 3 (15: untextured) | size tier */
     u16 tier_polys[6], tier_vertices[6]; /* by size (drop_bounds) */
@@ -490,6 +492,76 @@ static inline __attribute__((always_inline)) int mesh_uvs(const u16 *uvs, int ty
     }
 }
 
+/* Model triangle strips: a model's opaque triangles (its FT3 list, in its order) drawn as the 3D engine's triangle
+ * strips, each vertex at its own depth, so a triangle that shares an edge with the last one (the same texture use and
+ * colour, the edge's uvs the same) costs one vertex instead of three (native_strips). */
+/* the FT3 at s shares the edge a-b (with those uvs) and has a third vertex: it (*c, *uc) */
+static inline __attribute__((always_inline)) int strip_link(const u8 *s, const u16 *uvs, u32 a, u32 b, u16 ua, u16 ub, u32 *c, u16 *uc) {
+    const u32 v[3] = {MW(s, 0) & 0xFFFF, MW(s, 0) >> 16, MH(s, 4)};
+    u16 uv[3];
+    mesh_uvs(uvs, 1, s, uv);
+    int ia = -1, ib = -1;
+    for (int i = 0; i < 3; ++i) {
+        if (v[i] == a && uv[i] == ua) ia = i;
+        else if (v[i] == b && uv[i] == ub) ib = i;
+    }
+    if (ia < 0 || ib < 0) return 0;
+    const int ic = 3 - ia - ib;
+    if (v[ic] == a || v[ic] == b) return 0;
+    *c = v[ic]; *uc = uv[ic];
+    return 1;
+}
+/* a strip's first triangle s: its vertices in the order that leaves the edge the next triangle (s2, if any) shares
+ * last */
+static inline __attribute__((always_inline)) void strip_first(const u8 *s, const u8 *s2, const u16 *uvs, u32 *v, u16 *uv) {
+    const u32 w[3] = {MW(s, 0) & 0xFFFF, MW(s, 0) >> 16, MH(s, 4)};
+    u16 wu[3];
+    mesh_uvs(uvs, 1, s, wu);
+    int r = 0;
+    if (s2) {
+        u32 c;
+        u16 uc;
+        for (int i = 0; i < 3; ++i)
+            if (strip_link(s2, uvs, w[(i + 1) % 3], w[(i + 2) % 3], wu[(i + 1) % 3], wu[(i + 2) % 3], &c, &uc)) { r = i; break; }
+    }
+    for (int i = 0; i < 3; ++i) { v[i] = w[(r + i) % 3]; uv[i] = wu[(r + i) % 3]; }
+}
+/* the vertices a model's strips save (port_native_mesh: the budget), as native_strips draws them when every texture
+ * use has its region */
+PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static unsigned strip_count(const MeshInst *mi) {
+    const int n = mi->count[1], base = mi->count[0];
+    if (n < 2) return 0;
+    const u8 *s0 = mi->src + base * 0x18;
+    unsigned saved = 0;
+    int open = 0, use = 0;
+    u32 a = 0, b = 0, col = 0;
+    u16 ua = 0, ub = 0;
+    for (int k = 0; k < n; ++k) {
+        const u8 *s = s0 + k * 0x14, inf = mi->info[base + k];
+        if (inf == 0xFF || (inf & 0x80)) { open = 0; continue; }
+        const int u = (inf >> 3) & 15;
+        const u32 c = MW(s, 8) & 0xFFFFFF;
+        u32 nc;
+        u16 nuc;
+        if (open && u == use && c == col && strip_link(s, mi->uvs, a, b, ua, ub, &nc, &nuc)) {
+            saved += 2;
+            a = b; ua = ub; b = nc; ub = nuc;
+            continue;
+        }
+        const u8 *s2 = NULL;
+        if (k + 1 < n) {
+            const u8 i2 = mi->info[base + k + 1];
+            if (i2 != 0xFF && !(i2 & 0x80) && ((i2 >> 3) & 15) == u && (MW(s + 0x14, 8) & 0xFFFFFF) == c) s2 = s + 0x14;
+        }
+        u32 v[3];
+        u16 uv[3];
+        strip_first(s, s2, mi->uvs, v, uv);
+        open = 1; use = u; col = c;
+        a = v[1]; ua = uv[1]; b = v[2]; ub = uv[2];
+    }
+    return saved;
+}
+
 /* Whether a polygon's screen vertices (GTE SXY words) all lie off one side of the buffer: hybrid_poly clips such a
  * packet to nothing. The drawing offset is the walk's (b->ofs_*: the previous frame's, the same in battle). */
 static int offscreen(const Buffer *b, const u32 *xy, const u32 *v, int n) {
@@ -512,18 +584,21 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
     if (b->mesh_gen != psx_ot_generation) { b->mesh_gen = psx_ot_generation; b->pool_used = 0; b->meshes = 0; }
     unsigned npolys = 0;
     for (int t = 0; t < 8; ++t) npolys += nm->count[t];
-    unsigned need = (sizeof(MeshInst) + (unsigned)nm->nverts * 4 + npolys * 3 + 3) & ~3u;
+    unsigned need = (sizeof(MeshInst) + (unsigned)nm->nverts * 6 + npolys * 3 + 3) & ~3u;
     if (b->meshes >= MAX_MESHES || b->pool_used + need > POOL_BYTES) { gxh_stats_mesh_fallback++; return 0; }
     MeshInst *mi = (MeshInst *)(b->pool + b->pool_used);
     u32 *xy = (u32 *)(mi + 1);
     u16 *z = (u16 *)(xy + nm->nverts); /* per polygon drawn: its OT entry (collect_native) */
-    u8 *info = (u8 *)(z + npolys);
+    u16 *ve = z + npolys;               /* per vertex: its own (native_strips' depths) */
+    u8 *info = (u8 *)(ve + nm->nverts);
     const unsigned *sz = nm->sz;
     const int zsf3 = (s16)psx_gte.c[29], ebias = 8 - (int)nm->ot_bias;
     int bx0 = 1 << 30, by0 = 1 << 30, bx1 = -(1 << 30), by1 = -(1 << 30);
     for (int i = 0; i < nm->nverts; ++i) {
         u32 w = nm->sxy[i];
         xy[i] = w;
+        int e = (int)((u16)sz[i] >> 4) + ebias;
+        ve[i] = (u16)(e < 0 ? 0 : e > 0x100F ? 0x100F : e);
         int x = (s16)w, y = (s16)(w >> 16);
         if (x < bx0) bx0 = x;
         if (x > bx1) bx1 = x;
@@ -533,7 +608,8 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
     /* (a model all inside the buffer needs no test per polygon) */
     int inside = bx0 + b->ofs_x >= 0 && bx1 + b->ofs_x < b->w && by0 + b->ofs_y >= 0 && by1 + b->ofs_y < b->h;
     mi->src = nm->src; mi->uvs = nm->uvs; mi->colors = (const u32 *)nm->colors; mi->bias = (s16)nm->ot_bias;
-    mi->xy = xy; mi->z = z; mi->info = info; mi->nuses = 0; mi->kind = MESH_MODEL; mi->untex_abr = 0;
+    mi->xy = xy; mi->z = z; mi->ve = ve; mi->info = info; mi->nuses = 0; mi->kind = MESH_MODEL; mi->untex_abr = 0;
+    mi->strip_saved = 0;
     for (int t = 0; t < 8; ++t) mi->count[t] = nm->count[t];
     /* each polygon once: the PS1's culling (NCLIP <= 0 unless double-sided), no area or off the buffer (as
      * hybrid_poly), its size for the budget, the texture word and blend mode it uses and their texels' bounds */
@@ -624,7 +700,8 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const 
         if (lv1 > u->v1) u->v1 = (u8)lv1;
     }
     if (tex_use >= 0) mi->untex_abr = (u8)((((mi->uses[tex_use].page & 0xFFFF) | mi->uses[tex_use].orbits) >> 5) & 3);
-    mi->polys = (u16)polys; mi->vertices = (u16)vertices;
+    mi->strip_saved = (u16)strip_count(mi);
+    mi->polys = (u16)polys; mi->vertices = (u16)(vertices - mi->strip_saved);
     b->mesh_at[b->meshes] = (u16)b->pool_used;
     b->pool_used += need;
     b->meshes++;
@@ -699,6 +776,7 @@ int port_native_bg(const NativeBg *r) {
     const u32 *col = (const u32 *)(rec + MH(rec, 6));
     const u8 *idx = rec + MH(rec, 8), *uv = rec + MH(rec, 0xA);
     mi->src = rec; mi->uvs = NULL; mi->colors = col; mi->xy = xy; mi->z = oti; mi->kind = MESH_BG;
+    mi->ve = NULL; mi->strip_saved = 0;
     mi->bright = (u16)r->bright; mi->bias = 0; mi->nuses = 0; mi->info = info;
     memset(mi->count, 0, sizeof mi->count);
     mi->count[0] = (u16)nquad; mi->count[1] = (u16)ntri;
@@ -2680,6 +2758,22 @@ static inline void native_next(const Buffer *b, NativeWalk *w) {
     }
 }
 
+/* native_strips: on while the walk leaves it the models' opaque triangles; their drawing places per 4 main-OT entries */
+static int strips_on;
+static u16 *strip_places;
+/* a texture use native_strips can draw (its texels in a region, not converted; a palette if it needs one) */
+static inline __attribute__((always_inline)) int strip_use_ok(const MeshUse *u) {
+    const int grp = u->group;
+    const Region *rg = grp == 0xFF || grp == RUN_GROUP ? NULL : groups[grp].region;
+    int depth = (int)((((u->page & 0xFFFF) | u->orbits) >> 7) & 3);
+    if (depth == 3) depth = 2;
+    return rg && !rg->conv && !(depth < 2 && u->palette == 0xFF);
+}
+/* a model's FT3 (its info byte inf) native_strips draws */
+static inline __attribute__((always_inline)) int strip_tri(const MeshInst *mi, u8 inf) {
+    return inf != 0xFF && !(inf & 0x80) && strip_use_ok(&mi->uses[(inf >> 3) & 15]);
+}
+
 /* Battle: the native polygons due before recorded primitive k, opaque and textured ones straight from their meshes
  * (the general path's words for them, without their Prim records). Returns at one the general path draws (w->ri),
  * or when none is due. */
@@ -2735,6 +2829,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
             gouraud = 0;
         } else {
             s = model_poly(mi, pi, &t);
+            if (t == 1 && strips_on && strip_tri(mi, inf)) { walk.ri = r->next; ++walk.zc; continue; } /* (native_strips') */
             if (t >= 4 || (MB(s, mesh_flags_at[t]) & 1)) break; /* untextured; translucent */
             n = t & 1 ? 3 : 4;
             gouraud = MODEL_GOURAUD && t >= 2;
@@ -2812,6 +2907,109 @@ PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buff
     *w = walk;
 }
 #pragma GCC diagnostic pop
+
+/* The drawing place (emit_scene's walk: the recorded primitives and native polygons drawn before) of each 4 main-OT
+ * entries, far to near: a strip's vertices sit at their own entries' places, between the primitives around them. */
+PORT_OVERLAY_CODE(0b) static void build_places(Buffer *b) {
+    int nat = 0;
+    for (int q = 0x100F >> 2; q >= 0; --q) {
+        const int e_hi = 4 * q + 3 > 0x100F ? 0x100F : 4 * q + 3;
+        strip_places[q] = (u16)(entry_rank(b, e_hi) + nat);
+        for (int e = e_hi; e >= 4 * q; --e)
+            if (native_bits[e >> 5] & (1u << (e & 31)))
+                for (int r = native_heads[e]; r != NO_REF; r = native_refs[r].next) ++nat;
+    }
+}
+
+/* The models' opaque triangles (strip_tri) as triangle strips, each model's FT3 list in its order (strip_count's
+ * rules), before the walk (which skips them): their vertices at their own depths, so their order doesn't matter. */
+PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_strips(Buffer *b, EmitState *es) {
+    u32 *wp = es->wp, *pack_header, pack_ids;
+    int pack_shift;
+    u32 image = es->image, palette = es->palette, attr = es->attr;
+    int polys = es->polys, vertices = es->vertices;
+    u32 *wend = chunks[chunk] + (CHUNK_WORDS - PRIM_WORDS);
+    const u32 ofs_x = (u32)b->ofs_x, ofs_y = (u32)b->ofs_y << 16;
+    const u16 *const pl = strip_places;
+    for (int m = 0; m < b->meshes; ++m) {
+        const MeshInst *mi = mesh_at(b, m);
+        if (mi->kind != MESH_MODEL || !mi->count[1]) continue;
+        const int n = mi->count[1], base = mi->count[0];
+        const u8 *s0 = mi->src + base * 0x18;
+        const u32 *xy = mi->xy;
+        const u16 *ve = mi->ve, *uvs = mi->uvs;
+        const MeshUse *use = NULL, *last_u = NULL;
+        int open = 0, tu = 0, tv = 0;
+        u32 a = 0, bb = 0, col = 0, want_image = 0, want_palette = ~0u;
+        u16 ua = 0, ub = 0;
+#define STRIP_VERTEX(V, UV) do { \
+            const u32 p_ = xy[V]; \
+            put(((p_ + ofs_x) & 0xFFFF) | ((p_ & 0xFFFF0000) + ofs_y)); \
+            put((u32)(u16)(Z_STEP * pl[ve[V] >> 2] + 1)); \
+        } while (0)
+#define STRIP_TC(UV) put((u32)(u16)((((UV) & 0xFF) - tu) * 16) | (u32)(u16)((((UV) >> 8) - tv) * 16) << 16)
+        for (int k = 0; k < n; ++k) {
+            const u8 *s = s0 + k * 0x14, inf = mi->info[base + k];
+            if (!strip_tri(mi, inf)) { open = 0; continue; }
+            if (mesh_dropped(b, inf & 7)) { gxh_stats_dropped++; open = 0; continue; }
+            const MeshUse *u = &mi->uses[(inf >> 3) & 15];
+            const u32 c = MW(s, 8) & 0xFFFFFF;
+            if (wp > wend) { chunk_words = wp - chunks[chunk]; flush_chunk(); wp = chunks[chunk]; wend = wp + (CHUNK_WORDS - PRIM_WORDS); }
+            u32 nc;
+            u16 nuc;
+            if (open && u == use && c == col && strip_link(s, uvs, a, bb, ua, ub, &nc, &nuc)) {
+                if (polys >= MAX_POLYS || vertices + 1 > MAX_VERTICES) { gxh_stats_dropped++; open = 0; continue; }
+                pack_begin(); pack(CMD_TEXCOORD); pack(CMD_VTX16); pack_end();
+                STRIP_TC(nuc);
+                STRIP_VERTEX(nc, nuc);
+                a = bb; ua = ub; bb = nc; ub = nuc;
+                ++polys; ++vertices;
+                continue;
+            }
+            if (polys >= MAX_POLYS || vertices + 3 > MAX_VERTICES) { gxh_stats_dropped++; open = 0; continue; }
+            if (u != last_u) {
+                const Region *rg = groups[u->group].region;
+                const u32 tp = (u->page & 0xFFFF) | u->orbits;
+                int depth = (tp >> 7) & 3;
+                if (depth == 3) depth = 2;
+                tu = (rg->x - (int)(tp & 15) * 64) * texels_per_halfword(depth); tv = rg->y - (int)((tp >> 4) & 1) * 256;
+                want_image = (u32)(rg->unit * TEX_UNIT / 8) | rg->size_bits | (u32)(depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
+                want_palette = ~0u;
+                if (depth < 2) { want_image |= index0_transparent(u->palette); want_palette = (u32)u->palette * 512 / 16; }
+                last_u = u;
+            }
+            const u8 *s2 = NULL;
+            if (k + 1 < n) {
+                const u8 i2 = mi->info[base + k + 1];
+                if (strip_tri(mi, i2) && &mi->uses[(i2 >> 3) & 15] == u && (MW(s + 0x14, 8) & 0xFFFFFF) == c) s2 = s + 0x14;
+            }
+            u32 v[3];
+            u16 uv[3];
+            strip_first(s, s2, uvs, v, uv);
+            pack_begin();
+            if (want_palette != ~0u && want_palette != palette) { pack(CMD_PLTTBASE); put(want_palette); palette = want_palette; }
+            if (want_image != image) { pack(CMD_TEXIMAGE); put(want_image); image = want_image; }
+            if (attr != INITIAL_ATTR) { pack(CMD_POLYATTR); put(INITIAL_ATTR); attr = INITIAL_ATTR; }
+            pack(CMD_BEGIN); put(2); /* (a triangle strip) */
+            pack_end();
+            pack_begin(); pack(CMD_COLOR); pack(CMD_TEXCOORD); pack(CMD_VTX16); pack_end();
+            put(TEX_TINT(c & 0xFF) | TEX_TINT(c >> 8 & 0xFF) << 5 | TEX_TINT(c >> 16 & 0xFF) << 10);
+            STRIP_TC(uv[0]);
+            STRIP_VERTEX(v[0], uv[0]);
+            for (int i = 1; i < 3; ++i) {
+                pack_begin(); pack(CMD_TEXCOORD); pack(CMD_VTX16); pack_end();
+                STRIP_TC(uv[i]);
+                STRIP_VERTEX(v[i], uv[i]);
+            }
+            open = 1; use = u; col = c;
+            a = v[1]; ua = uv[1]; bb = v[2]; ub = uv[2];
+            ++polys; vertices += 3;
+        }
+#undef STRIP_VERTEX
+#undef STRIP_TC
+    }
+    es->wp = wp; es->image = image; es->palette = palette; es->attr = attr; es->polys = polys; es->vertices = vertices;
+}
 
 
 /* The world map's terrain and backdrop faces (emit_scene; ARM in ovl_0c's area) */
@@ -3064,6 +3262,14 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
     int ring_at = 0;
     NativeWalk nw = {-1, NO_REF, 0, 0};
     if (with_meshes && collect_native(b)) nw.ne = 0x100F;
+    strips_on = 0;
+    if (nw.ne >= 0 && !tp_battle && strip_places) { /* the models' opaque triangles in strips first (one pass only) */
+        build_places(b);
+        strips_on = 1;
+        EmitState es = {wp, attr, image, palette, polys, vertices};
+        native_strips(b, &es);
+        wp = es.wp; attr = es.attr; image = es.image; palette = es.palette; polys = es.polys; vertices = es.vertices;
+    }
     int runs_sent = !b->bg_runs || !ovl0a_resident();
     /* depth-tested scenes without meshes: the primitives to draw listed once, the opaque ones from the last then the
      * translucent ones in order (the loop below would visit each of them twice, and those of the composite too), in
@@ -4066,7 +4272,8 @@ _Static_assert(OVL0B_PRIMS_AT_1 + MAX_PRIMS * sizeof(Prim) <= OVL0B_RANKS_AT, "b
 _Static_assert(OVL0B_RANKS_AT + 2 * RANK_BUCKETS * 2 <= OVL0B_PRIMTAB_AT, "the rank tables overrun the primitive tables");
 _Static_assert(Z_STEP * (BATTLE_PRIMS + POOL_BYTES / 8 + 1) < 32768, "battle depths overrun VTX16");
 _Static_assert(OVL0B_PRIMTAB_AT + PRIM_TABLES * BATTLE_PRIMS <= OVL0B_HEADS_AT, "the primitive tables overrun the entry heads");
-_Static_assert(OVL0B_HEADS_AT + 0x1010 * 2 <= OVL0B_CODE_END, "the entry heads overrun ovl_0b's code");
+_Static_assert(OVL0B_HEADS_AT + 0x1010 * 2 <= OVL0B_PLACES_AT, "the entry heads overrun the places");
+_Static_assert(OVL0B_PLACES_AT + ((0x100F >> 2) + 1) * 2 <= OVL0B_CODE_END, "the places overrun ovl_0b's code");
 _Static_assert(OVL0A_PRIMS_AT_1 + OVL0A_FIELD_PRIMS * (sizeof(Prim) + PRIM_TABLES) <= OVL0A_CODE_END,
                "field buffer 1 and the primitive tables overrun ovl_0a's code");
 
@@ -4731,6 +4938,7 @@ static void use_place(const Place *p) {
         tables = (u8 *)(buffers[1].prims + prims_max);
     }
     native_heads = p->field || p->world ? NULL : (u16 *)(psx_ram + p->at + OVL0B_HEADS_AT);
+    strip_places = p->field || p->world ? NULL : (u16 *)(psx_ram + p->at + OVL0B_PLACES_AT);
     prim_group = tables; prim_palette = tables + prims_max; prim_drop = tables + 2 * prims_max;
     prim_layer = tables + 3 * prims_max;
 #ifdef PORT_FIELD_GX
@@ -5617,6 +5825,7 @@ static void battle_two(Buffer *b) {
     /* after no split fitted the textures, the next scenes go straight to one pass, more of them each time it fails
      * again (a battle's textures stay as big: each try is two texture plans) */
     if (battle_hold) { --battle_hold; battle_one(b); return; }
+    for (int m = 0; m < b->meshes; ++m) vertices += mesh_at(b, m)->strip_saved; /* (two passes: no strips) */
     if (back_bg < 0) { /* (the first pass's capture behind the second: BG3, as a field's) */
         back_bg = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 8, 0);
         bgSetPriority(back_bg, 3);

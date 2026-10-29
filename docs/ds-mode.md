@@ -1377,3 +1377,18 @@ the last split that fitted first: d1_b0228 35.7 -> 25.1, d3_b0232 36.2 -> 25.5, 
 Where the vertices go (average scene): the party ~2,300-2,600, the heavy enemy ~2,000-3,000, the recorded primitives
 (the background's layers 8/4/2, linked into the second OT, which port_native_bg leaves to GP0; effects; UI)
 ~900-1,700; the over-budget scenes are 100-1,000 vertices over on average.
+
+### Battle model triangle strips (2026-10-29)
+The 3D engine's 6144 vertices are what battles run out of, and the models' triangles (FT3, nearly all of an enemy's)
+cost three each. In one pass, native_strips draws each model's opaque textured triangles before the walk, in its FT3
+list's order, as triangle strips: a triangle sharing an edge with the last one (same texture use and colour, the
+edge's uvs the same; the strip's first triangle turned so that the edge the next one shares is last) costs one
+vertex. Each vertex sits at its own depth: its OT entry (port_native_mesh keeps one per vertex, as a quad of four of
+it would have) mapped to the walk's drawing place there (strip_places, per 4 entries, in ovl_0b's dead code after
+the entry heads), so the models' order among the arena's and effects' primitives stays about the PS1's (approximate
+depth, approved for models). The walk skips those triangles but counts their places. The budget counts strips
+(strip_count: the same rules); two passes don't use them (their split is by place) and count every vertex.
+As stored, the lists' order strips 15-21% of the heavy enemies' drawn vertices (offline, eight views each; reordering
+the lists into strips would make it 27-30%). Dropped polygons over a run: d1_b0228 7,943 -> 0, d3_b0232 19,435 -> 0,
+d4_b0678 3,408 -> 1,566, d2_b0135 17,302 -> 6,826; time 25.1 -> 28.8, 25.5 -> 29.2, 36.6 -> 33.7, 32.4 -> 36.8 ms
+(the scenes are now drawn whole).
