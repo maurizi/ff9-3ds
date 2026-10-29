@@ -647,7 +647,7 @@ def main():
             runs = []
             for s_, d_ in patches:
                 end = runs[-1][0] + len(runs[-1][1]) if runs else None
-                if runs and s_ - end <= 8:  # (a short gap: the image's own sectors in between, one run fewer)
+                if runs and s_ - end <= 64:  # (a gap: the image's own sectors in between, one run fewer)
                     for k in range(end, s_):
                         runs[-1][1].append(img.read(k * SECTOR, SECTOR))
                     runs[-1][1].append(d_)

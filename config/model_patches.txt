@@ -3,15 +3,17 @@
 # are game data (never committed): `make model-patches` regenerates build/patches/discN.bin from the disc images and
 # checks each against the SHA-256 recorded here; the CD layer (port/psx/cd.c) serves them from ff9ds/patches/.
 # Models (FF9.IMG dir 7 file ids): Ochu 95, Bandersnatch 145, Grand Dragon 355, Gigan Toad 137/663, Red Dragon 610,
-# Zuu 87, Axe Beak 97, Worm Hydra 340, Zaghnol 163.
-models 95,145,355,137,663,610,87,97,340,163
+# Zuu 87, Axe Beak 97, Worm Hydra 340, Zaghnol 163; then (the battles still dropping on 2026-10-29) Python 60, Armstrong 334,
+# Serpion 88, Troll 326, Iron Man 343, Antlion 350, Fang 151, Cerberus 89, Hecteyes 166, Abadon 341, Adamantoise 324,
+# Plant Spider 345, Seeker Bat 153, Sand Scorpion 81, Clipper 150.
+models 95,145,355,137,663,610,87,97,340,163,60,334,88,326,343,350,151,89,166,341,324,345,153,81,150
 ratio 0.15
 sharp 60
 bake 1
 pose 1
 model 610 sharp 75
 model 610 ratio 0.2
-disc1 b6444e92be23f87588639666d535b7a0a13531277cf41529cd172fc47575d89b
-disc2 97d6ffe9c12e1b836cf40fa52f1c652e1a6c9a108064b3dc3f63460e97999842
-disc3 8dd9b23eb3f043e1467be07890a3021e4a8625856a5e49e5b30918992015033c
-disc4 107536d1039e1a3258ab11695b667d82767bd2ce47cdb4ab260ac15325003d39
+disc1 7118df46f199a6588292a746927ac79e89122a47e419cbd2761bb8d06bcff3a1
+disc2 1685650148bbdad51bf19fb0a7f63d7798dab0b24ec64f4a1a9ed3de444c0bf7
+disc3 6344e680f478d883b52d30729f11a60f330e6dd5b5eb383e51aba46895c77374
+disc4 b6beb85f91996b0d7dff293d24962b3d28e456508ac85016430de02ed3cdb621
