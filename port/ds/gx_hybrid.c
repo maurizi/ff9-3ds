@@ -3710,7 +3710,7 @@ static int field_sprite(Buffer *b, const Gp0Mode *m, const Gp0Vtx *v, int w, int
 
 /* field_sprite from a texture page + SPRT_16 packet's own words (a field's background tile: gp0_tpage_sprite16), the
  * same record without decoding them into a mode and a vertex first (0: left to hybrid_rect) */
-static int hybrid_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc) {
+GXH_HOT static int hybrid_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc) {
     if (!place->field) return 0;
     Buffer *shown, *b = target(&shown);
     if (!b || b == shown || b->soft || gp0_state.twin_mask_x || gp0_state.twin_mask_y || gp0_state.set_mask ||

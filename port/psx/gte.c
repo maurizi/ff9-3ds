@@ -21,6 +21,12 @@
 #else
 #define GTE_HOT
 #endif
+/* the lighting (DS mode's models are native and flat: under 0.4% of a field or battle) leaves ITCM to the renderer */
+#if defined(PORT_DS_MODE) && defined(PORT_GX_HYBRID)
+#define GTE_LIGHT_HOT
+#else
+#define GTE_LIGHT_HOT GTE_HOT
+#endif
 
 typedef int16_t i16;
 typedef int32_t i32;
@@ -527,7 +533,7 @@ GTE_HOT static void mat_mul(int mbase, i64 vx, i64 vy, i64 vz, i64 tx, i64 ty, i
 }
 
 /* Interpolate MAC (in .12 colour units) toward the far colour by IR0, then push the colour FIFO. */
-GTE_HOT static void interpolate(i64 m1, i64 m2, i64 m3, int sf, int lm) {
+GTE_LIGHT_HOT static void interpolate(i64 m1, i64 m2, i64 m3, int sf, int lm) {
 #define FITS(v, bits) ((uint64_t)((i64)(v) + ((i64)1 << (bits))) < ((uint64_t)1 << ((bits) + 1))) /* -2^bits <= v < 2^bits */
     if (sf && FITS(m1, 29) && FITS(m2, 29) && FITS(m3, 29) && FITS(RFC, 17) && FITS(GFC, 17) && FITS(BFC, 17)) {
         /* every sum within 32 bits (colours: DPCS's RGB << 16, INTPL's IR << 12, the lighting's colour x IR << 4),
@@ -559,7 +565,7 @@ static void color_ir(u32 r, u32 gr, u32 b, i64 *m1, i64 *m2, i64 *m3) {
     *m3 = (i64)b * IR3 * 16;
 }
 
-GTE_HOT static void light(int v, int sf, int lm, int kind) {
+GTE_LIGHT_HOT static void light(int v, int sf, int lm, int kind) {
     int shift = sf * 12;
     i64 m1, m2, m3;
     mat_mul(8, V_X(v), V_Y(v), V_Z(v), 0, 0, 0, sf, lm);  /* LLM * V */
