@@ -235,9 +235,13 @@ $(BUILD)/ds/ff9ds_ds.mem:
 $(BUILD)/ds/ff9ds.specs: $(GAME_SPECS_BASE) $(BUILD)/ds/ff9ds_arm9.ld $(GAME_MEM) $(BUILD)/ds/runtime-config
 	@sed -e 's|%:getenv(BLOCKSDS /sys/crts/ds_arm9.ld)|$(BUILD)/ds/ff9ds_arm9.ld|' \
 		$(if $(GAME_MEM),-e 's|%:getenv(BLOCKSDS /sys/crts/ds_arm9.mem)|$(GAME_MEM)|') $< > $@
+# picolibc's integer-only printf and scanf (nothing formats or parses floats; no %ll): its double versions and
+# their soft-float helpers are ~8 KB of resident code, which DS mode's heap needs (a battle's)
+DS_STDIO_INT := $(foreach f,vfprintf __d_vfprintf,-Wl$(,)--wrap=$(f) -Wl$(,)--defsym=__wrap_$(f)=__i_vfprintf) $(foreach f,vfscanf __d_vfscanf,-Wl$(,)--wrap=$(f) -Wl$(,)--defsym=__wrap_$(f)=__i_vfscanf)
+
 $(BUILD)/ds/stubs.c $(BUILD)/ds/ff9ds.elf: $(BUILD)/ds/ff9ds.specs
 $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH),ds,arm,\
-	-specs=$(BUILD)/ds/ff9ds.specs -L$(BLOCKSDS)/libs/libnds/lib -L$(BLOCKSDS)/libs/maxmod/lib -Wl$(,)--gc-sections $(if $(filter 3,$(PROFILE)),-Wl$(,)--wrap=memset -Wl$(,)--wrap=free -Wl$(,)--wrap=swiIntrWait -Wl$(,)--wrap=swiWaitForVBlank),-lmm9 -lnds9 -lc))
+	-specs=$(BUILD)/ds/ff9ds.specs -L$(BLOCKSDS)/libs/libnds/lib -L$(BLOCKSDS)/libs/maxmod/lib -Wl$(,)--gc-sections $(DS_STDIO_INT) $(if $(filter 3,$(PROFILE)),-Wl$(,)--wrap=memset -Wl$(,)--wrap=free -Wl$(,)--wrap=swiIntrWait -Wl$(,)--wrap=swiWaitForVBlank),-lmm9 -lnds9 -lc))
 
 # Changing a DS runtime option must rebuild its users even when sources are unchanged.
 .PHONY: FORCE_DS_CONFIG
