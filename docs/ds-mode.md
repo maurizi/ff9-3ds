@@ -1438,3 +1438,9 @@ texel off everywhere: darker edges, the toad's nostrils spread into a block). A 
 model as if every triangle had changed now reproduces 98.5% of its texels' colours (the rest along edges; it used to
 change most). Baking is back on: the toad matches the original, the Ochu's petals keep their centre stripe; the
 notch in its front petal (geometry) remains. Drops: Ochu 656, Bandersnatch 215, Gigan Toad 605, Zuu 0, Axe Beak 258.
+With the decomp's R27 (tools/battle_pose.py, exact against the PS1), the simplifier judges collapses on the posed
+model (the idle motion at three frames, model space): a vertex's triangles may span bones (u still only moves onto a
+vertex of its own bone; flips are checked in all three frames), and baking samples the posed original surface, only
+from the original triangles the simplified one took over (its provenance: a collapse merges its fan's), which keeps a
+moved chest from picking up an arm's texels. Dropped polygons over a run: Ochu 153, Bandersnatch 34, Grand Dragon
+22 / 127 / 282 / 2,703, Gigan Toad 776, Zuu 0, Axe Beak 0, Red Dragon x2 5,067 (it reaches only 6%: sharp folds).

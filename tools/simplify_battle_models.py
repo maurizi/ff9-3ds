@@ -26,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..', 'decomp', 'tools'))
 import battle_models as bm          # noqa: E402
 import encounter_catalog as ec      # noqa: E402
+import battle_pose                  # noqa: E402  (R27: the models' poses)
 
 SECTOR = 2048
 FT4, FT3 = 0x18, 0x14
@@ -92,10 +93,12 @@ def q_cost(q, p):
     return sum(q[i * 4 + j] * v[i] * v[j] for i in range(4) for j in range(4))
 
 
-def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False, split_quads=True):
+def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False, split_quads=True, poses=None):
     """Remove about `ratio` of the group's triangles. Returns (removed triangles, max error, collapses)."""
     nv = len(g.V)
-    P = [v[:3] for v in g.V]
+    # positions: bone-local as stored, or (R27: tools/battle_pose.py) the model posed in model space, the first of a
+    # few frames of its idle motion; with a pose, triangles across bones are judged too
+    P = poses[0] if poses else [v[:3] for v in g.V]
     # the quads as their two triangles (the GPU draws an FT4 as (0, 1, 2) and (1, 2, 3)); pairs that come through
     # untouched are quads again at the end
     n_tris = len(g.tris)
@@ -117,6 +120,7 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False, split_quads=True):
     g.quads = []
     orig_bytes = [bytes(t) for t in g.tris]  # (each triangle as it was, quads' halves included: changed ones are baked)
     alive = [True] * len(g.tris)
+    source = [{i} for i in range(len(g.tris))]  # per triangle, the original ones whose surface it shows (baking)
     vt = [set() for _ in range(nv)]
     for i, t in enumerate(g.tris):
         for v in g.tv(t):
@@ -150,7 +154,7 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False, split_quads=True):
         edges = {}
         for t in fan:
             vs = g.tv(t)
-            if any(g.bone[x] != g.bone[u] for x in vs):
+            if not poses and any(g.bone[x] != g.bone[u] for x in vs):
                 return None
             for x in vs:
                 if x != u:
@@ -171,6 +175,8 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False, split_quads=True):
         best = None
         charts = {chart(t, u) for t in fan}
         for v in edges:
+            if g.bone[v] != g.bone[u]:
+                continue  # (u's corners take v: it must move with u's bone)
             # in each chart, v's uv where u's triangles touch it: one value (the corners moving onto v take it)
             uvi = {}
             ok = True
@@ -191,6 +197,14 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False, split_quads=True):
                 new = cross(sub(P[nvs[1]], P[nvs[0]]), sub(P[nvs[2]], P[nvs[0]]))
                 if dot(old, new) <= 0.2 * math.sqrt(dot(old, old) * dot(new, new)):
                     ok = False
+                    break
+                for Pf in (poses or [])[1:]:  # (and in the motion's other frames: joints bend)
+                    o2 = cross(sub(Pf[vs[1]], Pf[vs[0]]), sub(Pf[vs[2]], Pf[vs[0]]))
+                    n2 = cross(sub(Pf[nvs[1]], Pf[nvs[0]]), sub(Pf[nvs[2]], Pf[nvs[0]]))
+                    if dot(o2, n2) <= 0.2 * math.sqrt(dot(o2, o2) * dot(n2, n2)):
+                        ok = False
+                        break
+                if not ok:
                     break
                 # its texture's stretch (surface per texel) kept within 1.5x: a small texture area spread over more
                 # surface (a nostril's dark texels over the back) is beyond what baking can redraw
@@ -242,6 +256,10 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False, split_quads=True):
             break  # (the cheapest left costs more: done)
         _, v, uvi = c
         touched = set()
+        # (provenance: the triangles left around u now cover the area of all of u's, original triangles included)
+        merged = set().union(*(source[i] for i in vt[u]))
+        for i in vt[u]:
+            source[i] = merged
         for i in list(vt[u]):
             t = g.tris[i]
             vs = g.tv(t)
@@ -285,6 +303,7 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False, split_quads=True):
             alive[a] = alive[b] = False
             g.quads.append(bytearray(q))
     g.changed = [bytes(t) != orig_bytes[i] for i, (t, a) in enumerate(zip(g.tris, alive)) if a]
+    g.source = [source[i] for i, a in enumerate(alive) if a]
     g.tris = [t for t, a in zip(g.tris, alive) if a]
     # the vertices still used, in bone order (vertexCounts per bone), and the polygons' indices remapped
     used = set(x for t in g.tris for x in g.tv(t)) | set(x for q in g.quads for x in struct.unpack_from('<4H', q, 0))
@@ -292,6 +311,7 @@ def simplify(g, ratio, max_error=1e9, sharp=40.0, bake=False, split_quads=True):
     remap = {k: i for i, k in enumerate(keep)}
     g.vcounts = [sum(1 for k in keep if g.bone[k] == b) for b in range(len(g.vcounts))]
     g.bone_of = [g.bone[k] for k in keep]
+    g.posed = [P[k] for k in keep] if poses else None
     g.V = [g.V[k] for k in keep]
     for t in g.tris:
         struct.pack_into('<3H', t, 0, *[remap[x] for x in g.tv(t)])
@@ -403,31 +423,29 @@ def ray_tri(o, d, p0, p1, p2):
     return dot(e2, qv) / det, b1, b2
 
 
-def bake(out, data, orig, g, tims, reach):
+def bake(out, data, orig, g, tims, reach, posed=None):
     """Redraw the texels of the triangles the collapses changed from the original surface: for each, the point of the
     simplified triangle it shows, along that triangle's normal the outermost original triangle of the same bone within
     `reach`, the nearest one (the same surface, or a removed feature in front of it), its texel there in the target
     texture's nearest colour (a colour far from all of them gets a CLUT entry no texel uses). Texels an unchanged triangle also shows stay.
     Returns the texels redrawn."""
-    P0 = [v[:3] for v in orig.V]
-    # the original surface: every triangle (quads as two), by bone, with what it shows
+    P0 = posed if posed else [v[:3] for v in orig.V]  # (posed: every triangle in one space, across bones)
+    # the original surface: every triangle, numbered as simplify numbered them (its FT3s, then each quad's halves),
+    # with what it shows; a simplified triangle samples only those it took over (g.source)
     src = []
     for t in orig.tris:
         src.append((g.tv(t), g.tuv(t), t[6]))
     for q in orig.quads:
         v4, uv4 = struct.unpack_from('<4H', q, 0), struct.unpack_from('<4H', q, 8)
-        for order in ((0, 1, 2), (1, 2, 3)):
+        for order in ((0, 1, 2), (1, 3, 2)):
             src.append(([v4[k] for k in order], [uv4[k] for k in order], q[0x13]))
-    by_bone = {}
+    surf = []
     for vs, uvs, tex in src:
-        b = orig.bone[vs[0]]
-        if all(orig.bone[x] == b for x in vs):
-            ps = [P0[x] for x in vs]
-            c = tuple(sum(p[i] for p in ps) / 3 for i in range(3))
-            r = max(math.dist(c, p) for p in ps)
-            by_bone.setdefault(b, []).append((ps, uvs, tex, c, r))
+        ps = [P0[x] for x in vs]
+        c = tuple(sum(p[i] for p in ps) / 3 for i in range(3))
+        surf.append((ps, uvs, tex, c, max(math.dist(c, p) for p in ps)))
     # the simplified triangles' positions: g's vertices (remapped) and quads
-    P = [v[:3] for v in g.V]
+    P = g.posed if posed else [v[:3] for v in g.V]
     cover = {}
     for i, t in enumerate(g.tris):
         if tims[t[6]] is None:
@@ -454,7 +472,7 @@ def bake(out, data, orig, g, tims, reach):
         n = (n[0] / nl, n[1] / nl, n[2] / nl)
         c = tuple(sum(p[k] for p in ps) / 3 for k in range(3))
         r = max(math.dist(c, p) for p in ps) + reach
-        near = [s_ for s_ in by_bone.get(g.bone_of[vs[0]], []) if math.dist(s_[3], c) <= r + s_[4]]
+        near = [surf[j] for j in g.source[i]]
         for x, y, bary in tri_texels([(g.uvs[k] & 0xFF, g.uvs[k] >> 8) for k in g.tuv(t)]):
             owners = cover.get((t[6], x, y), [])
             if any(j < 0 or not changed[j] for j in owners) or owners[:1] != [i]:
@@ -494,7 +512,7 @@ def bake(out, data, orig, g, tims, reach):
     return done
 
 
-def rewrite(data, mid, ratio, report, max_error=1e9, sharp=40.0, do_bake=False):
+def rewrite(data, mid, ratio, report, max_error=1e9, sharp=40.0, do_bake=False, pose_key=None):
     """The model file with its groups simplified in place (same size); per-group stats."""
     out = bytearray(data)
     pack = ec.db_find(data, bm.KIND_PACK << 16)
@@ -504,17 +522,25 @@ def rewrite(data, mid, ratio, report, max_error=1e9, sharp=40.0, do_bake=False):
     total_packet = 0
     stats = []
     tims = load_tims(data) if do_bake else None
+    group_poses = None
+    if pose_key is not None:  # (the idle motion at three frames: model space per vertex, per group)
+        model = battle_pose.Model(data, mid)
+        fc = max(1, model.frame_count(pose_key))
+        frames = sorted({0, fc // 3, 2 * fc // 3})
+        posed = [model.vertices(model.bone_matrices(pose_key, f)) for f in frames]
+        group_poses = [[pf[gi] for pf in posed] for gi in range(nmesh)]
     for i in range(nmesh):
         m = mesh_o + i * 0x28
         g = Group(data, h, m, nbones)
         before = (len(g.quads), len(g.tris), len(g.V))
         orig = Group(data, h, m, nbones) if do_bake else None
-        gone, err, n = simplify(g, ratio, max_error, sharp, do_bake)
+        poses = group_poses[i] if group_poses else None
+        gone, err, n = simplify(g, ratio, max_error, sharp, do_bake, poses=poses)
         if g.v_o + 8 * len(g.V) + FT4 * len(g.quads) + FT3 * len(g.tris) > g.uv_o:
             # (quads that stayed two triangles take more room than the lists had: this group with its quads whole)
             g = Group(data, h, m, nbones)
-            gone, err, n = simplify(g, ratio, max_error, sharp, do_bake, split_quads=False)
-        baked = bake(out, data, orig, g, tims, max(2.0, 2 * err)) if do_bake and tims else 0
+            gone, err, n = simplify(g, ratio, max_error, sharp, do_bake, split_quads=False, poses=poses)
+        baked = bake(out, data, orig, g, tims, max(2.0, 2 * err), poses[0] if poses else None) if do_bake and tims else 0
         stats.append((i, before, (len(g.quads), len(g.tris), len(g.V)), err, baked))
         # counts and packet size
         struct.pack_into('<H', out, m + 2, len(g.quads))
@@ -560,6 +586,7 @@ def main():
     ap.add_argument('--ratio', type=float, default=0.15, help='share of each group\'s triangles to remove')
     ap.add_argument('--out', help='directory for discN.bin sector patches (under ff9ds/ or build/)')
     ap.add_argument('--report', action='store_true')
+    ap.add_argument('--pose', action='store_true', help='judge collapses on the posed model (triangles across bones)')
     ap.add_argument('--bake', action='store_true', help='redraw the textures where collapses moved or removed surface')
     ap.add_argument('--sharp', type=float, default=40.0, help='a vertex whose triangles bend more (degrees) stays')
     ap.add_argument('--max-error', type=float, default=1e9, help='largest collapse error (model units) taken')
@@ -577,6 +604,8 @@ def main():
                 setattr(a, key, float(val))
             elif key == 'bake':
                 a.bake = val.strip() == '1'
+            elif key == 'pose':
+                a.pose = val.strip() == '1'
             elif re.fullmatch(r'disc[1-4]', key):
                 expect[key] = val.strip()
     if not a.models:
@@ -595,7 +624,8 @@ def main():
                 continue
             sec, n = files[mid]
             data = img.read(sec * SECTOR, n * SECTOR)
-            new, stats = rewrite(data, mid, a.ratio, a.report, a.max_error, a.sharp, a.bake)
+            key = battle_pose.motion_key(mid, 0, disc, a.img) if a.pose else None
+            new, stats = rewrite(data, mid, a.ratio, a.report, a.max_error, a.sharp, a.bake, key)
             if a.report or disc == 1:
                 for i, b, c, err, baked in stats:
                     c0, c1 = 4 * b[0] + 3 * b[1], 4 * c[0] + 3 * c[1]
