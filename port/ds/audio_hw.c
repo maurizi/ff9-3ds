@@ -214,6 +214,9 @@ void port_hw_sound_frame(void) {
         psx_spu_voice_output(v, out);
         int l = out->left < 0 ? -out->left : out->left, r = out->right < 0 ? -out->right : out->right;
         amps[v] = out->on && !out->noise ? (l > r ? l : r) + 1 : 0;
+#ifdef PORT_SPU_SOLO /* (debug: only these voices heard) */
+        if (!(PORT_SPU_SOLO >> v & 1)) amps[v] = 0;
+#endif
         candidates += amps[v] > 0;
     }
     /* noise voices: the two loudest take channels 14 and 15 for this frame */

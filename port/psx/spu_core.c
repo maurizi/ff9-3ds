@@ -340,7 +340,12 @@ SPU_HOT void psx_spu_advance(unsigned ticks) {
         if (key_on || key_off) sample_frame(output), i = 1; /* key events apply after this sample */
         while (i < count) {
             unsigned n = count - i > PSX_SPU_BLOCK_SPAN ? PSX_SPU_BLOCK_SPAN : count - i;
-            if (span_independent(n)) span_frames(output + i * 2, n);
+#ifdef PORT_SPU_SOLO /* (debug: the per-sample path, where the solo mask is) */
+            if (0)
+#else
+            if (span_independent(n))
+#endif
+                span_frames(output + i * 2, n);
             else for (unsigned k = 0; k < n; ++k) sample_frame(output + (i + k) * 2);
             i += n;
         }

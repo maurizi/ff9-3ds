@@ -685,3 +685,12 @@ the echo approximation (unchanged with it off) nor phase inversion. Negative voi
 copies: voice 22 there, L -3356 R -38) are now played inverted (the samples negated after the low-pass, the louder
 side's sign: one channel plays both sides), which didn't change the bass. Still to find, per voice (soloed on both
 sides): pitch modulation, the envelope's per-frame steps, or a voice the DS keeps after the PS1 released it.
+Per voice (`PORT_SPU_SOLO=mask`, a debug define in spu_voice.c, spu_core.c (which then takes the per-sample path)
+and audio_hw.c: only those voices heard): d3_f2305's voices 0-3 alone, each, carry 20-28 dB more energy at 50-220 Hz
+(against 300-3000 Hz) on the DS than on the host, while above 240 Hz they match within ~2 dB. That low band comes
+in bursts (thumps), not a hum: the hardware path sets each voice's envelope as its channel's volume once a frame
+(16.7 ms steps for attacks, decays and releases) and cuts channels with soundKill wherever their wave is. Matching
+the channels' rates to the DS's 59.83 Hz frames (a drift between the rings' writes and reads) changed nothing.
+Proposed: the envelope baked into the samples as the rings are written (ramped from block to block), the channel's
+volume only the voice's volume and pan. The capture now also sets melonDS's AudioSync, so the recording follows
+emulated time when the emulator can't hold full speed on this machine.

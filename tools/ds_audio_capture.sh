@@ -12,6 +12,9 @@ conf=$HOME/.var/app/net.kuribo64.melonDS/config/melonDS/melonDS.toml
 cp "$conf" "$out.melonDS.toml"
 trap 'cp "$out.melonDS.toml" "$conf"; rm -f "$out.melonDS.toml"' EXIT
 sed -i 's/^LimitFPS = .*/LimitFPS = true/' "$conf"
+# (and paced by its audio output: every emulated sample reaches the recording, in emulated time, however fast this
+# machine runs it; a wall-clock recording stretches when melonDS can't hold full speed)
+sed -i 's/^AudioSync = .*/AudioSync = true/' "$conf"
 parec -d "$sink.monitor" --file-format=wav --rate=48000 --channels=2 --format=s16le "$out" & rec=$!
 ( # move melonDS's stream to the sink whenever one shows up on another sink
   while kill -0 $rec 2>/dev/null; do

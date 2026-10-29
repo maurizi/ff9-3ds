@@ -81,6 +81,9 @@ SPU_HOT void psx_spu_mix_voices(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_
         if (action & PSX_SPU_SOURCE_MUTE) psx_spu_adsr_force_off(&voice->adsr);
         for (unsigned channel = 0; channel < 2; ++channel) {
             int32_t value = (sample * voice->volume[channel].level) >> 15;
+#ifdef PORT_SPU_SOLO /* (debug: only these voices heard) */
+            if (!(PORT_SPU_SOLO & bit)) value = 0;
+#endif
             mix->dry[channel] += value;
             if (reverb_mask & bit) mix->reverb_send[channel] += value;
             if (voice->volume[channel].active) psx_spu_volume_tick(&voice->volume[channel]);
