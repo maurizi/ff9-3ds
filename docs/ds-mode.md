@@ -1452,3 +1452,8 @@ strip_order also writes each FT3's link into its last byte (padding: bit 0 it co
 corners in strip order), and the per-frame count and the emitter only read it (no edge or uv search per triangle,
 which was 14% of d1_b0228's busy time). Only meshes whose header carries the flag (NativeMesh.strips) draw strips.
 d1_b0228 28.4 -> 26.0, d3_b0232 28.8 -> 26.4, d4_b0678 33.2 -> 30.8, d2_b0135 36.3 -> 33.7 ms; no more drops.
+Battle sweep (60 fixtures, DS mode, 2026-10-29, after the strips, the simplified enemies and the strip links): all 60
+run to frame 1500, median 25.2 ms per VBlank (it was ~28-29 before the strips' precomputation), 43 drop nothing over
+a run. The rest: Red Dragon x2 (d3_b0194, 3,615), d4_b0359 (3,355: an effect-heavy close-up of the party, no
+enemy model on screen), Grand Dragon (d4_b0617, 2,703), Worm Hydra (1,617), Zaghnol (1,308), Gigan Toad (776), and
+under 600 elsewhere. On the host, all 1,085 battle fixtures pass with the patches (2,000 frames, rendering).
