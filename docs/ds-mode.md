@@ -1457,3 +1457,10 @@ run to frame 1500, median 25.2 ms per VBlank (it was ~28-29 before the strips' p
 a run. The rest: Red Dragon x2 (d3_b0194, 3,615), d4_b0359 (3,355: an effect-heavy close-up of the party, no
 enemy model on screen), Grand Dragon (d4_b0617, 2,703), Worm Hydra (1,617), Zaghnol (1,308), Gigan Toad (776), and
 under 600 elsewhere. On the host, all 1,085 battle fixtures pass with the patches (2,000 frames, rendering).
+
+### Where a field frame's time goes (2026-10-29, PROFILE=1 with temporary timers in submit)
+Per VBlank (fields run the game at 30 fps: one submit per two VBlanks): d4_f2904 35.5 ms = submit 22.9 (field_frame
+12.9: planning, the composite, the 2D layer; emit_scene 9.6; upload 0.5) + the OT walk recording 6.5 + game ~4.5.
+d1_f0604 37.5 = field_frame 7.9 + emit_scene 11.2 + OT walk 7.3 + game. d2_f0356 30.2 = field_frame 15.6 (of it the
+exact additive layer's software raster 7.8) + emit 1.5 + OT walk 5.2. d4_f2904 records ~946 primitives a scene:
+emission is on the order of 1,000+ cycles each, the field's largest single cost after field_frame.
