@@ -1760,3 +1760,10 @@ run.
   run left it off for 5 hours (interpreter: +0.5-2 ms a field), fixed in 37c5038.
 - **After all of the above (melonDS JIT):** 64-field sample median 20.14 ms per VBlank (19 of 64 within 17.5),
   battles d1_b0228 23.8, d2_b0098 24.8, world maps d1_w9009 23.4, d3_w9006 26.8, d4_w9006 25.0.
+- **The battle UI's cost, measured with the JIT (d1_b0228):** the software rows, rects, lines and the 2D layer's present
+  are ~18% of a battle frame. The UI list is drawn whole at nearly every flush (403 flushes in the run, 193 of them
+  whole for translucency, 22,376 entries drawn, 0 skipped): each flush lands on a newly shown buffer the game's fill
+  cleared. Carrying the last UI's pixels across the swap (CPU copy, or DMA a row at a time with the cache kept
+  coherent) and redrawing changed rectangles only was 1-3 ms slower: the copy and the per-rectangle clears cost more
+  than the redraw. Next to try: per-buffer lists (each buffer diffed against its own last UI) with the game's
+  covering fill skipped under the UI in battles, so nothing has to be copied.
