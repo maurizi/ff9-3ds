@@ -5942,7 +5942,7 @@ static void battle_one(Buffer *b) {
  * ~30% of a battle's polygons are hidden, ~25% by this test. A hidden polygon's info byte is 0xFF, as one culled. */
 /* whether a polygon's texels (the box of its uvs on its page) have no transparent one (index of a CLUT colour
  * 0x0000, or a 15-bit 0x0000); a box past 64 x 64 texels isn't checked (not opaque) */
-__attribute__((optimize("Os"), noinline)) static int occ_poly_opaque(const Prim *p) {
+__attribute__((target("arm"), noinline)) static int occ_poly_opaque(const Prim *p) {
     if (!(p->flags & P_TEXTURED)) return 1;
     int u0 = p->u[0], u1 = u0, v0 = p->v[0], v1 = v0;
     for (int i = 1; i < p->n; ++i) {
@@ -5954,11 +5954,34 @@ __attribute__((optimize("Os"), noinline)) static int occ_poly_opaque(const Prim 
     const int depth = p->depth;
     u32 clear = 0; /* (indexed: the CLUT entries that are 0x0000, as bits; 8-bit past 32: any) */
     if (depth < 2) {
-        const u16 *cl = psx_vram + (p->clut_y & 511) * 1024 + (p->clut_x & 1023);
-        for (int i = 0; i < (depth ? 256 : 16); ++i) if (!cl[i]) { if (i < 32) clear |= 1u << i; else return 0; }
+        /* (two entries a word: a zero halfword in it found as a zero byte would be, then which) */
+        const u32 *cl = (const u32 *)(psx_vram + (p->clut_y & 511) * 1024 + (p->clut_x & 1023)); /* (x: 16s) */
+        for (int i = 0; i < (depth ? 256 : 16); i += 2) {
+            const u32 w = cl[i >> 1];
+            if (!((w - 0x00010001u) & ~w & 0x80008000u)) continue;
+            for (int k = 0; k < 2; ++k)
+                if (!(u16)(w >> (16 * k))) { if (i + k < 32) clear |= 1u << (i + k); else return 0; }
+        }
         if (!clear) return 1; /* (no transparent colour in the CLUT: any texel is opaque) */
     }
     if ((u1 - u0 + 1) * (v1 - v0 + 1) > 64 * 64) return 0;
+    if (depth < 2 && clear == 1) { /* (only index 0 transparent, FF9's usual: a halfword's texels at once, those outside
+                                    * the box made nonzero first; any zero nibble or byte is one) */
+        const int per = depth ? 1 : 3, bits = depth ? 8 : 4;
+        const u32 ones = depth ? 0x0101 : 0x1111, highs = depth ? 0x8080 : 0x8888;
+        const int h0 = u0 >> (depth ? 1 : 2), h1 = u1 >> (depth ? 1 : 2);
+        const u32 lo_fill = (1u << (bits * (u0 & per))) - 1, hi_fill = ~((1u << (bits * ((u1 & per) + 1))) - 1) & 0xFFFF;
+        for (int v = v0; v <= v1; ++v) {
+            const u16 *row = psx_vram + ((p->ty + v) & 511) * 1024;
+            for (int h = h0; h <= h1; ++h) {
+                u32 hw = row[(p->tx + h) & 1023];
+                if (h == h0) hw |= lo_fill;
+                if (h == h1) hw |= hi_fill;
+                if ((hw - ones) & ~hw & highs) return 0;
+            }
+        }
+        return 1;
+    }
     for (int v = v0; v <= v1; ++v) {
         const u16 *row = psx_vram + ((p->ty + v) & 511) * 1024;
         for (int x = u0; x <= u1; ++x) {
@@ -5969,34 +5992,6 @@ __attribute__((optimize("Os"), noinline)) static int occ_poly_opaque(const Prim 
         }
     }
     return 1;
-}
-/* a triangle's spans, row by row from y0: [l, r] the pixels whose centres are inside (PS1 coordinates) */
-/* a triangle's spans, row by row from y0: [l, r] the pixels whose centres are inside (PS1 coordinates); each edge's x
- * at the rows' centres in 16.16, one division an edge */
-__attribute__((optimize("Os"))) static int occ_tri_spans(const s16 *x, const s16 *y, int a, int b, int c, int *y0, s16 (*span)[2], int max) {
-    int ia = a, ib = b, ic = c, t;
-    if (y[ib] < y[ia]) { t = ia; ia = ib; ib = t; }
-    if (y[ic] < y[ia]) { t = ia; ia = ic; ic = t; }
-    if (y[ic] < y[ib]) { t = ib; ib = ic; ic = t; }
-    const int top = y[ia], mid = y[ib], bot = y[ic];
-    if (bot <= top || bot - top > max) return 0;
-    *y0 = top;
-    /* x(row centre yy + 0.5) on edge p-q: x_p + (x_q - x_p)(yy + 0.5 - y_p)/(y_q - y_p) */
-    const s32 dl = (s32)(((x[ic] - x[ia]) << 16) / (bot - top));
-    s32 xl = (x[ia] << 16) + dl / 2;
-    s32 ds = mid > top ? (s32)(((x[ib] - x[ia]) << 16) / (mid - top)) : 0, xs = (x[ia] << 16) + ds / 2;
-    for (int yy = top; yy < bot; ++yy) {
-        if (yy == mid) { /* the short edge's second half, b-c */
-            ds = (s32)(((x[ic] - x[ib]) << 16) / (bot - mid));
-            xs = (x[ib] << 16) + ds / 2;
-        }
-        const s32 lo = xl < xs ? xl : xs, hi = xl < xs ? xs : xl;
-        /* (pixel px's centre px + 0.5: the first with it >= lo, the last with it <= hi) */
-        span[yy - top][0] = (s16)((lo - 0x8000 + 0xFFFF) >> 16);
-        span[yy - top][1] = (s16)((hi - 0x8000) >> 16);
-        xl += dl; xs += ds;
-    }
-    return bot - top;
 }
 static u32 *occ_mask; static int occ_words, occ_h;
 static inline int occ_span_set(int yy, int l, int r, int mark) {
@@ -6014,33 +6009,89 @@ static inline int occ_span_set(int yy, int l, int r, int mark) {
     return 1;
 }
 int gxh_stats_occluded;
-/* (a primitive's or polygon's spans: its triangles' (a rectangle's rows) from p's vertices; h0/h1 0: no pixel) */
-__attribute__((optimize("Os"))) static void occ_spans(const Prim *p, s16 (*span)[256][2], int *t0, int *h0, int *t1, int *h1) {
-    *h0 = *h1 = 0;
+/* A triangle's rows walked from its top: [l, r] the pixels whose centres are inside (PS1 coordinates); each edge's x
+ * at the rows' centres in 16.16, one division an edge (on the DS's divider) */
+typedef struct { const s16 *x; int ib, ic, mid, bot, yy; s32 xl, dl, xs, ds; } OccWalk;
+static inline int occ_walk_init(OccWalk *w, const s16 *x, const s16 *y, int a, int b, int c) {
+    int ia = a, ib = b, ic = c, t;
+    if (y[ib] < y[ia]) { t = ia; ia = ib; ib = t; }
+    if (y[ic] < y[ia]) { t = ia; ia = ic; ic = t; }
+    if (y[ic] < y[ib]) { t = ib; ib = ic; ic = t; }
+    const int top = y[ia], mid = y[ib], bot = y[ic];
+    if (bot <= top || bot - top > 255) return 0;
+    w->x = x; w->ib = ib; w->ic = ic; w->mid = mid; w->bot = bot; w->yy = top;
+    /* x(row centre yy + 0.5) on edge p-q: x_p + (x_q - x_p)(yy + 0.5 - y_p)/(y_q - y_p) */
+    w->dl = div32((x[ic] - x[ia]) << 16, bot - top);
+    w->xl = (x[ia] << 16) + w->dl / 2;
+    w->ds = mid > top ? div32((x[ib] - x[ia]) << 16, mid - top) : 0;
+    w->xs = (x[ia] << 16) + w->ds / 2;
+    return bot - top;
+}
+static inline void occ_walk_row(OccWalk *w, int *l, int *r) {
+    if (w->yy == w->mid) { /* the short edge's second half, b-c */
+        w->ds = div32((w->x[w->ic] - w->x[w->ib]) << 16, w->bot - w->mid);
+        w->xs = (w->x[w->ib] << 16) + w->ds / 2;
+    }
+    const s32 lo = w->xl < w->xs ? w->xl : w->xs, hi = w->xl < w->xs ? w->xs : w->xl;
+    /* (pixel px's centre px + 0.5: the first with it >= lo, the last with it <= hi) */
+    *l = (lo - 0x8000 + 0xFFFF) >> 16;
+    *r = (hi - 0x8000) >> 16;
+    w->xl += w->dl; w->xs += w->ds; w->yy++;
+}
+/* whether every pixel of the triangle, grown by one, is covered (-1: it has no pixel), its rows walked only until one
+ * isn't (most polygons show: the first rows tell) */
+__attribute__((target("arm"))) static int occ_tri_covered(const s16 *x, const s16 *y, int a, int b, int c) {
+    OccWalk w;
+    const int h = occ_walk_init(&w, x, y, a, b, c), top = w.yy;
+    if (!h) return -1;
+    int l, r;
+    occ_walk_row(&w, &l, &r);
+    if (!occ_span_set(top - 1, l - 1, r + 1, 0) || !occ_span_set(top, l - 1, r + 1, 0)) return 0;
+    for (int j = 1; j < h; ++j) {
+        occ_walk_row(&w, &l, &r);
+        if (!occ_span_set(top + j, l - 1, r + 1, 0)) return 0;
+    }
+    return occ_span_set(top + h, l - 1, r + 1, 0);
+}
+__attribute__((target("arm"))) static void occ_tri_mark(const s16 *x, const s16 *y, int a, int b, int c) {
+    OccWalk w;
+    const int h = occ_walk_init(&w, x, y, a, b, c), top = w.yy;
+    for (int j = 0, l, r; j < h; ++j) { occ_walk_row(&w, &l, &r); occ_span_set(top + j, l, r, 1); }
+}
+/* the primitive's or polygon's test (-1: no pixel) or its pixels marked: its triangles (a rectangle's rows) from
+ * its vertices */
+__attribute__((target("arm"))) static int occ_poly(const Prim *p, int mark) {
     if (p->flags & P_RECT) { /* (vertices 0 1 2 3: top left, top right, bottom left, bottom right) */
-        const int h = p->y[2] - p->y[0];
-        if (h <= 0 || h > 255 || p->x[1] <= p->x[0]) return;
-        *t0 = p->y[0]; *h0 = h;
-        for (int i = 0; i < h; ++i) { span[0][i][0] = p->x[0]; span[0][i][1] = (s16)(p->x[1] - 1); }
-        return;
+        const int top = p->y[0], h = p->y[2] - p->y[0], l = p->x[0], r = p->x[1] - 1;
+        if (h <= 0 || h > 255 || r < l) return -1;
+        if (mark) { for (int j = 0; j < h; ++j) occ_span_set(top + j, l, r, 1); return 1; }
+        for (int j = -1; j <= h; ++j) if (!occ_span_set(top + j, l - 1, r + 1, 0)) return 0;
+        return 1;
     }
     s16 x[4], y[4];
     for (int i = 0; i < p->n; ++i) { x[i] = p->x[i]; y[i] = p->y[i]; }
-    *h0 = occ_tri_spans(x, y, 0, 1, 2, t0, span[0], 255);
-    if (p->n == 4) *h1 = occ_tri_spans(x, y, 1, 2, 3, t1, span[1], 255);
+    if (mark) {
+        occ_tri_mark(x, y, 0, 1, 2);
+        if (p->n == 4) occ_tri_mark(x, y, 1, 2, 3);
+        return 1;
+    }
+    const int c0 = occ_tri_covered(x, y, 0, 1, 2);
+    if (!c0) return 0;
+    const int c1 = p->n == 4 ? occ_tri_covered(x, y, 1, 2, 3) : -1;
+    if (c0 < 0 && c1 < 0) return -1;
+    return c1 != 0; /* (a triangle without a pixel doesn't keep the other from being hidden) */
 }
-PORT_OVERLAY_CODE(0b) __attribute__((optimize("Os"))) static void battle_occlude(Buffer *b, int *prims, int *vertices) {
+PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void battle_occlude(Buffer *b, int *prims, int *vertices) {
     const int n = collect_native(b);
     occ_words = (b->w + 31) / 32; occ_h = b->h;
     unsigned at = ((b->pool_used + 3) & ~3u) + (unsigned)n * sizeof(NativeRef);
     at = (at + 3) & ~3u;
     const int total = n + b->count;
-    const unsigned need = (unsigned)(occ_words * occ_h) * 4u, spans = 2 * 256 * 2 * sizeof(s16);
-    if (at + need + spans + (unsigned)total * 4 > POOL_BYTES) return;
+    const unsigned need = (unsigned)(occ_words * occ_h) * 4u;
+    if (at + need + (unsigned)total * 4 > POOL_BYTES) return;
     occ_mask = (u32 *)(b->pool + at);
     memset(occ_mask, 0, need);
-    s16 (*span)[256][2] = (s16 (*)[256][2])(b->pool + at + need); /* (and the spans after it, then the order) */
-    u32 *order = (u32 *)(b->pool + at + need + spans);
+    u32 *order = (u32 *)(b->pool + at + need); /* (and the order after it) */
     /* the scene's drawing order, as emit_scene walks it: the native polygons due before each recorded primitive
      * (bit 31: a native reference), far to near */
     int m = 0;
@@ -6069,17 +6120,8 @@ PORT_OVERLAY_CODE(0b) __attribute__((optimize("Os"))) static void battle_occlude
             p = &b->prims[order[i]];
             if (p->flags & P_UI) continue;
         }
-        int t0 = 0, t1 = 0, h0, h1;
-        occ_spans(p, span, &t0, &h0, &t1, &h1);
-        if (!h0 && !h1) continue; /* (no pixel: left to the 3D engine) */
-        int covered = 1; /* hidden: every pixel grown by one covered */
-        for (int k = 0; k < 2 && covered; ++k) {
-            const int h = k ? h1 : h0, top = k ? t1 : t0;
-            for (int j = -1; j <= h && covered; ++j) {
-                const int ja = j < 0 ? 0 : j >= h ? h - 1 : j;
-                covered = occ_span_set(top + j, span[k][ja][0] - 1, span[k][ja][1] + 1, 0);
-            }
-        }
+        const int covered = occ_poly(p, 0); /* hidden: every pixel grown by one covered */
+        if (covered < 0) continue; /* (no pixel: left to the 3D engine) */
         if (covered) {
             const int nv = p->n;
             if (mi) {
@@ -6110,10 +6152,7 @@ PORT_OVERLAY_CODE(0b) __attribute__((optimize("Os"))) static void battle_occlude
             if ((*op & 3) == 0 || (*op & ~3u) != tag) *op = (u8)(tag | (occ_poly_opaque(p) ? 1 : 2));
             if ((*op & 3) != 1) continue;
         } else if (!occ_poly_opaque(p)) continue;
-        for (int k = 0; k < 2; ++k) { /* its pixels (their centres inside: the test's growth is the margin) */
-            const int h = k ? h1 : h0, top = k ? t1 : t0;
-            for (int j = 0; j < h; ++j) occ_span_set(top + j, span[k][j][0], span[k][j][1], 1);
-        }
+        occ_poly(p, 1); /* its pixels (their centres inside: the test's growth is the margin) */
     }
     if (!hidden) return;
     gxh_stats_occluded += hidden;

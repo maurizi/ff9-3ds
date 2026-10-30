@@ -1667,3 +1667,19 @@ psx_gte_rtpt_depths, the projection by psx_gte_project), in ARM (in Thumb each 6
 group goes through the GTE, so the registers end as the game leaves them (the only state a group takes from the one
 before is RGBC's code byte, tracked). Frames identical. ms per VBlank: d1_w9009 31.73 -> 28.16, d3_w9006 37.75 ->
 31.93, d4_w9006 33.89 -> 30.03.
+
+### The occlusion cull's cost (2026-10-30)
+
+60-battle sample (b60f, this session's builds): median 25.24 -> 25.09 ms per VBlank against b60e (before the split
+search, the cull and two passes); the over-budget battles are slower than b60e, drawn whole now instead of dropping
+(Zaghnol d1_b0014 31.7 -> 44.9, Gigan Toad d2_b0135 33.0 -> 41.7, Grand Dragon d4_b0617 27.4 -> 33.6). Timers over
+frames 1275-1403 put Zaghnol's in battle_occlude: 177 ms a call (~2,100 polygons: 1,287 model, 116 arena, 720
+recorded; 11 calls in the 128 frames, ~15 ms per VBlank), ~40% of it opacity checks (a model polygon's once a
+battle, a recorded primitive's every scene: ~17,000 cycles each, the texel scan and an 8-bit CLUT's 256 entries),
+the rest the spans (~1,000 cycles a polygon), the coverage test, the marking and native_poly. Now: the cull in ARM
+(it was size-optimised Thumb); the texel scan a halfword at a time where only CLUT index 0 is transparent (FF9's
+usual: a zero nibble or byte found as a zero byte is, the box's outside texels made nonzero; checked against the
+per-texel test on 3M random rows), the CLUT two entries a word the same way; each triangle's rows walked only until
+one isn't covered (occ_tri_covered: most polygons show), the spans no longer stored. (The divisions on the DS's
+divider and the spans' lines read before their stores changed nothing: neither was the cost.) Zaghnol 44.9 -> 39.5,
+Gigan Toad 41.7 -> 38.7, Grand Dragon 33.6 -> 32.2; frames as before by eye (timing moves the frame-1500 shots).
