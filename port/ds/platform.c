@@ -23,7 +23,44 @@ volatile u32 port_pc_frame; /* (pc_sampler.c counts from a frame) */
 #endif
 
 /* Keep each status row inside 31 columns: writing the final column wraps and scrolls the console. */
+/* The bottom screen: the debug console, or (port_sub_ui) the game's 2D layer as an 8-bit bitmap in banks H and I
+ * (256 x 192: 48 KB). While the bitmap shows, printf writes to a console whose map is in spare PS1 RAM. */
+static int sub_ui;
+static PrintConsole sub_quiet, *sub_console;
+static u16 *sub_quiet_map;
+int port_sub_ui(int on) {
+    if (on == sub_ui || (on && !sub_quiet_map)) return sub_ui;
+    sub_ui = on;
+    if (on) {
+        sub_quiet = *consoleGetDefault(); /* (writing only its map, there) */
+        sub_quiet.fontBgMap = sub_quiet_map;
+        memset(sub_quiet_map, 0, 32 * 32 * 2);
+        sub_quiet.cursorX = sub_quiet.cursorY = 0;
+        sub_console = consoleSelect(&sub_quiet);
+        videoSetModeSub(MODE_5_2D);
+        vramSetBankH(VRAM_H_SUB_BG);
+        vramSetBankI(VRAM_I_SUB_BG_0x06208000);
+        int bg = bgInitSub(3, BgType_Bmp8, BgSize_B8_256x256, 0, 0);
+        bgSetPriority(bg, 0);
+        bgUpdate();
+        dmaFillWords(0, BG_BMP_RAM_SUB(0), 256 * 192);
+    } else {
+        vramSetBankI(VRAM_I_LCD);
+        videoSetModeSub(MODE_0_2D);
+        vramSetBankH(VRAM_H_SUB_BG);
+        consoleInit(sub_console, 0, BgType_Text4bpp, BgSize_T_256x256, 0, 1, false, true);
+        consoleSelect(sub_console);
+        /* what was printed meanwhile (a fatal error's reason: plat_halt) */
+        dmaCopy(sub_quiet_map, sub_console->fontBgMap, 32 * 32 * 2);
+        sub_console->cursorX = sub_quiet.cursorX;
+        sub_console->cursorY = sub_quiet.cursorY;
+    }
+    return sub_ui;
+}
+int port_sub_ui_on(void) { return sub_ui; }
+
 static void status_row(int row, const char *fmt, ...) {
+    if (sub_ui) return;
     char text[32];
     va_list ap;
     va_start(ap, fmt);
@@ -231,6 +268,7 @@ void plat_vlog(const char *fmt, va_list ap) {
 
 void plat_halt(void) {
     port_audio_stop();
+    port_sub_ui(0);
     for (;;) {
         swiWaitForVBlank();
     }
@@ -283,6 +321,7 @@ int main(void) {
     printf("ff9-ds (%s mode)\n", isDSiMode() ? "DSi" : "DS");
     printf("psx_ram %p\n", (void *)psx_ram);
     psx_mem_init(); /* the VRAM and SPU RAM shadows, before anything else takes heap */
+    sub_quiet_map = psx_spare_alloc(32 * 32 * 2); /* (port_sub_ui's console map, out of the heap) */
     if (!fatInitDefault()) {
         printf("no SD card / flashcart filesystem\n");
     } else {

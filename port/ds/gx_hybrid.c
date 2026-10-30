@@ -4441,6 +4441,8 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
 /* ---- presentation ------------------------------------------------------------------------------------------ */
 
 #define BLOCK 32
+int port_sub_ui(int on);
+static int layer_sub; /* (the 2D layer is the sub engine's: below) */
 static u8 block_shown[6][8];   /* the 2D layer has pixels in this 32x32 output block */
 static Buffer *last_shown;
 static u32 block_hash[6][8];
@@ -5223,6 +5225,10 @@ void gxh_enable(int on) {
         bgSetPriority(layer_bg, 0);
         bgUpdate();
         memset((void *)BG_BMP_RAM(0), 0, 256 * 256);
+        /* a battle's 2D layer (its HUD, menus, messages) on the bottom screen: the top shows the battle alone (the
+         * user's dual-screen plan, docs/dual-screen.md; started 2026-10-30) */
+        layer_sub = port_sub_ui(!place->field && !place->world);
+        if (layer_sub) bgHide(layer_bg);
         if (place->field) {
             back_bg = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 8, 0);
             bgSetPriority(back_bg, 3);
@@ -5253,6 +5259,7 @@ void gxh_enable(int on) {
     } else {
         if (layer_bg >= 0) bgHide(layer_bg);
         if (back_bg >= 0) bgHide(back_bg);
+        if (layer_sub) { layer_sub = 0; port_sub_ui(0); }
         gp0_backend = &psx_softgpu;
     }
 }
@@ -6502,10 +6509,14 @@ static int colours, colours_full;
 #define CUBE 64
 static const u8 cube_level[4] = {0, 10, 21, 31};
 
+/* the 2D layer's palette and bitmap: the main engine's (over the 3D layer), or in battles the sub engine's (the
+ * bottom screen: port_sub_ui) */
+static inline volatile u16 *layer_palette(void) { return layer_sub ? BG_PALETTE_SUB : BG_PALETTE; }
+static inline u16 *layer_bitmap(void) { return layer_sub ? (u16 *)BG_BMP_RAM_SUB(0) : (u16 *)BG_BMP_RAM(0); }
 static void reset_colours(void) {
     memset(colour_map, 0, 32768);
     for (int i = 0; i < CUBE; ++i)
-        BG_PALETTE[1 + i] = cube_level[i & 3] | cube_level[(i >> 2) & 3] << 5 | cube_level[i >> 4] << 10;
+        layer_palette()[1 + i] = cube_level[i & 3] | cube_level[(i >> 2) & 3] << 5 | cube_level[i >> 4] << 10;
     colours = CUBE;
     colours_full = 0;
 }
@@ -6525,12 +6536,12 @@ static u8 colour_of(u16 c) {
     if (i) return i;
     if (colours < 255) {
         i = (u8)++colours;
-        BG_PALETTE[i] = c;
+        layer_palette()[i] = c;
     } else {
         colours_full = 1;
         int best = 1, best_d = 1 << 30;
         for (int k = 1; k <= 255; ++k) {
-            u16 p = BG_PALETTE[k];
+            u16 p = layer_palette()[k];
             int dr = (p & 31) - (c & 31), dg = ((p >> 5) & 31) - ((c >> 5) & 31), db = ((p >> 10) & 31) - ((c >> 10) & 31);
             int dd = dr * dr + dg * dg + db * db;
             if (dd < best_d) { best_d = dd; best = k; }
@@ -6674,7 +6685,7 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
     u16 *block = scaled_block();
     u32 memo_colour = 0x10000; /* none yet (colours are 15-bit plus STP): the palette may have been reset above */
     u8 memo_index = 0;
-    u16 *bitmap = (u16 *)BG_BMP_RAM(0);
+    u16 *bitmap = layer_bitmap();
     int shown = 0;
     /* the shown buffer's untouched cells (a battle's reset only with the game's covering fill) */
     int field_scene = b && !b->soft && b->x == d->x && b->y == d->y;

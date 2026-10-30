@@ -70,6 +70,17 @@ opcodes that read the pad (R20).
   with the real font metrics and reports which ones overflow at 1:1. Menus that overflow get a hand-made layout;
   lists scroll.
 
+## 4a. Progress
+- **Battle, step 1 (2026-10-30):** the hybrid renderer's 2D layer (every 2D primitive it doesn't draw in 3D: the
+  HUD, command windows, messages, help) goes to the sub engine in battles. That is an 8-bit bitmap in banks H+I
+  (`port_sub_ui`, platform.c), with the same blocks, hashes and dynamic palette as on the main engine. The top
+  screen shows the battle in 3D, and its target arrows are 3D sprites. The bottom screen shows the PS1 layout,
+  ×0.8, where it was. While the bottom screen shows the UI, printf goes to a console whose map is in spare PS1
+  RAM. plat_halt switches back and copies it over, so a fatal error's reason still shows. Cost: none measured
+  (d1_b0228 24.8 ms per VBlank).
+- Next: the bottom screen at 1:1 from the game's state (party panel, command list, lists, targets, help) in
+  place of the scaled layer; then touch.
+
 ## 5. What the decomp needs to expose for this
 Each bottom-screen UI needs three things: **(a)** where the game draws that UI (to suppress it on top),
 **(b)** the state variables (cursor index, list contents, current menu, selected target), and **(c)** where input
