@@ -3272,6 +3272,15 @@ PORT_OVERLAY_CODE(0a) static void emit_bg_runs(Buffer *b, EmitState *es) {
 /* emit_scene's opaque textured sprites (a field's background tiles) and converted translucent ones (additive or
  * subtractive: mist, glows), the general path's words for them without its other cases, in ITCM: a field's
  * thousands of tiles a scene went through main RAM's code (17% of a median field). 1: the general path takes it. */
+/* emit_sprite's unpaired sprite (its corners vertex by vertex), out of ITCM: tiles are paired */
+static __attribute__((noinline)) void sprite_corners(const Prim *src, int tu, int tv, u32 *xy, u32 *uv) {
+    static const u8 order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
+    for (int j = 0; j < 4; ++j) {
+        int i = order[j];
+        xy[j] = (u32)(u16)src->x[i] | (u32)(u16)src->y[i] << 16;
+        uv[j] = (u32)(u16)((src->u[i] - tu + (i & 1)) * 16) | (u32)(u16)((src->v[i] - tv + (i >> 1)) * 16) << 16;
+    }
+}
 GXH_HOT static int emit_sprite(EmitState *es, const Prim *src, int grp, int pal, int z, int conv) {
     u32 *wp = es->wp, *pack_header, pack_ids;
     int pack_shift;
@@ -3316,8 +3325,17 @@ GXH_HOT static int emit_sprite(EmitState *es, const Prim *src, int grp, int pal,
         if (alpha > 31) alpha = 31;
         if (!alpha) goto done; /* (adds nothing; alpha 0 would be wireframe) */
         want_attr = 3u << 6 | (u32)alpha << 16 | (u32)translucent_id(src, polys) << 24;
-        const u32 hue = raw || abr == 2 ? 0x7FFF : hue_of(src, 0, (u32)m); /* (once: both below) */
-        if (abr != 2) add_white = light_under(src, alpha, modulate(cpal_hue[cpal & 63], hue));
+        /* (a mist layer's tiles share their colour and palette: the hue and its modulation once for a run of them,
+         * not two calls into main RAM's code a tile) */
+        static u32 memo_rgb = ~0u, memo_cpal_hue, memo_hue, memo_mod;
+        const u32 rgb = raw || abr == 2 ? 0x1000000u : (u32)r0 | (u32)g0 << 8 | (u32)b0 << 16, chue = cpal_hue[cpal & 63];
+        if (rgb != memo_rgb || chue != memo_cpal_hue) {
+            memo_hue = raw || abr == 2 ? 0x7FFF : hue_of(src, 0, (u32)m);
+            memo_mod = modulate(chue, memo_hue);
+            memo_rgb = rgb; memo_cpal_hue = chue;
+        }
+        const u32 hue = memo_hue; /* (once: both below) */
+        if (abr != 2) add_white = light_under(src, alpha, memo_mod);
         colour = abr == 2 ? 0 : raw ? 0x7FFF : whiten_by(hue, add_white);
     } else {
         if (depth < 2) {
@@ -3337,12 +3355,7 @@ GXH_HOT static int emit_sprite(EmitState *es, const Prim *src, int grp, int pal,
         xy[0] = x0 | y0; xy[1] = x1 | y0; xy[2] = x1 | y1; xy[3] = x0 | y1;
         uv[0] = ul | vt; uv[1] = ur | vt; uv[2] = ur | vb; uv[3] = ul | vb;
     } else {
-        static const u8 order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
-        for (int j = 0; j < 4; ++j) {
-            int i = order[j];
-            xy[j] = (u32)(u16)src->x[i] | (u32)(u16)src->y[i] << 16;
-            uv[j] = (u32)(u16)((src->u[i] - tu + (i & 1)) * 16) | (u32)(u16)((src->v[i] - tv + (i >> 1)) * 16) << 16;
-        }
+        sprite_corners(src, tu, tv, xy, uv); /* (rare: tiles are paired) */
     }
     pack_begin();
     if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); palette = set_palette; }
