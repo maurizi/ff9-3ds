@@ -29,7 +29,8 @@ static DsTextRect *text_rects, *previous_rects; /* TEXT_RECTS each (psx_spare_al
 static u16 *band; /* the software display's scaling band (display_present; psx_spare_alloc, 32-byte aligned) */
 static unsigned text_count;
 static unsigned previous_count;
-static int drawing;
+int psx_display_drawing_on; /* (psx_display_drawing ran since the last present: gp0.c tests it inline) */
+#define drawing psx_display_drawing_on
 unsigned int psx_display_font_calls, psx_display_font_presented;
 
 void psx_display_drawing(void) {

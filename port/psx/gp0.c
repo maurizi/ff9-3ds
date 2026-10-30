@@ -40,6 +40,8 @@ unsigned int psx_gp0_font_probe[16];
 /* DS presentation may preserve font coverage when shrinking the display. */
 __attribute__((weak)) void psx_display_glyph(int x, int y, int w, int h) {}
 __attribute__((weak)) void psx_display_drawing(void) {}
+/* (set by the display once drawing started, so the decoder skips the call per primitive: display.c) */
+__attribute__((weak)) int psx_display_drawing_on;
 
 static inline int sext11(int v) {
     return (v & 0x7FF) - ((v & 0x400) << 1);
@@ -112,7 +114,7 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
     unsigned int cmd = w[0] >> 24;
     if (cmd >= 0xE0) return state_command(w[0]);
     if ((cmd >= 0x20 && cmd < 0x80) || cmd == 2) {
-        psx_display_drawing();
+        if (!psx_display_drawing_on) psx_display_drawing();
         psx_vram_generation++;
         if (cmd != 2) { /* draws stay inside the drawing area; fills count their own rectangle (vram_fill) */
             if (!area_hits_valid || area_hits_version != psx_display_watch_version) {
@@ -287,12 +289,12 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
 /* A packet of exactly a texture page (E1) and a 16x16 sprite (SPRT_16, 7C-7F): a field background tile (BgSprt,
  * MargePrim'd). Both commands as command() runs them, without its dispatch; the font pages' sprites (their glyph
  * coverage, below) are left to it. 0: not run. */
-GP0_HOT int gp0_tpage_sprite16(const unsigned int *w) {
+GP0_HOT_THUMB int gp0_tpage_sprite16(const unsigned int *w) {
     unsigned int tp = w[0] & 0xFFFFFF, cmd = w[1] >> 24;
     if ((tp & 0x10) && (tp & 15) >= 14) return 0; /* (page 896 or 960, 256) */
     if (!gp0_backend || !gp0_backend->rect) return 0;
     gp0_state.texpage = tp;
-    psx_display_drawing();
+    if (!psx_display_drawing_on) psx_display_drawing();
     psx_vram_generation++;
     if (!area_hits_valid || area_hits_version != psx_display_watch_version) {
         area_hits = psx_display_hits(gp0_state.area_x0, gp0_state.area_y0, gp0_state.area_x1 - gp0_state.area_x0 + 1,
@@ -325,7 +327,7 @@ __attribute__((section(".psxovl_0a.port"), noinline)) /* (its only caller is ovl
 #endif
 void gp0_note_sprites(unsigned int texpage, unsigned int n) {
     gp0_state.texpage = texpage & 0xFFFFFF;
-    psx_display_drawing();
+    if (!psx_display_drawing_on) psx_display_drawing();
     psx_vram_generation += n;
     if (!area_hits_valid || area_hits_version != psx_display_watch_version) {
         area_hits = psx_display_hits(gp0_state.area_x0, gp0_state.area_y0, gp0_state.area_x1 - gp0_state.area_x0 + 1,
