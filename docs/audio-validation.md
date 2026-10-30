@@ -732,3 +732,8 @@ echo's images, now 24 dB down at their source); 60 Hz-6 kHz within ~3 dB. d1_f07
 +6.2 -> -0.4, the rest within 1 dB. Left: d1_f0755's 10 kHz (unchanged by the echo; voices pitched above 32.73 kHz
 fold their content above 16.4 kHz, which the PS1 keeps up to 22 kHz). The ARM7's worst command backlog went from 56
 to 145 (of SPU7_RING 512) on d3_f2305 and d2_b0321; the ARM9's frame times are unchanged.
+What the remaining treble differences weigh: on both fields the 9-16 kHz bands sit 36-54 dB below the music's total
+on the host and on the DS (d1_f0755 9-11 kHz: host -40.3, DS -36.9 dB of total; d3_f2305 11-14 kHz: -54.2 and -40.9),
+around the DS's own 10-bit output floor. d1_f0755's key-ons (host --spu-trace, 1500 frames): 2 of 26 above the
+mixer's rate (voices 20 and 22, pitch 0x11f5 and 0x1306, ~49-52 kHz), whose content above 16.4 kHz folds; a proper
+decimation filter for such voices would cost the ARM7 more than this is worth for now.
