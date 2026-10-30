@@ -34,7 +34,8 @@
 /* header: magic, main base, main buckets, ITCM base, ITCM buckets, samples, outside (BIOS waits, other memory),
  * main bucket shift, ITCM bucket shift */
 volatile u32 port_pc_header[9] = {0x53504332, /* 2: ITCM counts are 32-bit */ MAIN_LO, MAIN_BUCKETS, ITCM_LO, ITCM_BUCKETS, 0, 0, SHIFT, ITCM_SHIFT};
-u16 port_pc_main[MAIN_BUCKETS];
+/* (in DTCM: the stack has ~7.9 KB to spare there, the heap too little in battles, where effect packs load) */
+u16 port_pc_main[MAIN_BUCKETS] DTCM_BSS;
 u32 port_pc_itcm[ITCM_BUCKETS]; /* 32-bit: the VBlank wait and the interrupt dispatcher share a few buckets */
 extern u32 __sp_irq[];
 
@@ -56,7 +57,7 @@ static void sample(void) {
 #else
 #define MEMSET_CALLERS 256
 #endif
-volatile u32 port_pc_memset[MEMSET_CALLERS][3];
+volatile u32 port_pc_memset[MEMSET_CALLERS][3] DTCM_BSS;
 void *__real_memset(void *p, int c, size_t n);
 void *__wrap_memset(void *p, int c, size_t n) {
     if (n >= 16) {

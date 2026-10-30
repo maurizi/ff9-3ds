@@ -52,9 +52,16 @@ for name in ('port_pc_header', 'port_pc_main', 'port_pc_itcm'):
         p.error('the ELF has no %s: build with PROFILE=3' % name)
 
 
+DTCM_LO = 0x02FF4000  # (BlocksDS's __dtcm_start: the sampler's tables live there, pc_sampler.c)
+
+
 def ram(addr, size, src=None):
+    src = src or data
+    if DTCM_LO <= addr < DTCM_LO + 0x4000:  # DTCM: in the state's CP15 section, after 20 bytes and the 32 KB ITCM
+        at = src.index(b'CP15') + 8 + 20 + 0x8000 + addr - DTCM_LO
+        return src[at:at + size]
     off = 36 + addr - 0x02000000
-    return (src or data)[off:off + size]
+    return src[off:off + size]
 
 
 nhead = 9 if sizes.get('port_pc_header', 32) >= 36 else 8  # older builds: one shift for both tables
