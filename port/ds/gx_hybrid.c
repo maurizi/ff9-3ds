@@ -1332,6 +1332,10 @@ static __attribute__((noinline)) u32 whiten_by(u32 c, u32 w) {
     return (r > 31 ? 31 : r) | (g > 31 ? 31 : g) << 5 | (b > 31 ? 31 : b) << 10;
 }
 #define ADD_BASE (ADD_WHITEN * 0x421u)
+#ifndef SMALL_PARTICLE
+#define SMALL_PARTICLE 24 /* (pixels: a translucent polygon no wider or taller is a particle, emit_scene; d1_f0604's
+                           * flower sparkles are 9-24) */
+#endif
 /* at most this much from the light under a primitive: where the earlier layers fell short of the PS1's brightness,
  * whitening toward its estimate shows the primitive's shape */
 /* and none for primitives over this many cells: screen-sized layers (flashes, fades), not stacked glows */
@@ -3449,9 +3453,22 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
         u32 set_image = ~0u;
         if (want_image != image) set_image = want_image;
         int alpha = 31, id = 0;
+        /* a small translucent polygon (a particle: sparkles, fireflies) takes the cheap approximation (the user's
+         * choice of 2026-10-29): no search for the polygon ID of a neighbour it shares an edge with, and the base
+         * whitening instead of the light stacked under it (light_under) */
+        int small = 0;
+        if ((p->flags & (P_SEMI | P_RECT)) == P_SEMI) {
+            int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
+            for (int j = 1; j < p->n; ++j) {
+                if (p->x[j] < x0) x0 = p->x[j]; else if (p->x[j] > x1) x1 = p->x[j];
+                if (p->y[j] < y0) y0 = p->y[j]; else if (p->y[j] > y1) y1 = p->y[j];
+            }
+            small = x1 - x0 <= SMALL_PARTICLE && y1 - y0 <= SMALL_PARTICLE;
+        }
         if (glow) {
-            id = translucent_id(src, polys);
-            if (p->abr != 2) { /* its brightness: the brightest vertex channel, as the ramp's U */
+            id = small ? 1 + (polys & 31) : translucent_id(src, polys);
+            if (small) add_white = ADD_BASE;
+            else if (p->abr != 2) { /* its brightness: the brightest vertex channel, as the ramp's U */
                 int m = 0;
                 for (int j = 0; j < p->n; ++j) {
                     int v = p->r[j] > p->g[j] ? (p->r[j] > p->b[j] ? p->r[j] : p->b[j]) : (p->g[j] > p->b[j] ? p->g[j] : p->b[j]);
@@ -3475,8 +3492,9 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             if (alpha > 31) alpha = 31;
             if (!alpha) continue; /* adds nothing (alpha 0 would be wireframe) */
             additive = m;
-            id = translucent_id(src, polys);
-            if (p->abr != 2)
+            id = small ? 1 + (polys & 31) : translucent_id(src, polys);
+            if (small) add_white = ADD_BASE;
+            else if (p->abr != 2)
                 add_white = light_under(p, alpha, modulate(tex_hue, (p->flags & P_RAW) ? 0x7FFF : hue_of(p, 0, (u32)m)));
         } else if (p->flags & P_SEMI) {
             alpha = p->abr == 3 ? 8 : p->abr == 1 ? 24 : 16; /* additive: a brighter blend than 50% */
@@ -3485,7 +3503,7 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                 alpha = (int)((u32)(p->r[0] + p->g[0] + p->b[0]) * 31 * 43863u >> 25);
                 if (!alpha) continue; /* alpha 0 would be wireframe */
             }
-            id = translucent_id(src, polys);
+            id = small ? 1 + (polys & 31) : translucent_id(src, polys);
         }
         u32 want_attr = 3u << 6 | (u32)alpha << 16 | (u32)id << 24;
         /* the state that changed and BEGIN, in one packed group (a primitive skipped above sends nothing and leaves

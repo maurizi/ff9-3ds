@@ -1527,3 +1527,11 @@ against 30.3. The CPU's share (fm_take_hw, ~170 cycles a vertex with its polygon
 GTE's projection and the take pass did, and the per-vertex matrix restores add 3D engine work. The DS's own culling
 would drop the per-polygon test but emit the back faces too (twice the polygons through fm_emit and the 3D engine's
 2,048). Not merged; the branch also has fm_kind in four instantiations instead of eight (4.2 KB of slot 0 back).
+
+### Small translucent particles approximated (2026-10-29, the user's choice)
+
+d1_f0604's flower sparkles (260 textured translucent quads a scene, 9-24 pixels) went through translucent_id's
+shared-edge search and light_under's stacked-light estimate one by one. A translucent polygon at most SMALL_PARTICLE
+(24) pixels wide and tall now takes polygon ID 1 + (n & 31) and the base whitening. d1_f0604 35.9 -> 34.2 ms per
+VBlank, d2_f0931 43.6 -> 42.1; d4_f0351, d4_f2110, d1_f0453, d2_f0955 within noise; frames' mean absolute difference
+at most 0.03 levels (the sparkles look the same in close-ups).
