@@ -918,34 +918,9 @@ static inline int max3_index(u32 a, u32 b, u32 c) {
     return (s32)(b - c) > 0 ? 1 : 2;
 }
 
-PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) int port_native_world_block(const NativeWorldBlock *n) {
-    if (!active || !place->world) return 0;
-    Buffer *b = buffer_at(n->draw_x, n->draw_y);
-    if (!b || !b->slots) return 0;
-    struct Terrain *t = terrain_ring[psx_ot_generation % 3];
-    if (t->gen != psx_ot_generation) {
-        terrain_reset(t);
-        t->gen = psx_ot_generation;
-        t->buffer = (int)(b - buffers);
-        t->fog_mode = 0;
-    }
-    const u8 *blk = n->block;
-    int nv = blk[0], nf = *(const u16 *)(blk + 2);
-    nv = (nv + 2) / 3 * 3; /* (the vertex pass does whole groups of three) */
-    if (!nf || t->nblocks == TB_MAX || t->nverts + nv > TV_MAX || t->nfaces == TF_MAX) return 0;
-    int backdrop = n->variant == WORLD_BACKDROP;
-    int fog = n->variant != WORLD_FACES_NEAR && !backdrop, shift = n->variant == WORLD_FACES_FAR ? 1 : 2;
-    u32 fog_offset = n->fog_params[1] & 0xFFFF;
-    if (fog) { t->fog_mode = n->variant == WORLD_FACES_FAR ? 2 : 1; t->fog_colour = n->fog_params[0]; t->fog_offset = fog_offset; }
-    u32 bf = n->fog_params[0] & 0xFFFFFF, bf_max = 1;
-    if (backdrop) { /* (its fog is added by translucent polygons: a vertex's fog colour is bf x d) */
-        t->backdrop_fog = bf;
-        u32 r = bf & 0xFF, g = bf >> 8 & 0xFF, bl = bf >> 16 & 0xFF;
-        bf_max = r > g ? (r > bl ? r : bl) : (g > bl ? g : bl);
-        if (!bf_max) bf_max = 1;
-    }
-    /* the vertices: depth on the scene's scale, colour lit / (1 - d) */
-    int vbase = t->nverts;
+/* port_native_world_block's vertices (depth on the scene's scale, colour lit / (1 - d)), in the world map's ITCM image */
+PORT_ITCM_CODE(0c) static void terrain_verts(const NativeWorldBlock *n, TVert *out, int nv, int backdrop, int fog,
+                                             u32 fog_offset, int shift, u32 bf_max) {
     for (int i = 0; i < nv; ++i) {
         u32 sz = n->sz[i], lit = n->lit[i];
         int z = world_entry_depth((int)(sz >> 3) + 8);
@@ -977,8 +952,39 @@ PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) int port_native_world_block
             c = r >> 2 | (g >> 2) << 5 | (bl >> 2) << 10;
         }
         if (all_fog) c = TV_ALL_FOG;
-        t->verts[vbase + i] = (TVert){n->sxy[i], (s16)z, (u16)c};
+        out[i] = (TVert){n->sxy[i], (s16)z, (u16)c};
     }
+}
+
+PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) int port_native_world_block(const NativeWorldBlock *n) {
+    if (!active || !place->world) return 0;
+    Buffer *b = buffer_at(n->draw_x, n->draw_y);
+    if (!b || !b->slots) return 0;
+    struct Terrain *t = terrain_ring[psx_ot_generation % 3];
+    if (t->gen != psx_ot_generation) {
+        terrain_reset(t);
+        t->gen = psx_ot_generation;
+        t->buffer = (int)(b - buffers);
+        t->fog_mode = 0;
+    }
+    const u8 *blk = n->block;
+    int nv = blk[0], nf = *(const u16 *)(blk + 2);
+    nv = (nv + 2) / 3 * 3; /* (the vertex pass does whole groups of three) */
+    if (!nf || t->nblocks == TB_MAX || t->nverts + nv > TV_MAX || t->nfaces == TF_MAX) return 0;
+    int backdrop = n->variant == WORLD_BACKDROP;
+    int fog = n->variant != WORLD_FACES_NEAR && !backdrop, shift = n->variant == WORLD_FACES_FAR ? 1 : 2;
+    u32 fog_offset = n->fog_params[1] & 0xFFFF;
+    if (fog) { t->fog_mode = n->variant == WORLD_FACES_FAR ? 2 : 1; t->fog_colour = n->fog_params[0]; t->fog_offset = fog_offset; }
+    u32 bf = n->fog_params[0] & 0xFFFFFF, bf_max = 1;
+    if (backdrop) { /* (its fog is added by translucent polygons: a vertex's fog colour is bf x d) */
+        t->backdrop_fog = bf;
+        u32 r = bf & 0xFF, g = bf >> 8 & 0xFF, bl = bf >> 16 & 0xFF;
+        bf_max = r > g ? (r > bl ? r : bl) : (g > bl ? g : bl);
+        if (!bf_max) bf_max = 1;
+    }
+    /* the vertices: depth on the scene's scale, colour lit / (1 - d) */
+    int vbase = t->nverts;
+    terrain_verts(n, &t->verts[vbase], nv, backdrop, fog, fog_offset, shift, bf_max);
     /* the faces wf_face would draw */
     int ti = t->nblocks;
     TBlock *tb = &t->blocks[ti];
