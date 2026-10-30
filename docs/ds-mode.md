@@ -1563,3 +1563,11 @@ Measured after: a failing second pass wants ~300 KB of texture regions (d4_b0617
 358 KB; d1_b0014 300,736) against banks C and D's 256 KB, and the regions are tight (the uses' own boxes sum to more:
 they overlap). The room has to come from the passes' banks (one capture bank for both passes, the other for textures)
 or from a third pass (a battle frame is four VBlanks).
+The split search, then: battle_two capped the first pass at half the scene (the second pass then always held the
+nearer half, party and enemy, ~300 KB of textures). It now searches the whole range, from as many places as a pass
+holds down to the least the second leaves it, by halving for the most first-pass places whose textures fit (they grow
+with it, the second's shrink), and checks the second pass there; the last fitting split first. Of the 15 dropping
+battles: none drop now in d4_b0617, d2_b0780, d1_b0678, d1_b0304, d2_b0277, d3_b0233, d2_b0321, d4_b0673 (Grand
+Dragon 2,703 -> 0, Worm Hydra 1,617 -> 0); unchanged d1_b0014 (Zaghnol), d3_b0194 (Red Dragon: no split fits, the
+pages both passes use), d3_b0583, d2_b0280, d4_b0657, d4_b0922, d4_b0359 (effects); d2_b0135 776 -> 702. Two passes
+cost: d2_b0135 33.0 -> 37.6 ms, d4_b0617 27.4 -> 29.3; the others within noise.

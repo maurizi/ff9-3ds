@@ -5848,6 +5848,20 @@ static void battle_one(Buffer *b) {
     tp_leave();
     if (bank_a_bg && !place->field) { bank_a_as_bg(0); REG_BLDCNT = 0; REG_BLDALPHA = 0; }
 }
+/* whether a split after `first` places fits: the passes' textures (mask: bit 0 the first pass's, bit 1 the
+ * second's), planned for the check; the first pass's planned last (it is uploaded first) */
+static int battle_fits(Buffer *b, int first, int mask) {
+    tp_split = Z_STEP * (first + 1); /* (places 1..first the first pass) */
+    battle_label(b);
+    if (mask & 2) {
+        tp_plan_pass = 2;
+        plan_textures(b);
+        if (gxh_stats_unplaced) return 0;
+    }
+    tp_plan_pass = 1;
+    plan_textures(b);
+    return !gxh_stats_unplaced;
+}
 static void battle_two(Buffer *b) {
     tp_plan_pass = 0; tp_battle = 0;
     if (place->field || place->world || movie_banks || !b->meshes || b->mesh_gen != b->scene_gen) { tp_leave(); goto bank_a; }
@@ -5877,20 +5891,21 @@ static void battle_two(Buffer *b) {
     int cap = vertices ? (int)((long long)MAX_VERTICES * prims / vertices) : MAX_POLYS;
     if (cap > MAX_POLYS) cap = MAX_POLYS;
     cap -= cap / 32;
-    const int lo = seq - cap > 0 ? seq - cap : 0, hi = seq / 2 < cap ? seq / 2 : cap; /* (first-pass places) */
+    /* the first pass's places: as many as a pass holds leave the second pass the nearest few and their few textures;
+     * as few as the second pass leaves it, the first pass the fewest. The first pass's textures grow with its places
+     * and the second's shrink: the split is the most first-pass places whose textures fit banks C and D (found by
+     * halving), if the second pass's fit there too (else none does). The last split that fitted is tried first. */
+    const int lo = seq - cap > 0 ? seq - cap : 0, hi = cap < seq ? cap : seq;
     if (lo > hi) { battle_one(b); return; }
-    for (int n = 0; n < 4; ++n) {
-        const int i = (battle_try + n) & 3; /* (the last split that fitted first) */
-        const int first = hi - (hi - lo) * i / 3;
-        tp_split = Z_STEP * (first + 1); /* (places 1..first the first pass) */
-        battle_label(b);
-        tp_plan_pass = 2; /* (each pass's textures must fit: planned now as a check, again before it) */
-        plan_textures(b);
-        if (gxh_stats_unplaced) continue;
-        tp_plan_pass = 1;
-        plan_textures(b);
-        if (!gxh_stats_unplaced) { tp_planned = 1; battle_try = i; battle_fails = 0; return; } /* (the first pass's planned) */
+    if (battle_try >= lo && battle_try <= hi && battle_fits(b, battle_try, 3)) {
+        tp_planned = 1; battle_fails = 0; return;
     }
+    int a = lo, z = hi, best = -1;
+    for (int n = 0; a <= z && n < 12; ++n) {
+        const int mid = a + (z - a) / 2;
+        if (battle_fits(b, mid, 1)) { best = mid; a = mid + 1; } else z = mid - 1;
+    }
+    if (best >= 0 && battle_fits(b, best, 3)) { tp_planned = 1; battle_try = best; battle_fails = 0; return; }
     battle_hold = battle_fails < 5 ? (1 << battle_fails) - 1 : 31;
     ++battle_fails;
     battle_one(b);
