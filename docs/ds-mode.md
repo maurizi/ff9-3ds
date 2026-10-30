@@ -1683,3 +1683,7 @@ per-texel test on 3M random rows), the CLUT two entries a word the same way; eac
 one isn't covered (occ_tri_covered: most polygons show), the spans no longer stored. (The divisions on the DS's
 divider and the spans' lines read before their stores changed nothing: neither was the cost.) Zaghnol 44.9 -> 39.5,
 Gigan Toad 41.7 -> 38.7, Grand Dragon 33.6 -> 32.2; frames as before by eye (timing moves the frame-1500 shots).
+All of it at -O2 cost the heap 3.5 KB (a battle's: 4,960 -> 1,384 bytes free, under what a battle's first effect
+needs); size-optimised (ARM) but for the two row loops (the test's one loop: its first and last rows' spans as the
+walk leaves them), it costs 2 KB (2,968 free in a battle, 4,904 at boot), for the same speed: Zaghnol 39.9, Gigan
+Toad 38.8.

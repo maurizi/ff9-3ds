@@ -5942,7 +5942,7 @@ static void battle_one(Buffer *b) {
  * ~30% of a battle's polygons are hidden, ~25% by this test. A hidden polygon's info byte is 0xFF, as one culled. */
 /* whether a polygon's texels (the box of its uvs on its page) have no transparent one (index of a CLUT colour
  * 0x0000, or a 15-bit 0x0000); a box past 64 x 64 texels isn't checked (not opaque) */
-__attribute__((target("arm"), noinline)) static int occ_poly_opaque(const Prim *p) {
+__attribute__((target("arm"), optimize("Os"), noinline)) static int occ_poly_opaque(const Prim *p) {
     if (!(p->flags & P_TEXTURED)) return 1;
     int u0 = p->u[0], u1 = u0, v0 = p->v[0], v1 = v0;
     for (int i = 1; i < p->n; ++i) {
@@ -6044,14 +6044,12 @@ __attribute__((target("arm"))) static int occ_tri_covered(const s16 *x, const s1
     OccWalk w;
     const int h = occ_walk_init(&w, x, y, a, b, c), top = w.yy;
     if (!h) return -1;
-    int l, r;
-    occ_walk_row(&w, &l, &r);
-    if (!occ_span_set(top - 1, l - 1, r + 1, 0) || !occ_span_set(top, l - 1, r + 1, 0)) return 0;
-    for (int j = 1; j < h; ++j) {
-        occ_walk_row(&w, &l, &r);
+    int l = 0, r = 0;
+    for (int j = -1; j <= h; ++j) { /* (rows -1 and h: the first's and the last's spans) */
+        if (j < h && j != 0) occ_walk_row(&w, &l, &r);
         if (!occ_span_set(top + j, l - 1, r + 1, 0)) return 0;
     }
-    return occ_span_set(top + h, l - 1, r + 1, 0);
+    return 1;
 }
 __attribute__((target("arm"))) static void occ_tri_mark(const s16 *x, const s16 *y, int a, int b, int c) {
     OccWalk w;
@@ -6060,7 +6058,7 @@ __attribute__((target("arm"))) static void occ_tri_mark(const s16 *x, const s16 
 }
 /* the primitive's or polygon's test (-1: no pixel) or its pixels marked: its triangles (a rectangle's rows) from
  * its vertices */
-__attribute__((target("arm"))) static int occ_poly(const Prim *p, int mark) {
+__attribute__((target("arm"), optimize("Os"))) static int occ_poly(const Prim *p, int mark) {
     if (p->flags & P_RECT) { /* (vertices 0 1 2 3: top left, top right, bottom left, bottom right) */
         const int top = p->y[0], h = p->y[2] - p->y[0], l = p->x[0], r = p->x[1] - 1;
         if (h <= 0 || h > 255 || r < l) return -1;
@@ -6081,7 +6079,7 @@ __attribute__((target("arm"))) static int occ_poly(const Prim *p, int mark) {
     if (c0 < 0 && c1 < 0) return -1;
     return c1 != 0; /* (a triangle without a pixel doesn't keep the other from being hidden) */
 }
-PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void battle_occlude(Buffer *b, int *prims, int *vertices) {
+PORT_OVERLAY_CODE(0b) __attribute__((target("arm"), optimize("Os"))) static void battle_occlude(Buffer *b, int *prims, int *vertices) {
     const int n = collect_native(b);
     occ_words = (b->w + 31) / 32; occ_h = b->h;
     unsigned at = ((b->pool_used + 3) & ~3u) + (unsigned)n * sizeof(NativeRef);
