@@ -4125,8 +4125,37 @@ GXH_HOT static int hybrid_sprite16(unsigned int tp, unsigned int cmd, unsigned i
     return 1;
 }
 
+/* A battle's UI-page sprite through a texture window in the scene (the help banner's fill: a tile repeated), with its 2D
+ * layer on the bottom screen: one sprite per repetition of the tile, each reading the tile's texels straight, so they
+ * go to the 3D layer like the scene's other sprites (the 3D engine has no texture window); 0 if too many pieces. */
+static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h);
+static int twin_split(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
+    const int mx = gp0_state.twin_mask_x, my = gp0_state.twin_mask_y, ox = gp0_state.twin_off_x, oy = gp0_state.twin_off_y;
+    const int px = mx ? (mx & -mx) : 256, py = my ? (my & -my) : 256; /* (the tile's period: the window's lowest bit) */
+    if ((w / px + 2) * (h / py + 2) > 64) return 0;
+    gp0_state.twin_mask_x = gp0_state.twin_mask_y = 0;
+    for (int y = 0; y < h;) {
+        const int vv = (v->v + y) & 255, sh = py - vv % py < h - y ? py - vv % py : h - y;
+        for (int x = 0; x < w;) {
+            const int uu = (v->u + x) & 255, sw = px - uu % px < w - x ? px - uu % px : w - x;
+            Gp0Vtx c = *v;
+            c.x += x; c.y += y;
+            c.u = (uu & ~mx) | (ox & mx);
+            c.v = (vv & ~my) | (oy & my);
+            hybrid_rect(m, &c, sw, sh);
+            x += sw;
+        }
+        y += sh;
+    }
+    gp0_state.twin_mask_x = mx; gp0_state.twin_mask_y = my;
+    return 1;
+}
+
 static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     Buffer *shown, *b = target(&shown);
+    if (layer_sub && b && b != shown && m->textured && m->ty == 256 && (m->tx == 896 || m->tx == 960) &&
+        (gp0_state.twin_mask_x || gp0_state.twin_mask_y) && twin_split(m, v, w, h))
+        return;
     if (b && b != shown && place->field && field_sprite(b, m, v, w, h)) return;
     if (b && b == shown && ui_defer(b, UI_RECT, m, v, 1, w, h)) return;
     ui_flush();
