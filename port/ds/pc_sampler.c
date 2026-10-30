@@ -27,6 +27,8 @@
 #define ITCM_SHIFT 9
 #elif defined(PORT_PC_LO)
 #define ITCM_SHIFT 6  /* 64 bytes in a window build (2 KB of 32-bit counts): the interrupt dispatcher apart from its neighbours */
+#elif defined(PORT_DS_MODE)
+#define ITCM_SHIFT 7  /* 128 bytes (1 KB of counts): the hot ITCM functions are 0.1-4 KB, 2 KB buckets blurred them */
 #else
 #define ITCM_SHIFT SHIFT
 #endif

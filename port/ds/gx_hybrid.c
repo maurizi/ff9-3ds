@@ -2354,9 +2354,8 @@ typedef struct { u32 *wp; u32 attr, image, palette; int polys, vertices; } EmitS
 static void fm_emit(const Buffer *b, const FStore *fst, EmitState *es);
 
 /* c * 31 / d for c, d <= 255, d > 0, by a reciprocal (ceil(2^24 / d); exact over that range) */
-static u32 recip24[256] DTCM_BSS; /* (in DTCM: the heap is short, and it is read per primitive) */
+static u32 recip24[256] DTCM_BSS; /* (in DTCM: the heap is short, and it is read per primitive; set by gxh_init) */
 static inline u32 div31(u32 c, u32 d) {
-    if (!recip24[1]) for (u32 k = 1; k < 256; ++k) recip24[k] = (u32)(((1ull << 24) + k - 1) / k);
     /* (c <= d, as hue_of's callers give it: the product fits 32 bits, checked exact for every pair; Thumb's 64-bit
      * multiply is a library call) */
     if (c <= d) return c * 31 * recip24[d] >> 24;
@@ -5017,6 +5016,7 @@ static void textures_reset(void) {
 
 static void spare_buffers(void);
 void gxh_init(void) {
+    for (u32 k = 1; k < 256; ++k) recip24[k] = (u32)(((1ull << 24) + k - 1) / k);
     use_place(&places[0]);
     spare_buffers();
     static u32 main_chunks[2][CHUNK_WORDS] __attribute__((aligned(32)));
