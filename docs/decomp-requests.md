@@ -222,6 +222,46 @@ them like the overlays (one binary per module, all linked at 0x801E7700), even a
 to behave the same. The port would then compile them like the overlays and load the native code with the module.
 If (b) is out of scope, the port can instead translate MIPS to ARM when a module loads, and (a) is enough.
 
+### R29. Facts for the speed work on the original DS (2026-10-30)
+The original DS must reach 16.7 ms per PS1 VBlank (battles are ~25 now, fields median 20.5, world map 25-29). The
+port's ideas need facts only the decomp can give; each item says what it would de-risk. Answers in prose are fine.
+1. **Is battle model data immutable after init?** After `btl_applyModelTextures` (btl_mesh.c, uv offsets applied
+   once under `h->flags & 1`), does anything rewrite a `BtlMesh`'s `prims`, `uvs`, `colors` or `vertexCounts`?
+   Candidates: `btl_setModelRgb`/`btl_fillModelRgb`/`btl_addMeshRgb`/`btl_setMeshRgb` (and whether
+   `btl_setUnitBrightness`/`btl_updateUnitTint` call them every frame), `btlfx_splitMeshVertices` (hi_vertex.c),
+   `btlfx_projectMorphMesh`, Trance/petrify/zombie looks, fx modules. Which paths change a polygon's flags (its
+   translucency: fades) or texture index, or a model's texture page/CLUT words per frame (`btl_makeEnemyGreyCluts`,
+   `btl_saveEnemyCluts`, `texAnims`)? Is any mesh drawn double-sided (no NCLIP)? (The port now caches each mesh's
+   texture bounds across scenes.)
+2. **Battle OT rules.** How `btl_drawMesh` computes each polygon's OT index (AVSZ, `otBias` semantics,
+   `btlbg_setOtShift`'s shift, the clamp); the link order per scene (units in `unitList` order, then `btlbg_draw`,
+   banner, effects: all LIFO at the entry head?); whether effects (`g_btlfxEnv->prim`) or shadows
+   (`btl_drawShadow`) rely on sharing an entry with a model polygon. (A single model pass with a fixed depth rule
+   per entry, ~12% of a battle.)
+3. **When a battle arena is still.** Per background id: its scroll count, texture animations, animated groups
+   (`btlbg_draw`'s per-id cases and the default rotation of groups 1+), sky speed, layers used, so the port knows
+   which arenas are static. `btlbg_drawRecord`: a record's depth rule (fixed entry or projected) and whether a record
+   can sit in front of units (pillars, Evil Forest trees). What `g_btlbgSkyOwnProj` changes; which effects draw the
+   background themselves (btlfx_op.c ~1200). (Reusing the arena as a captured image while the camera holds.)
+4. **Battle frame structure.** What `gd->unk842`/`unk8C4` (btl_main.c ~2120) are (VBlanks per scene); whether
+   every unit re-animates every scene (`btl_updateUnitModel`'s `a->frame++`) or bone matrices can repeat (stop,
+   petrify, freeze, flag bit 21); what `btl_updatePause`'s `DrawOTag(D_800FDEB0)` replays.
+5. **Field model animation rate.** fld_movie.c (~413-480) recomputes `fldmdl_calcBoneMatrices` and `worldMatrix` for
+   every object every draw: which function steps `EvtObject.animFrame`, at what rate against the draw, and is there
+   state saying an object's `pos`/`rot`/`animFrame`/`anim` didn't change, so the port can skip its projection when
+   the camera didn't move either? (The take pass and projection are ~25% of the worst fields.)
+6. **Field background layer motion.** Which code moves or animates layers (camera parallax per layer, the event
+   script's tile animations, `bgi_updateAnims`/`bgi_showAnimFrame`), and any per-layer "unchanged this frame" state
+   (the port hashes every layer's tiles each scene, ~1.5 ms).
+7. **World map lighting constancy.** When `g_worldMapLightMatrix`, the colour matrix and back colour change (weather,
+   time of day, `wm_effect.c` block effects), whether block vertex normals are static, and what per-frame inputs feed
+   the depth cue and fog: a per-block lit-colour cache (the vertex pass is ~15% of a world map frame).
+8. **ovl_0b's memory map with lifetimes.** Its .bss/.data buffers with size and lifetime: load-only staging
+   (`btl_load*Step`, `btl_allocBuffers`), per battle, per frame, and dead ranges, and the double-buffered
+   `work->prims`/`ot` sizes against their worst real use. (Room for caches: the battle heap has ~3 KB free.)
+9. **Battle bone/vertex layout.** Are vertices contiguous per bone in `vertexCounts` order (as `btl_projectMesh`
+   reads them), and how often do polygons span bones? (Per-bone normal-cone culling at load.)
+
 ### R28. Field model files: format, which fields load which, and which are the party (2026-10-29)
 On the DS the field models are the largest single cost of the slowest fields (median 8.5 ms per PS1 VBlank of the
 15 slowest sampled fields, the whole gap to PS1 speed in five: docs/ds-mode.md, "What the field models cost"). The
