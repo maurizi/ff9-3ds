@@ -117,6 +117,18 @@ def main():
             # melonDS's sizes: 0 fits the folder (with too little room for FAT and the disc image beside the other
             # files: 740 MB of disc 1 didn't make it), 1-5 256 MB to 4 GB
             size = 0
+            # melonDS's FolderSync doesn't grow a file past the clusters the image gave it, and writes the image's
+            # copy back to the folder at exit: a file that grew (ovls.bin past a 4 KB boundary) came back cut, its
+            # last overlay unreadable ("code overlays: can't read overlay 65"). The folder's sizes are kept beside
+            # the image; when one changes, the image is made again from the folder.
+            if a.sd_folder:
+                import json
+                sizes = {str(f.relative_to(a.sd_folder.resolve())): f.stat().st_size
+                         for f in a.sd_folder.resolve().rglob('*') if f.is_file()}
+                stamp = a.sd_image.with_suffix(a.sd_image.suffix + '.sizes')
+                if a.sd_image.exists() and (not stamp.exists() or json.loads(stamp.read_text()) != sizes):
+                    a.sd_image.unlink()
+                stamp.write_text(json.dumps(sizes, sort_keys=True))
             if a.sd_folder and not a.sd_image.exists():
                 need = sum(f.stat().st_size for f in a.sd_folder.resolve().rglob('*') if f.is_file()) * 1.05 + (32 << 20)
                 size = next((k for k in range(1, 6) if (128 << 20 << k) >= need), 5)

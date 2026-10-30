@@ -117,11 +117,11 @@ src/ovl_0a/fld_movie.c | db_lookupRegistered(8, arg0, DB_MODEL_INFO) | PSX_NZ(db
 # count 3, so the original field path can enter the branch and writes the
 # inline third animation entry at +0x2c/+0x34/+0x3a (AB988/994/9A0).
 # Map all accesses while retaining NULL for the guarded animation routines.
-src/ovl_0a/fld_movie.c | if (m->texAnims->unk0 >= 2 && fld_isModelTexAnimActive(m) == 0) { | if (PSX_NZ(m->texAnims)->unk0 >= 2 && fld_isModelTexAnimActive(m) == 0) { | 1
-src/ovl_0a/fld_movie.c | m->texAnims->unk4[2]. | PSX_NZ(m->texAnims)->unk4[2]. | 3
+src/ovl_0a/fld_movie.c | if (m->texAnims->count >= 2 && fld_isModelTexAnimActive(m) == 0) { | if (PSX_NZ(m->texAnims)->count >= 2 && fld_isModelTexAnimActive(m) == 0) { | 1
+src/ovl_0a/fld_movie.c | m->texAnims->anims[2]. | PSX_NZ(m->texAnims)->anims[2]. | 3
 # Event texture-animation opcodes C0/C1/C2 also address this nullable table.
 # Original 8003E7A0..7E0 and 8003E8A4..8E4 write +4/+C/+12 without a table guard.
-src/main/event.c | m->unk50->unk0[b]. | PSX_NZ(m->unk50)->unk0[b]. | 7
+src/main/event.c | m->texAnims->unk0[b]. | PSX_NZ(m->texAnims)->unk0[b]. | 7
 # Missing animation metadata still supplies its halfword at physical address 2
 # on PSX (800216F8); do not dereference the native NULL returned by the lookup.
 src/main/tu_80021640.c | ((u16 *)db_lookupRegistered( | ((u16 *)PSX_NZ(db_lookupRegistered( | 1
