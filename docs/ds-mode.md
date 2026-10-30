@@ -1785,3 +1785,8 @@ run.
   replays every entry over it (the windows' backgrounds too): 32 ms (worse). The battle UI genuinely changes much of
   itself each scene (gauges inside the cached panel rows): an exact redraw of the whole list is near the cheapest
   exact way to draw it. Left as it is.
+- **Battle trades tried (2026-10-30, the user's approval to try with before/after frames):** party models simplified
+  with tools/simplify_battle_models.py (now takes `p<id>`: FF9.IMG dir 10, the ids of g_btlCharModelIds) lose only
+  0-5% of their polygon vertices (~1,300 a model, many bones and seams: the tool's same-bone, seamless collapses find
+  little); not pursued. The bottom screen's translucent window gradients pre-blended with the clear value and drawn
+  opaque: 0.1-0.45 ms slower (the opaque path's clipped redraws after each swap). Arenas next.

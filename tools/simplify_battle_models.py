@@ -614,7 +614,9 @@ def main():
                 expect[key] = val.strip()
     if not a.models:
         ap.error('--models or a manifest with a models line')
-    models = [int(x) for x in a.models.split(',')]
+    # ("p<id>": a party model, FF9.IMG dir 10, its file id's low 16 bits the id g_btlCharModelIds holds; the user's
+    # choice of 2026-10-30 to try them simplified too, judged on before/after frames)
+    models = [x.strip() for x in a.models.split(',') if x.strip()]
     written = {}
     for disc in (1, 2, 3, 4):
         path = find_image(disc, a.img)
@@ -622,13 +624,19 @@ def main():
             continue
         img = ec.Img(path)
         files = {f: (s, n) for f, s, n in img.files(bm.DIR_MODELS)}
+        party = {}
+        for f, s, n in img.files(10):
+            party.setdefault(f & 0xFFFF, (s, n))
         patches = []
-        for mid in models:
-            if mid not in files:
+        for spec in models:
+            is_party = spec.startswith('p')
+            mid = int(spec[1:], 0) if is_party else int(spec)
+            table = party if is_party else files
+            if mid not in table:
                 continue
-            sec, n = files[mid]
+            sec, n = table[mid]
             data = img.read(sec * SECTOR, n * SECTOR)
-            key = battle_pose.motion_key(mid, 0, disc, a.img) if a.pose else None
+            key = battle_pose.motion_key(mid, 0, disc, a.img) if a.pose and not is_party else None
             o = override.get(mid, {})
             new, stats = rewrite(data, mid, o.get('ratio', a.ratio), a.report, o.get('max_error', a.max_error),
                                  o.get('sharp', a.sharp), a.bake, key)
