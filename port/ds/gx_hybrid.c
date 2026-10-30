@@ -1161,7 +1161,9 @@ static int clip_inside(const Gp0Vtx *v, int edge, int bound) {
 static Gp0Vtx clip_intersection(const Gp0Vtx *a, const Gp0Vtx *b, int edge, int bound) {
     int av = edge < 2 ? a->x : a->y, bv = edge < 2 ? b->x : b->y;
     Gp0Vtx p;
-#define LERP(member) p.member = a->member + (int)((long long)(b->member - a->member) * (bound - av) / (bv - av))
+    /* (32 bits: |b - a| x |bound - av| is at most 2048 x 2048 for positions, 255 x 2048 for the rest; the 64-bit
+     * division was a library call per member, 1-2% of a world map) */
+#define LERP(member) p.member = a->member + (b->member - a->member) * (bound - av) / (bv - av)
     LERP(x); LERP(y); LERP(r); LERP(g); LERP(b); LERP(u); LERP(v);
 #undef LERP
     if (edge < 2) p.x = bound; else p.y = bound;
