@@ -716,3 +716,19 @@ Found (2026-10-29): the bass excess was two things.
 With both, d3_f2305 (holds left out): 60-240 Hz from +8..+14 dB to -1..+3 dB; 300 Hz-6 kHz within ~2 dB; 8-12 kHz
 still +6..+16 (the channels' imaging above the voices' rates). The earlier rate experiment changed nothing because the
 start bug dominated.
+
+Treble (2026-10-29, same day): the DS mixer samples every channel at its own rate, BUS_HZ / 1024 = 32.73 kHz (on
+hardware as in melonDS), so a channel playing at any other rate has its images (copies of its spectrum around
+multiples of its rate) folded into the audible band: a 44.1 kHz voice's mids came back at 11.3 kHz - f. Now:
+- each voice is resampled to exactly the mixer's rate as its ring is written, through the PS1's 4-point Gaussian at
+  its pitch (what the PS1 does towards 44.1 kHz; it replaces the three-tap stand-in), and its channel plays at timer
+  512. The lead servo of the same day nudges the interpolation's step instead of the channel's timer: exact, and the
+  pitch stays the PS1's apart from the VBlank's 0.3%.
+- the echo's channels and capture units run at half the mixer's rate (16.36 kHz, was 11.025: its images were the
+  mids mirrored around 11.025 kHz, correlation 0.77 with the mirrored spectrum), its buffer 4608 samples a side
+  (0.28 s); the voice rings shrank to 3584 samples (110 ms at the mixer's rate) to pay for it.
+d3_f2305 (holds left out), before -> after: 7959 Hz +5.9 -> -2.2, 10045 Hz +15.8 -> +2.1, 12677 Hz +8.9 -> +6.1 (the
+echo's images, now 24 dB down at their source); 60 Hz-6 kHz within ~3 dB. d1_f0755: 10045 Hz +10.8 -> +5.9, 12677 Hz
++6.2 -> -0.4, the rest within 1 dB. Left: d1_f0755's 10 kHz (unchanged by the echo; voices pitched above 32.73 kHz
+fold their content above 16.4 kHz, which the PS1 keeps up to 22 kHz). The ARM7's worst command backlog went from 56
+to 145 (of SPU7_RING 512) on d3_f2305 and d2_b0321; the ARM9's frame times are unchanged.

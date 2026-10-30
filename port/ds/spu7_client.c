@@ -14,8 +14,8 @@ extern unsigned psx_spu_ram_size, psx_spu_ram_split[2];
 extern unsigned char *psx_spu_ram, *psx_spu_ram_mid, *psx_spu_ram_hi;
 
 #define RINGS 16
-#define RING 4096
-#define ECHO_MAX 3072
+#define RING 3584
+#define ECHO_MAX 4608
 
 unsigned int spu7_backlog_max; /* (post-mortems: the most commands the ARM7 was behind) */
 static Spu7Shared shared_block __attribute__((aligned(32)));
