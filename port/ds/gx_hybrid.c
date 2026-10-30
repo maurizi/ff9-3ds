@@ -1254,7 +1254,7 @@ typedef struct {
     int cpal;                           /* conv: its 8-colour palette in ADD_SLOT */
 } Region;
 
-static Region regions[MAX_REGIONS];
+static Region *regions; /* [MAX_REGIONS], in spare PS1 RAM (gxh_init: the heap is short) */
 /* PS1 VRAM cells (32 halfwords x 16 lines) holding any region's texels or CLUT or any palette's colours (a superset:
  * rebuilt when one is placed), for regions_touch to pass over the writes elsewhere at once */
 static u32 touch_cells[32];
@@ -1845,7 +1845,7 @@ static void upload_run(const Run *r, u8 *base) {
 /* Per-scene texture plan: one group per (depth, page) with its texels' bounding box (halfwords, rows). */
 #define MAX_GROUPS 96
 typedef struct { int depth, tx, ty, x0, y0, x1, y1; Region *region; int conv, cx, cy; } Group;
-static Group groups[MAX_GROUPS];
+static Group *groups; /* [MAX_GROUPS], in spare PS1 RAM (gxh_init) */
 static int group_count;
 /* per recorded primitive (prim_tables: in the resident mode overlay's dead range, use_place) */
 static u8 *prim_group, *prim_palette;
@@ -2118,7 +2118,8 @@ static inline int colour_distance(u16 a, u16 b) {
 /* the A5I3 alpha of a texel: transparent 0x0000, opaque without the semi-transparency bit, else its brightness */
 static inline u8 texel_alpha(u16 c, int bright) { return !c ? 0 : (u8)(c & 0x8000 ? bright : 31); }
 
-static u32 conv_scratch[32768 / 32]; /* conv_choose's colours seen (a bit each), conv_upload's nearest choices */
+#define CONV_SCRATCH_WORDS (32768 / 32)
+static u32 *conv_scratch; /* [CONV_SCRATCH_WORDS], in spare PS1 RAM (gxh_init); conv_choose's colours seen (a bit each), conv_upload's nearest choices */
 
 /* Choose an additive copy's 8 colours (from its 4- or 8-bit CLUT, or a sample of its 15-bit texels at x, y, wh, h)
  * and write them as palette cpal; code: each CLUT index's A5I3 texel (4- and 8-bit). Returns the colours chosen. */
@@ -2259,7 +2260,7 @@ static __attribute__((noinline)) void conv_upload(Region *r, u8 *dst, int row_by
         }
         if (r->wh & 1) out[r->wh / 2] = pair[0];
     }
-    memset(conv_scratch, 0, sizeof conv_scratch);
+    memset(conv_scratch, 0, CONV_SCRATCH_WORDS * sizeof *conv_scratch);
 }
 
 /* Copy dirty regions and palettes from PS1 VRAM. Banks A-D, F and G must be mapped to the CPU (LCDC). */
@@ -5235,6 +5236,13 @@ void gxh_init(void) {
     use_place(&places[0]);
     spare_buffers();
     marks = psx_spare_alloc(1024 * 512 / 8); /* in main's MIPS code range, see psx_spare_alloc */
+    /* (the spare range held main's MIPS code: cleared, as the BSS they were in) */
+    regions = psx_spare_alloc(MAX_REGIONS * sizeof *regions);
+    memset(regions, 0, MAX_REGIONS * sizeof *regions);
+    groups = psx_spare_alloc(MAX_GROUPS * sizeof *groups);
+    memset(groups, 0, MAX_GROUPS * sizeof *groups);
+    conv_scratch = psx_spare_alloc(CONV_SCRATCH_WORDS * sizeof *conv_scratch);
+    memset(conv_scratch, 0, CONV_SCRATCH_WORDS * sizeof *conv_scratch);
     for (int i = 0; i < 2; ++i) ui_list[i] = psx_spare_alloc(UI_MAX * sizeof(UiPrim));
     memset(marks, 0, 1024 * 512 / 8);
 }
@@ -5293,7 +5301,7 @@ void gxh_enable(int on) {
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
         bgSetPriority(0, 1);
-        memset(regions, 0, sizeof regions);
+        memset(regions, 0, MAX_REGIONS * sizeof *regions);
         memset(cpal_users, 0, sizeof cpal_users);
         runs_reset();
         field_runs = 0;
