@@ -366,13 +366,14 @@ static void start_scene(Buffer *b, int filled /* the game's fill is about to cov
 
 /* The buffer the current drawing area belongs to (NULL: offscreen), starting its scene if it was shown; *shown is
  * the displayed buffer. */
-__attribute__((noinline, target("arm"))) static Buffer *target(Buffer **shown) {
+/* the lookups depend only on the drawing environment, the display position and the buffers' places */
+static struct { int x, y, w, h, ax, ay, dx, dy; unsigned version, env; Buffer *shown, *b; } target_last = {.w = -1, .env = ~0u};
+__attribute__((noinline, target("arm"))) static Buffer *target_slow(Buffer **shown) {
     /* the place's buffers and tables are in its overlay's code range: none while another overlay is loading there
      * (between a mode's overlay arriving and display_present enabling its place; d3_f0455 wrote a field's depths
      * over ovl_0b's data and crashed in btlbg_init) */
     if (psx_ovl_resident[0] != place->overlay) { *shown = NULL; return NULL; }
-    /* the lookups depend only on the drawing environment, the display position and the buffers' places */
-    static struct { int x, y, w, h, ax, ay, dx, dy; unsigned version, env; Buffer *shown, *b; } last = {.w = -1, .env = ~0u};
+#define last target_last
     Buffer *b;
     if (psx_gpu_env_version == last.env && gp0_state.area_x0 == last.ax && gp0_state.area_y0 == last.ay &&
         buffers_version == last.version) { /* (nothing they depend on changed: the common case, a primitive at once) */
@@ -398,6 +399,18 @@ __attribute__((noinline, target("arm"))) static Buffer *target(Buffer **shown) {
     }
     if (b && b->shown && b != *shown) start_scene(b, 0);
     return b;
+}
+#undef last
+/* (inline: the common case, nothing changed since the last primitive, without a call into main RAM's code) */
+static inline __attribute__((always_inline)) Buffer *target(Buffer **shown) {
+    if (psx_ovl_resident[0] == place->overlay && psx_gpu_env_version == target_last.env &&
+        gp0_state.area_x0 == target_last.ax && gp0_state.area_y0 == target_last.ay && buffers_version == target_last.version) {
+        *shown = target_last.shown;
+        Buffer *b = target_last.b;
+        if (b && b->shown && b != *shown) start_scene(b, 0);
+        return b;
+    }
+    return target_slow(shown);
 }
 
 static int triangle_area(const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c) {
@@ -4103,7 +4116,7 @@ GXH_HOT static int hybrid_sprite16(unsigned int tp, unsigned int cmd, unsigned i
     if (u > 240 || v > 240) return 0; /* (a page wrap) */
     int x = (int)(xy & 0x7FF) - (int)((xy & 0x400) << 1) + gp0_state.ofs_x;
     int y = (int)(xy >> 16 & 0x7FF) - (int)((xy >> 16 & 0x400) << 1) + gp0_state.ofs_y;
-    ui_flush();
+    if (ui_count[1]) ui_flush(); /* (a call into main RAM's code saved a tile) */
     /* clipped to the drawing area as hybrid_rect clips it (texels following pixels): one wholly outside is nothing */
     int w = 16, h = 16;
     if (x < gp0_state.area_x0 || y < gp0_state.area_y0 || x + 16 > gp0_state.area_x1 + 1 || y + 16 > gp0_state.area_y1 + 1) {
