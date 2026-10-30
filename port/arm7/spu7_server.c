@@ -71,17 +71,44 @@ static void publish(u32 done) {
     shared->published++;
 }
 
+/* the ARM7's clock (timers 0 and 1, audio_hw.c's): 64 bus cycles a tick */
+static u32 clock_now(void) {
+    u16 hi = TIMER_DATA(1), lo = TIMER_DATA(0), hi2 = TIMER_DATA(1);
+    if (hi2 != hi) lo = 0;
+    return (u32)hi2 << 16 | lo;
+}
+
 /* the commands the ARM9 has written so far */
 void spu7_service(void) {
     if (!shared) return;
     u32 tail = shared->tail;
+    if (tail == shared->head) return;
+    u32 t0 = clock_now();
     while (tail != shared->head) {
         const Spu7Cmd c = shared->cmd[tail % SPU7_RING];
         u32 arg = c.a & 0xFFFFFF;
         switch (c.a >> 24) {
         case SPU7_WRITE: psx_spu_write(arg, (uint16_t)c.b); break;
         case SPU7_ADVANCE: psx_spu_advance(c.b * 96); publish(tail + 1); break;
-        case SPU7_FRAME: port_hw_sound_frame(); break;
+        case SPU7_FRAME: {
+            port_hw_sound_frame();
+            /* its time per frame over the last 16 (8755 ticks a DS frame; behind, it stays in this loop): past 3/4 of
+             * a frame's, new notes are written as decoded (audio_hw.c port_hw_sound_busy), the resampling's time
+             * saved; back under half (that without most of the resampling), resampled again */
+            extern int port_hw_sound_busy;
+            static u32 busy0, n;
+            const u32 t = clock_now();
+            shared->busy += t - t0;
+            t0 = t;
+            if (++n == 16) {
+                const u32 load = shared->busy - busy0;
+                if (load > 16u * 8755 * 3 / 4) port_hw_sound_busy = 1;
+                else if (load < 16u * 8755 / 2) port_hw_sound_busy = 0;
+                busy0 = shared->busy; n = 0;
+            }
+            shared->frames++;
+            break;
+        }
         case SPU7_ADDR: ram_at = arg; break;
         case SPU7_RAM_IN: ram_span(ram_at, arg, (const u8 *)c.b, NULL); shared->transfers++; break;
         case SPU7_RAM_OUT: ram_span(ram_at, arg, NULL, (u8 *)c.b); shared->transfers++; break;
@@ -91,6 +118,7 @@ void spu7_service(void) {
         }
         shared->tail = ++tail;
     }
+    shared->busy += clock_now() - t0;
 }
 
 void spu7_init(void) {

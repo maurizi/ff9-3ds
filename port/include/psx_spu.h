@@ -24,8 +24,13 @@ void psx_spu_advance(unsigned ticks);
 typedef struct {
     void (*key_on)(unsigned voice, void *user);
     void (*block)(unsigned voice, const int16_t *samples, void *user); /* 28 samples */
+    /* where to decode the voice's next 28 samples directly (4-byte aligned; *negate: negated), else NULL: they go to
+     * block (NULL: always). PSX_SPU_UNHEARD: nowhere, only the block's flags are read (its predictor history then
+     * stays as it was: the next block heard starts off it). */
+    int16_t *(*target)(unsigned voice, int *negate, void *user);
     void *user;
 } PsxSpuSink;
+#define PSX_SPU_UNHEARD ((int16_t *)1)
 void psx_spu_set_hw(const PsxSpuSink *sink); /* NULL: software mixing */
 typedef struct {
     int on;               /* the voice is stepping (envelope not off) */

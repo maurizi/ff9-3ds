@@ -2,7 +2,10 @@
  *
  * The SPU core steps the voices the game observes without mixing them (psx_spu_set_hw). Each voice's decoded
  * ADPCM blocks arrive here in play order and go into the voice's ring buffer, resampled at its pitch to the DS
- * mixer's rate, which a DS channel plays in a loop. A key-on restarts the ring; the channel starts once a frame and a
+ * mixer's rate, which a DS channel plays in a loop. When the ARM7 runs short of time (spu7_server.c, over 3/4 of a
+ * frame's per frame) the notes keyed on from then are "native": decoded straight into their rings as they are,
+ * their channels at their own rates (cheaper by about half; the mixer then folds their images into the treble). A
+ * voice without a ring isn't decoded at all. A key-on restarts the ring; the channel starts once a frame and a
  * quarter of samples are in. Once a frame, each sounding voice's envelope, volumes and main volume set its channel's
  * volume and pan. The first 16 sounding voices get channels.
  *
@@ -52,6 +55,9 @@ static void capture_start(void *buffer, u16 words, int unit) {
 #include "psx_runtime.h"
 #endif
 
+/* the ARM7 short of time (spu7_server.c): new notes the cheap way */
+int port_hw_sound_busy;
+
 #define VOICES 24
 #define RING 3584          /* samples per voice ring: 110 ms at the mixer's rate (spu7_client.c allocates them too) */
 #define LEAD 1             /* frames of samples written before a channel starts (plus a quarter frame) */
@@ -80,6 +86,7 @@ typedef struct {
     s16 h1, h2, h3;        /* its last three samples (the interpolation's) */
     u32 phase;             /* the interpolation's position between its last two samples (x 65536) */
     u32 step;              /* samples decoded per sample written (x 65536): its pitch, nudged */
+    u8 native;             /* written as decoded, its channel at the voice's rate (port_hw_sound_busy at its key-on) */
     int invert;            /* its louder side's volume is negative (the PS1 inverts the wave: written negated) */
     u64 read;              /* the channel's read position (samples since its start, x 65536), from the clock */
     u32 since;             /* clock() when read was last brought up to date */
@@ -137,6 +144,7 @@ static void key_on(unsigned v, void *user) {
     p->h1 = p->h2 = p->h3 = 0;
     p->phase = 0;
     p->step = step_of(psx_spu_read(v * 16 + 4) & 0x3fff);
+    p->native = (u8)(port_hw_sound_busy != 0);
     ring_take(p);
     if (!p->ring) p->lost = 1; /* none free: it plays from later samples once it gets one */
 }
@@ -149,31 +157,45 @@ static void key_on(unsigned v, void *user) {
 static void block(unsigned v, const int16_t *samples, void *user) {
     (void)user;
     Voice *p = &voices[v];
-    if (!p->ring) return;
+    if (!p->ring || p->native) return; /* (a native voice's samples are decoded into its ring: target) */
+    /* (the coefficients at a phase sum to under 1.0: no clamp; a voice played inverted is negated as it comes in) */
+    const s16 *const G = psx_spu_gauss;
     int h1 = p->h1, h2 = p->h2, h3 = p->h3;
-    u32 phase = p->phase, w = p->write, at = w % RING;
+    u32 phase = p->phase, at = p->write % RING;
     const u32 step = p->step;
-    const int invert = p->invert;
-    s16 *ring = p->ring;
+    const int neg = p->invert ? -1 : 1;
+    s16 *const ring = p->ring;
+    u32 written = 0;
     for (int i = 0; i < 28; ++i) {
-        const int x = samples[i];
-        for (; phase < 0x10000; phase += step) {
+        const int x = samples[i] * neg;
+        while (phase < 0x10000) {
             const unsigned g = phase >> 8;
-            int y = (psx_spu_gauss[255 - g] * h3 + psx_spu_gauss[511 - g] * h2 + psx_spu_gauss[256 + g] * h1 +
-                     psx_spu_gauss[g] * x) >> 15;
-            if (invert) y = -y;
-            ring[at] = (s16)(y > 32767 ? 32767 : y < -32768 ? -32768 : y);
+            ring[at] = (s16)((G[255 - g] * h3 + G[511 - g] * h2 + G[256 + g] * h1 + G[g] * x) >> 15);
             if (++at == RING) at = 0;
-            ++w;
+            ++written;
+            phase += step;
         }
         phase -= 0x10000;
         h3 = h2; h2 = h1; h1 = x;
     }
     p->h1 = (s16)h1; p->h2 = (s16)h2; p->h3 = (s16)h3;
-    p->phase = phase; p->write = w;
+    p->phase = phase; p->write += written;
 }
 
-static const PsxSpuSink sink = {key_on, block, NULL};
+/* A native voice's samples are decoded straight into its ring, as they are (blocks of 28 from 0: RING is 128 of
+ * them, so they never wrap); a voice without a ring's not at all */
+static int16_t *target(unsigned v, int *negate, void *user) {
+    (void)user;
+    Voice *p = &voices[v];
+    if (!p->ring) return PSX_SPU_UNHEARD; /* (no ring, no channel: the samples aren't heard) */
+    if (!p->native) return NULL;
+    s16 *at = p->ring + p->write % RING;
+    p->write += 28;
+    *negate = p->invert;
+    return at;
+}
+
+static const PsxSpuSink sink = {key_on, block, target, NULL};
 static void echo_alloc(void);
 
 #ifdef ARM7
@@ -245,6 +267,8 @@ static void echo_frame(const PsxSpuReverbState *r) {
     }
 }
 
+/* a frequency's timer value, rounded as SOUNDXTMR_FREQ does it */
+static u16 timer_of(unsigned freq) { return (u16)((BUS_HZ / 2 + (freq + 1) / 2) / freq); }
 /* The channel's read position brought up to now, at its timer value */
 static void read_update(Voice *p, u32 now) {
     p->read += ((u64)(u32)(now - p->since) * 64 << 16) / (2u * p->timer);
@@ -326,6 +350,10 @@ void port_hw_sound_frame(void) {
         /* the rings are written once per emulated frame, one per DS VBlank (59.83 Hz) when the port keeps pace: the
          * channels read at that rate (else they gain 0.3% on their writes and catch them on a long note) */
         u32 step = step_of(out->pitch);
+        /* (a native voice: its rate, its frame's samples; else the mixer's) */
+        unsigned rate = p->native ? 44100u * out->pitch / 4096 : MIX_HZ;
+        if (rate < 64) rate = 64;
+        const long long frame = rate / 60;
         /* make this frame's samples visible to the sound DMA */
         if (p->write) {
             unsigned from = p->flush_from % RING, to = p->write % RING;
@@ -338,6 +366,12 @@ void port_hw_sound_frame(void) {
             stop(p);
             p->restart = 0;
         }
+        if (port_hw_sound_busy && !p->native) { /* (the ARM7 short of time: the cheap way now, from the next samples) */
+            stop(p);
+            p->native = 1;
+            p->write = p->flush_from = 0;
+            continue;
+        }
         if (p->sound_id >= 0) {
             /* the samples come a frame's worth at a time, so the channel must stay more than a frame behind them and
              * less than a ring: the interpolation's step follows the voice's pitch, nudged (at most 2%) to keep the
@@ -346,7 +380,7 @@ void port_hw_sound_frame(void) {
              * the writes every frame. */
             read_update(p, now);
             const long long lead = (long long)p->write - (long long)(p->read >> 16);
-            if (lead < FRAME || lead > RING - 2 * FRAME) {
+            if (lead < frame || lead > RING - frame) {
                 stop(p);
                 p->write = p->flush_from = 0;
                 port_hw_sound_stats[3]++;
@@ -355,15 +389,23 @@ void port_hw_sound_frame(void) {
             /* (the emulated frames come at the DS's 59.83 Hz: a step 0.3% shorter writes a VBlank's worth each; and
              * writes ahead by more, a longer step, fewer written, corrected over ~4 s so frame-time jitter doesn't
              * wobble the pitch) */
-            long long want = (long long)step * 59826 / 60000;
-            want += want * (lead - 3 * FRAME / 2) / (4 * MIX_HZ);
-            const long long most = step / 50 + 1;
-            if (want > (long long)step + most) want = step + most;
-            if (want < (long long)step - most) want = step - most;
-            step = (u32)want;
+            if (p->native) { /* (the channel's rate nudged instead: one timer step is ~0.1-0.3%) */
+                long long want = (long long)rate * 59826 / 60000 + (lead - 3 * frame / 2) / 4;
+                const long long most = rate / 50 + 1;
+                if (want > (long long)rate + most) want = rate + most;
+                if (want < (long long)rate - most) want = rate - most;
+                rate = (unsigned)want;
+            } else {
+                long long want = (long long)step * 59826 / 60000;
+                want += want * (lead - 3 * frame / 2) / (4 * MIX_HZ);
+                const long long most = step / 50 + 1;
+                if (want > (long long)step + most) want = step + most;
+                if (want < (long long)step - most) want = step - most;
+                step = (u32)want;
+            }
         }
         p->step = step;
-        const u16 freq = MIX_HZ;
+        const u16 freq = p->native ? (u16)(rate > 65535 ? 65535 : rate) : MIX_HZ;
         if (p->sound_id < 0 && p->lost) {
             /* back from losing its channel: start over from the samples written from now on */
             ring_take(p);
@@ -376,7 +418,7 @@ void port_hw_sound_frame(void) {
             /* the samples arrive a frame's worth at a time (the advances, then this update): with less than that
              * written, as for a note keyed on partway through the frame, the channel would read past them before
              * the next ones and play the ring's old contents, crossing the writes each frame (a 60 Hz buzz) */
-            if (p->write < LEAD * FRAME + FRAME / 4 + 1) continue;
+            if (p->write < LEAD * frame + frame / 4 + 1) continue;
             int ch = -1;
             for (int c = 0; c < 16; ++c) if (!((channel_used | reserved_mask) & (1u << c))) { ch = c; break; }
             if (ch < 0) continue;
@@ -385,12 +427,15 @@ void port_hw_sound_frame(void) {
             p->sound_id = soundPlaySampleChannel(ch, p->ring, SoundFormat_16Bit, RING * 2, freq, (u8)vol, (u8)pan,
                                                  true, 0);
             p->volume = (u8)vol; p->pan = (u8)pan; p->freq = freq;
-            p->timer = MIX_TIMER; p->read = 0; p->since = now;
+            p->timer = p->native ? timer_of(freq) : MIX_TIMER; p->read = 0; p->since = now;
             port_hw_sound_stats[0]++;
         } else {
             if (vol != p->volume) { soundSetVolume(p->sound_id, (u8)vol); p->volume = (u8)vol; }
             if (pan != p->pan) { soundSetPan(p->sound_id, (u8)pan); p->pan = (u8)pan; }
-            (void)freq;
+            if (p->native && freq != p->freq) {
+                soundSetFreq(p->sound_id, freq);
+                p->freq = freq; p->timer = timer_of(freq);
+            }
         }
         ++sounding;
     }

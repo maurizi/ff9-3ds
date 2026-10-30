@@ -285,7 +285,7 @@ static void hw_step(unsigned frames) {
     unsigned t = port_profile_begin();
     for (unsigned i = 0; i < PSX_SPU_VOICES; ++i)
         psx_spu_step_voice(&voices[i], i, psx_spu_ram, frames, !!(control & 0x40), &ended, hw_sink->block,
-                           hw_sink->user);
+                           hw_sink->target, hw_sink->user);
     port_profile_detail_end(PORT_PROFILE_SPU_VOICES, t);
     t = port_profile_begin();
     for (unsigned c = 0; c < 2; ++c)

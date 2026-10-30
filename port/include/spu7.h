@@ -44,6 +44,8 @@ typedef struct {
     volatile uint32_t transfers;     /* the ARM7's: SPU RAM transfers done */
     volatile uint32_t published;     /* the ARM7's: readbacks published (odd while it writes one) */
     volatile uint32_t published_at;  /* the ARM7's: the commands done when the last readback was taken */
+    volatile uint32_t busy, frames;  /* the ARM7's: time spent on the commands (its clock, 64 bus cycles a tick) and
+                                      * channel updates done, for its load (post-mortems) */
     Spu7Readback readback;
     Spu7Cmd cmd[SPU7_RING];
     /* set up by the ARM9 before it starts the ARM7's loop */

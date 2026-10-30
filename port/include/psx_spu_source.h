@@ -33,6 +33,10 @@ void psx_spu_source_set_loop(PsxSpuSource *source, uint16_t *loop_address,
  * ram must provide the full 512 KiB SPU RAM image. */
 void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
                           uint16_t *loop_address);
+/* The same, its samples decoded into `to` (4-byte aligned, 28 samples) negated if `negate`, not into source->samples
+ * (the hardware path, which doesn't interpolate) */
+void psx_spu_source_fetch_to(PsxSpuSource *source, const uint8_t *ram, uint16_t *loop_address,
+                             int16_t *to, int negate);
 
 /* Four-tap Gaussian sample at the current 4.12 source position. Requires fetch
  * first. Counter bits 0..3 are ignored; bits 4..11 select the coefficient phase. */

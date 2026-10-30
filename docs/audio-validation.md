@@ -737,3 +737,25 @@ on the host and on the DS (d1_f0755 9-11 kHz: host -40.3, DS -36.9 dB of total; 
 around the DS's own 10-bit output floor. d1_f0755's key-ons (host --spu-trace, 1500 frames): 2 of 26 above the
 mixer's rate (voices 20 and 22, pitch 0x11f5 and 0x1306, ~49-52 kHz), whose content above 16.4 kHz folds; a proper
 decimation filter for such voices would cost the ARM7 more than this is worth for now.
+
+ARM7 load (2026-10-30): the resampling made sound-heavy fields regress on the ARM9 (s60e: d2_f1003 26.6 -> 40.8 ms
+per VBlank, d4_f0759 17.9 -> 29.6, d2_f0759 21.1 -> 29.5, d2_f1352 23.7 -> 30.2, d1_f0652 17.1 -> 22.0): the ARM7
+fell behind, its command ring (512) filled and the ARM9 waited on it. A sampling profile of the ARM7 (timer 2 at
+4 kHz counting the interrupted PC from the BIOS's IRQ frame, as pc_sampler.c does on the ARM9; a debug build, not
+kept) on d2_f1003 with every voice written as decoded: ADPCM decode 28%, voice stepping 19%, the copy into the rings
+18% (halfword stores to main RAM, slow from the ARM7), integer division 9%, idle 15%. Now:
+- psx_spu_decode_block_to: a native voice's block decoded straight into its ring, two samples a word and stored in
+  two 7-register bursts (the same samples as psx_spu_decode_block: checked on 2M random blocks, negated or not);
+- a voice without a ring (no channel) isn't decoded at all, its blocks' flags only (PSX_SPU_UNHEARD: its predictor
+  history goes stale, heard only if it gets a ring back);
+- the stepping's divisions (by the pitch, by the envelope's increment) by reciprocals kept per voice (exact for its
+  ranges);
+- the load-adaptive mode: over 3/4 of a frame's ARM7 time per frame (16 frames), new notes are native (written as
+  decoded, the channel at the voice's rate, its timer nudged by the lead servo), resampling voices switch at once;
+  under 1/2, new notes resample again. (The load had been added up only when the ARM7 left its command loop, which
+  it never does while behind: the check saw nothing.)
+With everything resampled the ARM7 needs 167% of a frame per frame on d2_f1003 (36.7 ms), all native 89% (19.7 ms).
+ms per VBlank, adaptive: d2_f1003 19.7, d4_f0759 17.7, d2_f0759 20.9, d2_f1352 23.2, d1_f0652 17.0, d3_f2305 16.7,
+d1_f0110 16.7, d2_b0920 16.7 (ARM7 per frame: 90, 63, 63, 55, 44, 48, 27%). d4_f0759 (native most of the run) against
+the host: within ~2 dB to 4 kHz; +4 dB at 6.3 kHz, +8 at 8, +14 at 10 kHz (the native channels' images, as before
+the resampling).

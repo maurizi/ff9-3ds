@@ -16,4 +16,8 @@ uint8_t psx_spu_decode_block(const uint8_t block[PSX_SPU_BLOCK_BYTES],
                            PsxSpuAdpcmHistory *history,
                            int16_t output[PSX_SPU_BLOCK_SAMPLES]);
 
+/* The same into a 4-byte aligned `output`, negated if `negate` (the hardware channels' rings) */
+uint8_t psx_spu_decode_block_to(const uint8_t block[PSX_SPU_BLOCK_BYTES], PsxSpuAdpcmHistory *history,
+                                int16_t *output, int negate);
+
 #endif

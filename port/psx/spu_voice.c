@@ -305,9 +305,20 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
     }
 }
 
+/* x / d for the stepping's x below 2^17 and d below 2^15 (pitches, envelope increments), by d's reciprocal rounded up,
+ * kept per voice while d stays (the ARM7 has no divider): exact, as the error x * (r - 2^32 / d) / 2^32 stays below
+ * 2^-15 and x / d's fraction can't come nearer to 1 than 1 / d. */
+typedef struct { uint32_t d, r; } Recip;
+static Recip pitch_recip[PSX_SPU_VOICES], inc_recip[PSX_SPU_VOICES];
+static inline uint32_t div_by(uint32_t x, uint32_t d, Recip *c) {
+    if (d <= 1) return x;
+    if (c->d != d) { c->d = d; c->r = 0xFFFFFFFFu / d + 1; }
+    return (uint32_t)(((uint64_t)x * c->r) >> 32);
+}
+
 SPU_HW_ONLY_HOT void psx_spu_step_voice(PsxSpuVoice *voice, unsigned index, const uint8_t *ram, unsigned n, int fetch_off,
                                 uint32_t *ended, void (*block)(unsigned voice, const int16_t *samples, void *user),
-                                void *user) {
+                                int16_t *(*target)(unsigned voice, int *negate, void *user), void *user) {
     PsxSpuSource *src = &voice->source;
     const uint32_t pitch = voice->registers[2] > 0x3fff ? 0x3fff : voice->registers[2];
     const uint32_t bit = 1u << index;
@@ -318,8 +329,13 @@ SPU_HW_ONLY_HOT void psx_spu_step_voice(PsxSpuVoice *voice, unsigned index, cons
         if (voice->adsr.phase == PSX_SPU_ADSR_OFF && !fetch_off) return;
         if (!src->fetched) {
             unsigned t = port_profile_begin();
-            psx_spu_source_fetch(src, ram, &voice->registers[7]);
-            block(index, src->samples + 3, user);
+            int negate;
+            int16_t *to = target ? target(index, &negate, user) : NULL;
+            if (to) psx_spu_source_fetch_to(src, ram, &voice->registers[7], to, negate);
+            else {
+                psx_spu_source_fetch(src, ram, &voice->registers[7]);
+                block(index, src->samples + 3, user);
+            }
             port_profile_detail_end(PORT_PROFILE_SPU_STEADY, t);
         }
         PsxSpuAdsr *adsr = &voice->adsr;
@@ -330,7 +346,7 @@ SPU_HW_ONLY_HOT void psx_spu_step_voice(PsxSpuVoice *voice, unsigned index, cons
             /* jump to the sample that crosses into the next block, or the end */
             if (!pitch) return;
             uint32_t left = (PSX_SPU_BLOCK_SAMPLES << 12) - src->counter;
-            run = (left + pitch - 1) / pitch;
+            run = div_by(left + pitch - 1, pitch, &pitch_recip[index]);
             if (run > n - s) { src->counter += pitch * (n - s); return; }
         } else {
             /* one sample with the envelope step (as fast_span's per-sample path) */
@@ -356,8 +372,10 @@ SPU_HW_ONLY_HOT void psx_spu_step_voice(PsxSpuVoice *voice, unsigned index, cons
                         else if (env->rate >= 40) inc >>= 1;
                     }
                     if (inc && inc < 0x8000) {
-                        uint32_t change = (0x8000 - env->counter + inc - 1) / inc; /* the tick that changes it */
-                        uint32_t cross = pitch ? ((PSX_SPU_BLOCK_SAMPLES << 12) - src->counter + pitch - 1) / pitch
+                        /* the tick that changes it */
+                        uint32_t change = div_by(0x8000 - env->counter + inc - 1, inc, &inc_recip[index]);
+                        uint32_t cross = pitch ? div_by((PSX_SPU_BLOCK_SAMPLES << 12) - src->counter + pitch - 1,
+                                                        pitch, &pitch_recip[index])
                                                : 0xFFFFFFFFu;
                         uint32_t skip = change - 1;
                         if (skip > cross - 1) skip = cross - 1;

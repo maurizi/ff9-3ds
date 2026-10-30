@@ -31,7 +31,7 @@ static int hw_sound;
 static unsigned long hw_blocks, hw_key_ons;
 static void hw_key_on(unsigned voice, void *user) { (void)voice; (void)user; hw_key_ons++; }
 static void hw_block(unsigned voice, const int16_t *samples, void *user) { (void)voice; (void)samples; (void)user; hw_blocks++; }
-static const PsxSpuSink hw_counting_sink = {hw_key_on, hw_block, NULL};
+static const PsxSpuSink hw_counting_sink = {hw_key_on, hw_block, NULL, NULL};
 static void hw_report(void) { fprintf(stderr, "hw sound: %lu key-ons, %lu blocks\n", hw_key_ons, hw_blocks); }
 static const char *ram_dump_path;
 static const char *spu_snapshot_path;

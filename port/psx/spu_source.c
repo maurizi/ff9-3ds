@@ -21,20 +21,35 @@ SPU_HOT void psx_spu_source_set_loop(PsxSpuSource *source, uint16_t *loop_addres
     if (!voice_on || !source->first_block) source->ignore_loop_start = 1;
 }
 
+/* Key-on, increment, and loop redirects all align to 16 bytes. The last
+ * block starts at 0x7fff0 and fits entirely inside the RAM image. */
+static inline const uint8_t *source_block(const PsxSpuSource *source, const uint8_t *ram) {
+    unsigned byte_address = (unsigned)source->address * 8;
+    static const uint8_t zeros[16] __attribute__((aligned(4)));
+    return !&psx_spu_ram_size || byte_address < psx_spu_ram_split[0] ? ram + byte_address
+         : byte_address < psx_spu_ram_split[1] ? psx_spu_ram_mid + byte_address
+         : byte_address < psx_spu_ram_size ? psx_spu_ram_hi + byte_address : zeros;
+}
+
 SPU_HW_HOT void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
                           uint16_t *loop_address) {
     if (source->fetched) return;
     for (unsigned i = 0; i < 3; ++i)
         source->samples[i] = source->samples[PSX_SPU_BLOCK_SAMPLES + i];
-    /* Key-on, increment, and loop redirects all align to 16 bytes. The last
-     * block starts at 0x7fff0 and fits entirely inside the RAM image. */
-    unsigned byte_address = (unsigned)source->address * 8;
-    static const uint8_t zeros[16];
-    const uint8_t *block = !&psx_spu_ram_size || byte_address < psx_spu_ram_split[0] ? ram + byte_address
-                         : byte_address < psx_spu_ram_split[1] ? psx_spu_ram_mid + byte_address
-                         : byte_address < psx_spu_ram_size ? psx_spu_ram_hi + byte_address : zeros;
-    source->flags = psx_spu_decode_block(block, &source->history,
+    source->flags = psx_spu_decode_block(source_block(source, ram), &source->history,
                                          source->samples + 3);
+    source->fetched = 1;
+    if ((source->flags & 4) && !source->ignore_loop_start)
+        *loop_address = source->address;
+}
+
+/* As psx_spu_source_fetch, its samples decoded into `to` instead (psx_spu_decode_block_to), not into the source's:
+ * for the hardware path, which doesn't interpolate them. `to` 1: not decoded, its flags only. */
+SPU_HW_ONLY_HOT void psx_spu_source_fetch_to(PsxSpuSource *source, const uint8_t *ram, uint16_t *loop_address,
+                                        int16_t *to, int negate) {
+    if (source->fetched) return;
+    source->flags = to == (int16_t *)1 ? source_block(source, ram)[1] /* (PSX_SPU_UNHEARD: its flags only) */
+                  : psx_spu_decode_block_to(source_block(source, ram), &source->history, to, negate);
     source->fetched = 1;
     if ((source->flags & 4) && !source->ignore_loop_start)
         *loop_address = source->address;

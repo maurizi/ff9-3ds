@@ -44,11 +44,12 @@ typedef struct {
 } PsxSpuVoiceBlock;
 /* The hardware-mixing path (design §7.0): advance a voice's state over n samples exactly as mixing would (ADSR
  * per sample, source position, block crossings, loop/end flags) without producing samples. Each block the voice
- * decodes, in play order, goes to block(voice, samples, user) (28 samples). Pitch modulation and noise use the
+ * decodes, in play order, goes to block(voice, samples, user) (28 samples), or is decoded where target (if any)
+ * returns. Pitch modulation and noise use the
  * plain pitch here. */
 void psx_spu_step_voice(PsxSpuVoice *voice, unsigned index, const uint8_t *ram, unsigned n, int fetch_off,
                         uint32_t *ended, void (*block)(unsigned voice, const int16_t *samples, void *user),
-                        void *user);
+                        int16_t *(*target)(unsigned voice, int *negate, void *user), void *user);
 void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_t *ram, unsigned n,
                               const int16_t *noise, uint32_t noise_mask, uint32_t modulation_mask,
                               uint32_t reverb_mask, int fetch_off_voices, PsxSpuVoiceBlock *out);
