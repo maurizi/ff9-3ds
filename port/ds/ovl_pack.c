@@ -6,6 +6,8 @@
 #include <nds.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "platform.h"
 #include "psx_runtime.h"
 #include "psx_mem.h"
@@ -16,23 +18,33 @@ extern const u32 psx_fx_build_id __attribute__((weak)); /* the Makefile's (fxid.
 /* gx_hybrid.c: its scene buffers there are gone */
 __attribute__((weak)) void gxh_native_overwritten(uintptr_t at, unsigned int len) { (void)at; (void)len; }
 
-static FILE *pack;
+static int pack = -1;
 static u32 (*entries)[4], count;      /* (id, address, size, offset) */
 static int loaded[256];               /* by overlay id: its code is in place (another one of its slot clears it) */
 
+/* n bytes at offset `at` of the file into buf (0: short or failed). POSIX I/O, not stdio: a FILE costs the heap ~600
+ * bytes more for each file open, which battles are short of. */
+static int read_at(int fd, long at, void *buf, unsigned int n) {
+    if (lseek(fd, at, SEEK_SET) != at) return 0;
+    for (u8 *p = buf; n;) {
+        const int got = read(fd, p, n);
+        if (got <= 0) return 0;
+        p += got; n -= (unsigned int)got;
+    }
+    return 1;
+}
 static void open_pack(void) {
-    if (pack) return;
+    if (pack >= 0) return;
     char path[256];
     snprintf(path, sizeof path, "%s/ovls.bin", plat_data_dir());
-    pack = fopen(path, "rb");
-    if (pack) setvbuf(pack, NULL, _IONBF, 0); /* (no stdio buffer from the heap: battles are short of it) */
+    pack = open(path, O_RDONLY);
     u32 head[3];
-    if (!pack || fread(head, 4, 3, pack) != 3) port_fatal("code overlays: can't read %s", path);
+    if (pack < 0 || !read_at(pack, 0, head, 12)) port_fatal("code overlays: can't read %s", path);
     if (head[0] != OVL_PACK_MAGIC || head[1] != psx_fx_build_id)
         port_fatal("code overlays: %s is from another build", path);
     count = head[2];
     entries = malloc(count * sizeof *entries);
-    if (!entries || fread(entries, sizeof *entries, count, pack) != count) port_fatal("code overlays: bad %s", path);
+    if (!entries || !read_at(pack, 12, entries, count * sizeof *entries)) port_fatal("code overlays: bad %s", path);
 }
 
 void port_ovl_native_load(unsigned int id) {
@@ -41,7 +53,7 @@ void port_ovl_native_load(unsigned int id) {
     for (u32 i = 0; i < count; ++i) {
         if (entries[i][0] != id) continue;
         u32 address = entries[i][1], size = entries[i][2];
-        if (fseek(pack, (long)entries[i][3], SEEK_SET) != 0 || fread((void *)address, 1, size, pack) != size)
+        if (!read_at(pack, (long)entries[i][3], (void *)address, size))
             port_fatal("code overlays: can't read overlay %02X", id);
         DC_FlushRange((void *)address, size); /* new code: out of the data cache, then a fresh instruction cache */
         IC_InvalidateAll();
@@ -73,8 +85,7 @@ void port_ovl_native_sector(unsigned int id, unsigned int off, unsigned int len)
         if (s_lo < lo) s_lo = lo;
         if (s_hi > hi) s_hi = hi;
         if (s_lo >= s_hi) return;
-        if (fseek(pack, (long)(entries[i][3] + (s_lo - lo)), SEEK_SET) != 0 ||
-            fread((void *)s_lo, 1, s_hi - s_lo, pack) != s_hi - s_lo)
+        if (!read_at(pack, (long)(entries[i][3] + (s_lo - lo)), (void *)s_lo, s_hi - s_lo))
             port_fatal("code overlays: can't read overlay %02X", id);
         DC_FlushRange((void *)s_lo, s_hi - s_lo);
         IC_InvalidateAll();

@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "platform.h"
 #include "psx_runtime.h"
 
@@ -18,22 +20,32 @@ extern const u8 psx_fx_area_size[] __attribute__((weak)); /* its address is the 
 extern unsigned char psx_ram[];
 extern const u32 psx_fx_build_id __attribute__((weak)); /* the Makefile's (fxid.s), new each link; weak for its scan */
 
-static FILE *pack;
+static int pack = -1;
 static u32 pack_count; /* (each module's {offset, size} read from the pack as it loads: the 3 KB index in the heap
                          * made the first effect of a battle fail when a few KB were left) */
 static int pack_state;                /* 0 not opened yet, 1 usable, -1 not */
 static int loaded[2] = {-1, -1}; /* each slot's module (its area: the bottom, or the top FX_SLOT2_SIZE bytes) */
 #define FX_SLOT2_SIZE 0x3000u /* (the Makefile's: the _1 modules are linked there) */
 
+/* n bytes at offset `at` of the file into buf (0: short or failed). POSIX I/O, not stdio: a FILE costs the heap ~600
+ * bytes more for each file open, which battles are short of. */
+static int read_at(int fd, long at, void *buf, unsigned int n) {
+    if (lseek(fd, at, SEEK_SET) != at) return 0;
+    for (u8 *p = buf; n;) {
+        const int got = read(fd, p, n);
+        if (got <= 0) return 0;
+        p += got; n -= (unsigned int)got;
+    }
+    return 1;
+}
 static int open_pack(void) {
     if (pack_state) return pack_state > 0;
     pack_state = -1;
     char path[256];
     snprintf(path, sizeof path, "%s/fxmods.bin", plat_data_dir());
-    pack = fopen(path, "rb");
-    if (pack) setvbuf(pack, NULL, _IONBF, 0); /* (no buffer from the heap: the reads are whole modules) */
+    pack = open(path, O_RDONLY);
     u32 head[4];
-    if (!pack || fread(head, 4, 4, pack) != 4) {
+    if (pack < 0 || !read_at(pack, 0, head, 16)) {
         port_log("effect modules: no %s\n", path);
         return 0;
     }
@@ -67,13 +79,12 @@ const void *port_fx_pack_load(unsigned int index, int slot) {
     if ((int)index == loaded[slot]) return h;
     loaded[slot] = -1;
     u32 entry[2];
-    if (fseek(pack, (long)(16 + 8 * index), SEEK_SET) != 0 || fread(entry, 4, 2, pack) != 2) {
+    if (!read_at(pack, (long)(16 + 8 * index), entry, 8)) {
         port_log("effect modules: module %u's index unreadable\n", index);
         return NULL;
     }
     const u32 offset = entry[0], size = entry[1];
-    if (size > room || fseek(pack, (long)offset, SEEK_SET) != 0 ||
-        fread(at, 1, size, pack) != size || h[0] != FX_HEAD_MAGIC || h[2] < h[1] ||
+    if (size > room || !read_at(pack, (long)offset, at, size) || h[0] != FX_HEAD_MAGIC || h[2] < h[1] ||
         h[1] < (u32)(uintptr_t)at || h[2] > (u32)(uintptr_t)(at + room)) {
         port_log("effect modules: module %u unreadable\n", index);
         return NULL;
