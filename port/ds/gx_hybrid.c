@@ -2783,7 +2783,8 @@ static const u8 *model_poly(const MeshInst *mi, int pi, int *type) {
 /* The scene's native polygons to draw, in a list per main-OT entry as the PS1 links them (returns their count; ones
  * the pool has no room for are dropped). */
 static const Buffer *collect_last_b; /* (collect_native's lists: NULL, collected again) */
-static int collect_native(Buffer *b) {
+/* (only scenes with battle meshes collect: in the battle's ITCM image) */
+PORT_ITCM_CODE(0b) static int collect_native(Buffer *b) {
     unsigned at = (b->pool_used + 3) & ~3u;
     native_refs = (NativeRef *)(b->pool + at);
     /* (the lists of the meshes as they were last collected: a battle's two passes and its labelling collect them
@@ -3008,7 +3009,7 @@ PORT_ITCM_CODE(0b) static void native_run(Buffer *b, EmitState *es, NativeWalk *
 
 /* The drawing place (emit_scene's walk: the recorded primitives and native polygons drawn before) of each 4 main-OT
  * entries, far to near: a strip's vertices sit at their own entries' places, between the primitives around them. */
-PORT_OVERLAY_CODE(0b) static void build_places(Buffer *b) {
+PORT_ITCM_CODE(0b) static void build_places(Buffer *b) {
     int nat = 0;
     for (int q = 0x100F >> 2; q >= 0; --q) {
         const int e_hi = 4 * q + 3 > 0x100F ? 0x100F : 4 * q + 3;
