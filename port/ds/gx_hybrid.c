@@ -168,6 +168,10 @@ static int tp_zlo = -0x7FFFFFFF, tp_zhi = 0x7FFFFFFF, tp_counting;
 enum { TP_OFF, TP_IDLE, TP_P1_LISTED, TP_P1_SHOWN, TP_P2_LISTED, TP_P2_SHOWN };
 static volatile int tp_state = TP_OFF;
 static int tp_split, tp_final;  /* the depth between the passes; bank B holds a whole frame */
+/* a battle's third pass (battle_two: when no two passes' textures fit): tp_split2 the depth between the second and
+ * third; the passes' captures alternate banks A and B (tp_cap: the last one captured, 1 B), and tp_fbank holds the
+ * last whole frame (B unless a three-pass scene left it in A) */
+static int tp_split2 = 0x7FFFFFFF, tp_passes = 2, tp_pass, tp_cap, tp_fbank = 1;
 /* a battle's two passes: each its own textures in banks C and D (battle_label; 0: the scene's, 1 or 2: a pass's) */
 static int tp_plan_pass, tp_battle;
 static int tp_planned; /* (battle_two planned the first pass's textures last: submit needn't again) */
@@ -1971,7 +1975,7 @@ static __attribute__((noinline)) int plan_textures(Buffer *b) {
             MeshInst *mi = mesh_at(b, m);
             for (int i = 0; i < mi->nuses; ++i) {
                 MeshUse *u = &mi->uses[i];
-                if (tp_plan_pass && !(u->passes & tp_plan_pass)) { u->group = u->palette = 0xFF; continue; }
+                if (tp_plan_pass && !(u->passes & 1 << (tp_plan_pass - 1))) { u->group = u->palette = 0xFF; continue; }
                 Prim q;
                 q.n = 4; q.flags = (u8)(P_TEXTURED | (u->semi ? P_SEMI : 0));
                 use_page(u, &q);
@@ -5525,13 +5529,14 @@ static int tp_enter(void) {
     for (int u = 64; u < 128; ++u) unit_used[u] = 1;
     vramSetBankB(VRAM_B_LCD);
     back_mode(0);
-    tp_final = 0;
+    tp_final = 0; tp_fbank = 1; tp_passes = 2; tp_split2 = 0x7FFFFFFF;
     tp_state = TP_IDLE;
     return 1;
 }
 static void tp_leave(void) {
     if (tp_state == TP_OFF) return;
     tp_state = TP_OFF; /* (the interrupt leaves the registers alone from here) */
+    tp_passes = 2; tp_split2 = 0x7FFFFFFF; tp_fbank = 1;
     REG_DISPCAPCNT = 0;
     if ((REG_DISPCNT & (3u << 16)) == DISPLAY_MODE_FB) REG_DISPCNT = tp_dispcnt;
     if (bank_a_bg) vramSetBankA(VRAM_A_MAIN_BG_0x06020000);
@@ -5540,26 +5545,28 @@ static void tp_leave(void) {
 }
 /* the second pass, once the first is on screen (display.c, at each present, and before a scene is submitted) */
 void gxh_tp_tick(void) {
-    if (tp_state != TP_P1_SHOWN) return;
+    const int third = tp_state == TP_P2_SHOWN && tp_pass == 2 && tp_passes == 3;
+    if (tp_state != TP_P1_SHOWN && !third) return;
     while (dmaBusy(0)) {}
-    if (tp_battle) { /* the second pass's textures over the first's, once it is drawn and captured (the 3D engine
+    if (tp_battle) { /* the next pass's textures over the last's, once it is drawn and captured (the 3D engine
                       * reads them through the frame after its swap: the capture ends with it) */
         for (int n = 0; (REG_DISPCAPCNT & DCAP_ENABLE) && n < 4; ++n) swiWaitForVBlank();
-        tp_plan_pass = 2;
+        tp_plan_pass = third ? 3 : 2;
         plan_textures(tp_b);
         vramSetBankC(VRAM_C_LCD); vramSetBankD(VRAM_D_LCD); vramSetBankF(VRAM_F_LCD); vramSetBankG(VRAM_G_LCD);
         upload();
         vramSetBankC(VRAM_C_TEXTURE_SLOT2); vramSetBankD(VRAM_D_TEXTURE_SLOT3);
         vramSetBankF(VRAM_F_TEX_PALETTE_SLOT0); vramSetBankG(VRAM_G_TEX_PALETTE_SLOT1);
     }
-    tp_zlo = tp_split;
+    tp_zlo = third ? tp_split2 : tp_split;
+    tp_zhi = third ? 0x7FFFFFFF : tp_split2;
     const unsigned gen = tp_b->scene_gen;
     const int count = tp_b->count, ofs_x = tp_b->ofs_x, ofs_y = tp_b->ofs_y;
     if (tp_battle) { tp_b->scene_gen = tp_gen; tp_b->count = tp_count; tp_b->ofs_x = tp_ofs_x; tp_b->ofs_y = tp_ofs_y; }
     emit_scene(tp_b);
     tp_b->scene_gen = gen; tp_b->count = count; tp_b->ofs_x = ofs_x; tp_b->ofs_y = ofs_y;
     flush_chunk();
-    tp_zlo = -0x7FFFFFFF;
+    tp_zlo = -0x7FFFFFFF; tp_zhi = 0x7FFFFFFF;
     while (dmaBusy(0)) {}
     tp_state = TP_P2_LISTED;
     tp_plan_pass = 0;
@@ -5570,6 +5577,10 @@ void gxh_tp_finish(void) {
     for (int n = 0; tp_state == TP_P1_LISTED && n < 4; ++n) swiWaitForVBlank();
     gxh_tp_tick(); /* (a battle's waits for its first pass's capture: the game's next frame redraws its meshes into
                     * the buffer, so its second pass can't come later) */
+    if (tp_passes == 3) { /* (and its third, after the second is shown) */
+        for (int n = 0; (tp_state == TP_P2_LISTED || (tp_state == TP_P2_SHOWN && tp_pass < 2)) && n < 4; ++n) swiWaitForVBlank();
+        gxh_tp_tick();
+    }
 }
 /* wait for the passes under way (a scene is about to be submitted over them) */
 static void tp_settle(void) {
@@ -5585,24 +5596,33 @@ void gxh_vblank(void) {
     int s = tp_state;
     if (s != TP_P1_LISTED && s != TP_P2_LISTED && s != TP_P2_SHOWN) return;
     if (s == TP_P2_SHOWN) {
-        if (!(REG_DISPCAPCNT & DCAP_ENABLE)) { tp_final = 1; tp_state = TP_IDLE; }
+        /* (a third pass to come: gxh_tp_tick lists it once this capture ends) */
+        if (!(REG_DISPCAPCNT & DCAP_ENABLE) && tp_pass >= tp_passes) { tp_final = 1; tp_fbank = tp_cap; tp_state = TP_IDLE; }
         return;
     }
     for (int spin = 0; (GFX_STATUS & (1 << 27)) && spin < 256; ++spin) {} /* (it may read busy a moment at the swap) */
     if (GFX_STATUS & (1 << 27)) return;
     if (s == TP_P1_LISTED) {
-        vramSetBankA(VRAM_A_LCD);
-        REG_DISPCAPCNT = DCAP_ENABLE | DCAP_MODE(DCAP_MODE_A) | DCAP_BANK(DCAP_BANK_VRAM_A) | DCAP_SIZE(DCAP_SIZE_256x192) |
-                         DCAP_SRC_A(DCAP_SRC_A_3DONLY);
-        if (tp_final) { tp_dispcnt = REG_DISPCNT; REG_DISPCNT = MODE_FB1; }
+        /* the last whole frame (bank tp_fbank) shown; the first pass's 3D captured into the other */
+        tp_cap = !tp_fbank;
+        if (tp_cap) vramSetBankB(VRAM_B_LCD); else vramSetBankA(VRAM_A_LCD);
+        REG_DISPCAPCNT = DCAP_ENABLE | DCAP_MODE(DCAP_MODE_A) | DCAP_BANK(tp_cap ? DCAP_BANK_VRAM_B : DCAP_BANK_VRAM_A) |
+                         DCAP_SIZE(DCAP_SIZE_256x192) | DCAP_SRC_A(DCAP_SRC_A_3DONLY);
+        if (tp_final) { tp_dispcnt = REG_DISPCNT; REG_DISPCNT = tp_fbank ? MODE_FB1 : MODE_FB0; }
         glClearColor(tp_clear & 31, (tp_clear >> 5) & 31, (tp_clear >> 10) & 31, 31); /* (read as it renders: opaque) */
+        tp_pass = 1;
         tp_state = TP_P1_SHOWN;
     } else {
-        vramSetBankA(VRAM_A_MAIN_BG_0x06020000);
+        /* the passes so far (the last capture) as BG3 under this one; the whole captured into the other bank */
+        const int shown = tp_cap;
+        if (shown) { vramSetBankB(VRAM_B_MAIN_BG_0x06020000); vramSetBankA(VRAM_A_LCD); }
+        else { vramSetBankA(VRAM_A_MAIN_BG_0x06020000); vramSetBankB(VRAM_B_LCD); }
         if ((REG_DISPCNT & (3u << 16)) == DISPLAY_MODE_FB) REG_DISPCNT = tp_dispcnt;
-        REG_DISPCAPCNT = DCAP_ENABLE | DCAP_MODE(DCAP_MODE_A) | DCAP_BANK(DCAP_BANK_VRAM_B) | DCAP_SIZE(DCAP_SIZE_256x192) |
-                         DCAP_SRC_A(DCAP_SRC_A_COMPOSITED);
+        tp_cap = !shown;
+        REG_DISPCAPCNT = DCAP_ENABLE | DCAP_MODE(DCAP_MODE_A) | DCAP_BANK(tp_cap ? DCAP_BANK_VRAM_B : DCAP_BANK_VRAM_A) |
+                         DCAP_SIZE(DCAP_SIZE_256x192) | DCAP_SRC_A(DCAP_SRC_A_COMPOSITED);
         glClearColor(tp_clear & 31, (tp_clear >> 5) & 31, (tp_clear >> 10) & 31, 0); /* (the first pass shows through) */
+        tp_pass++;
         tp_state = TP_P2_SHOWN;
     }
 }
@@ -5852,9 +5872,16 @@ static void battle_one(Buffer *b) {
  * second's), planned for the check; the first pass's planned last (it is uploaded first) */
 static int battle_meshes; /* (battle_two: the scene's native meshes are its own; else its primitives alone, at
                            * emit_scene's depth k + 1, the split an index) */
-static int battle_fits(Buffer *b, int first, int mask) {
-    tp_split = (battle_meshes ? Z_STEP : 1) * (first + 1); /* (places 1..first the first pass) */
+static int battle_fits3(Buffer *b, int first, int second, int mask) {
+    const int unit = battle_meshes ? Z_STEP : 1;
+    tp_split = unit * (first + 1); /* (places 1..first the first pass) */
+    tp_split2 = second < 0 ? 0x7FFFFFFF : unit * (second + 1); /* (first+1..second the second; a third after) */
     battle_label(b);
+    if (mask & 4) {
+        tp_plan_pass = 3;
+        plan_textures(b);
+        if (gxh_stats_unplaced) return 0;
+    }
     if (mask & 2) {
         tp_plan_pass = 2;
         plan_textures(b);
@@ -5864,6 +5891,7 @@ static int battle_fits(Buffer *b, int first, int mask) {
     plan_textures(b);
     return !gxh_stats_unplaced;
 }
+static int battle_fits(Buffer *b, int first, int mask) { return battle_fits3(b, first, -1, mask); }
 static void battle_two(Buffer *b) {
     tp_plan_pass = 0; tp_battle = 0;
     if (place->field || place->world || movie_banks) { tp_leave(); goto bank_a; }
@@ -5903,15 +5931,33 @@ static void battle_two(Buffer *b) {
      * halving), if the second pass's fit there too (else none does). The last split that fitted is tried first. */
     const int lo = seq - cap > 0 ? seq - cap : 0, hi = cap < seq ? cap : seq;
     if (lo > hi) { battle_one(b); return; }
-    if (battle_try >= lo && battle_try <= hi && battle_fits(b, battle_try, 3)) {
-        tp_planned = 1; battle_fails = 0; return;
+    static int battle_try2 = -1; /* (the last three-pass split's second boundary: -1 two passes fitted) */
+    if (battle_try >= lo && battle_try <= hi) {
+        if (battle_try2 < 0 && battle_fits(b, battle_try, 3)) { tp_planned = 1; tp_passes = 2; battle_fails = 0; return; }
+        if (battle_try2 > battle_try && battle_try2 < seq && seq - battle_try2 <= cap &&
+            battle_fits3(b, battle_try, battle_try2, 7)) { tp_planned = 1; tp_passes = 3; battle_fails = 0; return; }
     }
     int a = lo, z = hi, best = -1;
     for (int n = 0; a <= z && n < 12; ++n) {
         const int mid = a + (z - a) / 2;
         if (battle_fits(b, mid, 1)) { best = mid; a = mid + 1; } else z = mid - 1;
     }
-    if (best >= 0 && battle_fits(b, best, 3)) { tp_planned = 1; battle_try = best; battle_fails = 0; return; }
+    if (best >= 0 && battle_fits(b, best, 3)) {
+        tp_planned = 1; battle_try = best; battle_try2 = -1; tp_passes = 2; battle_fails = 0; return;
+    }
+    /* no two passes fit: three (a battle frame is four VBlanks), the second pass the most places after the first's
+     * whose textures fit (halving again), the third the rest, if it fits the 3D engine and banks C and D */
+    if (best >= 0) {
+        int a2 = best + 1, z2 = best + cap < seq ? best + cap : seq, best2 = -1;
+        for (int n = 0; a2 <= z2 && n < 12; ++n) {
+            const int mid = a2 + (z2 - a2) / 2;
+            if (battle_fits3(b, best, mid, 2)) { best2 = mid; a2 = mid + 1; } else z2 = mid - 1;
+        }
+        if (best2 >= 0 && seq - best2 <= cap && battle_fits3(b, best, best2, 7)) {
+            tp_planned = 1; battle_try = best; battle_try2 = best2; tp_passes = 3; battle_fails = 0; return;
+        }
+    }
+    tp_split2 = 0x7FFFFFFF; tp_passes = 2;
     battle_hold = battle_fails < 5 ? (1 << battle_fails) - 1 : 31;
     ++battle_fails;
     battle_one(b);
@@ -5929,7 +5975,8 @@ bank_a:
 static void battle_label(Buffer *b) {
     if (!battle_meshes) { /* (primitives alone: emit_scene draws primitive k at depth k + 1) */
         memset(prim_drop, 0, b->count);
-        for (int k = 0; k < b->count; ++k) if (in_scene(&b->prims[k], k) && k + 1 >= tp_split) prim_drop[k] = 2;
+        for (int k = 0; k < b->count; ++k)
+            if (in_scene(&b->prims[k], k) && k + 1 >= tp_split) prim_drop[k] = k + 1 >= tp_split2 ? 4 : 2;
         return;
     }
     for (int m = 0; m < b->meshes; ++m) {
@@ -5945,11 +5992,13 @@ static void battle_label(Buffer *b) {
             const NativeRef *r = &native_refs[nw.ri];
             nw.ri = r->next;
             MeshInst *mi = mesh_at(b, r->m);
-            mi->uses[(mi->info[r->pi] >> 3) & 15].passes |= (u8)(Z_STEP * ++nw.zc >= tp_split ? 2 : 1);
+            const int z = Z_STEP * ++nw.zc;
+            mi->uses[(mi->info[r->pi] >> 3) & 15].passes |= (u8)(z >= tp_split2 ? 4 : z >= tp_split ? 2 : 1);
         } else if (k < b->count) {
             const int kk = k++;
             if (!in_scene(&b->prims[kk], kk)) continue;
-            if (Z_STEP * ++nw.zc >= tp_split) prim_drop[kk] = 2;
+            const int z = Z_STEP * ++nw.zc;
+            if (z >= tp_split) prim_drop[kk] = z >= tp_split2 ? 4 : 2;
         } else break;
     }
 }

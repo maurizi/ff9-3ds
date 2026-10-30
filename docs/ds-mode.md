@@ -1571,3 +1571,17 @@ battles: none drop now in d4_b0617, d2_b0780, d1_b0678, d1_b0304, d2_b0277, d3_b
 Dragon 2,703 -> 0, Worm Hydra 1,617 -> 0); unchanged d1_b0014 (Zaghnol), d3_b0194 (Red Dragon: no split fits, the
 pages both passes use), d3_b0583, d2_b0280, d4_b0657, d4_b0922, d4_b0359 (effects); d2_b0135 776 -> 702. Two passes
 cost: d2_b0135 33.0 -> 37.6 ms, d4_b0617 27.4 -> 29.3; the others within noise.
+
+### Battles in three passes (2026-10-30)
+
+When no two-pass split fits banks C and D, battle_two tries three: the first pass the most places whose textures fit
+(as for two), the second the most after it whose textures fit (halving), the third the rest if it fits the 3D engine
+and the banks. The passes' captures alternate banks A and B (tp_cap): the first pass's 3D into the bank not showing
+the last whole frame (tp_fbank), each later pass over the last capture as BG3, its composite into the other; a third
+pass leaves the whole frame in A, and the next scene's first pass shows it with MODE_FB0. Two-pass scenes (and every
+field's) keep the frame in B as before (fields' frames identical). The third pass's textures are planned and
+uploaded once the second's capture ends, and listed before the game goes on (gxh_tp_finish), as the second's.
+Result: no drops in Zaghnol d1_b0014 (1,308 before), Gigan Toad d2_b0135 (702), Armstrong d3_b0583 (537); the cost is
+the passes' texture uploads (each pass's pages displace the others' in C and D, re-uploaded every scene): d1_b0014
+32 -> 45 ms per VBlank, d2_b0135 37.6 -> 57.9, d3_b0583 27.7 -> 31.7 (the user's choice of 2026-10-29: no drops
+over speed). Red Dragon d3_b0194 still drops (no first pass fits: its arena and dragons share pages).
