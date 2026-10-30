@@ -2318,19 +2318,26 @@ enum { CMD_MTX_IDENTITY = 0x15, CMD_MTX_LOAD4X3 = 0x17, CMD_COLOR = 0x20, CMD_TE
        CMD_TEXIMAGE = 0x2A, CMD_PLTTBASE = 0x2B, CMD_BEGIN = 0x40 };
 #define INITIAL_ATTR (3u << 6 | 31u << 16)
 
-/* The scene's commands (packed FIFO format, one command per header), fed to the geometry FIFO by DMA while the
- * CPU goes on. Worst case per polygon: 4 state commands and 4 vertices of colour, texcoord and position. */
-#define CHUNK_WORDS 512    /* two 2 KB halves: one fills while the other goes to the FIFO */
-static u32 (*chunks)[CHUNK_WORDS]; /* two, in main RAM: the CPU writes VRAM (bank I before) more slowly */
-static int chunk, chunk_words;
+/* The scene's commands (packed FIFO format, one command per header), written into a chunk in DTCM and copied into
+ * the geometry FIFO by the CPU, eight words a store (the FIFO's addresses 0x400-0x43F are all its port). In main RAM
+ * every word was a store of its own past the data cache (it allocates on reads only), ~18 cycles each, and the DMA
+ * that fed them on didn't make up for it; the FIFO keeps up (the CPU never waited on it). Worst case per polygon: 4
+ * state commands and 4 vertices of colour, texcoord and position. */
+#define CHUNK_WORDS 256
+static u32 dtcm_chunk[1][CHUNK_WORDS] DTCM_BSS;
+static u32 (*const chunks)[CHUNK_WORDS] = dtcm_chunk;
+static const int chunk = 0;
+static int chunk_words;
 
-static void flush_chunk(void) {
+__attribute__((target("arm"), noinline)) static void flush_chunk(void) {
     if (!chunk_words) return;
-    DC_FlushRange(chunks[chunk], chunk_words * 4);
-    while (dmaBusy(0)) {}
-    while (dmaBusy(1) || dmaBusy(2) || dmaBusy(3)) {} /* libnds: no concurrent DMA when one feeds the FIFO */
-    dmaSetParams(0, chunks[chunk], (void *)&GFX_FIFO, DMA_FIFO | (u32)chunk_words);
-    chunk ^= 1;
+    while (dmaBusy(0)) {} /* (a list some other path still feeds by DMA) */
+    const u32 *s = chunks[0];
+    int n = chunk_words;
+    for (; n >= 8; n -= 8)
+        __asm__ volatile("ldmia %0!, {r4-r10, r12}\n\tstmia %1, {r4-r10, r12}" : "+r"(s) : "r"(&GFX_FIFO)
+                         : "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r12", "memory");
+    for (; n > 0; --n) GFX_FIFO = *s++;
     chunk_words = 0;
 }
 
@@ -5019,8 +5026,6 @@ void gxh_init(void) {
     for (u32 k = 1; k < 256; ++k) recip24[k] = (u32)(((1ull << 24) + k - 1) / k);
     use_place(&places[0]);
     spare_buffers();
-    static u32 main_chunks[2][CHUNK_WORDS] __attribute__((aligned(32)));
-    chunks = main_chunks;
     marks = psx_spare_alloc(1024 * 512 / 8); /* in main's MIPS code range, see psx_spare_alloc */
     for (int i = 0; i < 2; ++i) ui_list[i] = psx_spare_alloc(UI_MAX * sizeof(UiPrim));
     memset(marks, 0, 1024 * 512 / 8);

@@ -1627,3 +1627,26 @@ there depends on speed: camera, menus), so they were checked by eye and against 
 Heap for it: battles had ~1 KB at boot after its code. Freed: the effect pack's 3 KB index (3e3c0a8), the overlay
 pack unbuffered, the scenario's field list as a bitmap (512 bytes less), bgc_use's second cell table (marked in
 cell_far instead, 768), recip24 and glow_alpha in DTCM (2 KB; stack free 7,920 -> 5,868). Battle heap 4,376 at boot.
+
+### The ARM7 regression, and the scene's command list out of main RAM (2026-10-30)
+
+60-field sample after the ARM7 fix (43f5d68, docs/audio-validation.md): median 22.14 -> 21.17 ms per VBlank (s60e ->
+s60f), 17 fields within 17.5 ms; the five sound-heavy fields back (d2_f1003 40.8 -> 19.3), nothing else moved by
+more than 1 ms. Slowest: d1_f0501 39.0, d1_f0604 33.4, d3_f0767 32.7, d3_f1818 29.8, d3_f2801 29.6, d4_f2101 29.6.
+
+Where a median field's scene goes (d3_f2607, 21.7 ms per VBlank, a scene every two: temporary timers): submit 22.3 ms
+a scene, of it field_frame 9.2 (bgc_use 2.2, bgc_hash 1.5: ~141 cycles a primitive, compute, not memory: a pass
+touching each 48-byte record costs ~9 cycles), upload 0.4, emit_scene 12.6-12.9 (fm_emit 2.1; 427 sprites by the fast
+path, 331 of them additive: translucent_id ~340 cycles each, light_under with hue_of ~600; the GX FIFO never made
+the CPU wait). By object (PROFILE=3): the renderer 61% of the frame, gpu.c's GP0 parsing 8%, the GTE 7%, the game's
+own code ~7%. (PROFILE=3 in DS mode now counts ITCM in 128-byte buckets; main RAM's are still 2 KB, so main-RAM
+functions' shares there are approximate: free()'s dispose_chunk at 1.2% was a neighbour's, free is called ~10 times
+a run.)
+The command list: emit_scene's words went one store at a time to two 2 KB chunks in main RAM (the data cache
+allocates on reads only, so each was an uncached write), fed to the FIFO by DMA. Now one 1 KB chunk in DTCM, copied
+into the FIFO by the CPU eight words a store (flush_chunk, ARM): d3_f2607 21.71 -> 21.32, d4_f2404 28.90 -> 28.38,
+d1_b0228 25.14 -> 24.93, d3_b0194 26.82 -> 26.59; frames identical. The heap gains the old chunks' 4 KB (8,624 at
+boot, 6,688 in a battle), DTCM's stack 1 KB (free 5,868 -> 4,844).
+Tried, no measurable gain (reverted): fldmdl_projectMeshClipY natively (as fldmdl_projectMesh; DS mode's MVMVAs there
+already take the 32-bit path), light_under's cell test with its edge functions stepped (its primitives are a cell or
+two: the cost is per call).
