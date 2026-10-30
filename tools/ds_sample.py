@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -154,6 +155,12 @@ def main():
         return funcs[i][1] if i >= 0 else f'{pc:08x}'
 
     backup = CONFIG.with_suffix('.toml.ds_sample')
+    # (a run stopped by a signal used to leave the JIT off and the stub on: every later melonDS run, benchmarks
+    # included, then ran in the interpreter with other timings. SIGTERM, as `timeout` sends, now unwinds through the
+    # finally below; a backup a crashed run left is the configuration to restore, not to overwrite.)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
+    if backup.exists():
+        shutil.copy(backup, CONFIG)
     shutil.copy(CONFIG, backup)
     text = CONFIG.read_text()
     text = set_option(text, 'JIT', 'Enable', 'false')
