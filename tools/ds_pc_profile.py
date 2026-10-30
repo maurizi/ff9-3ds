@@ -32,6 +32,7 @@ if data[:4] != b'MELN' or (base_data and base_data[:4] != b'MELN'):
 symbols = {}
 sizes = {}
 funcs = []
+func_section = {}
 for line in subprocess.check_output(['objdump', '-t', str(a.elf)], text=True).splitlines():
     m = re.match(r'([0-9a-f]{8}) (.{7}) (\S+)\s+([0-9a-f]{8})\s+(?:\.hidden )?(\S+)$', line)
     if not m:
@@ -44,7 +45,10 @@ for line in subprocess.check_output(['objdump', '-t', str(a.elf)], text=True).sp
         continue
     if section.startswith('.psxovl_') and section != '.psxovl_' + a.overlay and section[len('.psxovl_'):] < '32':
         continue  # another overlay of the slot (slots 1 and 2, 32 up, sit at their own MIPS addresses)
+    if section.startswith('.itcmovl_') and section != '.itcmovl_' + a.overlay:
+        continue  # another mode's ITCM code (gen_link.py's ITCM overlay: one place for all)
     funcs.append((addr & ~1, size, name))
+    func_section[name] = section
 funcs.sort()
 starts = [f[0] for f in funcs]
 for name in ('port_pc_header', 'port_pc_main', 'port_pc_itcm'):
@@ -133,8 +137,29 @@ if 'port_pc_memset' in symbols:
 
 if a.detail:
     detail.sort(reverse=True)
-    lines = subprocess.check_output(['addr2line', '-e', str(a.elf)] + ['%x' % (lo + 2) for _, lo in detail[:a.detail_n]],
-                                    text=True).splitlines()
+    sec = func_section.get(a.detail, '')
+    if sec.startswith(('.psxovl_', '.itcmovl_')):
+        # (overlays share addresses: addr2line would take another one's lines; the section's own disassembly says)
+        where, cur = {}, '?'
+        dis = None
+        for cmd in (['arm-none-eabi-objdump'], ['tools/docker.sh', 'arm-none-eabi-objdump']):
+            try:
+                dis = subprocess.check_output(cmd + ['-d', '-l', '-j', sec, str(a.elf)], text=True)
+                break
+            except (OSError, subprocess.CalledProcessError):
+                continue
+        for l in (dis or '').splitlines():
+            m = re.match(r'^(/\S+:\d+)', l)
+            if m:
+                cur = m[1]
+                continue
+            m = re.match(r'^\s*([0-9a-f]+):', l)
+            if m:
+                where[int(m[1], 16)] = cur
+        lines = [where.get(lo + 2, where.get(lo, '?')) for _, lo in detail[:a.detail_n]]
+    else:
+        lines = subprocess.check_output(['addr2line', '-e', str(a.elf)] + ['%x' % (lo + 2) for _, lo in detail[:a.detail_n]],
+                                        text=True).splitlines()
     print('hottest buckets of', a.detail)
     for (c, lo), line in zip(detail[:a.detail_n], lines):
         print(f'{100 * c / total:6.2f}%  {lo:08X}  {line.split("/")[-1]}')

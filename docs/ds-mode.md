@@ -1727,3 +1727,28 @@ now picks no composite there: 25.9 -> 24.8, the 3D path's shade) and d3_f1914 (3
 layers overlap, slightly further from the host's frame: not yet understood; neither layer alone as a unit differs,
 nor do either unit order, cross-entry merges or the texture page state). d2_f0931, d2_f1403 (peeks), d3/d4_f1911
 run.
+
+### Battle UI on the bottom screen, heap, and ITCM per mode (2026-10-30)
+
+- **Bottom screen (ba2a51c, b08cf90, dac8816):** in battles the hybrid renderer's 2D layer (the UI list drawn over
+  the shown buffer) is the sub engine's 8-bit bitmap (port_sub_ui); the scene's own sprites and lines (damage
+  numbers, the help banner, whose texture-window fill is split per tile) go to the 3D layer. No speed change on its
+  own: the UI list is redrawn whole at each swap (translucent windows over the game's fill), and neither drawing it
+  every 8th VBlank, nor carrying it across swaps with per-rectangle redraws, nor a block-hash cache gained (the carry
+  lost ~1 ms: copying the UI's bounds costs more than redrawing it).
+- **Heap (594efba, 2bc7064, f866c89, dd8c400):** battles hung silently in an effect (ARM9 in swiIntrWait under
+  port_effect_call) when a file open found no heap. Freed: libnds glInit's texture manager (gx_hw_init does its
+  hardware part), stdio FILEs (the packs and the CD layer use POSIX I/O), and gx_hybrid's regions/groups/conv_scratch
+  (~15 KB) moved to spare PS1 RAM (psx_spare_alloc had ~20 KB left). Free heap ~6 -> ~20 KB in every mode.
+  port_heap_now holds the last frame's figure (the status rows are hidden in battles).
+- **melonDS and the data cache:** melonDS charges ~10 cycles per main-RAM load whatever the pattern (no D-cache):
+  copying a mesh's vertices to DTCM to avoid misses measured nothing. Instruction fetches from main RAM are the cost.
+- **ITCM per mode (d1e77d9, eaf08e7):** PORT_ITCM_CODE(0a|0b|0c) puts a mode's hottest functions in one ITCM place
+  after the shared .itcm (gen_link.py psx_itcm_ovl.ld), read in with the mode's overlay (ovls.bin entry 0x100 +
+  overlay, port/ds/ovl_pack.c). Battle: port_native_mesh, native_strips, native_run. Field: port_native_field_mesh,
+  fldmdl_projectMeshClipY, and fm_emit's FT4/FT3 loops (field models have no other kind). World: wv_transform,
+  terrain_emit. Out of the shared ITCM for the room: mat_mul, the display scaler, the 8-bit row loops, rect_rows,
+  gp0_note_sprites, hue_of, light_under, target, psx_gte_gpf12. d1_b0228 25.5 -> 24.4, d1_b0186 25.0 -> 24.3,
+  d2_b0098 25.8 -> 25.3, d4_f2110 23.4 -> 22.4, d1_w9009 26.6 -> 24.4, d3_w9006 29.2 -> 28.0; frames identical.
+  tools/ds_pc_profile.py now drops other modes' ITCM symbols; source lines inside slot 0's overlays still need the
+  object file (DWARF lines overlap there).
