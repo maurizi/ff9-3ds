@@ -222,7 +222,26 @@ them like the overlays (one binary per module, all linked at 0x801E7700), even a
 to behave the same. The port would then compile them like the overlays and load the native code with the module.
 If (b) is out of scope, the port can instead translate MIPS to ARM when a module loads, and (a) is enough.
 
-### R27. Battle model rest pose: a model's bone transforms from its motions (2026-10-29)
+### R28. Field model files: format, which fields load which, and which are the party (2026-10-29)
+On the DS the field models are the largest single cost of the slowest fields (median 8.5 ms per PS1 VBlank of the
+15 slowest sampled fields, the whole gap to PS1 speed in five: docs/ds-mode.md, "What the field models cost"). The
+user has approved simplifying non-party field models at build time, as the port does for the heaviest battle
+enemies (R26/R27, tools/simplify_battle_models.py: sector patches the port's CD layer serves, outputs never
+committed). The party (Zidane, Vivi, Garnet/Dagger, Steiner, Freya, Quina, Eiko, Amarant, in any of their field
+forms) stays exact. Asked, as R26 did for battle models:
+- **Where a field model comes from**: the FF9.IMG directory and key of a field model file, and how a field's
+  actor (or `ModelObj`, `fldmdl_initModel`) names it, so a tool can list each field's models from the disc.
+- **The file's layout as loaded**: the `ModelObj`/`WmModelGroup` header (counts at +2, otBias +0x13, bone vertex
+  counts +0x14, vertices +0x18, polygon sources +0x1C as the port reads them), the eight polygon lists (FT4 FT3 GT4
+  GT3 G4 G3 F4 F3: their source records and the packets `fldmdl_buildPackets` makes from them), uvs, colours,
+  texture words, what is relocated at load, and the motion format if it differs from battle models' (R27).
+- **What else indexes a field model's vertices or polygons by number**: e.g. a vertex used as an anchor (speech
+  balloons, held items, effects, look-at), `fldmdl_tintGroup`/`setSemiTrans`/`setAbr` (per group, fine), texture
+  animations (`fldmdl_updateTexAnims`: by polygon?), shadows, mirrored or clipped draws.
+- **The party's model ids** (every field form, including costumes and the Moogle-suit/disguise variants if any).
+- Python in tools/ (as battle_models.py) listing every field model with its counts and the fields that use it.
+
+: a model's bone transforms from its motions (2026-10-29)
 After R26 (thanks: docs/battle-models.md, tools/battle_models.py, tools/battle_budget.py), the port draws battle
 models' triangles as strips and simplifies the heaviest enemies at build time (tools/simplify_battle_models.py,
 config/model_patches.txt; only vertices whose triangles all sit on one bone collapse, since vertex positions are
