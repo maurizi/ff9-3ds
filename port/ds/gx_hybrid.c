@@ -4470,6 +4470,25 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
     }
 }
 
+/* glInit's hardware setup without its texture manager (the renderer places its own textures): glInit's VRAM block
+ * tables and arrays cost the heap ~700 bytes for good, which battles are short of */
+static void gx_hw_init(void) {
+    powerOn(POWER_3D_CORE | POWER_MATRIX);
+    while (GFX_STATUS & (1 << 27)) {} /* (the geometry engine idle) */
+    GFX_STATUS |= 1 << 29;            /* (the FIFO cleared) */
+    glResetMatrixStack();
+    glFlush(0);
+    GFX_CONTROL = 0;
+    glClearColor(0, 0, 0, 31);
+    glClearPolyID(0);
+    glClearDepth(GL_MAX_DEPTH);
+    GFX_TEX_FORMAT = 0;
+    GFX_POLY_FORMAT = 0;
+    glMatrixMode(GL_PROJECTION); glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    glMatrixMode(GL_TEXTURE); glLoadIdentity();
+}
+
 /* ---- presentation ------------------------------------------------------------------------------------------ */
 
 #define BLOCK 32
@@ -5267,7 +5286,7 @@ void gxh_enable(int on) {
             bgHide(back_bg);
         }
         reset_colours();
-        glInit();
+        gx_hw_init();
         glEnable(GL_TEXTURE_2D | GL_BLEND);
         glClearPolyID(63);
         glClearDepth(GL_MAX_DEPTH);
