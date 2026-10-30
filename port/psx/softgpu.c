@@ -1403,7 +1403,7 @@ static __attribute__((noinline)) void tile_semi(const Gp0Mode *m, const Gp0Vtx *
 }
 #endif
 
-static SG_HOT void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
+static void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (!psx_vram) {
         return;
     }

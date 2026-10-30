@@ -3256,6 +3256,98 @@ PORT_OVERLAY_CODE(0a) static void emit_bg_runs(Buffer *b, EmitState *es) {
     es->wp = wp; es->image = image; es->palette = palette; es->attr = attr; es->polys = polys; es->vertices = vertices;
 }
 
+/* emit_scene's opaque textured sprites (a field's background tiles) and converted translucent ones (additive or
+ * subtractive: mist, glows), the general path's words for them without its other cases, in ITCM: a field's
+ * thousands of tiles a scene went through main RAM's code (17% of a median field). 1: the general path takes it. */
+GXH_HOT static int emit_sprite(EmitState *es, const Prim *src, int grp, int pal, int z, int conv) {
+    u32 *wp = es->wp, *pack_header, pack_ids;
+    int pack_shift;
+    u32 image = es->image, palette = es->palette, attr = es->attr;
+    int polys = es->polys, vertices = es->vertices, general = 0;
+    {
+    /* An opaque textured sprite (a field's background tiles), or an additive or subtractive one (mist,
+     * glows): the general path's words for it, without its other cases. Its fields are read first, as
+     * words: stores through wp would reload them. */
+    const u32 *sw = (const u32 *)src;
+    const u32 sw1 = sw[1], sw2 = sw[2], sx = sw[3], sy0 = sw[5], sy1 = sw[6], su = sw[10], sv = sw[11];
+    /* (a sprite's record: x0 x1 x0 x1, y0 y0 y1 y1, u0 u1 u0 u1, v0 v0 v1 v1; else vertex by vertex) */
+    const int paired = sx == sw[4] && sy0 >> 16 == (sy0 & 0xFFFF) && sy1 >> 16 == (sy1 & 0xFFFF) &&
+                       su >> 16 == (su & 0xFFFF) && (sv & 0xFF) == (sv >> 8 & 0xFF) && (sv >> 16 & 0xFF) == sv >> 24;
+    const int tx = (int)(sw1 & 0xFFFF), ty = (int)(sw1 >> 16), cx = (int)(sw2 & 0xFFFF), cy = (int)(sw2 >> 16);
+    int depth = src->depth, u0 = (int)(su & 0xFF), v0 = (int)(sv & 0xFF), tu, tv;
+    u32 unit, size_bits;
+    int cpal = 0;
+    if (grp == RUN_GROUP) {
+        const Run *r = run_holding(STRIP_KEY(depth, conv, tx, ty, cx, cy, v0 >> 4), u0 >> 4, (int)(su >> 8 & 0xFF) >> 4);
+        if (!r) { gxh_stats_texture_fail++; goto done; }
+        unit = rows[r->row].unit; size_bits = RUN_SIZE_BITS; cpal = r->cpal;
+        tu = (r->bu - r->slot) * 16;
+        tv = (v0 >> 4) * 16;
+    } else {
+        const Region *r = grp == 0xFF ? NULL : groups[grp].region;
+        if (!r) { gxh_stats_texture_fail++; goto done; }
+        if (r->conv != conv) { general = 1; goto done; }
+        unit = r->unit; size_bits = r->size_bits; cpal = r->cpal;
+        tu = (r->x - tx) * texels_per_halfword(depth);
+        tv = r->y - ty;
+    }
+    u32 want_image = (u32)(unit * TEX_UNIT / 8) | size_bits | (u32)(conv ? 6 : depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
+    u32 set_palette = ~0u, want_attr = INITIAL_ATTR, colour;
+    if (conv) { /* (as the general path's additive case: its brightness the alpha, the light under it) */
+        u32 want_palette = (u32)(ADD_SLOT * 512 + cpal * 16) / 16;
+        if (want_palette != palette) set_palette = want_palette;
+        const int abr = src->abr, raw = src->flags & P_RAW;
+        const int r0 = (int)(sw[7] & 0xFF), g0 = (int)(sw[8] & 0xFF), b0 = (int)(sw[9] & 0xFF);
+        const int m = raw ? 128 : r0 > g0 ? (r0 > b0 ? r0 : b0) : (g0 > b0 ? g0 : b0);
+        int alpha = m * 31 * (abr == 2 ? 2 : 1) >> (abr == 3 ? 9 : 7);
+        if (alpha > 31) alpha = 31;
+        if (!alpha) goto done; /* (adds nothing; alpha 0 would be wireframe) */
+        want_attr = 3u << 6 | (u32)alpha << 16 | (u32)translucent_id(src, polys) << 24;
+        const u32 hue = raw || abr == 2 ? 0x7FFF : hue_of(src, 0, (u32)m); /* (once: both below) */
+        if (abr != 2) add_white = light_under(src, alpha, modulate(cpal_hue[cpal & 63], hue));
+        colour = abr == 2 ? 0 : raw ? 0x7FFF : whiten_by(hue, add_white);
+    } else {
+        if (depth < 2) {
+            if (pal == 0xFF) { gxh_stats_palette_fail++; goto done; }
+            want_image |= index0_transparent(pal);
+            u32 want_palette = (u32)pal * 512 / 16;
+            if (want_palette != palette) set_palette = want_palette;
+        }
+        if (src->flags & P_RAW) colour = 0x7FFF;
+        else colour = TEX_TINT(sw[7] & 0xFF) | TEX_TINT(sw[8] & 0xFF) << 5 | TEX_TINT(sw[9] & 0xFF) << 10;
+    }
+    u32 xy[4], uv[4];
+    if (paired) { /* the DS quad's corners 0, 1, 3, 2 (PS1 quad 0,1,2 + 1,2,3), the right and bottom one on */
+        const u32 x0 = sx & 0xFFFF, x1 = sx >> 16, y0 = sy0 << 16, y1 = sy1 << 16;
+        const u32 ul = (u16)((u0 - tu) * 16), ur = (u16)(((int)(su >> 8 & 0xFF) - tu + 1) * 16);
+        const u32 vt = (u32)(u16)((v0 - tv) * 16) << 16, vb = (u32)(u16)(((int)(sv >> 16 & 0xFF) - tv + 1) * 16) << 16;
+        xy[0] = x0 | y0; xy[1] = x1 | y0; xy[2] = x1 | y1; xy[3] = x0 | y1;
+        uv[0] = ul | vt; uv[1] = ur | vt; uv[2] = ur | vb; uv[3] = ul | vb;
+    } else {
+        static const u8 order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
+        for (int j = 0; j < 4; ++j) {
+            int i = order[j];
+            xy[j] = (u32)(u16)src->x[i] | (u32)(u16)src->y[i] << 16;
+            uv[j] = (u32)(u16)((src->u[i] - tu + (i & 1)) * 16) | (u32)(u16)((src->v[i] - tv + (i >> 1)) * 16) << 16;
+        }
+    }
+    pack_begin();
+    if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); palette = set_palette; }
+    if (want_image != image) { pack(CMD_TEXIMAGE); put(want_image); image = want_image; }
+    if (attr != want_attr) { pack(CMD_POLYATTR); put(want_attr); attr = want_attr; }
+    pack(CMD_BEGIN); put(1);
+    pack_end();
+    put(CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTX16 << 16);
+    put(colour); put(uv[0]); put(xy[0]); put((u32)(u16)z);
+    for (int j = 1; j < 4; ++j) { put(CMD_TEXCOORD | CMD_VTXXY << 8); put(uv[j]); put(xy[j]); }
+    ++polys;
+    vertices += 4;
+    }
+done:
+    es->wp = wp; es->image = image; es->palette = palette; es->attr = attr; es->polys = polys; es->vertices = vertices;
+    return general;
+}
+
 static __attribute__((noinline)) void emit_scene(Buffer *b) {
     if (!glow_alpha[1][255])
         for (int abr = 0; abr < 4; ++abr)
@@ -3399,84 +3491,11 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
             const u32 sflags = src->flags & (P_RECT | P_TEXTURED | P_SEMI | P_GOURAUD | P_UI | P_TWIN);
             const int conv = sflags == (P_RECT | P_TEXTURED | P_SEMI) && src->abr; /* (modes 1-3: the converted copy) */
             if ((sflags == (P_RECT | P_TEXTURED) || conv) && src->n == 4) {
-                /* An opaque textured sprite (a field's background tiles), or an additive or subtractive one (mist,
-                 * glows): the general path's words for it, without its other cases. Its fields are read first, as
-                 * words: stores through wp would reload them. */
-                const u32 *sw = (const u32 *)src;
-                const u32 sw1 = sw[1], sw2 = sw[2], sx = sw[3], sy0 = sw[5], sy1 = sw[6], su = sw[10], sv = sw[11];
-                /* (a sprite's record: x0 x1 x0 x1, y0 y0 y1 y1, u0 u1 u0 u1, v0 v0 v1 v1; else vertex by vertex) */
-                const int paired = sx == sw[4] && sy0 >> 16 == (sy0 & 0xFFFF) && sy1 >> 16 == (sy1 & 0xFFFF) &&
-                                   su >> 16 == (su & 0xFFFF) && (sv & 0xFF) == (sv >> 8 & 0xFF) && (sv >> 16 & 0xFF) == sv >> 24;
-                const int tx = (int)(sw1 & 0xFFFF), ty = (int)(sw1 >> 16), cx = (int)(sw2 & 0xFFFF), cy = (int)(sw2 >> 16);
-                int depth = src->depth, u0 = (int)(su & 0xFF), v0 = (int)(sv & 0xFF), tu, tv;
-                u32 unit, size_bits;
-                int cpal = 0;
-                if (grp == RUN_GROUP) {
-                    const Run *r = run_holding(STRIP_KEY(depth, conv, tx, ty, cx, cy, v0 >> 4), u0 >> 4, (int)(su >> 8 & 0xFF) >> 4);
-                    if (!r) { gxh_stats_texture_fail++; continue; }
-                    unit = rows[r->row].unit; size_bits = RUN_SIZE_BITS; cpal = r->cpal;
-                    tu = (r->bu - r->slot) * 16;
-                    tv = (v0 >> 4) * 16;
-                } else {
-                    const Region *r = grp == 0xFF ? NULL : groups[grp].region;
-                    if (!r) { gxh_stats_texture_fail++; continue; }
-                    if (r->conv != conv) goto general;
-                    unit = r->unit; size_bits = r->size_bits; cpal = r->cpal;
-                    tu = (r->x - tx) * texels_per_halfword(depth);
-                    tv = r->y - ty;
-                }
-                u32 want_image = (u32)(unit * TEX_UNIT / 8) | size_bits | (u32)(conv ? 6 : depth == 2 ? 7 : depth == 0 ? 3 : 4) << 26;
-                u32 set_palette = ~0u, want_attr = INITIAL_ATTR, colour;
-                if (conv) { /* (as the general path's additive case: its brightness the alpha, the light under it) */
-                    u32 want_palette = (u32)(ADD_SLOT * 512 + cpal * 16) / 16;
-                    if (want_palette != palette) set_palette = want_palette;
-                    const int abr = src->abr, raw = src->flags & P_RAW;
-                    const int r0 = (int)(sw[7] & 0xFF), g0 = (int)(sw[8] & 0xFF), b0 = (int)(sw[9] & 0xFF);
-                    const int m = raw ? 128 : r0 > g0 ? (r0 > b0 ? r0 : b0) : (g0 > b0 ? g0 : b0);
-                    int alpha = m * 31 * (abr == 2 ? 2 : 1) >> (abr == 3 ? 9 : 7);
-                    if (alpha > 31) alpha = 31;
-                    if (!alpha) continue; /* (adds nothing; alpha 0 would be wireframe) */
-                    want_attr = 3u << 6 | (u32)alpha << 16 | (u32)translucent_id(src, polys) << 24;
-                    const u32 hue = raw || abr == 2 ? 0x7FFF : hue_of(src, 0, (u32)m); /* (once: both below) */
-                    if (abr != 2) add_white = light_under(src, alpha, modulate(cpal_hue[cpal & 63], hue));
-                    colour = abr == 2 ? 0 : raw ? 0x7FFF : whiten_by(hue, add_white);
-                } else {
-                    if (depth < 2) {
-                        if (pal == 0xFF) { gxh_stats_palette_fail++; continue; }
-                        want_image |= index0_transparent(pal);
-                        u32 want_palette = (u32)pal * 512 / 16;
-                        if (want_palette != palette) set_palette = want_palette;
-                    }
-                    if (src->flags & P_RAW) colour = 0x7FFF;
-                    else colour = TEX_TINT(sw[7] & 0xFF) | TEX_TINT(sw[8] & 0xFF) << 5 | TEX_TINT(sw[9] & 0xFF) << 10;
-                }
-                u32 xy[4], uv[4];
-                if (paired) { /* the DS quad's corners 0, 1, 3, 2 (PS1 quad 0,1,2 + 1,2,3), the right and bottom one on */
-                    const u32 x0 = sx & 0xFFFF, x1 = sx >> 16, y0 = sy0 << 16, y1 = sy1 << 16;
-                    const u32 ul = (u16)((u0 - tu) * 16), ur = (u16)(((int)(su >> 8 & 0xFF) - tu + 1) * 16);
-                    const u32 vt = (u32)(u16)((v0 - tv) * 16) << 16, vb = (u32)(u16)(((int)(sv >> 16 & 0xFF) - tv + 1) * 16) << 16;
-                    xy[0] = x0 | y0; xy[1] = x1 | y0; xy[2] = x1 | y1; xy[3] = x0 | y1;
-                    uv[0] = ul | vt; uv[1] = ur | vt; uv[2] = ur | vb; uv[3] = ul | vb;
-                } else {
-                    static const u8 order[4] = {0, 1, 3, 2}; /* PS1 quad 0,1,2 + 1,2,3 is DS quad 0,1,3,2 */
-                    for (int j = 0; j < 4; ++j) {
-                        int i = order[j];
-                        xy[j] = (u32)(u16)src->x[i] | (u32)(u16)src->y[i] << 16;
-                        uv[j] = (u32)(u16)((src->u[i] - tu + (i & 1)) * 16) | (u32)(u16)((src->v[i] - tv + (i >> 1)) * 16) << 16;
-                    }
-                }
-                pack_begin();
-                if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); palette = set_palette; }
-                if (want_image != image) { pack(CMD_TEXIMAGE); put(want_image); image = want_image; }
-                if (attr != want_attr) { pack(CMD_POLYATTR); put(want_attr); attr = want_attr; }
-                pack(CMD_BEGIN); put(1);
-                pack_end();
-                put(CMD_COLOR | CMD_TEXCOORD << 8 | CMD_VTX16 << 16);
-                put(colour); put(uv[0]); put(xy[0]); put((u32)(u16)z);
-                for (int j = 1; j < 4; ++j) { put(CMD_TEXCOORD | CMD_VTXXY << 8); put(uv[j]); put(xy[j]); }
-                ++polys;
-                vertices += 4;
-                continue;
+                EmitState es = {wp, attr, image, palette, polys, vertices};
+                const int general = emit_sprite(&es, src, grp, pal, z, conv);
+                wp = es.wp; attr = es.attr; image = es.image; palette = es.palette; polys = es.polys; vertices = es.vertices;
+                if (!general) continue;
+                goto general;
             }
         general:
             copy_prim(&local, src);
