@@ -1773,3 +1773,10 @@ run.
   across flushes: 403 flushes of ~55 entries for 300 presents), so every flush redrew the whole UI area and the run
   was ~1.3 ms slower. psx_vram_touch isn't what splits them (flushing only on writes the list can see changed
   nothing). Next: trace what triggers each flush during btlui_vsync, then compare by content rather than index.
+- **Battle UI, exact partial redraw (2026-10-30, tried, kept out; diff kept outside the repo):** with the game's fill
+  skipped and the frame's list kept across its mid-frame flushes (the game copies the party panel's rows out of the
+  shown buffer every scene, ~105 copies of 48x32 / 16x32 blocks to a cache at x 960+, y 432+, read back as UI
+  textures), the comparison works by index, but ~31 entries a frame still change: they sample the cache, which the
+  copies rewrite each scene with different pixels (the panel's gauges), so the dirty list overflows and the whole buffer
+  is redrawn (~4 ms slower). Skipping copies/uploads that change nothing didn't reduce them. To pursue: per-entry
+  source checks on the texels an entry reads (not its whole page), so a gauge's change dirties its own rows only.
