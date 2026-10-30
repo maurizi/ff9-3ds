@@ -1780,3 +1780,8 @@ run.
   copies rewrite each scene with different pixels (the panel's gauges), so the dirty list overflows and the whole buffer
   is redrawn (~4 ms slower). Skipping copies/uploads that change nothing didn't reduce them. To pursue: per-entry
   source checks on the texels an entry reads (not its whole page), so a gauge's change dirties its own rows only.
+  With the source check narrowed to the texels each entry reads, whole-buffer redraws fell to 6 a run, but ~19
+  entries a frame still change through their sources and the changes scatter into ~46 small rectangles a frame; each
+  replays every entry over it (the windows' backgrounds too): 32 ms (worse). The battle UI genuinely changes much of
+  itself each scene (gauges inside the cached panel rows): an exact redraw of the whole list is near the cheapest
+  exact way to draw it. Left as it is.
