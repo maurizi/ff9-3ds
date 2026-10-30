@@ -4654,7 +4654,7 @@ static inline __attribute__((always_inline)) void fm_take_kind(FmTake *k, FStore
 /* A group's translucent polygons natively (fm_semi_ok), if all are textured and additive (modes 1, 3): the PS1's
  * culling (link_translucent's), each drawn one's bit with the opaque ones', its texture use (tpage bit 15: planned
  * converted, plan_textures) and twice its area (st->semi_area2). 0: some aren't, all left to the linker. */
-PORT_ITCM_CODE(0a) static int fm_take_semi(FStore *st, const NativeFieldMesh *n,
+PORT_OVERLAY_CODE(0a) __attribute__((noinline)) static int fm_take_semi(FStore *st, const NativeFieldMesh *n,
                                                                                       int pi, int nv) {
     const u8 *g = n->group;
     for (int t = 0, at = 0; t < 8; ++t) { /* (nothing taken from a group that keeps some for the linker) */
@@ -5055,6 +5055,16 @@ PORT_OVERLAY_CODE(0a) __attribute__((noinline)) static u32 *fm_semi_emit(FmCtx *
     return wp;
 }
 
+/* The field models' polygons are FT4s and FT3s (no other kind on the discs' fields): those two kinds' loops in ITCM
+ * with the field's other hottest code (PORT_ITCM_CODE), the rest in fm_emit */
+PORT_ITCM_CODE(0a) static u32 *fm_kind_ft4(FmCtx *c, EmitState *es, u32 *wp, const FGroup *fg, const u8 *src, const u8 *pk,
+                                           int pi, int count) {
+    return fm_kind(c, es, wp, 0, fg, src, pk, pi, count);
+}
+PORT_ITCM_CODE(0a) static u32 *fm_kind_ft3(FmCtx *c, EmitState *es, u32 *wp, const FGroup *fg, const u8 *src, const u8 *pk,
+                                           int pi, int count) {
+    return fm_kind(c, es, wp, 1, fg, src, pk, pi, count);
+}
 PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const Buffer *b, const FStore *fst, EmitState *es) {
     FmCtx c;
     c.fst = fst; c.last_use = 0; c.ofs_x = b->ofs_x; c.ofs_y = b->ofs_y;
@@ -5107,8 +5117,8 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
             int count = *(const u16 *)(g + 2 + 2 * t);
             if (!count) continue;
             switch (t) {
-            case 0: wp = fm_kind(&c, es, wp, 0, fg, src, pk, pi, count); break;
-            case 1: wp = fm_kind(&c, es, wp, 1, fg, src, pk, pi, count); break;
+            case 0: wp = fm_kind_ft4(&c, es, wp, fg, src, pk, pi, count); break;
+            case 1: wp = fm_kind_ft3(&c, es, wp, fg, src, pk, pi, count); break;
             case 2: wp = fm_kind(&c, es, wp, 2, fg, src, pk, pi, count); break;
             case 3: wp = fm_kind(&c, es, wp, 3, fg, src, pk, pi, count); break;
             case 4: wp = fm_kind(&c, es, wp, 4, fg, src, pk, pi, count); break;

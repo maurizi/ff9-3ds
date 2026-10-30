@@ -539,7 +539,7 @@ void psx_gte_rtpt_depths(void) { /* (main RAM: ITCM is full; a call per three ve
 }
 
 /* GPF sf=1 lm=0 (gte_gpf12: the rotation matrices) */
-GTE_HOT void psx_gte_gpf12(void) {
+void psx_gte_gpf12(void) {
     i32 ir0 = (i16)g.d[8];
     u32 flag = 0, rgb = g.d[6] & 0xFF000000u;
     for (int i = 0; i < 3; ++i) {
