@@ -149,6 +149,9 @@ static int reading;
 static u8 sector[RAW_SECTOR] __attribute__((aligned(32)));
 static unsigned int sector_lba; /* LBA of `sector` */
 static unsigned int sector_pos; /* bytes of `sector`'s user data already taken by CdGetSector */
+#ifdef PORT_DISC_PACK
+static int sector_rebuilt;      /* `sector` came from a disc pack's data record: no EDC/ECC */
+#endif
 
 #define QUEUE 16
 static struct {
@@ -163,11 +166,52 @@ static int last_com_done;
 
 /* ---- disc image ----------------------------------------------------------------------------------------- */
 
+static long disc_at = -1; /* the image's position after the last read */
+
+#ifdef PORT_DISC_PACK
+/* <data>/discs.bin, when there (tools/pack_discs.py: the packed ROM's four discs in one), else raw/FF9 CD<N>.img.
+ * The pack keeps each distinct sector once: game data as its 2048 bytes of user data (sync, address and data
+ * subheader rebuilt here; EDC/ECC zero), the rest (the movies) whole. Runs map a disc's LBAs to those records. */
+static int packed;
+static unsigned int pack_table, pack_runs, pack_sectors, pack_data, pack_raw;
+#define PACK_DATA 1u   /* run flags: 2048-byte data records (else 2352-byte raw ones) */
+#define PACK_REPEAT 2u /* every sector of the run is the same record */
+#define PACK_BLOCK 16
+static struct { unsigned int lba, count, off, pad; } pack_buf[PACK_BLOCK]; /* a block of the table's runs */
+static unsigned int pack_first, pack_n;
+static int sector_is_data; /* the last read_raw rebuilt a data record (no EDC/ECC) */
+
+static unsigned int le32(const u8 *p);
+static void pack_read(long at, void *buf, unsigned int bytes) {
+    if (fseek(disc, at, SEEK_SET) != 0 || fread(buf, 1, bytes, disc) != bytes)
+        port_fatal("disc %d: can't read discs.bin at %ld", disc_no, at);
+    disc_at = at + (long)bytes;
+}
+#endif
+
 static int open_disc(void) {
     if (disc) {
         return 1;
     }
     char path[512];
+#ifdef PORT_DISC_PACK
+    snprintf(path, sizeof path, "%s/discs.bin", plat_data_dir());
+    if ((disc = fopen(path, "rb")) != NULL) {
+        u8 h[32];
+        pack_read(0, h, 32);
+        if (__builtin_memcmp(h, "FF9D", 4) != 0 || le32(h + 4) != 1 || le32(h + 8) < (unsigned int)disc_no)
+            port_fatal("%s: not a version 1 disc pack with disc %d", path, disc_no);
+        pack_data = le32(h + 12);
+        pack_raw = le32(h + 16);
+        pack_read(32 + 12 * (disc_no - 1), h, 12);
+        pack_table = le32(h);
+        pack_runs = le32(h + 4);
+        pack_sectors = le32(h + 8);
+        if (!pack_sectors) port_fatal("%s: no disc %d in this pack (make ds-packed PACK_DISCS=...)", path, disc_no);
+        packed = 1;
+        return 1;
+    }
+#endif
     snprintf(path, sizeof path, "%s/raw/FF9 CD%d.img", plat_data_dir(), disc_no);
     disc = fopen(path, "rb");
     if (!disc) {
@@ -175,6 +219,35 @@ static int open_disc(void) {
     }
     return 1;
 }
+
+#ifdef PORT_DISC_PACK
+/* The run holding `lba`: from the cached block of the table, else the block from it read: the next one when the
+ * reads go on past this one's end, else found by a binary search of the table (at a seek). */
+static unsigned int pack_run(unsigned int lba) {
+    static unsigned int last;
+    if (last < pack_n && lba - pack_buf[last].lba < pack_buf[last].count) return last;
+    if (pack_n && lba >= pack_buf[0].lba)
+        for (unsigned int i = 0; i < pack_n; i++)
+            if (lba - pack_buf[i].lba < pack_buf[i].count) return last = i;
+    if (lba >= pack_sectors) port_fatal("disc %d: sector %u past the disc's end", disc_no, lba);
+    unsigned int lo = 0, hi = pack_runs; /* the last run starting at or before lba */
+    if (pack_n && lba == pack_buf[pack_n - 1].lba + pack_buf[pack_n - 1].count) hi = (lo = pack_first + pack_n) + 1;
+    while (hi - lo > 1) {
+        unsigned int mid = (lo + hi) / 2;
+        u8 e[4];
+        pack_read((long)(pack_table + 16 * mid), e, 4);
+        if (le32(e) <= lba) lo = mid; else hi = mid;
+    }
+    pack_first = lo;
+    pack_n = pack_runs - lo < PACK_BLOCK ? pack_runs - lo : PACK_BLOCK;
+    pack_read((long)(pack_table + 16 * lo), pack_buf, 16 * pack_n);
+    for (unsigned int i = 0; i < pack_n; i++) { /* (count | flags << 28: the flags to pad) */
+        pack_buf[i].pad = pack_buf[i].count >> 28;
+        pack_buf[i].count &= 0x0FFFFFFFu;
+    }
+    return last = 0;
+}
+#endif
 
 static void patch_load(void);
 static void patch_apply(unsigned int lba, u8 *raw);
@@ -187,13 +260,40 @@ static void read_raw(unsigned int lba, u8 *buf) {
     BB(0x43440001, lba); BB(0x43440002, buf);
     /* (no seek for the next sector: on the DS a seek behind the file system's read-ahead walks the image's cluster
      * chain from its start, which costs more the further into the disc) */
-    static unsigned int next_lba = ~0u;
-    if ((lba != next_lba && fseek(disc, (long)lba * RAW_SECTOR, SEEK_SET) != 0) ||
-        fread(buf, 1, RAW_SECTOR, disc) != RAW_SECTOR) {
-        next_lba = ~0u;
+    long at = (long)lba * RAW_SECTOR;
+    unsigned int bytes = RAW_SECTOR;
+    u8 *dst = buf;
+#ifdef PORT_DISC_PACK
+    sector_is_data = 0;
+    if (packed) {
+        unsigned int r = pack_run(lba);
+        unsigned int flags = pack_buf[r].pad;
+        sector_is_data = flags & PACK_DATA;
+        bytes = sector_is_data ? 2048 : RAW_SECTOR;
+        at = (long)((sector_is_data ? pack_data : pack_raw) + pack_buf[r].off +
+                    (flags & PACK_REPEAT ? 0 : (lba - pack_buf[r].lba) * bytes));
+        if (sector_is_data) dst = buf + USER_OFFSET;
+    }
+#endif
+    if ((at != disc_at && fseek(disc, at, SEEK_SET) != 0) || fread(dst, 1, bytes, disc) != bytes) {
+        disc_at = -1;
         port_fatal("disc %d: can't read sector %u", disc_no, lba);
     }
-    next_lba = lba + 1;
+    disc_at = at + (long)bytes;
+#ifdef PORT_DISC_PACK
+    if (packed) {
+        if (sector_is_data) {
+            static const u8 head[USER_OFFSET] = {0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0,
+                                                 0, 0, 0, 2, 0, 0, 8, 0, 0, 0, 8, 0};
+            __builtin_memcpy(buf, head, USER_OFFSET);
+            __builtin_memset(buf + USER_OFFSET + 2048, 0, RAW_SECTOR - USER_OFFSET - 2048);
+        }
+        unsigned int a = lba + 150;
+        buf[12] = (u8)((a / 4500 / 10) << 4 | a / 4500 % 10);
+        buf[13] = (u8)((a / 75 % 60 / 10) << 4 | a / 75 % 60 % 10);
+        buf[14] = (u8)((a % 75 / 10) << 4 | a % 75 % 10);
+    }
+#endif
     patch_apply(lba, buf);
     port_profile_detail_end(PORT_PROFILE_CD_READ, t);
 }
@@ -552,6 +652,9 @@ static void pump(int max_sectors) {
         if (reading && ready_cb && delivered < max_sectors) {
             sector_lba = read_lba;
             read_raw(read_lba++, sector);
+#ifdef PORT_DISC_PACK
+            sector_rebuilt = sector_is_data;
+#endif
             psx_cd_debug[2]++;
             psx_cd_debug[3] = sector_lba;
             sector_pos = 0;
@@ -570,6 +673,10 @@ static void pump(int max_sectors) {
 int CD_getsector(void *madr, int size) {
     unsigned int bytes = (unsigned int)size * 4;
     unsigned int base = (mode & 0x20) ? 12 : USER_OFFSET; /* CdlModeSize1: 2340-byte sectors from the header */
+#ifdef PORT_DISC_PACK
+    if (sector_rebuilt && base + sector_pos + bytes > USER_OFFSET + 2048)
+        port_fatal("disc %d: sector %u's EDC/ECC read, which discs.bin doesn't keep for game data", disc_no, sector_lba);
+#endif
     __builtin_memcpy(madr, sector + base + sector_pos, bytes);
     /* user data of a code overlay landing at that overlay's slot: put the relocated image back over it */
     unsigned int file_off, id;

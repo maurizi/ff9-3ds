@@ -1,6 +1,9 @@
 /* DS platform: entry point, console, frame pacing. */
 #include "blackbox.h"
 #include <fat.h>
+#ifdef PORT_DISC_PACK
+#include <filesystem.h>
+#endif
 #include <nds.h>
 #include "audio.h"
 #include <stdio.h>
@@ -233,7 +236,8 @@ void plat_halt(void) {
     }
 }
 
-/* ff9ds/ at the root of the boot drive: the DSi's SD card ("sd:"), or a DS flashcart via DLDI ("fat:"). */
+/* ff9ds/ at the root of the boot drive: the DSi's SD card ("sd:"), or a DS flashcart via DLDI ("fat:"); or in the
+ * ROM's own NitroFS, in a packed ROM (make ds-packed). */
 static char data_dir[32] = "fat:/ff9ds";
 
 void plat_video_init(void) {
@@ -284,6 +288,19 @@ int main(void) {
     } else {
         snprintf(data_dir, sizeof data_dir, "%sff9ds", fatGetDefaultDrive());
     }
+#ifdef PORT_DISC_PACK
+    /* a packed ROM: the data folder in the ROM (read from the card, or through the .nds file on the SD card); only
+     * a ROM with files (its FAT) has one */
+    if (__NDSHeader->fatSize && nitroFSInit(NULL)) {
+        FILE *f = fopen("nitro:/ff9ds/discs.bin", "rb");
+        if (f) {
+            fclose(f);
+            snprintf(data_dir, sizeof data_dir, "nitro:/ff9ds");
+        } else {
+            nitroFSExit();
+        }
+    }
+#endif
     printf("data: %s\n", data_dir);
 #ifdef PORT_SCENARIO
     port_scenario_load(PORT_SCENARIO);

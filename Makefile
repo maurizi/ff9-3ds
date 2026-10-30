@@ -211,7 +211,12 @@ DS_ARCH  := -mcpu=arm946e-s -mthumb -mthumb-interwork
 # SPU7=1 (the default with DSMODE=1 HWSOUND=1): the emulated SPU's voices and the channels on the ARM7 (spu7.h)
 SPU7 ?= 1
 SPU7_ON := $(and $(filter 1,$(DSMODE)),$(filter 1,$(HWSOUND)),$(filter 1,$(SPU7)))
-PORT_EXTRA_ds := $(if $(SPU7_ON),-DPORT_SPU_ARM7) $(if $(filter 1,$(SPUITCM)),-DPORT_SPU_ITCM) $(if $(filter 1,$(HWSOUND)),-DPORT_HW_SOUND -DPORT_GTE_ITCM,$(if $(filter 1,$(AUDIO)),-DPORT_AUDIO)) $(if $(filter 1,$(AUDIOHASH)),-DPORT_AUDIO_HASH) $(if $(AUDIOCAPTURE),-DPORT_AUDIO_CAPTURE=$(AUDIOCAPTURE)) -I$(BLOCKSDS)/libs/maxmod/include -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include $(if $(AUTORUN),-DPORT_AUTORUN) \
+# PACKED=1 (set by the ds-packed goal): the reader of a packed ROM's discs.bin and its NitroFS, left out otherwise
+# (port/psx/cd.c, port/ds/platform.c): an original DS's heap has no room for unused code
+ifneq ($(filter ds-packed,$(MAKECMDGOALS)),)
+PACKED := 1
+endif
+PORT_EXTRA_ds := $(if $(filter 1,$(PACKED)),-DPORT_DISC_PACK) $(if $(SPU7_ON),-DPORT_SPU_ARM7) $(if $(filter 1,$(SPUITCM)),-DPORT_SPU_ITCM) $(if $(filter 1,$(HWSOUND)),-DPORT_HW_SOUND -DPORT_GTE_ITCM,$(if $(filter 1,$(AUDIO)),-DPORT_AUDIO)) $(if $(filter 1,$(AUDIOHASH)),-DPORT_AUDIO_HASH) $(if $(AUDIOCAPTURE),-DPORT_AUDIO_CAPTURE=$(AUDIOCAPTURE)) -I$(BLOCKSDS)/libs/maxmod/include -specs=$(SPECS) -I$(BLOCKSDS)/libs/libnds/include $(if $(AUTORUN),-DPORT_AUTORUN) \
                  $(if $(CAPTURE_FRAME),-DPORT_CAPTURE_FRAME=$(CAPTURE_FRAME)) \
                  $(if $(filter 1,$(CAPTURE_READBACK)),-DPORT_CAPTURE_READBACK) \
                  $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') $(if $(filter 1,$(SOFTDISPLAY) $(HYBRID)),-DPORT_SOFT_DISPLAY) $(if $(filter 1,$(HYBRID)),-DPORT_GX_HYBRID) $(if $(filter 0,$(GXMERGE)),-DPORT_GX_NO_MERGE) $(if $(filter 1,$(GXMERGE)),-DPORT_GX_MERGE) $(if $(filter 1,$(GXEXPERIMENTAL)),-DPORT_GX_EXPERIMENTAL) $(if $(filter 1,$(GXSHADOW)),-DPORT_GX_SHADOW) $(if $(filter 1,$(GXLAZY)),-DPORT_GX_LAZY) $(if $(filter 1,$(GXPLAN)),-DPORT_GX_PLAN) $(if $(filter 1,$(GXSHARE)),-DPORT_GX_SHARE_INDEXED) $(if $(filter 1 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD) $(if $(filter 2,$(ITCMGUARD)),-DPORT_ITCM_GUARD_LOW) $(if $(filter 1 2 3,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 2 3,$(PROFILE)),-DPORT_PROFILE_FRAME_ONLY) $(if $(PROFWIN),-DPORT_PROFILE_WINDOW=$(PROFWIN)) $(if $(filter 3,$(PROFILE)),-DPORT_PC_SAMPLER $(if $(PCLO),-DPORT_PC_LO=$(PCLO)u -DPORT_PC_SHIFT=$(or $(PCSHIFT),4))) $(if $(filter 1,$(CANARY)),-DPORT_CANARY) $(if $(filter 1,$(DSMODE)),-DPORT_DS_MODE -DPORT_GTE_APPROX) $(if $(filter 1,$(FIELDGX)),-DPORT_FIELD_GX) $(if $(filter 1,$(WORLDGX)),-DPORT_WORLD_GX) $(if $(filter 1,$(BLACKBOX)),-DPORT_BLACKBOX) $(if $(filter 1,$(MODELGOURAUD)),-DPORT_MODEL_GOURAUD)
@@ -247,7 +252,7 @@ $(eval $(call target_rules,ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(DS_ARCH)
 .PHONY: FORCE_DS_CONFIG
 $(BUILD)/ds/runtime-config: FORCE_DS_CONFIG
 	@mkdir -p $(dir $@)
-	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(AUDIO)' '$(AUDIOHASH)' '$(AUDIOCAPTURE)' '$(SPUARM)' '$(SPUITCM)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' '$(GXLAZY)' '$(CAPTURE_READBACK)' '$(CANARY)' '$(HYBRID)' '$(HWSOUND)' '$(DSMODE)' '$(FIELDGX)' '$(WORLDGX)' '$(BLACKBOX)' '$(PCLO)' '$(PCSHIFT)' '$(PROFWIN)' '$(SPU7)' '$(MODELGOURAUD)' > $@.tmp
+	@printf '%s\n' '$(AUTORUN)' '$(AUTOPRESS)' '$(SOFTDISPLAY)' '$(AUDIO)' '$(AUDIOHASH)' '$(AUDIOCAPTURE)' '$(SPUARM)' '$(SPUITCM)' '$(GXMERGE)' '$(GXEXPERIMENTAL)' '$(GXPLAN)' '$(GXSHADOW)' '$(GXSHARE)' '$(ITCMGUARD)' '$(SCENARIO)' '$(PROFILE)' '$(CAPTURE_FRAME)' '$(GXLAZY)' '$(CAPTURE_READBACK)' '$(CANARY)' '$(HYBRID)' '$(HWSOUND)' '$(DSMODE)' '$(FIELDGX)' '$(WORLDGX)' '$(BLACKBOX)' '$(PCLO)' '$(PCSHIFT)' '$(PROFWIN)' '$(SPU7)' '$(MODELGOURAUD)' '$(PACKED)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(ds_PORTOBJS): $(BUILD)/ds/runtime-config
@@ -379,7 +384,7 @@ $(BUILD)/tests/gpu_ordering_test: tests/gpu/ordering_test.c port/psx/gpu.c port/
 # PC: 32-bit, non-PIE (psx_ram is mapped at a fixed address, like the DS's main RAM), 8-byte doubles like
 # ARM/MIPS. psx_ram is placed with --defsym and mapped by port/pc before anything runs.
 PC_ARCH  := -m32 -malign-double -fno-pie
-PORT_EXTRA_pc :=
+PORT_EXTRA_pc := -DPORT_DISC_PACK
 # RASTER_REFERENCE=1: the PC software renderer without fast paths (tools/check_raster_frames.sh compares the two).
 PORT_ARCH_pc_psx/softgpu := $(if $(filter 1,$(RASTER_REFERENCE)),-DPORT_SOFTGPU_REFERENCE)
 $(BUILD)/pc/port/psx/softgpu.o: $(BUILD)/pc/raster-config
@@ -471,6 +476,34 @@ ds-r4: $(BUILD)/ff9ds_r4.nds
 $(BUILD)/ff9ds_r4.nds: $(BUILD)/ff9ds.nds
 	@cp $< $@
 	@$(BLOCKSDS)/tools/dlditool/dlditool $(BLOCKSDS)/sys/dldi_r4/r4tf.dldi $@ > /dev/null
+
+# A ROM carrying the data folder in its NitroFS (port/ds/platform.c), so it needs nothing on the card: the disc images
+# packed into one discs.bin (tools/pack_discs.py: sectors the discs share kept once, game data without its CD
+# framing), the code/effect packs, the model patches, and fv.bin and the FMV transcodes (build/fmv/) when built.
+# All four discs make about 2 GB (under the 2 GiB of 32-bit file offsets); melonDS loads at most 1 GiB, so test
+# with one disc, e.g. PACK_DISCS=1 (-> ff9ds_packed_d1.nds, ~750 MB). Game data: never distribute it.
+PACK_DISCS ?= 1 2 3 4
+PACK_FMV   ?= build/fmv
+PACK_TAG   := $(if $(filter 4,$(words $(sort $(PACK_DISCS)))),,_d$(subst $() ,,$(sort $(PACK_DISCS))))
+PACKED     := $(BUILD)/packed$(PACK_TAG)/ff9ds
+.PHONY: ds-packed FORCE_PACKED
+ds-packed: $(BUILD)/ff9ds_packed$(PACK_TAG).nds
+$(PACKED)/discs.bin: tools/pack_discs.py
+	@echo "PACK $@"
+	@$(PYTHON) tools/pack_discs.py --img $(DISKS) --discs "$(PACK_DISCS)" --out $@
+$(BUILD)/ff9ds_packed$(PACK_TAG).nds: $(BUILD)/ds/ff9ds.elf $(ARM7ELF) $(PACKED)/discs.bin $(BUILD)/fxmods.bin \
+		$(BUILD)/ovls.bin model-patches FORCE_PACKED
+	@set -e; b=$(CURDIR)/$(BUILD); cd $(PACKED); find . -mindepth 1 ! -name discs.bin -delete; \
+	for f in fxmods.bin ovls.bin fv.bin validation/psx_low_ram.bin; do [ -f $$b/$$f ] && ln -f $$b/$$f .; done; \
+	[ -f fv.bin ] || echo "warning: no $(BUILD)/fv.bin (make fv-blob): movies through the MDEC"; \
+	[ -d $$b/patches ] && mkdir patches && ln -f $$b/patches/disc*.bin patches/; \
+	for d in $(PACK_DISCS); do [ -d $(CURDIR)/$(PACK_FMV)/d$$d ] && mkdir -p fmv/d$$d && \
+		ln -f $(CURDIR)/$(PACK_FMV)/d$$d/*.fv fmv/d$$d/; done; true
+	@echo "NDS  $@"
+	@$(NDSTOOL) -c $@ -7 $(ARM7ELF) -9 $< -b $(BLOCKSDS)/sys/icon.bmp "FF9 DS;packed build;not for distribution" \
+		-d $(dir $(PACKED))
+	@size=$$(stat -c %s $@); echo "     $$((size / 1048576)) MiB"; \
+	[ $$size -lt 2147483648 ] || { echo "$@: over 2 GiB"; rm -f $@; exit 1; }
 
 $(BUILD)/ff9ds.nds: $(BUILD)/ds/ff9ds.elf $(ARM7ELF)
 	@echo "NDS  $@"

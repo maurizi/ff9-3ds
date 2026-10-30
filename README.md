@@ -51,6 +51,13 @@ tools/docker.sh make test-gx         # host texture/cache/compositing checks wit
 `tools/docker.sh` runs the BlocksDS container (`skylyrac/blocksds:slim-v1.24.0` plus Python). The build never
 writes game data outside `build/`.
 
+To run it, `build/ff9ds.nds` reads an `ff9ds/` folder at the root of the SD card or flashcart (`raw/FF9 CDn.img`,
+`fxmods.bin`, `ovls.bin`, `patches/`, `fmv/`, `fv.bin`). Alternatively, `tools/docker.sh make ds-packed` builds
+`build/ff9ds_packed.nds` (about 2 GB). That ROM carries the folder in its own NitroFS, so it needs nothing beside it.
+The four discs are packed into one `discs.bin` (`tools/pack_discs.py`): sectors shared between discs are stored once,
+and game data is kept without its CD framing. This is a 2848 MB → 1651 MB reduction, which keeps the ROM under the
+2 GiB that emulators and 32-bit file offsets allow.
+
 For BIOS-dependent low-RAM reads, install a captured `psx_low_ram.bin` beside the
 runtime data. The [capture and validation instructions](docs/scenario-testing.md)
 use your own BIOS and original game; missing assets retain the older zero-filled
