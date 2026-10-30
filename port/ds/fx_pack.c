@@ -19,7 +19,8 @@ extern unsigned char psx_ram[];
 extern const u32 psx_fx_build_id __attribute__((weak)); /* the Makefile's (fxid.s), new each link; weak for its scan */
 
 static FILE *pack;
-static u32 (*pack_index)[2], pack_count;
+static u32 pack_count; /* (each module's {offset, size} read from the pack as it loads: the 3 KB index in the heap
+                         * made the first effect of a battle fail when a few KB were left) */
 static int pack_state;                /* 0 not opened yet, 1 usable, -1 not */
 static int loaded[2] = {-1, -1}; /* each slot's module (its area: the bottom, or the top FX_SLOT2_SIZE bytes) */
 #define FX_SLOT2_SIZE 0x3000u /* (the Makefile's: the _1 modules are linked there) */
@@ -30,6 +31,7 @@ static int open_pack(void) {
     char path[256];
     snprintf(path, sizeof path, "%s/fxmods.bin", plat_data_dir());
     pack = fopen(path, "rb");
+    if (pack) setvbuf(pack, NULL, _IONBF, 0); /* (no buffer from the heap: the reads are whole modules) */
     u32 head[4];
     if (!pack || fread(head, 4, 4, pack) != 4) {
         port_log("effect modules: no %s\n", path);
@@ -40,8 +42,6 @@ static int open_pack(void) {
         return 0;
     }
     pack_count = head[2];
-    pack_index = malloc(pack_count * sizeof *pack_index);
-    if (!pack_index || fread(pack_index, sizeof *pack_index, pack_count, pack) != pack_count) return 0;
     pack_state = 1;
     return 1;
 }
@@ -66,7 +66,12 @@ const void *port_fx_pack_load(unsigned int index, int slot) {
     const u32 *h = (const u32 *)at;
     if ((int)index == loaded[slot]) return h;
     loaded[slot] = -1;
-    u32 offset = pack_index[index][0], size = pack_index[index][1];
+    u32 entry[2];
+    if (fseek(pack, (long)(16 + 8 * index), SEEK_SET) != 0 || fread(entry, 4, 2, pack) != 2) {
+        port_log("effect modules: module %u's index unreadable\n", index);
+        return NULL;
+    }
+    const u32 offset = entry[0], size = entry[1];
     if (size > room || fseek(pack, (long)offset, SEEK_SET) != 0 ||
         fread(at, 1, size, pack) != size || h[0] != FX_HEAD_MAGIC || h[2] < h[1] ||
         h[1] < (u32)(uintptr_t)at || h[2] > (u32)(uintptr_t)(at + room)) {

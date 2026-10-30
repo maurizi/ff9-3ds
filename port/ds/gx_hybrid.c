@@ -5850,8 +5850,10 @@ static void battle_one(Buffer *b) {
 }
 /* whether a split after `first` places fits: the passes' textures (mask: bit 0 the first pass's, bit 1 the
  * second's), planned for the check; the first pass's planned last (it is uploaded first) */
+static int battle_meshes; /* (battle_two: the scene's native meshes are its own; else its primitives alone, at
+                           * emit_scene's depth k + 1, the split an index) */
 static int battle_fits(Buffer *b, int first, int mask) {
-    tp_split = Z_STEP * (first + 1); /* (places 1..first the first pass) */
+    tp_split = (battle_meshes ? Z_STEP : 1) * (first + 1); /* (places 1..first the first pass) */
     battle_label(b);
     if (mask & 2) {
         tp_plan_pass = 2;
@@ -5864,16 +5866,20 @@ static int battle_fits(Buffer *b, int first, int mask) {
 }
 static void battle_two(Buffer *b) {
     tp_plan_pass = 0; tp_battle = 0;
-    if (place->field || place->world || movie_banks || !b->meshes || b->mesh_gen != b->scene_gen) { tp_leave(); goto bank_a; }
+    if (place->field || place->world || movie_banks) { tp_leave(); goto bank_a; }
+    /* (a scene without its own meshes, an effect's say, has only its primitives: two passes split by index) */
+    battle_meshes = b->meshes && b->mesh_gen == b->scene_gen;
     int prims = 0, vertices = 0, seq = 0;
     for (int k = 0; k < b->count; ++k) if (in_scene(&b->prims[k], k)) { vertices += b->prims[k].n; ++prims; }
-    seq = prims; /* (each recorded primitive in the scene takes a place, as each native polygon) */
-    for (int m = 0; m < b->meshes; ++m) { const MeshInst *mi = mesh_at(b, m); prims += mi->polys; vertices += mi->vertices; seq += mi->polys; }
+    seq = battle_meshes ? prims : b->count; /* (each recorded primitive in the scene takes a place, as each native
+                                              * polygon; without meshes, its index) */
+    if (battle_meshes)
+        for (int m = 0; m < b->meshes; ++m) { const MeshInst *mi = mesh_at(b, m); prims += mi->polys; vertices += mi->vertices; seq += mi->polys; }
     if (prims <= MAX_POLYS && vertices <= MAX_VERTICES) { tp_leave(); goto bank_a; }
     /* after no split fitted the textures, the next scenes go straight to one pass, more of them each time it fails
      * again (a battle's textures stay as big: each try is two texture plans) */
     if (battle_hold) { --battle_hold; battle_one(b); return; }
-    for (int m = 0; m < b->meshes; ++m) vertices += mesh_at(b, m)->strip_saved; /* (two passes: no strips) */
+    if (battle_meshes) for (int m = 0; m < b->meshes; ++m) vertices += mesh_at(b, m)->strip_saved; /* (two passes: no strips) */
     if (back_bg < 0) { /* (the first pass's capture behind the second: BG3, as a field's) */
         back_bg = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 8, 0);
         bgSetPriority(back_bg, 3);
@@ -5921,6 +5927,11 @@ bank_a:
  * one takes a place, none dropped in two passes): a primitive of the second has prim_drop bit 1, a texture use the
  * bits of the passes that use it */
 static void battle_label(Buffer *b) {
+    if (!battle_meshes) { /* (primitives alone: emit_scene draws primitive k at depth k + 1) */
+        memset(prim_drop, 0, b->count);
+        for (int k = 0; k < b->count; ++k) if (in_scene(&b->prims[k], k) && k + 1 >= tp_split) prim_drop[k] = 2;
+        return;
+    }
     for (int m = 0; m < b->meshes; ++m) {
         MeshInst *mi = mesh_at(b, m);
         for (int i = 0; i < mi->nuses; ++i) mi->uses[i].passes = 0;
