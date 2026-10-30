@@ -956,14 +956,17 @@ PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) int port_native_world_block
         if (backdrop) { /* the fog amount from the fog colour; the depth field holds it as an alpha (0-31) */
             u32 f = n->fog[i], fr = f & 0xFF, fg = f >> 8 & 0xFF, fb = f >> 16 & 0xFF;
             u32 fm = fr > fg ? (fr > fb ? fr : fb) : (fg > fb ? fg : fb);
-            d = (int)(fm * 0x1000 / bf_max);
+            d = (int)div32((s32)(fm * 0x1000), (s32)bf_max);
             if (d > 0x1000) d = 0x1000;
             z = (d * 31 + 0x800) >> 12;
         } else if (fog) d = terrain_fog(sz, fog_offset, shift);
         int all_fog = 0;
         if (d >= 0) {
             if (d >= 0x1000) all_fog = 1;
-            else { u32 k = (0x1000u << 12) / (u32)(0x1000 - d); r = r * k >> 12; g = g * k >> 12; bl = bl * k >> 12; }
+            else { /* (the DS's divider: the library's division in main RAM cost more, a vertex) */
+                u32 k = (u32)div32((s32)(0x1000u << 12), 0x1000 - d);
+                r = r * k >> 12; g = g * k >> 12; bl = bl * k >> 12;
+            }
         }
         /* 128 = x1, in 32 steps; over x1 (TUse.scale) in 16 up to x2, with bit 15 set */
         u32 c;
