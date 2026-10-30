@@ -271,6 +271,7 @@ int main(int argc, char **argv) {
             n_watches++;
         } else if (!strcmp(argv[i], "--render")) {
             psx_softgpu_enable(1);
+            { void occ_stats_install(void); occ_stats_install(); } /* (FF9_OCC=1: occ_stats.c) */
         } else if (!strcmp(argv[i], "--dump-dir") && i + 1 < argc) {
             dump_dir = argv[++i];
         } else if (!strcmp(argv[i], "--dump") && i + 1 < argc) {
