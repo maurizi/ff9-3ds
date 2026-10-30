@@ -1481,3 +1481,32 @@ composite keeps the scene in one pass: d4_f2101 went 30 -> 83 otherwise), and ba
 runs off (d3_f1818). 60-field sample: median 23.1 -> 22.5 ms (d4_f2904 35.4 -> 25.0, d3_f2402 32.3 -> 25.8,
 d3_f2173 25.7 -> 23.3), no field worse by more than 0.9 ms (noise). A first attempt at making the composite take
 the runs themselves (run summaries) cost 3 ms in other fields (their runs moved, or the paths fought) and was dropped.
+
+### What the field models cost (2026-10-29)
+
+Upper bound: the 15 slowest fields of the 60-field sample with fldmdl_projectMesh and the three fldmdl_drawMesh
+variants returning at once (no models at all), ms per VBlank, full -> without models:
+
+| field | full | no models | models |
+|---|---|---|---|
+| d1_f0501 | 39.2 | 30.3 | 8.8 |
+| d1_f0604 | 35.8 | 30.2 | 5.6 |
+| d3_f0767 | 33.1 | 23.9 | 9.2 |
+| d4_f2404 | 30.3 | 16.7 | 13.6 |
+| d3_f1818 | 30.2 | 21.7 | 8.5 |
+| d3_f2801 | 30.1 | 21.7 | 8.4 |
+| d4_f2101 | 30.0 | 16.8 | 13.2 |
+| d2_f0356 | 29.8 | 26.4 | 3.4 |
+| d4_f2155 | 28.9 | 20.6 | 8.2 |
+| d1_f0359 | 28.6 | 16.8 | 11.8 |
+| d2_f1656 | 28.6 | 18.2 | 10.4 |
+| d2_f1462 | 28.5 | 17.2 | 11.3 |
+| d1_f0814 | 28.2 | 23.8 | 4.4 |
+| d2_f1053 | 27.7 | 20.7 | 6.9 |
+| d1_f0056 | 27.4 | 22.7 | 4.8 |
+
+The models are the largest single cost (median 8.5 ms per VBlank, 17 a scene) and the whole gap in five of the
+fifteen. The rest of d1_f0501 (its dialog box's software UI replay is 5.4 of it) and d1_f0604 (a still background:
+emit_scene's per-primitive translucent paths, bgc_use, the OT walk) is the background's and the UI's. (Measuring:
+an ovl_0a-only change still needs `touch` on nothing; but a scratch copy of a source restored over a test edit drops
+the test's other lines: restore test edits with git checkout.)
