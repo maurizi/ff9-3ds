@@ -2478,7 +2478,8 @@ static inline int edge_side(const Prim *p, int a, int b, int x, int y) {
 /* translucent sprites (axis-aligned rectangles: mist, glows) against the recent ones only: two share an edge when
  * they touch along a whole side, the case the general test finds for them, without its vertex hashing (a field's
  * mist is hundreds a scene). (A sprite and a polygon don't take each other's ID: rare.) */
-GXH_DTCM static s16 rect_box[RECENT][4];
+/* their sides packed: x0 | x1 << 16 and y0 | y1 << 16 (16 bits each) */
+GXH_DTCM static u32 rect_xx[RECENT], rect_yy[RECENT];
 GXH_DTCM static u8 rect_id[RECENT];
 GXH_DTCM static int rect_at;
 /* (in main RAM, ARM: ITCM is full) */
@@ -2490,13 +2491,17 @@ __attribute__((noinline, target("arm"), long_call)) static int translucent_rect(
         if (p->y[i] < y0) y0 = p->y[i];
         if (p->y[i] > y1) y1 = p->y[i];
     }
+    /* q shares a whole side: the same rows and x1 = q's x0 or x0 = q's x1 (one of the halves of (x1 | x0 << 16) ^
+     * q's xx zero), or the same columns and the same for y */
+    const u32 xx = (u16)x0 | (u32)(u16)x1 << 16, yy = (u16)y0 | (u32)(u16)y1 << 16;
+    const u32 xs = (u16)x1 | (u32)(u16)x0 << 16, ys = (u16)y1 | (u32)(u16)y0 << 16;
     for (int k = 0; k < RECENT; ++k) {
-        const s16 *q = rect_box[k];
-        if ((y0 == q[1] && y1 == q[3] && (x1 == q[0] || x0 == q[2])) ||
-            (x0 == q[0] && x1 == q[2] && (y1 == q[1] || y0 == q[3]))) { id = rect_id[k]; break; }
+        const u32 qx = rect_xx[k], qy = rect_yy[k];
+        if (qy == yy) { const u32 d = xs ^ qx; if (!(d << 16) || !(d >> 16)) { id = rect_id[k]; break; } }
+        if (qx == xx) { const u32 d = ys ^ qy; if (!(d << 16) || !(d >> 16)) { id = rect_id[k]; break; } }
     }
     const int r = rect_at;
-    rect_box[r][0] = (s16)x0; rect_box[r][1] = (s16)y0; rect_box[r][2] = (s16)x1; rect_box[r][3] = (s16)y1;
+    rect_xx[r] = xx; rect_yy[r] = yy;
     rect_id[r] = (u8)id;
     rect_at = (r + 1) % RECENT;
     return id;
@@ -3364,8 +3369,9 @@ static __attribute__((noinline)) void emit_scene(Buffer *b) {
                     if (alpha > 31) alpha = 31;
                     if (!alpha) continue; /* (adds nothing; alpha 0 would be wireframe) */
                     want_attr = 3u << 6 | (u32)alpha << 16 | (u32)translucent_id(src, polys) << 24;
-                    if (abr != 2) add_white = light_under(src, alpha, modulate(cpal_hue[cpal & 63], raw ? 0x7FFF : hue_of(src, 0, (u32)m)));
-                    colour = abr == 2 ? 0 : raw ? 0x7FFF : whiten_by(hue_of(src, 0, (u32)m), add_white);
+                    const u32 hue = raw || abr == 2 ? 0x7FFF : hue_of(src, 0, (u32)m); /* (once: both below) */
+                    if (abr != 2) add_white = light_under(src, alpha, modulate(cpal_hue[cpal & 63], hue));
+                    colour = abr == 2 ? 0 : raw ? 0x7FFF : whiten_by(hue, add_white);
                 } else {
                     if (depth < 2) {
                         if (pal == 0xFF) { gxh_stats_palette_fail++; continue; }
