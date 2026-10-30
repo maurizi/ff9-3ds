@@ -1752,3 +1752,11 @@ run.
   d2_b0098 25.8 -> 25.3, d4_f2110 23.4 -> 22.4, d1_w9009 26.6 -> 24.4, d3_w9006 29.2 -> 28.0; frames identical.
   tools/ds_pc_profile.py now drops other modes' ITCM symbols; source lines inside slot 0's overlays still need the
   object file (DWARF lines overlap there).
+- **Tried without gain (2026-10-30, melonDS JIT; kept out):** reusing the last texture plan when a field scene's
+  textured primitives hash the same (the hash pass cost more than the hits saved: d2_f1950 +0.4 ms); planning each
+  primitive in place instead of from a local copy (no change); a mesh's vertices copied to DTCM (no D-cache in
+  melonDS); the library divisions (rare: SPU only); a 4-lane hash for the 2D layer's blocks.
+- **melonDS's JIT:** benchmarks need `[JIT] Enable = true` in the Flatpak's melonDS.toml; a timed-out ds_sample.py
+  run left it off for 5 hours (interpreter: +0.5-2 ms a field), fixed in 37c5038.
+- **After all of the above (melonDS JIT):** 64-field sample median 20.14 ms per VBlank (19 of 64 within 17.5),
+  battles d1_b0228 23.8, d2_b0098 24.8, world maps d1_w9009 23.4, d3_w9006 26.8, d4_w9006 25.0.
