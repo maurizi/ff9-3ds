@@ -456,6 +456,49 @@ GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *
 #endif
 }
 
+/* One vertex projected as RTPS/RTPT project it (sf 1, lm 0; in DS mode with rtp_sf1's 32-bit arithmetic), the
+ * registers left alone: its SXY and SZ, and the depth cue's MAC0 it would leave as an RTPT's last vertex. For port
+ * code that then runs its last vertices through the GTE, so that the registers end as the game leaves them
+ * (field_mesh.c's fld_emitSprite3D). */
+#if defined(__arm__)
+__attribute__((target("arm"))) /* (main RAM, ARM: ITCM is full; Thumb would make its 64-bit products calls) */
+#endif
+void psx_gte_project(gte_u32 vxy, gte_u32 vz, gte_u32 *sxy, gte_u32 *sz, gte_u32 *mac0) {
+    const i32 x = (i16)vxy, y = (i32)vxy >> 16, z = (i16)vz;
+#ifdef PORT_GTE_APPROX
+    const gte_u32 *c = g.c;
+    i32 ir1 = (i32)c[5] + (((i16)c[0] * x + ((i32)c[0] >> 16) * y + (i16)c[1] * z) >> 12);
+    i32 ir2 = (i32)c[6] + ((((i32)c[1] >> 16) * x + (i16)c[2] * y + ((i32)c[2] >> 16) * z) >> 12);
+    const i32 mac3 = (i32)c[7] + (((i16)c[3] * x + ((i32)c[3] >> 16) * y + (i16)c[4] * z) >> 12);
+#else
+    i32 ir1 = (i32)((((i64)TRX * 4096) + mtx(0, 0, 0) * x + mtx(0, 0, 1) * y + mtx(0, 0, 2) * z) >> 12);
+    i32 ir2 = (i32)((((i64)(i32)g.c[6] * 4096) + mtx(0, 1, 0) * x + mtx(0, 1, 1) * y + mtx(0, 1, 2) * z) >> 12);
+    const i64 mac3 = (((i64)(i32)g.c[7] * 4096) + mtx(0, 2, 0) * x + mtx(0, 2, 1) * y + mtx(0, 2, 2) * z) >> 12;
+#endif
+    if (ir1 > 0x7FFF) ir1 = 0x7FFF; else if (ir1 < -0x8000) ir1 = -0x8000;
+    if (ir2 > 0x7FFF) ir2 = 0x7FFF; else if (ir2 < -0x8000) ir2 = -0x8000;
+    const u32 sz3 = mac3 > 0xFFFF ? 0xFFFF : mac3 < 0 ? 0 : (u32)mac3;
+    u32 div;
+    const u32 h = H;
+    if (h >= sz3 * 2) div = 0x1FFFF;
+    else {
+        if (unr_table[0] == 0) init_unr();
+        const int sh = __builtin_clz(sz3) - 16;
+        u32 n = h << sh, d = sz3 << sh;
+        const u32 u = unr_table[(d - 0x7FC0) >> 7] + 0x101;
+        d = (0x2000080 - d * u) >> 8;
+        d = (0x0000080 + d * u) >> 8;
+        const uint64_t q = ((uint64_t)n * d + 0x8000) >> 16;
+        div = q > 0x1FFFF ? 0x1FFFF : (u32)q;
+    }
+    i32 sx = (i32)(((i64)ir1 * div + OFX) >> 16), sy = (i32)(((i64)ir2 * div + OFY) >> 16);
+    if (sx > 0x3FF) sx = 0x3FF; else if (sx < -0x400) sx = -0x400;
+    if (sy > 0x3FF) sy = 0x3FF; else if (sy < -0x400) sy = -0x400;
+    *sxy = (u32)sy << 16 | ((u32)sx & 0xFFFF);
+    *sz = sz3;
+    *mac0 = (u32)(i32)((i64)DQA * div + DQB);
+}
+
 #ifdef PORT_GTE_APPROX
 /* gte.h's DS-mode commands for the game's constant ones: MVMVA sf=1 lm=0 with RT (rtir, rtv0tr, rtv0) in 32 bits as
  * RTPS, so without MAC1-3's 44-bit overflow flags (bone matrices: two of every three MVMVAs) */

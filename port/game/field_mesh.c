@@ -56,6 +56,79 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1) {
     }
 }
 
+/* fld_emitSprite3D (decomp src_equiv/ovl_0a/field_sprites.c: a field's 3D sprites, quads of half size (halfW,
+ * halfH) around each (x, y, 0)): each corner projected by psx_gte_project as the game's RTPT and RTPS would (their
+ * SXY, the third corner's SZ for the OT entry and its MAC0 for the stop), the colour scaled as gte_gpf12 does, the
+ * packet written in the game's order. The last quad's GTE work runs through the GTE again, so the registers end as
+ * the game leaves them. */
+u8 *o0a_fld_emitSprite3D(u8 *src, FieldSprArgs *a, u8 *pkt, u32 *ot);
+PORT_OVERLAY_CODE(0a) u8 *o0a_fld_emitSprite3D(u8 *src, FieldSprArgs *a, u8 *pkt, u32 *ot) {
+    const u16 *uvTab = a->uvs;
+    const u8 *colTab = a->colors;
+    const s32 hw = a->halfW, hh = a->halfH, mod = a->fade;
+    const u32 tpage = (u32)a->tpage << 16, clut = (u32)a->clut << 16, code = (u32)a->primCode << 24;
+    s32 n = a->quadCount;
+    if (n == 0) return pkt;
+    SVECTOR v[4];
+    u32 last_k = 0;
+    int stopped = 0;
+    do {
+        u32 *p = (u32 *)pkt;
+        const s32 x = (s8)src[0] * 4, y = (s8)src[1] * 4;
+        v[0].vx = (s16)(x - hw); v[0].vy = (s16)(y - hh); v[0].vz = 0; v[0].pad = 0;
+        v[1].vx = (s16)(x + hw); v[1].vy = (s16)(y - hh); v[1].vz = 0; v[1].pad = 0;
+        v[2].vx = (s16)(x - hw); v[2].vy = (s16)(y + hh); v[2].vz = 0; v[2].pad = 0;
+        v[3].vx = (s16)(x + hw); v[3].vy = (s16)(y + hh); v[3].vz = 0; v[3].pad = 0;
+        u32 sxy[4], sz[4], mac0[4];
+        for (int i = 0; i < 3; ++i)
+            psx_gte_project((u16)v[i].vx | (u32)(u16)v[i].vy << 16, 0, &sxy[i], &sz[i], &mac0[i]);
+        const u32 k = src[2];
+        src += 3;
+        last_k = k;
+        const u32 uv = uvTab[k & 0xF], u = uv & 0xFF, vv = uv >> 8, ur = u + ((u32)hw >> 1), vb = vv + ((u32)hh >> 1);
+        p[3] = u | (vv << 8) | clut;
+        p[5] = ur | (vv << 8) | tpage;
+        p[7] = u | (vb << 8);
+        p[2] = sxy[0]; p[4] = sxy[1]; p[6] = sxy[2];
+        p[9] = ur | (vb << 8);
+        if (mac0[2] == 0) { stopped = 1; break; }
+        const u32 sz3 = sz[2];
+        psx_gte_project((u16)v[3].vx | (u32)(u16)v[3].vy << 16, 0, &sxy[3], &sz[3], &mac0[3]);
+        const u8 *ce = colTab + (k >> 4) * 4;
+        u32 c = *(const u16 *)ce | ((u32)ce[2] << 16);
+        p[8] = sxy[3];
+        if (mod >= 0) { /* (gte_gpf12: IR0 x each channel >> 12, saturated as IR, the low byte kept) */
+            u32 o = 0;
+            for (int ch = 0; ch < 3; ++ch) {
+                s32 m = (s16)mod * (s32)(c >> (8 * ch) & 0xFF) >> 12; /* (IR0 holds 16 bits) */
+                if (m > 0x7FFF) m = 0x7FFF; else if (m < -0x8000) m = -0x8000;
+                o |= ((u32)m & 0xFF) << (8 * ch);
+            }
+            c = o;
+        }
+        p[1] = c | code;
+        u32 *slot = &ot[(s32)sz3 >> 2];
+        const u32 e = *slot;
+        p[0] = (e & 0xFFFFFF) | 0x09000000;
+        *slot = (e & 0xFF000000) | ((u32)p & 0xFFFFFF);
+        pkt += 0x28;
+    } while (--n != 0);
+    /* the registers as the game's last quad leaves them */
+    gte_ldv3(&v[0], &v[1], &v[2]);
+    gte_rtpt();
+    if (!stopped) {
+        gte_ldv0(&v[3]);
+        gte_rtps();
+        if (mod >= 0) {
+            const u8 *ce = colTab + (last_k >> 4) * 4;
+            const u32 c = *(const u16 *)ce | ((u32)ce[2] << 16);
+            gte_ldir0123(mod, c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF);
+            gte_gpf12();
+        }
+    }
+    return pkt;
+}
+
 /* fldmdl_drawMesh (decomp src_equiv/ovl_0a/model_link.c, renamed by config/renames.txt): the renderer may take the
  * group (gx_hybrid.c port_native_field_mesh) instead of the game linking its prebuilt primitives into the OT. */
 void o0a_fldmdl_drawMesh_link(ModelObj *model, u8 group);
