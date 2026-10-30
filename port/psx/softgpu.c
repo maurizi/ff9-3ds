@@ -1004,7 +1004,7 @@ static inline __attribute__((always_inline)) void sprite_pixel(
 
 /* The row loops of fast_indexed_row, out of line so their few values stay in registers. src is the first
  * texel's halfword, lead the texel's position inside it; width >= 1. */
-static SG_HOT __attribute__((noinline)) void row_direct8(const u16 *src, const u16 *cl, u16 *dst, unsigned lead,
+static __attribute__((noinline)) void row_direct8(const u16 *src, const u16 *cl, u16 *dst, unsigned lead,
                                                          unsigned width, u16 mask) {
     if (lead) { u16 c = cl[*src++ >> 8]; if (c) *dst = c | mask; ++dst; --width; }
     /* byte offsets into the CLUT, each one instruction (ldrh takes no scaled index) */
@@ -1039,7 +1039,7 @@ static SG_HOT __attribute__((noinline)) void row_direct8(const u16 *src, const u
     if (width) { u16 c = cl[*src & 255]; if (c) *dst = c | mask; }
 }
 
-static SG_HOT __attribute__((noinline)) void row_palette8(const u16 *src, const u32 *pal, u16 *dst, unsigned lead,
+static __attribute__((noinline)) void row_palette8(const u16 *src, const u32 *pal, u16 *dst, unsigned lead,
                                                           unsigned width, u16 mask) {
     if (lead) { u32 p = pal[*src++ >> 8]; if ((u16)p) *dst = (u16)(p >> 16) | mask; ++dst; --width; }
     for (; width >= 2; width -= 2, dst += 2) {
@@ -1219,7 +1219,7 @@ static __attribute__((noinline)) void rect_rows_semi(const u16 *src, const u16 *
     }
 }
 
-static SG_HW_HOT __attribute__((noinline)) int rect_rows(const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int direct) {
+static __attribute__((noinline)) int rect_rows(const Gp0Mode *m, int u0, int v0, int x0, int y0, int x1, int y1, int direct) {
     if (x1 <= x0 || y1 <= y0) return 0;
     if (gp0_state.check_mask) return 0;
     if (gp0_state.twin_mask_x | gp0_state.twin_mask_y) /* (window_rows: semi-transparent ones unmodulated) */

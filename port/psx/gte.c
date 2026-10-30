@@ -558,7 +558,7 @@ GTE_HOT void psx_gte_gpf12(void) {
 #endif
 
 /* [MAC1..3] = (T << 12 + M * V) >> shift, IR = MAC (MVMVA and the lighting steps) */
-GTE_HOT static void mat_mul(int mbase, i64 vx, i64 vy, i64 vz, i64 tx, i64 ty, i64 tz, int sf, int lm) {
+static void mat_mul(int mbase, i64 vx, i64 vy, i64 vz, i64 tx, i64 ty, i64 tz, int sf, int lm) {
     i32 x = (i32)vx, y = (i32)vy, z = (i32)vz;
     if (sf && (u32)((x < 0 ? -x : x) + (y < 0 ? -y : y) + (z < 0 ? -z : z)) < 0x10000 &&
         (uint64_t)(tx + 0x40000000) < 0x80000000u && (uint64_t)(ty + 0x40000000) < 0x80000000u && (uint64_t)(tz + 0x40000000) < 0x80000000u) {

@@ -18,7 +18,7 @@ Gp0State gp0_state = {0, 0, 1023, 511, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 #else
 #define GP0_HOT
 #endif
-GP0_HOT void gp0_note_sprites(unsigned int texpage, unsigned int n);
+void gp0_note_sprites(unsigned int texpage, unsigned int n);
 const Gp0Backend *gp0_backend;
 /* psx_display.h; weak here and in gpu.c, since unit tests link either file alone */
 __attribute__((weak)) unsigned int psx_vram_generation;
@@ -320,7 +320,7 @@ GP0_HOT int gp0_tpage_sprite16(const unsigned int *w) {
 #ifdef PORT_FIELD_GX
 __attribute__((section(".psxovl_0a.port"), noinline)) /* (its only caller is ovl_0a's) */
 #endif
-GP0_HOT void gp0_note_sprites(unsigned int texpage, unsigned int n) {
+void gp0_note_sprites(unsigned int texpage, unsigned int n) {
     gp0_state.texpage = texpage & 0xFFFFFF;
     psx_display_drawing();
     psx_vram_generation += n;

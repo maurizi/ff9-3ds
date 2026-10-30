@@ -144,7 +144,7 @@ typedef long long ClipMac;
 #if defined(__arm__)
 __attribute__((target("arm"))) /* (Thumb has no long multiply) */
 #endif
-PORT_OVERLAY_CODE(0a) void o0a_fldmdl_projectMeshClipY(ModelObj *arg0, u8 arg1) {
+PORT_ITCM_CODE(0a) void o0a_fldmdl_projectMeshClipY(ModelObj *arg0, u8 arg1) {
     WmModelGroup *g = &arg0->model->groups[arg1];
     gte_SetGeomScreen(g_gameState->gameData->projDist);
     const MATRIX *bone = (const MATRIX *)arg0->boneMatrices;

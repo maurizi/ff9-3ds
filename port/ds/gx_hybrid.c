@@ -366,7 +366,7 @@ static void start_scene(Buffer *b, int filled /* the game's fill is about to cov
 
 /* The buffer the current drawing area belongs to (NULL: offscreen), starting its scene if it was shown; *shown is
  * the displayed buffer. */
-GXH_HOT static Buffer *target(Buffer **shown) {
+__attribute__((noinline, target("arm"))) static Buffer *target(Buffer **shown) {
     /* the place's buffers and tables are in its overlay's code range: none while another overlay is loading there
      * (between a mode's overlay arriving and display_present enabling its place; d3_f0455 wrote a field's depths
      * over ovl_0b's data and crashed in btlbg_init) */
@@ -537,7 +537,7 @@ static int offscreen(const Buffer *b, const u32 *xy, const u32 *v, int n) {
 }
 
 /* (ARM in ovl_0b's area: only the battle's btl_drawMesh calls it) */
-PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) int port_native_mesh(const NativeMesh *nm) {
+PORT_ITCM_CODE(0b) int port_native_mesh(const NativeMesh *nm) {
     if (!active || place->field) return 0;
     Buffer *b = buffer_at(nm->draw_x, nm->draw_y);
     if (!b || !b->pool) return 0;
@@ -1417,7 +1417,7 @@ static inline int inside(int x, int y, int ax, int ay, int bx, int by, int cx, i
 /* x * a / 31 for x, a up to 31 (exact over that range; Thumb has no long multiply, so a division by a constant is a
  * call) */
 static inline u32 div31x(u32 x, int a) { return x * (u32)a * 2115u >> 16; }
-GXH_HOT static u32 light_under(const Prim *p, int alpha, u32 hue) {
+__attribute__((noinline, target("arm"))) static u32 light_under(const Prim *p, int alpha, u32 hue) {
     int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
     for (int j = 1; j < p->n; ++j) {
         if (p->x[j] < x0) x0 = p->x[j]; else if (p->x[j] > x1) x1 = p->x[j];
@@ -2436,7 +2436,7 @@ static inline u32 div31(u32 c, u32 d) {
     return (u32)(((unsigned long long)(c * 31) * recip24[d]) >> 24);
 }
 /* vertex i's colour at full brightness: each channel x 31 / m (m its brightest channel or more) */
-GXH_HOT static __attribute__((noinline)) u32 hue_of(const Prim *p, int i, u32 m) {
+__attribute__((noinline, target("arm"))) static u32 hue_of(const Prim *p, int i, u32 m) {
     return div31(p->r[i], m) | div31(p->g[i], m) << 5 | div31(p->b[i], m) << 10;
 }
 
@@ -2855,7 +2855,7 @@ PORT_OVERLAY_CODE(0b) static void strip_uses(Buffer *b) {
 /* (col[]: a flat polygon's vertices take col[0] alone; GCC can't see it through the unrolled loops) */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_run(Buffer *b, EmitState *es, NativeWalk *w, int k) {
+PORT_ITCM_CODE(0b) static void native_run(Buffer *b, EmitState *es, NativeWalk *w, int k) {
     u32 *wp = es->wp, *pack_header, pack_ids;
     int pack_shift;
     /* (in locals: with -fno-strict-aliasing every store through wp would reload them from es) */
@@ -2998,7 +2998,7 @@ PORT_OVERLAY_CODE(0b) static void build_places(Buffer *b) {
 
 /* The models' opaque triangles (strip_tri) as triangle strips, each model's FT3 list in its order (strip_count's
  * rules), before the walk (which skips them): their vertices at their own depths, so their order doesn't matter. */
-PORT_OVERLAY_CODE(0b) __attribute__((target("arm"))) static void native_strips(Buffer *b, EmitState *es) {
+PORT_ITCM_CODE(0b) static void native_strips(Buffer *b, EmitState *es) {
     u32 *wp = es->wp, *pack_header, pack_ids;
     int pack_shift;
     u32 image = es->image, palette = es->palette, attr = es->attr;
@@ -4653,7 +4653,7 @@ static inline __attribute__((always_inline)) void fm_take_kind(FmTake *k, FStore
 /* A group's translucent polygons natively (fm_semi_ok), if all are textured and additive (modes 1, 3): the PS1's
  * culling (link_translucent's), each drawn one's bit with the opaque ones', its texture use (tpage bit 15: planned
  * converted, plan_textures) and twice its area (st->semi_area2). 0: some aren't, all left to the linker. */
-PORT_OVERLAY_CODE(0a) __attribute__((noinline)) static int fm_take_semi(FStore *st, const NativeFieldMesh *n,
+PORT_ITCM_CODE(0a) static int fm_take_semi(FStore *st, const NativeFieldMesh *n,
                                                                                       int pi, int nv) {
     const u8 *g = n->group;
     for (int t = 0, at = 0; t < 8; ++t) { /* (nothing taken from a group that keeps some for the linker) */
@@ -4719,7 +4719,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((noinline)) static int fm_take_semi(FStore *
     return 1;
 }
 
-PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) int port_native_field_mesh(const NativeFieldMesh *n) {
+PORT_ITCM_CODE(0a) int port_native_field_mesh(const NativeFieldMesh *n) {
     /* (not the GPU's backend: a scene gone software keeps the software renderer until it's shown, after this) */
     if (!active || !place->field || !fm_ring[0] || soft_hold) return 0;
     /* (the buffer's soft flag is still its last scene's: this one is walked later) */

@@ -62,6 +62,13 @@ void port_ovl_native_load(unsigned int id) {
             if (entries[k][1] == address) loaded[entries[k][0] & 255] = 0;
         loaded[id & 255] = 1;
         gxh_native_overwritten(address, size);
+        /* its ITCM part (the mode's hottest code, PORT_ITCM_CODE), over the last mode's: TCM isn't cached */
+        for (u32 k = 0; k < count; ++k)
+            if (entries[k][0] == (id | 0x100)) {
+                if (!read_at(pack, (long)entries[k][3], (void *)entries[k][1], entries[k][2]))
+                    port_fatal("code overlays: can't read overlay %02X's ITCM code", id);
+                IC_InvalidateAll();
+            }
         return;
     }
 }

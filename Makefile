@@ -168,7 +168,7 @@ $$($(1)_DIR)/ff9ds.elf: $$($(1)_LINK) $$($(1)_DIR)/stubs.o $$(if $$($(1)_FXOVL),
 	$$(if $$($(1)_FXOVL),@$(PYTHON) tools/fx_extern.py --build-id $$($(1)_DIR)/fxid.s && $(2) $(4) -c $$($(1)_DIR)/fxid.s -o $$($(1)_DIR)/fxid.o)
 	@$(2) $(4) -o $$@ $$($(1)_MAINLINK) $$($(1)_DIR)/stubs.o $$(if $$($(1)_FXOVL),$$($(1)_DIR)/fxid.o $$($(1)_DIR)/fx_extern.ld) \
 		$(GEN)/psx_syms.ld $(7) -Wl,-Map,$$($(1)_DIR)/ff9ds.map -Wl,--start-group $(8) -Wl,--end-group \
-		2> $$($(1)_DIR)/link.log; status=$$$$?; grep -v "allocated section .\.psxovl_.* not in segment" $$($(1)_DIR)/link.log >&2; \
+		2> $$($(1)_DIR)/link.log; status=$$$$?; grep -v "allocated section .\.\(psx\|itcm\)ovl_.* not in segment" $$($(1)_DIR)/link.log >&2; \
 		exit $$$$status
 endef
 
@@ -180,7 +180,7 @@ SPUARM ?= 1
 SPUITCM ?= $(if $(filter 1,$(HWSOUND)),0,1)
 # ARM9 timing probe verifies these pixel loops in instruction TCM; keep O2.
 PORT_ARCH_ds_psx/softgpu := -marm -DPORT_RASTER_ITCM
-PORT_ARCH_ds_ds/display_scale := -marm -DPORT_SCALE_ITCM
+PORT_ARCH_ds_ds/display_scale := -marm
 PORT_ARCH_ds_ds/itcm_guard := -marm
 # Movie decoding: Thumb has no long multiply (SMLAL), which the IDCT's 64-bit fallback and VLC shifts use.
 PORT_ARCH_ds_psx/mdec_decode := -marm
@@ -224,7 +224,7 @@ ds_FXOVL := 1
 # The game's ARM9 link: BlocksDS's script with the code overlays' areas (gen_link.py psx_ovl_areas.ld) before the heap
 $(BUILD)/ds/ff9ds_arm9.ld: $(BLOCKSDS)/sys/crts/ds_arm9.ld $(GEN)/stamp
 	@mkdir -p $(dir $@)
-	@$(PYTHON) -c "import sys; s = open(sys.argv[1]).read(); m = '    /* Space reserved for the thread local storage'; assert s.count(m) == 1; open(sys.argv[3], 'w').write(s.replace(m, open(sys.argv[2]).read() + m))" $< $(GEN)/psx_ovl_areas.ld $@
+	@$(PYTHON) -c "import sys; s = open(sys.argv[1]).read(); m = '    /* Space reserved for the thread local storage'; i = '    } >itcm AT>ewram :itcm = 0xff\n'; assert s.count(m) == 1 and s.count(i) == 1; s = s.replace(m, open(sys.argv[2]).read() + m); open(sys.argv[4], 'w').write(s.replace(i, i + open(sys.argv[3]).read()))" $< $(GEN)/psx_ovl_areas.ld $(GEN)/psx_itcm_ovl.ld $@
 # DSMODE=1: the original DS's memory map (BlocksDS's DS specs) instead of the DSi's, with main RAM up to the 4 KB
 # system area at its top: the ARM7 only stages its 33 KB image at 0x02380000 before copying it to its own RAM.
 ifeq ($(DSMODE),1)
