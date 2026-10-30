@@ -1585,3 +1585,13 @@ Result: no drops in Zaghnol d1_b0014 (1,308 before), Gigan Toad d2_b0135 (702), 
 the passes' texture uploads (each pass's pages displace the others' in C and D, re-uploaded every scene): d1_b0014
 32 -> 45 ms per VBlank, d2_b0135 37.6 -> 57.9, d3_b0583 27.7 -> 31.7 (the user's choice of 2026-10-29: no drops
 over speed). Red Dragon d3_b0194 still drops (no first pass fits: its arena and dragons share pages).
+
+### Semi-transparent background sprites in the composite one by one (2026-10-30)
+
+The composite took a field's semi-transparent sprites all or none: one of them in front of a model kept every one in
+the 3D scene, where their blend is the 3D engine's approximation. d1_f0604's 280 (still for 570 scenes) were all in
+3D. Now each goes into the composite if it is behind the 3D primitives and models in its cells and behind every
+semi-transparent sprite that stays in 3D there (the composite is under them all, so the PS1's order of the blends is
+kept); the selection is part of the composite's key (a change composes it whole), and a selection that changes often
+keeps them out for 120 scenes. d1_f0604 34.2 -> 33.6 ms per VBlank and its frame nearer the software reference
+(blurred mean difference 10.97 -> 6.66: the composite's blends are exact); d4_f0351, d2_f0931, d4_f2110 identical.
