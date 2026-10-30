@@ -78,8 +78,14 @@ opcodes that read the pad (R20).
   ×0.8, where it was. While the bottom screen shows the UI, printf goes to a console whose map is in spare PS1
   RAM. plat_halt switches back and copies it over, so a fatal error's reason still shows. Cost: none measured
   (d1_b0228 24.8 ms per VBlank).
-- Next: the bottom screen at 1:1 from the game's state (party panel, command list, lists, targets, help) in
-  place of the scaled layer; then touch.
+  The battle scene's own opaque sprites and lines (damage numbers and other popups, drawn into the frame being built)
+  are 3D-layer quads in battles, in their OT order, as the translucent ones already were. Only the UI list (drawn
+  over the shown buffer) stays on the 2D layer. Step 1 had put "84" on the bottom screen.
+- Measured after the move: the UI list is redrawn whole at every buffer swap (its windows are translucent and the
+  game's fill clears the buffer), so UI_RATE 8 gains nothing (24.86 -> 24.81 ms). A per-area block-hash cache and
+  a 4-lane hash were also within noise. The UI no longer costs a battle much; the remaining gap is the 3D scene.
+- A layout designed for the DS (1:1, touch) comes after the speed and fidelity goals (the user, 2026-10-30): the
+  move is for speed only.
 
 ## 5. What the decomp needs to expose for this
 Each bottom-screen UI needs three things: **(a)** where the game draws that UI (to suppress it on top),

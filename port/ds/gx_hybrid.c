@@ -56,6 +56,8 @@ static const int drop_bounds[6] = {16, 64, 256, 1024, 4096, 1 << 30};
 #define MAX_POLYS 2044
 #define MAX_VERTICES 6140
 
+int port_sub_ui(int on);
+static int layer_sub; /* battle: the 2D layer is the sub engine's (the bottom screen: gxh_enable) */
 int gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail, gxh_stats_palette_fail, gxh_stats_blocks;
 int gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced, gxh_stats_units_peak;
 int gxh_stats_soft; /* field: why scenes went software (bits, go_software's callers) */
@@ -4001,7 +4003,7 @@ static void hybrid_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b2) {
      * blended with the buffer's key or clear value and covered the scene opaquely) */
     Gp0Vtx ca, cb;
     if (!clip_line(a, b2, &ca, &cb)) return; /* (wholly outside the drawing area: nothing drawn) */
-    if (b && b != shown && (place->field ? !b->soft && !field_unexact(b, m) : m->semi)) {
+    if (b && b != shown && (place->field ? !b->soft && !field_unexact(b, m) : m->semi || layer_sub)) {
         Gp0Vtx t[3] = {ca, cb, cb};
         Gp0Mode lm = *m;
         lm.textured = 0;
@@ -4148,7 +4150,8 @@ static void hybrid_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         }
     }
     int field_ui_twin = place->field && ui_page && (gp0_state.twin_mask_x || gp0_state.twin_mask_y);
-    if (b && b != shown && (m->semi || place->field) &&
+    /* (a battle with its 2D layer on the bottom screen: the scene's opaque sprites too, its damage numbers) */
+    if (b && b != shown && (m->semi || place->field || layer_sub) &&
         ((!gp0_state.twin_mask_x && !gp0_state.twin_mask_y && (!m->textured || (v->u + w <= 256 && v->v + h <= 256))) ||
          field_ui_twin)) {
         /* clipped to the drawing area: texels follow pixels one to one */
@@ -4441,8 +4444,6 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
 /* ---- presentation ------------------------------------------------------------------------------------------ */
 
 #define BLOCK 32
-int port_sub_ui(int on);
-static int layer_sub; /* (the 2D layer is the sub engine's: below) */
 static u8 block_shown[6][8];   /* the 2D layer has pixels in this 32x32 output block */
 static Buffer *last_shown;
 static u32 block_hash[6][8];
