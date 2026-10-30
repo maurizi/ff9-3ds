@@ -1510,3 +1510,20 @@ fifteen. The rest of d1_f0501 (its dialog box's software UI replay is 5.4 of it)
 emit_scene's per-primitive translucent paths, bgc_use, the OT walk) is the background's and the UI's. (Measuring:
 an ovl_0a-only change still needs `touch` on nothing; but a scratch copy of a source restored over a test edit drops
 the test's other lines: restore test edits with git checkout.)
+
+### Field models through the 3D engine, again (branch gx-models-2, 2026-10-29): correct, not faster
+
+Why the first branch drew garbage: its bone matrices were the GTE's x 4096 (so that the result is in the GTE's
+units with v16 vertices), which puts clip coordinates near 2^25 (w ~ 28 million for Z 7,000); POS_TEST read them back
+exactly (a vertex at 224.4, 256.0 against the GTE's 224, 255), but the 3D engine's later stages overflow on them.
+x 16 (w ~ Z x 16, the projection's depth constant / 256 to match) draws the models right, close-ups matching the
+projected path.
+
+With the vertex pass deferred (fldmdl_projectMesh keeps the bones; the renderer transforms the vertices to view space
+with them, no division: Z for the group's depth range, the view-space determinant for the PS1's culling, matching
+NCLIP's sign and its sub-pixel zero; projected on demand for the packets' path, mirrored draws, translucent groups,
+software and two-pass scenes) it is still slower: d1_f0359 31.3 against 28.6-29.4 ms per VBlank, d4_f2404 32.3
+against 30.3. The CPU's share (fm_take_hw, ~170 cycles a vertex with its polygons' culling) costs about what the ITCM
+GTE's projection and the take pass did, and the per-vertex matrix restores add 3D engine work. The DS's own culling
+would drop the per-polygon test but emit the back faces too (twice the polygons through fm_emit and the 3D engine's
+2,048). Not merged; the branch also has fm_kind in four instantiations instead of eight (4.2 KB of slot 0 back).
