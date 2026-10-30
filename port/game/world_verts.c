@@ -62,59 +62,106 @@ static inline void wv_fog(u32 rgb, u32 sz, u32 attr, s32 flags, u32 *lit, u32 *f
 }
 
 #ifdef PORT_GTE_APPROX
-/* DS mode: a group's GTE steps as arithmetic (each the GTE's: NCT's two products and DPCS's and INTPL's
- * interpolation in 64-bit sums, exact as gte.c's; the RTPTs as DS mode's 32-bit ones, psx_gte_project and
- * psx_gte_rtpt_depths), for every group but the last, which wv_transform runs through the GTE so the registers end
- * as the game leaves them. The one register a group reads from the one before is RGBC (the colour code NCT pushes
- * with: the last fog colour loaded). */
+/* DS mode: a group's GTE steps as arithmetic (each the GTE's own: NCT's two products and DPCS's and INTPL's
+ * interpolation in 32 bits where gte.c's mat_mul and interpolate take their 32-bit paths, which give what the 64-bit
+ * ones would, else in 64; the RTPTs as DS mode's 32-bit ones: rtp_sf1's and psx_gte_rtpt_depths'), for every group
+ * but the last, which wv_transform runs through the GTE so the registers end as the game leaves them. The one
+ * register a group reads from the one before is RGBC (the colour code NCT pushes with: the last fog colour loaded).
+ * The GTE's constants are read once a call (WvCtx). */
+typedef struct {
+    u32 rot[5], llm[5], lcm[5];
+    s32 tr[3], bk[3], fc[3], ofx, ofy;
+    u32 h;
+    int fc32;          /* the far colour fits interpolate's 32-bit path */
+    const u16 *unr;
+} WvCtx;
 static inline s32 wv_clamp(long long v, s32 lo, s32 hi) { return v < lo ? lo : v > hi ? hi : (s32)v; }
-/* M x V for one of the GTE's matrices (rotation layout: 5 words from c) */
-static inline void wv_mat(const u32 *c, s32 x, s32 y, s32 z, long long *a, long long *b, long long *d) {
-    *a = (long long)(s16)c[0] * x + (long long)((s32)c[0] >> 16) * y + (long long)(s16)c[1] * z;
-    *b = (long long)((s32)c[1] >> 16) * x + (long long)(s16)c[2] * y + (long long)((s32)c[2] >> 16) * z;
-    *d = (long long)(s16)c[3] * x + (long long)((s32)c[3] >> 16) * y + (long long)(s16)c[4] * z;
+static inline s32 wv_clamp32(s32 v, s32 lo, s32 hi) { return v < lo ? lo : v > hi ? hi : v; }
+/* M x V >> 12 plus T, as mat_mul's results (rotation layout: 5 words) */
+static inline void wv_mat(const u32 *c, const s32 *t, s32 x, s32 y, s32 z, s32 *o) {
+    if ((u32)((x < 0 ? -x : x) + (y < 0 ? -y : y) + (z < 0 ? -z : z)) < 0x10000 &&
+        (u32)t[0] + 0x40000000u < 0x80000000u && (u32)t[1] + 0x40000000u < 0x80000000u &&
+        (u32)t[2] + 0x40000000u < 0x80000000u) {
+        o[0] = t[0] + (((s16)c[0] * x + ((s32)c[0] >> 16) * y + (s16)c[1] * z) >> 12);
+        o[1] = t[1] + ((((s32)c[1] >> 16) * x + (s16)c[2] * y + ((s32)c[2] >> 16) * z) >> 12);
+        o[2] = t[2] + (((s16)c[3] * x + ((s32)c[3] >> 16) * y + (s16)c[4] * z) >> 12);
+        return;
+    }
+    o[0] = (s32)((((long long)t[0] << 12) + (long long)(s16)c[0] * x + (long long)((s32)c[0] >> 16) * y + (long long)(s16)c[1] * z) >> 12);
+    o[1] = (s32)((((long long)t[1] << 12) + (long long)((s32)c[1] >> 16) * x + (long long)(s16)c[2] * y + (long long)((s32)c[2] >> 16) * z) >> 12);
+    o[2] = (s32)((((long long)t[2] << 12) + (long long)(s16)c[3] * x + (long long)((s32)c[3] >> 16) * y + (long long)(s16)c[4] * z) >> 12);
 }
 /* NCT's colour for one normal (sf 1, lm 1), pushed with the code byte */
-static inline u32 wv_nct(const SVECTOR *nv, u32 code) {
-    const u32 *c = psx_gte.c;
-    long long a, b, d;
-    wv_mat(c + 8, nv->vx, nv->vy, nv->vz, &a, &b, &d); /* LLM x V */
-    const s32 i1 = wv_clamp(a >> 12, 0, 0x7FFF), i2 = wv_clamp(b >> 12, 0, 0x7FFF), i3 = wv_clamp(d >> 12, 0, 0x7FFF);
-    wv_mat(c + 16, i1, i2, i3, &a, &b, &d); /* BK + LCM x IR */
-    const s32 m1 = (s32)((((long long)(s32)c[13] << 12) + a) >> 12), m2 = (s32)((((long long)(s32)c[14] << 12) + b) >> 12);
-    const s32 m3 = (s32)((((long long)(s32)c[15] << 12) + d) >> 12);
-    return code << 24 | (u32)wv_clamp(m3 >> 4, 0, 0xFF) << 16 | (u32)wv_clamp(m2 >> 4, 0, 0xFF) << 8 |
-           (u32)wv_clamp(m1 >> 4, 0, 0xFF);
+static inline u32 wv_nct(const WvCtx *cx, const SVECTOR *nv, u32 code) {
+    static const s32 zero[3] = {0, 0, 0};
+    s32 m[3];
+    wv_mat(cx->llm, zero, nv->vx, nv->vy, nv->vz, m); /* LLM x V */
+    const s32 i1 = wv_clamp32(m[0], 0, 0x7FFF), i2 = wv_clamp32(m[1], 0, 0x7FFF), i3 = wv_clamp32(m[2], 0, 0x7FFF);
+    wv_mat(cx->lcm, cx->bk, i1, i2, i3, m); /* BK + LCM x IR */
+    return code << 24 | (u32)wv_clamp32(m[2] >> 4, 0, 0xFF) << 16 | (u32)wv_clamp32(m[1] >> 4, 0, 0xFF) << 8 |
+           (u32)wv_clamp32(m[0] >> 4, 0, 0xFF);
 }
 /* DPCS (sf 1, lm 0) of colour rgbc toward the far colour by dp */
-static inline u32 wv_dpcs(u32 rgbc, s32 dp) {
-    const u32 *c = psx_gte.c;
+static inline u32 wv_dpcs(const WvCtx *cx, u32 rgbc, s32 dp) {
     u32 out = rgbc & 0xFF000000u;
     for (int k = 0; k < 3; ++k) {
-        const long long m = (long long)(rgbc >> (8 * k) & 0xFF) << 16;
-        const s32 ir = wv_clamp((((long long)(s32)c[21 + k] << 12) - m) >> 12, -0x8000, 0x7FFF);
-        const s32 mac = (s32)(((long long)ir * dp + m) >> 12);
-        out |= (u32)wv_clamp(mac >> 4, 0, 0xFF) << (8 * k);
+        const s32 m = (s32)(rgbc >> (8 * k) & 0xFF) << 16;
+        s32 mac;
+        if (cx->fc32) { /* (every sum within 32 bits: interpolate's own condition) */
+            const s32 ir = wv_clamp32((cx->fc[k] * 4096 - m) >> 12, -0x8000, 0x7FFF);
+            mac = (ir * dp + m) >> 12;
+        } else {
+            const s32 ir = wv_clamp((((long long)cx->fc[k] << 12) - m) >> 12, -0x8000, 0x7FFF);
+            mac = (s32)(((long long)ir * dp + m) >> 12);
+        }
+        out |= (u32)wv_clamp32(mac >> 4, 0, 0xFF) << (8 * k);
     }
     return out;
 }
+/* RTPS's projection of one vertex in DS mode (rtp_sf1's arithmetic): its SXY and SZ */
+static inline void wv_project(const WvCtx *cx, u32 vxy, u32 vz, u32 *sxy, u32 *sz) {
+    const s32 x = (s16)vxy, y = (s32)vxy >> 16, z = (s16)vz;
+    const u32 *c = cx->rot;
+    s32 ir1 = cx->tr[0] + (((s16)c[0] * x + ((s32)c[0] >> 16) * y + (s16)c[1] * z) >> 12);
+    s32 ir2 = cx->tr[1] + ((((s32)c[1] >> 16) * x + (s16)c[2] * y + ((s32)c[2] >> 16) * z) >> 12);
+    const s32 mac3 = cx->tr[2] + (((s16)c[3] * x + ((s32)c[3] >> 16) * y + (s16)c[4] * z) >> 12);
+    ir1 = wv_clamp32(ir1, -0x8000, 0x7FFF);
+    ir2 = wv_clamp32(ir2, -0x8000, 0x7FFF);
+    const u32 sz3 = mac3 > 0xFFFF ? 0xFFFF : mac3 < 0 ? 0 : (u32)mac3;
+    u32 div;
+    if (cx->h >= sz3 * 2) div = 0x1FFFF;
+    else {
+        const int sh = __builtin_clz(sz3) - 16;
+        u32 n = cx->h << sh, d = sz3 << sh;
+        const u32 u = cx->unr[(d - 0x7FC0) >> 7] + 0x101;
+        d = (0x2000080 - d * u) >> 8;
+        d = (0x0000080 + d * u) >> 8;
+        const unsigned long long q = ((unsigned long long)n * d + 0x8000) >> 16;
+        div = q > 0x1FFFF ? 0x1FFFF : (u32)q;
+    }
+    s32 sx = (s32)(((long long)ir1 * div + cx->ofx) >> 16), sy = (s32)(((long long)ir2 * div + cx->ofy) >> 16);
+    sx = wv_clamp32(sx, -0x400, 0x3FF);
+    sy = wv_clamp32(sy, -0x400, 0x3FF);
+    *sxy = (u32)sy << 16 | ((u32)sx & 0xFFFF);
+    *sz = sz3;
+}
 /* one group's results; *rgbc: RGBC as the GTE would hold it, before and after */
-static inline void wv_group(const u32 *v, s32 flags, u32 *rgbc, u32 *lit, u32 *fog, u32 *sxy, u32 *zs32, u16 *zs16) {
-    const u32 *c = psx_gte.c;
+static inline void wv_group(const WvCtx *cx, const u32 *v, s32 flags, u32 *rgbc, u32 *lit, u32 *fog, u32 *sxy,
+                            u32 *zs32, u16 *zs16) {
     u32 w[6], sz[3], rgb[3];
     for (int i = 0; i < 6; i++) w[i] = v[i];
-    const s32 trz = (s32)c[7], c3 = (s32)c[3], c4 = (s16)c[4];
+    const u32 *c = cx->rot;
     for (int i = 0; i < 3; ++i) { /* (the first RTPT's depths) */
         const u32 vxy = w[2 * i];
-        const s32 mac3 = trz + (((s16)c3 * (s16)vxy + (c3 >> 16) * ((s32)vxy >> 16) + c4 * (s16)w[2 * i + 1]) >> 12);
+        const s32 mac3 = cx->tr[2] + (((s16)c[3] * (s16)vxy + ((s32)c[3] >> 16) * ((s32)vxy >> 16) + (s16)c[4] * (s16)w[2 * i + 1]) >> 12);
         sz[i] = mac3 > 0xFFFF ? 0xFFFF : mac3 < 0 ? 0 : (u32)mac3;
     }
-    for (int i = 0; i < 3; ++i) rgb[i] = wv_nct(&D_800CD794[(w[2 * i + 1] >> 16) & 0xFF], *rgbc >> 24);
+    for (int i = 0; i < 3; ++i) rgb[i] = wv_nct(cx, &D_800CD794[(w[2 * i + 1] >> 16) & 0xFF], *rgbc >> 24);
     if (flags & WV_FOG) {
         for (int i = 0; i < 3; ++i) {
             const u32 *e = (const u32 *)g_worldFogParams + ((w[2 * i + 1] >> 25) & 1) * 2;
-            lit[i] = wv_dpcs(rgb[i], wv_depth(sz[i], e[1] >> 16, flags));
-            fog[i] = wv_dpcs(e[0], 0x1000 - wv_depth(sz[i], e[1] & 0xFFFF, flags));
+            lit[i] = wv_dpcs(cx, rgb[i], wv_depth(sz[i], e[1] >> 16, flags));
+            fog[i] = wv_dpcs(cx, e[0], 0x1000 - wv_depth(sz[i], e[1] & 0xFFFF, flags));
             *rgbc = e[0];
         }
     } else {
@@ -131,15 +178,12 @@ static inline void wv_group(const u32 *v, s32 flags, u32 *rgbc, u32 *lit, u32 *f
     if (flags & WV_CURVE_GTE) { /* (INTPL with the far colour's red 0: MAC1 = (clamp(-y) x IR0 + y << 12) >> 12) */
         for (int i = 0; i < 3; i++) {
             const s32 y = (s32)w[2 * i] >> 16, dp = (s16)((sz[i] >> 4) + (sz[i] >> 6));
-            const s32 ir = wv_clamp(-(long long)y, -0x8000, 0x7FFF);
-            const u32 m = (u32)(s32)(((long long)ir * dp + ((long long)y << 12)) >> 12);
+            const s32 ir = wv_clamp32(-y, -0x8000, 0x7FFF);
+            const u32 m = (u32)((ir * dp + (y << 12)) >> 12);
             w[2 * i] = (w[2 * i] & 0xFFFF) | m << 16;
         }
     }
-    for (int i = 0; i < 3; ++i) {
-        u32 mac0;
-        psx_gte_project(w[2 * i], w[2 * i + 1], &sxy[i], &sz[i], &mac0);
-    }
+    for (int i = 0; i < 3; ++i) wv_project(cx, w[2 * i], w[2 * i + 1], &sxy[i], &sz[i]);
     if (flags & WV_SZ16) { zs16[0] = (u16)(sz[0] >> 3); zs16[1] = (u16)(sz[1] >> 3); zs16[2] = (u16)(sz[2] >> 3); }
     else { zs32[0] = sz[0]; zs32[1] = sz[1]; zs32[2] = sz[2]; }
 }
@@ -163,10 +207,18 @@ PORT_OVERLAY_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
     s32 i, y;
 
 #ifdef PORT_GTE_APPROX
-    { /* all groups but the last as arithmetic (wv_group) */
+    if (n > 3) { /* all groups but the last as arithmetic (wv_group) */
+        const u32 *c = psx_gte.c;
+        WvCtx cx;
+        for (int k = 0; k < 5; ++k) { cx.rot[k] = c[k]; cx.llm[k] = c[8 + k]; cx.lcm[k] = c[16 + k]; }
+        for (int k = 0; k < 3; ++k) { cx.tr[k] = (s32)c[5 + k]; cx.bk[k] = (s32)c[13 + k]; cx.fc[k] = (s32)c[21 + k]; }
+        cx.ofx = (s32)c[24]; cx.ofy = (s32)c[25]; cx.h = (u16)c[26];
+        cx.fc32 = 1;
+        for (int k = 0; k < 3; ++k) if ((u32)cx.fc[k] + 0x20000u >= 0x40000u) cx.fc32 = 0; /* (interpolate's FITS(FC, 17)) */
+        cx.unr = psx_gte_unr();
         u32 rgbc = psx_gte.d[6];
         while (n > 3) {
-            wv_group(v, flags, &rgbc, lit, fog, sxy, zs32, zs16);
+            wv_group(&cx, v, flags, &rgbc, lit, fog, sxy, zs32, zs16);
             v += 6; n -= 3; lit += 3; sxy += 3;
             if (flags & WV_FOG) fog += 3;
             if (flags & WV_SZ16) zs16 += 3; else zs32 += 3;

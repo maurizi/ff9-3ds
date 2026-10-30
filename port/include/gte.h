@@ -42,6 +42,8 @@ void gte_cmd(gte_u32 op);
 void psx_gte_mvmva_rt12(gte_u32 op);
 /* a vertex projected as RTPS/RTPT would, the registers untouched (gte.c) */
 void psx_gte_project(gte_u32 vxy, gte_u32 vz, gte_u32 *sxy, gte_u32 *sz, gte_u32 *mac0);
+/* the UNR division's table (gte.c), for port code dividing as RTPS does */
+const unsigned short *psx_gte_unr(void);
 void psx_gte_gpf12(void);
 /* RTPT's depths alone, for a caller that overwrites the rest before reading it (gte.c) */
 void psx_gte_rtpt_depths(void);

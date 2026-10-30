@@ -173,6 +173,12 @@ static void init_unr(void) {
     }
 }
 
+/* the table, ready, for port code that divides as RTPS does (world_verts.c) */
+const u16 *psx_gte_unr(void) {
+    if (unr_table[0] == 0) init_unr();
+    return unr_table;
+}
+
 GTE_HOT static u32 gte_divide(u32 h, u32 sz3) {
     if (unr_table[0] == 0) init_unr();
     if (h >= sz3 * 2) {

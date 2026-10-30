@@ -1669,6 +1669,10 @@ psx_gte_rtpt_depths, the projection by psx_gte_project), in ARM (in Thumb each 6
 group goes through the GTE, so the registers end as the game leaves them (the only state a group takes from the one
 before is RGBC's code byte, tracked). Frames identical. ms per VBlank: d1_w9009 31.73 -> 28.16, d3_w9006 37.75 ->
 31.93, d4_w9006 33.89 -> 30.03.
+Then the GTE's constants read once a call (WvCtx), the projection inlined (the UNR table from psx_gte_unr), and
+NCT's products and the depth cue in 32 bits where gte.c's own mat_mul and interpolate take their 32-bit paths (the
+same conditions; they give what the 64-bit ones would), 64-bit otherwise: d1_w9009 28.16 -> 26.03, d3_w9006 31.93 ->
+29.97, d4_w9006 30.03 -> 28.06, frames identical to before either step.
 
 ### The occlusion cull's cost (2026-10-30)
 
