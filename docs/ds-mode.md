@@ -1559,3 +1559,7 @@ frame being captured; neither can hold textures read while it's written). Raisin
 from 15% to 30% removes almost nothing more (bone, seam and sharp-feature vertices bind: Grand Dragon 11/4%, Armstrong
 4/5%, Zaghnol 14/2%); Dracozombie at 15% (11/15%) didn't measurably change d4_b0673's drops: not kept. Open: a second
 pass with fewer texture pages (split by texture use, not only by depth), or strips in two passes.
+Measured after: a failing second pass wants ~300 KB of texture regions (d4_b0617 14 regions, 298,592 bytes, peak
+358 KB; d1_b0014 300,736) against banks C and D's 256 KB, and the regions are tight (the uses' own boxes sum to more:
+they overlap). The room has to come from the passes' banks (one capture bank for both passes, the other for textures)
+or from a third pass (a battle frame is four VBlanks).
