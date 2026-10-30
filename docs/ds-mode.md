@@ -1695,3 +1695,15 @@ All of it at -O2 cost the heap 3.5 KB (a battle's: 4,960 -> 1,384 bytes free, un
 needs); size-optimised (ARM) but for the two row loops (the test's one loop: its first and last rows' spans as the
 walk leaves them), it costs 2 KB (2,968 free in a battle, 4,904 at boot), for the same speed: Zaghnol 39.9, Gigan
 Toad 38.8.
+
+### What's left for the models and the background (2026-10-30)
+
+d4_f2101 (models' fields' worst, 30.5 ms per VBlank): the field models' take pass 14.9%, fm_emit 11.3%, the
+projection (gte_rtpt_batch) 10.2% (~3,000 polygons, ~3,600 vertices a scene: ~200 cycles a polygon to take, ~300
+to emit a front one, ~116 a vertex to project). Letting the 3D engine cull instead of the CPU (the GE-transformed
+design's premise) can't work: with every polygon emitted, the scene's count goes past the 3D engine's 2,048 before
+any is culled and the scene takes two passes or software (an experiment, the CPU's culling off: d4_f2101 29.5 ->
+91.9, d4_f2404 27.9 -> 47.6). The CPU must know the front faces before choosing the passes.
+Still backgrounds: runs per OT entry can't carry them (each tile at its own entry); a layer taken as a unit needs
+the scene known to stay in 3D or a software fallback re-sorted by depth (go_software replays records in order).
+Estimated ~7% of a median field for the records alone, ~15% with the composite's hash and choice cached per layer.
