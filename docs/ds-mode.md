@@ -1643,10 +1643,14 @@ own code ~7%. (PROFILE=3 in DS mode now counts ITCM in 128-byte buckets; main RA
 functions' shares there are approximate: free()'s dispose_chunk at 1.2% was a neighbour's, free is called ~10 times
 a run.)
 The command list: emit_scene's words went one store at a time to two 2 KB chunks in main RAM (the data cache
-allocates on reads only, so each was an uncached write), fed to the FIFO by DMA. Now one 1 KB chunk in DTCM, copied
-into the FIFO by the CPU eight words a store (flush_chunk, ARM): d3_f2607 21.71 -> 21.32, d4_f2404 28.90 -> 28.38,
-d1_b0228 25.14 -> 24.93, d3_b0194 26.82 -> 26.59; frames identical. The heap gains the old chunks' 4 KB (8,624 at
-boot, 6,688 in a battle), DTCM's stack 1 KB (free 5,868 -> 4,844).
+allocates on reads only, so each was an uncached write), fed to the FIFO by DMA. Now a 512-byte chunk in DTCM,
+copied into the FIFO by the CPU eight words a store (flush_chunk, ~6 cycles a word, measured) when the FIFO is empty
+and the engine idle, else through two 512-byte main RAM buffers by DMA as before: d3_f2607 21.71 -> 21.32-21.50,
+d4_f2404 28.90 -> 28.38-28.76, d1_b0228 25.14 -> 24.93, d3_b0194 26.82 -> 26.59; frames identical. The heap at boot: 4,376 ->
+6,800 bytes (the old chunks' 4 KB less the DMA buffers and this session's other main-RAM code); DTCM's stack free
+5,868 -> 5,356. d4_f0352 sits on the edge of the PS1's speed: 16.72 in the s60f and
+DMA-only builds and in one instrumented build of this one, 17.5-17.6 in the plain ones (which code lands where):
+the copy itself never waited on the FIFO there.
 Tried, no measurable gain (reverted): fldmdl_projectMeshClipY natively (as fldmdl_projectMesh; DS mode's MVMVAs there
 already take the 32-bit path), light_under's cell test with its edge functions stepped (its primitives are a cell or
 two: the cost is per call).

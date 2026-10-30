@@ -2318,27 +2318,49 @@ enum { CMD_MTX_IDENTITY = 0x15, CMD_MTX_LOAD4X3 = 0x17, CMD_COLOR = 0x20, CMD_TE
        CMD_TEXIMAGE = 0x2A, CMD_PLTTBASE = 0x2B, CMD_BEGIN = 0x40 };
 #define INITIAL_ATTR (3u << 6 | 31u << 16)
 
-/* The scene's commands (packed FIFO format, one command per header), written into a chunk in DTCM and copied into
- * the geometry FIFO by the CPU, eight words a store (the FIFO's addresses 0x400-0x43F are all its port). In main RAM
- * every word was a store of its own past the data cache (it allocates on reads only), ~18 cycles each, and the DMA
- * that fed them on didn't make up for it; the FIFO keeps up (the CPU never waited on it). Worst case per polygon: 4
- * state commands and 4 vertices of colour, texcoord and position. */
-#define CHUNK_WORDS 256
+/* The scene's commands (packed FIFO format, one command per header), written into a chunk in DTCM. A full chunk
+ * goes into the geometry FIFO by the CPU, eight words a store (the FIFO's addresses 0x400-0x43F are all its port;
+ * ~6 cycles a word), when the FIFO is empty and the geometry engine idle; else (the engine behind, or halted for a
+ * swap until the VBlank) it is copied in bursts to one of two main RAM buffers that DMA feeds to the FIFO while the
+ * CPU goes on. (Built in main RAM, every word was a store of its own past the data cache, which allocates on reads
+ * only.) Worst case per polygon: 4 state commands and 4 vertices of colour, texcoord and position. */
+#define CHUNK_WORDS 128
 static u32 dtcm_chunk[1][CHUNK_WORDS] DTCM_BSS;
 static u32 (*const chunks)[CHUNK_WORDS] = dtcm_chunk;
 static const int chunk = 0;
 static int chunk_words;
+static u32 dma_chunks[2][CHUNK_WORDS] __attribute__((aligned(32)));
+static int dma_next;
 
-__attribute__((target("arm"), noinline)) static void flush_chunk(void) {
+/* n words (a multiple of 8 first, then the rest) from s to d, d's address advancing or (fifo) not */
+__attribute__((target("arm"), noinline)) static void burst_copy(volatile u32 *d, const u32 *s, int n, int fifo) {
+    if (fifo)
+        for (; n >= 8; n -= 8)
+            __asm__ volatile("ldmia %0!, {r4-r10, r12}\n\tstmia %1, {r4-r10, r12}" : "+r"(s) : "r"(d)
+                             : "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r12", "memory");
+    else
+        for (; n >= 8; n -= 8)
+            __asm__ volatile("ldmia %0!, {r4-r10, r12}\n\tstmia %1!, {r4-r10, r12}" : "+r"(s), "+r"(d)
+                             : : "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r12", "memory");
+    for (; n > 0; --n) { *d = *s++; if (!fifo) ++d; }
+}
+
+static void flush_chunk(void) {
     if (!chunk_words) return;
-    while (dmaBusy(0)) {} /* (a list some other path still feeds by DMA) */
-    const u32 *s = chunks[0];
-    int n = chunk_words;
-    for (; n >= 8; n -= 8)
-        __asm__ volatile("ldmia %0!, {r4-r10, r12}\n\tstmia %1, {r4-r10, r12}" : "+r"(s) : "r"(&GFX_FIFO)
-                         : "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r12", "memory");
-    for (; n > 0; --n) GFX_FIFO = *s++;
+    const int n = chunk_words;
     chunk_words = 0;
+    /* (the FIFO empty and the engine idle, not halted for a swap until the VBlank: none of it waits) */
+    if (!dmaBusy(0) && (GFX_STATUS & (3u << 26)) == 1u << 26) {
+        burst_copy(&GFX_FIFO, chunks[0], n, 1);
+        return;
+    }
+    u32 *d = dma_chunks[dma_next];
+    burst_copy(d, chunks[0], n, 0);
+    DC_FlushRange(d, n * 4);
+    while (dmaBusy(0)) {} /* (the other buffer's, before it: in order) */
+    while (dmaBusy(1) || dmaBusy(2) || dmaBusy(3)) {} /* libnds: no concurrent DMA when one feeds the FIFO */
+    dmaSetParams(0, d, (void *)&GFX_FIFO, DMA_FIFO | (u32)n);
+    dma_next ^= 1;
 }
 
 /* Room for one primitive's words (at most 3 state commands, a begin and 4 vertices of colour, texcoord and
