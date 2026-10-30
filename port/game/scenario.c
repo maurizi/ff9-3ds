@@ -152,21 +152,24 @@ static void prepare_return_field(GameData *d) {
  * copied at bootstrap, while the in-RAM directory is intact: its area is later
  * shared with movie buffers (MBG_init) and battle data, and the game reloads it
  * before its own lookups. */
-static u16 field_ids[512];
+static u32 field_ids[4096/32]; /* (a bit per field ID: the heap is short) */
 static int n_field_ids=-1;
 static void cache_field_ids(void) {
     typedef struct {u16 field,area;u32 sector;} FieldEntry;
     _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
     FileDirEntry *dirs=(FileDirEntry *)g_gameState->dirs;
     const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+0x14c700+(dirs[4].unk8<<11));
-    if(dirs[4].unk4>(s32)(sizeof field_ids/sizeof field_ids[0])) port_fatal("scenario: %d field entries",(int)dirs[4].unk4);
-    for(n_field_ids=0;n_field_ids<dirs[4].unk4;n_field_ids++) field_ids[n_field_ids]=entries[n_field_ids].field;
+    __builtin_memset(field_ids,0,sizeof field_ids);
+    for(n_field_ids=0;n_field_ids<dirs[4].unk4;n_field_ids++) {
+        if(entries[n_field_ids].field>=4096) port_fatal("scenario: field %d past the bitmap",(int)entries[n_field_ids].field);
+        field_ids[entries[n_field_ids].field>>5]|=1u<<(entries[n_field_ids].field&31);
+    }
 }
 void port_scenario_field_entering(int field) {
     if(!scenario.enabled || !scenario.consumed) return;
     if(n_field_ids<0) cache_field_ids();
     port_log("scenario field entering: %d\n",field);
-    for(int i=0;i<n_field_ids;i++) if(field_ids[i]==field) return;
+    if(field>=0 && field<4096 && (field_ids[field>>5]>>(field&31)&1)) return;
     port_fatal("scenario: unavailable field %d in current archive (initial fixture disc %d, field %d); supply appropriate story/event state",
                field,scenario.disc,scenario.field);
 }

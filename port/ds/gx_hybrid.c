@@ -1075,7 +1075,8 @@ static u8 *prim_layer;
 /* clip: VRAM x0, y0, x1, y1 inclusive to draw within (NULL: the whole buffer) */
 static void bg_runs_replay(Buffer *b, int k);
 enum { L_3D, L_UI, L_ADD /* field: an additive primitive, drawn exactly in software into the added layer */,
-       L_BACK /* field: a background sprite behind every 3D primitive: only in the composite (bgc) */ };
+       L_BACK /* field: a background sprite behind every 3D primitive: only in the composite (bgc) */,
+       L_HIDDEN /* battle: hidden by nearer opaque polygons (battle_occlude): not drawn */ };
 static void replay_clip(Buffer *b, int from, int to, int layer /* -1: all, -2: the background sprites */, const int *clip) {
     Gp0State saved = gp0_state;
     gp0_state.area_x0 = b->x; gp0_state.area_y0 = b->y;
@@ -2353,7 +2354,7 @@ typedef struct { u32 *wp; u32 attr, image, palette; int polys, vertices; } EmitS
 static void fm_emit(const Buffer *b, const FStore *fst, EmitState *es);
 
 /* c * 31 / d for c, d <= 255, d > 0, by a reciprocal (ceil(2^24 / d); exact over that range) */
-static u32 recip24[256];
+static u32 recip24[256] DTCM_BSS; /* (in DTCM: the heap is short, and it is read per primitive) */
 static inline u32 div31(u32 c, u32 d) {
     if (!recip24[1]) for (u32 k = 1; k < 256; ++k) recip24[k] = (u32)(((1ull << 24) + k - 1) / k);
     /* (c <= d, as hue_of's callers give it: the product fits 32 bits, checked exact for every pair; Thumb's 64-bit
@@ -2680,15 +2681,15 @@ static const u8 *model_poly(const MeshInst *mi, int pi, int *type) {
 
 /* The scene's native polygons to draw, in a list per main-OT entry as the PS1 links them (returns their count; ones
  * the pool has no room for are dropped). */
+static const Buffer *collect_last_b; /* (collect_native's lists: NULL, collected again) */
 static int collect_native(Buffer *b) {
     unsigned at = (b->pool_used + 3) & ~3u;
     native_refs = (NativeRef *)(b->pool + at);
     /* (the lists of the meshes as they were last collected: a battle's two passes and its labelling collect them
      * three times a scene) */
-    static const Buffer *last_b;
     static unsigned last_gen, last_used;
     static int last_meshes, last_n;
-    if (b == last_b && b->mesh_gen == last_gen && b->pool_used == last_used && b->meshes == last_meshes) return last_n;
+    if (b == collect_last_b && b->mesh_gen == last_gen && b->pool_used == last_used && b->meshes == last_meshes) return last_n;
     int cap = at < POOL_BYTES ? (int)((POOL_BYTES - at) / sizeof(NativeRef)) : 0, n = 0;
     if (cap > NO_REF) cap = NO_REF;
     memset(native_heads, 0xFF, 0x1010 * sizeof *native_heads);
@@ -2710,7 +2711,7 @@ static int collect_native(Buffer *b) {
             native_bits[e >> 5] |= 1u << (e & 31);
         }
     }
-    last_b = b; last_gen = b->mesh_gen; last_used = b->pool_used; last_meshes = b->meshes; last_n = n;
+    collect_last_b = b; last_gen = b->mesh_gen; last_used = b->pool_used; last_meshes = b->meshes; last_n = n;
     return n;
 }
 
@@ -3104,7 +3105,7 @@ PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) static void terrain_emit(Bu
 
 /* an untextured additive glow's alpha by mode and brightness: m * 31 / 255 (subtraction twice that, mode 3 a quarter),
  * at most 31 */
-static u8 glow_alpha[4][256];
+static u8 glow_alpha[4][256] DTCM_BSS; /* (in DTCM: the heap is short) */
 
 /* The background runs' tiles (opaque, each at its run's depth), as emit_scene's opaque-sprite path sends a sprite;
  * between the scene's opaque primitives and its translucent ones (these don't write depth). From the walk's last
@@ -4914,6 +4915,7 @@ PORT_OVERLAY_CODE(0a) __attribute__((target("arm"))) static void fm_emit(const B
     es->wp = wp;
 }
 
+static u8 *occ_bg; /* (1 KB in ovl_0b's dead range: use_place) */
 static void use_place(const Place *p) {
     place = p;
     fm_semi_ok = 0;
@@ -4971,6 +4973,8 @@ static void use_place(const Place *p) {
     }
     native_heads = p->field || p->world ? NULL : (u16 *)(psx_ram + p->at + OVL0B_HEADS_AT);
     strip_places = p->field || p->world ? NULL : (u16 *)(psx_ram + p->at + OVL0B_PLACES_AT);
+    occ_bg = p->field || p->world ? NULL : psx_ram + p->at + OVL0B_OCC_BG_AT;
+    if (occ_bg) memset(occ_bg, 0, 1024);
     prim_group = tables; prim_palette = tables + prims_max; prim_drop = tables + 2 * prims_max;
     prim_layer = tables + 3 * prims_max;
 #ifdef PORT_FIELD_GX
@@ -5371,9 +5375,7 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
     static u32 semi_sel;
     if (semi_hold) { semi_hold--; semi_ok = 0; }
     u32 sel = 2166136261u;
-    if (semi_ok) {
-        static u16 stay_far[16][24];
-        memset(stay_far, 0xFF, sizeof stay_far);
+    if (semi_ok) { /* (a sprite that stays is marked in cell_far at once: those behind it then aren't behind all) */
         for (int k = 0; k < b->count; ++k)
             if (prim_layer[k] == L_3D && semi_sprite(&b->prims[k])) prim_layer[k] = L_BACK;
         for (int changed = 1, it = 0; changed && it < 8; ++it) {
@@ -5386,15 +5388,11 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
                 if (x1 > 23) x1 = 23;
                 if (y1 > 15) y1 = 15;
                 for (int cy = y0; cy <= y1; ++cy)
-                    for (int cx = x0; cx <= x1; ++cx) {
-                        if (cell_far[cy][cx] < far) far = cell_far[cy][cx];
-                        if (stay_far[cy][cx] < far) far = stay_far[cy][cx];
-                    }
+                    for (int cx = x0; cx <= x1; ++cx) if (cell_far[cy][cx] < far) far = cell_far[cy][cx];
                 if (b->slots[k] < far) continue;
                 prim_layer[k] = L_3D; /* (stays: what is nearer over it stays too, next round) */
                 changed = 1;
-                for (int cy = y0; cy <= y1; ++cy)
-                    for (int cx = x0; cx <= x1; ++cx) if (b->slots[k] < stay_far[cy][cx]) stay_far[cy][cx] = b->slots[k];
+                if (p->x[1] > 0 && p->y[2] > 0) BGC_MARK(p->x[0], p->y[0], p->x[1] - 1, p->y[2] - 1, b->slots[k]);
             }
         }
     }
@@ -5405,7 +5403,8 @@ PORT_OVERLAY_CODE(0a) static int bgc_use(Buffer *b, const FStore *fst, int displ
         if (prim_layer[k] == L_BACK) {
             back_polys++; back_vertices += p->n; nsel++;
             sel = (sel ^ (u32)k ^ (u32)b->slots[k] << 16) * 16777619u;
-        } else if (p->x[1] > 0 && p->y[2] > 0) BGC_MARK(p->x[0], p->y[0], p->x[1] - 1, p->y[2] - 1, b->slots[k]);
+        } else if (!semi_ok && p->x[1] > 0 && p->y[2] > 0) BGC_MARK(p->x[0], p->y[0], p->x[1] - 1, p->y[2] - 1, b->slots[k]);
+        /* (with semi_ok, the ones that stayed are marked already) */
     }
     if (nsel && sel != semi_sel) { semi_changes += 8; if (semi_changes > 32) { semi_hold = 120; semi_changes = 0; } }
     else if (semi_changes) semi_changes--;
@@ -5899,6 +5898,194 @@ static void battle_one(Buffer *b) {
 }
 /* whether a split after `first` places fits: the passes' textures (mask: bit 0 the first pass's, bit 1 the
  * second's), planned for the check; the first pass's planned last (it is uploaded first) */
+/* ---- a battle's hidden polygons (the user's idea of 2026-10-30) ----
+ * A scene past the 3D engine's polygons or vertices first loses its native polygons that nearer opaque ones hide
+ * entirely (they would cost the scene a second or third pass): nearest first (main-OT entries up, each list from its
+ * oldest), a polygon is hidden if every pixel of it, grown by one, is already covered; else an opaque one (not
+ * translucent; untextured, or a texture use without a transparent texel) covers its pixels, shrunk by one. A bit per
+ * PS1 pixel of the buffer, in the pool's room after the collected lists (none there: no cull). Host measure (FF9_OCC):
+ * ~30% of a battle's polygons are hidden, ~25% by this test. A hidden polygon's info byte is 0xFF, as one culled. */
+/* whether a polygon's texels (the box of its uvs on its page) have no transparent one (index of a CLUT colour
+ * 0x0000, or a 15-bit 0x0000); a box past 64 x 64 texels isn't checked (not opaque) */
+__attribute__((optimize("Os"), noinline)) static int occ_poly_opaque(const Prim *p) {
+    if (!(p->flags & P_TEXTURED)) return 1;
+    int u0 = p->u[0], u1 = u0, v0 = p->v[0], v1 = v0;
+    for (int i = 1; i < p->n; ++i) {
+        if (p->u[i] < u0) u0 = p->u[i];
+        if (p->u[i] > u1) u1 = p->u[i];
+        if (p->v[i] < v0) v0 = p->v[i];
+        if (p->v[i] > v1) v1 = p->v[i];
+    }
+    const int depth = p->depth;
+    u32 clear = 0; /* (indexed: the CLUT entries that are 0x0000, as bits; 8-bit past 32: any) */
+    if (depth < 2) {
+        const u16 *cl = psx_vram + (p->clut_y & 511) * 1024 + (p->clut_x & 1023);
+        for (int i = 0; i < (depth ? 256 : 16); ++i) if (!cl[i]) { if (i < 32) clear |= 1u << i; else return 0; }
+        if (!clear) return 1; /* (no transparent colour in the CLUT: any texel is opaque) */
+    }
+    if ((u1 - u0 + 1) * (v1 - v0 + 1) > 64 * 64) return 0;
+    for (int v = v0; v <= v1; ++v) {
+        const u16 *row = psx_vram + ((p->ty + v) & 511) * 1024;
+        for (int x = u0; x <= u1; ++x) {
+            if (depth == 2) { if (!row[(p->tx + x) & 1023]) return 0; continue; }
+            const u16 hw = row[(p->tx + (depth ? x >> 1 : x >> 2)) & 1023];
+            const u32 idx = depth ? (hw >> (8 * (x & 1))) & 255 : (hw >> (4 * (x & 3))) & 15;
+            if (idx < 32 && (clear >> idx & 1)) return 0;
+        }
+    }
+    return 1;
+}
+/* a triangle's spans, row by row from y0: [l, r] the pixels whose centres are inside (PS1 coordinates) */
+/* a triangle's spans, row by row from y0: [l, r] the pixels whose centres are inside (PS1 coordinates); each edge's x
+ * at the rows' centres in 16.16, one division an edge */
+__attribute__((optimize("Os"))) static int occ_tri_spans(const s16 *x, const s16 *y, int a, int b, int c, int *y0, s16 (*span)[2], int max) {
+    int ia = a, ib = b, ic = c, t;
+    if (y[ib] < y[ia]) { t = ia; ia = ib; ib = t; }
+    if (y[ic] < y[ia]) { t = ia; ia = ic; ic = t; }
+    if (y[ic] < y[ib]) { t = ib; ib = ic; ic = t; }
+    const int top = y[ia], mid = y[ib], bot = y[ic];
+    if (bot <= top || bot - top > max) return 0;
+    *y0 = top;
+    /* x(row centre yy + 0.5) on edge p-q: x_p + (x_q - x_p)(yy + 0.5 - y_p)/(y_q - y_p) */
+    const s32 dl = (s32)(((x[ic] - x[ia]) << 16) / (bot - top));
+    s32 xl = (x[ia] << 16) + dl / 2;
+    s32 ds = mid > top ? (s32)(((x[ib] - x[ia]) << 16) / (mid - top)) : 0, xs = (x[ia] << 16) + ds / 2;
+    for (int yy = top; yy < bot; ++yy) {
+        if (yy == mid) { /* the short edge's second half, b-c */
+            ds = (s32)(((x[ic] - x[ib]) << 16) / (bot - mid));
+            xs = (x[ib] << 16) + ds / 2;
+        }
+        const s32 lo = xl < xs ? xl : xs, hi = xl < xs ? xs : xl;
+        /* (pixel px's centre px + 0.5: the first with it >= lo, the last with it <= hi) */
+        span[yy - top][0] = (s16)((lo - 0x8000 + 0xFFFF) >> 16);
+        span[yy - top][1] = (s16)((hi - 0x8000) >> 16);
+        xl += dl; xs += ds;
+    }
+    return bot - top;
+}
+static u32 *occ_mask; static int occ_words, occ_h;
+static inline int occ_span_set(int yy, int l, int r, int mark) {
+    if (yy < 0 || yy >= occ_h) return 1;
+    if (l < 0) l = 0;
+    if (r >= occ_words * 32) r = occ_words * 32 - 1;
+    if (l > r) return 1;
+    u32 *row = occ_mask + yy * occ_words;
+    for (int w = l >> 5; w <= r >> 5; ++w) {
+        const int a = w == l >> 5 ? l & 31 : 0, z = w == r >> 5 ? r & 31 : 31;
+        const u32 m = (z == 31 ? ~0u : (2u << z) - 1) & ~((1u << a) - 1);
+        if (mark) row[w] |= m;
+        else if ((row[w] & m) != m) return 0;
+    }
+    return 1;
+}
+int gxh_stats_occluded;
+/* (a primitive's or polygon's spans: its triangles' (a rectangle's rows) from p's vertices; h0/h1 0: no pixel) */
+__attribute__((optimize("Os"))) static void occ_spans(const Prim *p, s16 (*span)[256][2], int *t0, int *h0, int *t1, int *h1) {
+    *h0 = *h1 = 0;
+    if (p->flags & P_RECT) { /* (vertices 0 1 2 3: top left, top right, bottom left, bottom right) */
+        const int h = p->y[2] - p->y[0];
+        if (h <= 0 || h > 255 || p->x[1] <= p->x[0]) return;
+        *t0 = p->y[0]; *h0 = h;
+        for (int i = 0; i < h; ++i) { span[0][i][0] = p->x[0]; span[0][i][1] = (s16)(p->x[1] - 1); }
+        return;
+    }
+    s16 x[4], y[4];
+    for (int i = 0; i < p->n; ++i) { x[i] = p->x[i]; y[i] = p->y[i]; }
+    *h0 = occ_tri_spans(x, y, 0, 1, 2, t0, span[0], 255);
+    if (p->n == 4) *h1 = occ_tri_spans(x, y, 1, 2, 3, t1, span[1], 255);
+}
+PORT_OVERLAY_CODE(0b) __attribute__((optimize("Os"))) static void battle_occlude(Buffer *b, int *prims, int *vertices) {
+    const int n = collect_native(b);
+    occ_words = (b->w + 31) / 32; occ_h = b->h;
+    unsigned at = ((b->pool_used + 3) & ~3u) + (unsigned)n * sizeof(NativeRef);
+    at = (at + 3) & ~3u;
+    const int total = n + b->count;
+    const unsigned need = (unsigned)(occ_words * occ_h) * 4u, spans = 2 * 256 * 2 * sizeof(s16);
+    if (at + need + spans + (unsigned)total * 4 > POOL_BYTES) return;
+    occ_mask = (u32 *)(b->pool + at);
+    memset(occ_mask, 0, need);
+    s16 (*span)[256][2] = (s16 (*)[256][2])(b->pool + at + need); /* (and the spans after it, then the order) */
+    u32 *order = (u32 *)(b->pool + at + need + spans);
+    /* the scene's drawing order, as emit_scene walks it: the native polygons due before each recorded primitive
+     * (bit 31: a native reference), far to near */
+    int m = 0;
+    NativeWalk nw = {-1, NO_REF, 0, 0};
+    if (n) nw.ne = 0x100F;
+    for (int k = 0; m < total;) {
+        native_next(b, &nw);
+        if (nw.ri != NO_REF && (k >= b->count || nw.erank <= k)) { order[m++] = 0x80000000u | (u32)nw.ri; nw.ri = native_refs[nw.ri].next; }
+        else if (k < b->count) { if (in_scene(&b->prims[k], k)) order[m++] = (u32)k; ++k; }
+        else break;
+    }
+    int hidden = 0, hidden_v = 0;
+    for (int i = m - 1; i >= 0; --i) { /* nearest first */
+        Prim pp, *p = &pp;
+        MeshInst *mi = NULL;
+        const NativeRef *r = NULL;
+        u8 inf = 0;
+        if (order[i] & 0x80000000u) {
+            r = &native_refs[order[i] & 0xFFFF];
+            mi = mesh_at(b, r->m);
+            inf = mi->info[r->pi];
+            if (inf == 0xFF) continue;
+            u8 grp, pal;
+            if (!native_poly(b, r, &pp, &grp, &pal)) continue;
+        } else {
+            p = &b->prims[order[i]];
+            if (p->flags & P_UI) continue;
+        }
+        int t0 = 0, t1 = 0, h0, h1;
+        occ_spans(p, span, &t0, &h0, &t1, &h1);
+        if (!h0 && !h1) continue; /* (no pixel: left to the 3D engine) */
+        int covered = 1; /* hidden: every pixel grown by one covered */
+        for (int k = 0; k < 2 && covered; ++k) {
+            const int h = k ? h1 : h0, top = k ? t1 : t0;
+            for (int j = -1; j <= h && covered; ++j) {
+                const int ja = j < 0 ? 0 : j >= h ? h - 1 : j;
+                covered = occ_span_set(top + j, span[k][ja][0] - 1, span[k][ja][1] + 1, 0);
+            }
+        }
+        if (covered) {
+            const int nv = p->n;
+            if (mi) {
+                ((u8 *)mi->info)[r->pi] = 0xFF; /* (in the pool: the mesh's own copy) */
+                if (mi->polys) mi->polys--;
+                mi->vertices = (u16)(mi->vertices > nv ? mi->vertices - nv : 0);
+                if (mi->tier_polys[inf & 7]) mi->tier_polys[inf & 7]--;
+                mi->tier_vertices[inf & 7] = (u16)(mi->tier_vertices[inf & 7] > nv ? mi->tier_vertices[inf & 7] - nv : 0);
+            } else prim_layer[order[i]] = L_HIDDEN;
+            hidden++; hidden_v += nv;
+            continue;
+        }
+        /* an opaque one hides what is behind its pixels: not translucent; untextured, or no transparent texel (a
+         * model polygon's worked out once, in its record's padding: FT4 +0x16, FT3 +7; the model file is read again
+         * each battle; an arena record's in occ_bg by its colour word's address, with a tag) */
+        if (mi ? (inf & 0x80) : (p->flags & P_SEMI)) continue;
+        if (mi && mi->kind == MESH_MODEL) {
+            int t;
+            u8 *rec = (u8 *)model_poly(mi, r->pi, &t);
+            if (t > 1) continue;
+            u8 *op = rec + (t ? 7 : 0x16);
+            if (!*op) *op = occ_poly_opaque(p) ? 1 : 2;
+            if (*op != 1) continue;
+        } else if (mi) {
+            if (!occ_bg) continue;
+            const u32 a = (u32)(uintptr_t)&mi->colors[r->pi] >> 2, tag = (a >> 10 & 63) << 2;
+            u8 *op = &occ_bg[a & 1023];
+            if ((*op & 3) == 0 || (*op & ~3u) != tag) *op = (u8)(tag | (occ_poly_opaque(p) ? 1 : 2));
+            if ((*op & 3) != 1) continue;
+        } else if (!occ_poly_opaque(p)) continue;
+        for (int k = 0; k < 2; ++k) { /* its pixels (their centres inside: the test's growth is the margin) */
+            const int h = k ? h1 : h0, top = k ? t1 : t0;
+            for (int j = 0; j < h; ++j) occ_span_set(top + j, span[k][j][0], span[k][j][1], 1);
+        }
+    }
+    if (!hidden) return;
+    gxh_stats_occluded += hidden;
+    collect_last_b = NULL; /* (the lists again, without them) */
+    *prims -= hidden; *vertices -= hidden_v;
+}
+
 static int battle_meshes; /* (battle_two: the scene's native meshes are its own; else its primitives alone, at
                            * emit_scene's depth k + 1, the split an index) */
 static int battle_fits3(Buffer *b, int first, int second, int mask) {
@@ -5933,6 +6120,11 @@ static void battle_two(Buffer *b) {
     if (battle_meshes)
         for (int m = 0; m < b->meshes; ++m) { const MeshInst *mi = mesh_at(b, m); prims += mi->polys; vertices += mi->vertices; seq += mi->polys; }
     if (prims <= MAX_POLYS && vertices <= MAX_VERTICES) { tp_leave(); goto bank_a; }
+    if (battle_meshes) { /* (its hidden polygons out first: often one pass then) */
+        battle_occlude(b, &prims, &vertices);
+        seq = prims; /* (a place each: the primitives' and the polygons left) */
+        if (prims <= MAX_POLYS && vertices <= MAX_VERTICES) { tp_leave(); goto bank_a; }
+    }
     /* after no split fitted the textures, the next scenes go straight to one pass, more of them each time it fails
      * again (a battle's textures stay as big: each try is two texture plans) */
     if (battle_hold) { --battle_hold; battle_one(b); return; }
@@ -5960,11 +6152,8 @@ static void battle_two(Buffer *b) {
      * halving), if the second pass's fit there too (else none does). The last split that fitted is tried first. */
     const int lo = seq - cap > 0 ? seq - cap : 0, hi = cap < seq ? cap : seq;
     if (lo > hi) { battle_one(b); return; }
-    static int battle_try2 = -1; /* (the last three-pass split's second boundary: -1 two passes fitted) */
-    if (battle_try >= lo && battle_try <= hi) {
-        if (battle_try2 < 0 && battle_fits(b, battle_try, 3)) { tp_planned = 1; tp_passes = 2; battle_fails = 0; return; }
-        if (battle_try2 > battle_try && battle_try2 < seq && seq - battle_try2 <= cap &&
-            battle_fits3(b, battle_try, battle_try2, 7)) { tp_planned = 1; tp_passes = 3; battle_fails = 0; return; }
+    if (battle_try >= lo && battle_try <= hi && battle_fits(b, battle_try, 3)) {
+        tp_planned = 1; tp_passes = 2; battle_fails = 0; return;
     }
     int a = lo, z = hi, best = -1;
     for (int n = 0; a <= z && n < 12; ++n) {
@@ -5972,20 +6161,10 @@ static void battle_two(Buffer *b) {
         if (battle_fits(b, mid, 1)) { best = mid; a = mid + 1; } else z = mid - 1;
     }
     if (best >= 0 && battle_fits(b, best, 3)) {
-        tp_planned = 1; battle_try = best; battle_try2 = -1; tp_passes = 2; battle_fails = 0; return;
+        tp_planned = 1; battle_try = best; tp_passes = 2; battle_fails = 0; return;
     }
-    /* no two passes fit: three (a battle frame is four VBlanks), the second pass the most places after the first's
-     * whose textures fit (halving again), the third the rest, if it fits the 3D engine and banks C and D */
-    if (best >= 0) {
-        int a2 = best + 1, z2 = best + cap < seq ? best + cap : seq, best2 = -1;
-        for (int n = 0; a2 <= z2 && n < 12; ++n) {
-            const int mid = a2 + (z2 - a2) / 2;
-            if (battle_fits3(b, best, mid, 2)) { best2 = mid; a2 = mid + 1; } else z2 = mid - 1;
-        }
-        if (best2 >= 0 && seq - best2 <= cap && battle_fits3(b, best, best2, 7)) {
-            tp_planned = 1; battle_try = best; battle_try2 = best2; tp_passes = 3; battle_fails = 0; return;
-        }
-    }
+    /* (a third pass, tp_passes 3, is wired through gxh_vblank and gxh_tp_tick but not chosen: with the occlusion
+     * cull no sampled battle needed it, and its display showed a black first pass in d2_b0135) */
     tp_split2 = 0x7FFFFFFF; tp_passes = 2;
     battle_hold = battle_fails < 5 ? (1 << battle_fails) - 1 : 31;
     ++battle_fails;

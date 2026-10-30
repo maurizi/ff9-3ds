@@ -1595,3 +1595,35 @@ semi-transparent sprite that stays in 3D there (the composite is under them all,
 kept); the selection is part of the composite's key (a change composes it whole), and a selection that changes often
 keeps them out for 120 scenes. d1_f0604 34.2 -> 33.6 ms per VBlank and its frame nearer the software reference
 (blurred mean difference 10.97 -> 6.66: the composite's blends are exact); d4_f0351, d2_f0931, d4_f2110 identical.
+
+### Hidden polygons culled in over-budget battles (2026-10-30, the user's idea)
+
+Host measurement (`FF9_OCC=2 build/pc/ff9ds --render`, port/pc/occ_stats.c: a primitive-id buffer in the PS1's draw
+order): in battles ~12% of the polygons cover no pixel and ~30% are hidden by later ones; a conservative per-pixel
+test (each polygon grown by a pixel, nearest first) takes 22-26%; 8x8 or 2x2 blocks take 0-10% (battle polygons are
+small: no single one fills a block).
+
+battle_occlude (gx_hybrid.c) runs on a battle scene past the 3D engine's polygons or vertices, before the passes are
+chosen: the scene's drawing order (recorded primitives and native polygons as emit_scene walks them) nearest first,
+a bit per PS1 pixel of the buffer (in the pool's room after the collected lists); a polygon whose pixels, grown by
+one, are all covered is hidden (a native one's info 0xFF, a recorded one's layer L_HIDDEN); an opaque one covers its
+pixels: not translucent, untextured or without a transparent texel in its uv box (CLUT-only check when its CLUT has
+no 0x0000; a model polygon's answer kept in its record's padding, an arena record's in a 1 KB tagged table in
+ovl_0b's dead range, a recorded one's checked each time). Spans from one 16.16 slope per edge (per-row divisions
+were 8% of the frame).
+
+With it, the third pass (dc2f5bb) isn't needed by any sampled battle and is no longer chosen (its display left
+d2_b0135's first pass black: the machinery stays, unused). ms per VBlank, drops over the run:
+| battle | before (2 passes, drops) | 3 passes | cull, 2 passes |
+|---|---|---|---|
+| d2_b0135 Gigan Toad | 37.6, 702 | 57.9, 0 | 42.0, 0 |
+| d1_b0014 Zaghnol | 32.0, 1,308 | 45.2, 0 | 44.5, 0 |
+| d4_b0617 Grand Dragon | 29.3, 0 | | 33.7, 0 |
+| d2_b0780 Worm Hydra | 26.8, 0 | | 28.6, 0 |
+| d3_b0194 Red Dragon | 26.7, 3,588 | | 26.7, 499 |
+Frames: no holes (models, arena, effects); frame-1500 shots differ between builds by timing alone (the game's state
+there depends on speed: camera, menus), so they were checked by eye and against the same build with the cull off.
+
+Heap for it: battles had ~1 KB at boot after its code. Freed: the effect pack's 3 KB index (3e3c0a8), the overlay
+pack unbuffered, the scenario's field list as a bitmap (512 bytes less), bgc_use's second cell table (marked in
+cell_far instead, 768), recip24 and glow_alpha in DTCM (2 KB; stack free 7,920 -> 5,868). Battle heap 4,376 at boot.

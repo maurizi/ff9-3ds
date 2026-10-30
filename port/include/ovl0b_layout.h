@@ -12,6 +12,7 @@
 #define OVL0B_RANKS_AT      0x46100   /* the hybrid's native-mesh rank tables (2 x 8 KB) */
 #define OVL0B_PRIMTAB_AT    0x4A160   /* its per-primitive tables (4 bytes a primitive) */
 #define OVL0B_HEADS_AT      0x4B440   /* its native polygons' list heads per main-OT entry (8 KB) */
-#define OVL0B_PLACES_AT     0x4D460   /* its drawing places per 4 main-OT entries (2 KB, model strips); after them free */
+#define OVL0B_PLACES_AT     0x4D460   /* its drawing places per 4 main-OT entries (2 KB, model strips) */
+#define OVL0B_OCC_BG_AT     0x4DC60   /* its occlusion cull's arena polygons' opacity (1 KB); after it free */
 #define OVL0B_CODE_END      0x4E1E8
 #endif

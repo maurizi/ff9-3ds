@@ -25,6 +25,7 @@ static void open_pack(void) {
     char path[256];
     snprintf(path, sizeof path, "%s/ovls.bin", plat_data_dir());
     pack = fopen(path, "rb");
+    if (pack) setvbuf(pack, NULL, _IONBF, 0); /* (no stdio buffer from the heap: battles are short of it) */
     u32 head[3];
     if (!pack || fread(head, 4, 3, pack) != 3) port_fatal("code overlays: can't read %s", path);
     if (head[0] != OVL_PACK_MAGIC || head[1] != psx_fx_build_id)

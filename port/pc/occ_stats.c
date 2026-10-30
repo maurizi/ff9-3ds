@@ -18,7 +18,7 @@ static unsigned *ids;                 /* per VRAM pixel: the last opaque primiti
 static struct { short x, y; unsigned char poly, opaque, empty; } *prims; /* by id: where it was drawn (a vertex), its kind */
 static unsigned nprims;
 static struct { short x[4], y[4]; unsigned char n, opaque; } *geo;
-static unsigned long long blk_culled, blk_total;
+static unsigned long long blk_culled, blk_total, cell_culled;
 
 static unsigned char *owned;
 static unsigned long long tot[2], hid[2], empty[2]; /* [0] rectangles, [1] polygons; empty: no pixel at all */
@@ -89,6 +89,7 @@ static void report(void) {
             tot[1] ? 100.0 * empty[1] / tot[1] : 0.0, hid[1], tot[1] ? 100.0 * hid[1] / tot[1] : 0.0);
     fprintf(stderr, "occlusion: pixel cull, tested a pixel wider (nearest first): %llu of %llu polygons (%.1f%%)\n", blk_culled, blk_total,
             blk_total ? 100.0 * blk_culled / blk_total : 0.0);
+    fprintf(stderr, "occlusion: 2x2-cell cull: %llu (%.1f%%)\n", cell_culled, blk_total ? 100.0 * cell_culled / blk_total : 0.0);
 }
 /* the conservative block cull as the DS would do it: per scene, the polygons nearest first (reverse draw order),
  * 8x8 blocks wholly inside an opaque polygon covered, a polygon whose bounding box's blocks are all covered culled */
@@ -126,12 +127,45 @@ static int poly_pixels(unsigned i, const PsxDisplayInfo *d, int grow, int mark) 
         }
     return mark ? any : 1;
 }
+/* (FF9_OCC_CELL=2: the same with 2x2-pixel cells, a cell covered when one polygon holds its four pixels) */
+static unsigned char ccov[256][512];
+static void cell_model(unsigned i, const PsxDisplayInfo *d, int *culled) {
+    int x0 = geo[i].x[0], x1 = x0, y0 = geo[i].y[0], y1 = y0;
+    for (int k = 1; k < geo[i].n; ++k) {
+        if (geo[i].x[k] < x0) x0 = geo[i].x[k];
+        if (geo[i].x[k] > x1) x1 = geo[i].x[k];
+        if (geo[i].y[k] < y0) y0 = geo[i].y[k];
+        if (geo[i].y[k] > y1) y1 = geo[i].y[k];
+    }
+    /* test: every cell holding a pixel of the polygon grown by one */
+    int vis = 0;
+    for (int y = y0 - 1; y < y1 + 1 && !vis; ++y)
+        for (int x = x0 - 1; x < x1 + 1 && !vis; ++x) {
+            if (x < d->x || y < d->y || x >= d->x + d->w || y >= d->y + d->h) continue;
+            int in = 0;
+            for (int dy = -1; dy <= 1 && !in; ++dy) for (int dx = -1; dx <= 1 && !in; ++dx) in = inside_poly(x + dx, y + dy, i);
+            if (in && !ccov[((y - d->y) >> 1) & 255][((x - d->x) >> 1) & 511]) vis = 1;
+        }
+    if (!vis) { *culled = 1; return; }
+    *culled = 0;
+    for (int cy = (y0 - d->y) >> 1; cy <= (y1 - d->y) >> 1; ++cy)
+        for (int cx = (x0 - d->x) >> 1; cx <= (x1 - d->x) >> 1; ++cx) {
+            if (cx < 0 || cy < 0 || cx >= 256 || cy >= 128) continue;
+            const int px = d->x + cx * 2, py = d->y + cy * 2;
+            if (inside_poly(px, py, i) && inside_poly(px + 1, py, i) && inside_poly(px, py + 1, i) && inside_poly(px + 1, py + 1, i))
+                ccov[cy][cx] = 1;
+        }
+}
 static void block_model(const PsxDisplayInfo *d) {
     for (int y = d->y; y < d->y + d->h; ++y) memset(&pcov[y & 511][d->x], 0, (size_t)d->w);
+    memset(ccov, 0, sizeof ccov);
     for (unsigned i = nprims; i >= 1; --i) {
         if (!prims[i].poly || !prims[i].opaque) continue;
         if (prims[i].x < d->x - 64 || prims[i].x >= d->x + d->w + 64 || prims[i].y < d->y - 64 || prims[i].y >= d->y + d->h + 64) continue;
         blk_total++;
+        int c;
+        cell_model(i, d, &c);
+        cell_culled += c;
         if (poly_pixels(i, d, 1, 0)) { blk_culled++; continue; }
         poly_pixels(i, d, 0, 1);
     }
