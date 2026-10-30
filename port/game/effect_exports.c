@@ -24,7 +24,7 @@ u8 o0b_btl_getMeshCount(void *);
 u16 o0b_btlfx_getMeshPrims(void *, u16, s32, s32 *, s32);
 void o0b_btlfx_getEffModelMeshCount(s32);
 void SystemError(s32, s32);
-extern char D_800A81A8[], D_800A825C[];
+extern char s_hiSplitMdlVertexErr[], s_hiGetMdlVertexPtrErr[];
 
 /* export 0x338, func_800E8F50: register a texture-list or Gouraud effect model; $v0 = the handle */
 u32 port_effect_export_800E8F50(Unk800E8F50 *arg0, s32 arg1) {
@@ -47,12 +47,12 @@ u32 port_effect_export_800E8F50(Unk800E8F50 *arg0, s32 arg1) {
 /* export 0x318, func_800DD0DC: $v0 = func_800DD10C's byte (a read) */
 u32 port_effect_export_800DD0DC(s32 arg0) {
     o0b_btlfx_getEffModelMeshCount(arg0);
-    return o0b_btl_getMeshCount(o0b_btlfx_getEffModel(arg0, D_800A81A8)->unk0);
+    return o0b_btl_getMeshCount(o0b_btlfx_getEffModel(arg0, s_hiSplitMdlVertexErr)->unk0);
 }
 
 /* export 0x310, Hi_GetMdlVertexPtr: its whole body is the tail call to func_800DF7A0 */
 u32 port_effect_export_Hi_GetMdlVertexPtr(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) {
-    return o0b_btlfx_getMeshPrims(o0b_btlfx_getEffModel(arg0, D_800A825C)->unk0, arg1, arg2, arg3, arg4);
+    return o0b_btlfx_getMeshPrims(o0b_btlfx_getEffModel(arg0, s_hiGetMdlVertexPtrErr)->unk0, arg1, arg2, arg3, arg4);
 }
 
 /* ovl_0b's sectors land and are relocated: point the three entries at the wrappers */

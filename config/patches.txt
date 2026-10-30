@@ -34,7 +34,7 @@ src/ovl_0b/btlfx_heap.c | btlfx_lerpVec((s16 *)e->origin, (s16 *)e->unk2C, acc, 
 # Effect output buffers may be supplied directly from a module-owned pool slot.
 src/ovl_0b/btlfx.c | n = ((Unk800D1494 *)p)->unk2; | p = (u8 *)port_effect_data((u32)p); out = (u8 *)port_effect_data((u32)out); n = ((Unk800D1494 *)p)->unk2; | 1
 # Particle motion and element hooks are also callbacks into loaded modules.
-src/ovl_0b/btlfx_heap.c | m->unk8(e, owner, &pos, func_800E0134(e, owner), frame, frames) | port_effect_call_words((u32)m->unk8, (u32[]){(u32)e, (u32)owner, (u32)&pos, (u32)func_800E0134(e, owner), frame, frames}, 6) | 1
+src/ovl_0b/btlfx_heap.c | m->unk8(e, owner, &pos, btlfx_getParticleTrail(e, owner), frame, frames) | port_effect_call_words((u32)m->unk8, (u32[]){(u32)e, (u32)owner, (u32)&pos, (u32)btlfx_getParticleTrail(e, owner), frame, frames}, 6) | 1
 src/ovl_0b/btlfx_heap.c | el->unk24(e, owner, &pos, vp, &scale, &alpha, &cnt, frame, frames); | port_effect_call_words((u32)el->unk24, (u32[]){(u32)e, (u32)owner, (u32)&pos, (u32)vp, (u32)&scale, (u32)&alpha, (u32)&cnt, frame, frames}, 9); | 1
 # Custom work-pool setup/update functions also reside in loaded MIPS modules.
 src/ovl_0b/btlfx_pool.c | pool->elemFn(1, d, g_btlfxEnv, pool->task, 0, pool, pool->task->work); | port_effect_call_words((u32)pool->elemFn, (u32[]){1, (u32)d, (u32)g_btlfxEnv, (u32)pool->task, 0, (u32)pool, pool->task->work}, 7); | 1
@@ -46,11 +46,11 @@ src/ovl_0b/btlfx_op.c | arg13(&v[1]); | port_effect_call_words((u32)arg13, (u32[
 # Loaded effects consume DF738's forwarded primitive count in v0. Its void
 # C declaration lets native inlining discard the count calculation entirely.
 src/ovl_0b/hi_vertex.c | void Hi_GetMdlVertexPtr(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) | u32 Hi_GetMdlVertexPtr(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) | 1
-src/ovl_0b/hi_vertex.c | btlfx_getMeshPrims(btlfx_getEffModel(arg0, D_800A825C)->model, arg1, arg2, arg3, arg4); | return btlfx_getMeshPrims(btlfx_getEffModel(arg0, D_800A825C)->model, arg1, arg2, arg3, arg4); | 1
+src/ovl_0b/hi_vertex.c | btlfx_getMeshPrims(btlfx_getEffModel(arg0, s_hiGetMdlVertexPtrErr)->model, arg1, arg2, arg3, arg4); | return btlfx_getMeshPrims(btlfx_getEffModel(arg0, s_hiGetMdlVertexPtrErr)->model, arg1, arg2, arg3, arg4); | 1
 # Mesh-count wrappers likewise forward DD10C's v0; promote narrow values to
 # the effect bridge's full 32-bit result on both host and ARM ABIs.
 src/ovl_0b/hi_model.c | btl_getMeshCount(btl_getUnit(arg0)->model); | return btl_getMeshCount(btl_getUnit(arg0)->model); | 1
-src/ovl_0b/hi_model.c | btl_getMeshCount(btlfx_getEffModel(arg0, D_800A81A8)->model); | return btl_getMeshCount(btlfx_getEffModel(arg0, D_800A81A8)->model); | 1
+src/ovl_0b/hi_model.c | btl_getMeshCount(btlfx_getEffModel(arg0, s_hiSplitMdlVertexErr)->model); | return btl_getMeshCount(btlfx_getEffModel(arg0, s_hiSplitMdlVertexErr)->model); | 1
 
 # Battle sound panning accepts unit IDs 0..17 or an SVECTOR pointer. The PS1
 # address-bit test misses native ARM stack pointers (DS crash SystemError S/310).
@@ -78,8 +78,8 @@ src/ovl_0b/btl_model.c | if ((u32)f > 0x80000000) { | if (PORT_IS_RAM_PTR(f)) { 
 # Particle attraction/plane modes accept absent position/direction vectors.
 # Original E0B7C/E0C88 read +2 unconditionally; preserve all nine modes' low-RAM
 # inputs at the access boundary, retaining the stored NULL and native pointers.
-src/ovl_0b/btlfx_heap.c | owner->unk64 | PSX_NZ(owner->unk64) | 16
-src/ovl_0b/btlfx_heap.c | owner->unk68 | PSX_NZ(owner->unk68) | 5
+src/ovl_0b/btlfx_heap.c | owner->fieldPos | PSX_NZ(owner->fieldPos) | 16
+src/ovl_0b/btlfx_heap.c | owner->fieldRot | PSX_NZ(owner->fieldRot) | 5
 # Found by wandering the fields on the host (20,000 frames of walking and confirm from each field, 2026-10-27):
 # script opcodes 0x95/0x96 and the 0x2F store take an object id that names no object (evt_getObjectArg NULL);
 # btl_rollAmbush reads a party slot that is empty after a party change (gd->party[i] NULL).
@@ -104,7 +104,7 @@ src/main/akao_voice.c | g_akaoSubSeq->pitchModMask, | PSX_NZ(g_akaoSubSeq)->pitc
 
 # Battle Item command confirmed on an empty item list: btlui_getItemListEntry returns NULL, and btlui_selectItem
 # reads p->unk0 for its item-table entry before its own NULL check (world map 9011, disc 4, walking input)
-src/ovl_0b/btlui.c | Unk8006A774 *e = &D_8006A774[p->unk0]; | Unk8006A774 *e = &D_8006A774[PSX_NZ(p)->unk0]; | 1
+src/ovl_0b/btlui.c | Unk8006A774 *e = &g_usableItemTableById[p->unk0]; | Unk8006A774 *e = &g_usableItemTableById[PSX_NZ(p)->unk0]; | 1
 
 # field object tables: db_lookupRegistered(8, id, 0x120000) can be NULL (the field has no type-8 table) and the code
 # reads t->unk1 / t->unk4 regardless (ovl_0a func_800AAF5C and its two siblings)
@@ -166,7 +166,7 @@ src/ovl_0b/btl_cmd.c | && (!(arg0->flags & 1) || (s32)m->motion != arg0->motions
 # The definition takes a 12-byte struct by value to reproduce the MIPS stack homes (ovl_0b.h); its callers pass two
 # pointers. Natively the struct's third word lies past the callers' arguments, in the caller's frame, and the
 # definition stores to it: define it as the callers see it, with the struct a local.
-src/ovl_0b/btlfx_op.c | Pool6CEntry *func_800E4A3C_def(s32 arg0, s32 arg1, Unk800E4A3CArgs arg2) { | Pool6CEntry *func_800E4A3C(s32 arg0, s32 arg1, s16 *arg2_a, s16 *arg2_b) { Unk800E4A3CArgs arg2 = {arg2_a, arg2_b, NULL}; | 1
+src/ovl_0b/btlfx_op.c | Pool6CEntry *btlfx_startCastEmitter_def(s32 arg0, s32 arg1, Unk800E4A3CArgs arg2) { | Pool6CEntry *btlfx_startCastEmitter(s32 arg0, s32 arg1, s16 *arg2_a, s16 *arg2_b) { Unk800E4A3CArgs arg2 = {arg2_a, arg2_b, NULL}; | 1
 # Effect setup can submit a native local packet/OT buffer; preserve its exact bounds.
 src/ovl_0b/btlfx.c | DrawOTag(ot); | port_draw_ot_buffer(ot, p, sizeof(*p)); | 1
 # Game Over owns both display buffers and their packet lists on the native stack.

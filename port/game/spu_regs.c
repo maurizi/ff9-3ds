@@ -80,7 +80,7 @@ void akao_initState(void) {
     g_akaoLoadedBanks[3] = 0;
     g_akaoLoadedBanks[2] = 0;
     g_akaoLoadedBanks[1] = 0;
-    D_8008314C = 0;
+    g_akaoRandIndex = 0;
     g_akaoLoadedBanks[0] = 0;
     D_8007F8E0 = 1;
     g_akaoFlags.bankUpload = 0;
@@ -96,20 +96,20 @@ void akao_initState(void) {
     g_akaoMainSeq.volume = 0x7F0000;
     g_akaoMainSeq.pan = 0x400000;
     g_akaoCdVolume = 0x7FFF0000;
-    D_8007F96C = 0;
-    D_80083150 = 0;
+    g_akaoPitchScaleLen = 0;
+    g_akaoPitchScale = 0;
     g_akaoMainSeq.volumeFadeLen = 0;
     g_akaoMainSeq.panSlideLen = 0;
-    D_8007F96E = 0;
-    D_80083154 = 0;
+    g_akaoTempoScaleLen = 0;
+    g_akaoTempoScale = 0;
     g_akaoCdVolumeFadeTicks = 0;
     psx_spu_write(0x180, 0x3FFF);
     psx_spu_write(0x182, 0x3FFF);
     psx_spu_write(0x1b0, 0x7FFF);
     psx_spu_write(0x1b2, 0x7FFF);
-    D_800809B8 = 0;
-    D_80080AC4 = 0;
-    D_800831C4 = 0;
+    g_akaoSkipMeasures = 0;
+    g_akaoMuteMask = 0;
+    g_akaoPauseFlags = 0;
     i = psx_spu_read(0x1aa);
     g_akaoSeState.noiseMask = 0;
     g_akaoMainSeq.noiseMask = 0;
@@ -123,9 +123,9 @@ void akao_initState(void) {
     g_akaoMainSeq.measure = 0;
     g_akaoStream.volume = 0x7F00;
     g_akaoStream.volumeFadeLen = 0;
-    D_80083238[2] = 0;
-    D_80083238[1] = 0;
-    D_80083238[0] = 0;
+    g_akaoVoiceModeMasks[2] = 0;
+    g_akaoVoiceModeMasks[1] = 0;
+    g_akaoVoiceModeMasks[0] = 0;
     D_80080A20 = 0;
     psx_spu_write(0x1aa, (i & ~5) | 1);
     for (c = g_akaoChannels, i = 0; i < 32; i++, c++) {
@@ -165,7 +165,7 @@ void akao_initState(void) {
     for (i = 0; i < 24; i++) {
         akao_setVoiceLoopAddr(i, 0x1030);
     }
-    D_8007E3C8[1] = 0;
-    D_8007E3C8[0] = 0;
-    D_8007E3D0 = 0;
+    g_akaoVsyncs[1] = 0;
+    g_akaoVsyncs[0] = 0;
+    g_akaoTickPhase = 0;
 }

@@ -265,7 +265,7 @@ void port_scenario_bootstrap(void) {
         if(scenario.preset[i]>=0) {
             int preset=scenario.preset[i];
             u8 flags=chr_getClassFlags(preset);
-            if(chr_getClass(preset)!=D_8006CAA4[ch][(flags>>4)&1])
+            if(chr_getClass(preset)!=g_chrAppearanceTypes[ch][(flags>>4)&1])
                 port_fatal("scenario: preset %d incompatible with character %d",preset,ch);
             c->info.b.row=preset;
             c->classFlags=flags;
