@@ -17,9 +17,9 @@ void o0c_wm_backdropVerts(s32 arg0);
 s32 o0c_wm_backdropFaces(s32 o, s32 pkt, s32 ot);
 void o0c_wm_drawBackdrop(s32 arg0, s32 arg1);
 
-extern u32 D_800D1FF0[]; /* per-vertex fog colours */
-extern u32 D_800D23F0[]; /* per-vertex lit colours */
-extern u16 D_800D29F8[]; /* per-vertex depths (SZ, u32, for the world blocks) */
+extern u32 g_worldVtxFogColors[]; /* per-vertex fog colours */
+extern u32 g_worldVtxLitColors[]; /* per-vertex lit colours */
+extern u16 g_worldVtxDepth[]; /* per-vertex depths (SZ, u32, for the world blocks) */
 
 /* Without the hybrid renderer (PC, the DS's software paths) every block writes its packets. */
 __attribute__((weak)) int port_native_world_block(const NativeWorldBlock *b) { (void)b; return 0; }
@@ -35,14 +35,14 @@ PORT_OVERLAY_CODE(0c) void o0c_wm_drawBlock(u8 *arg0, s32 arg1, s32 arg2) {
     NativeWorldBlock n;
     n.block = arg0;
     n.sxy = (const unsigned int *)SCRATCHPAD;
-    n.sz = (const unsigned int *)D_800D29F8;
-    n.lit = (const unsigned int *)D_800D23F0;
-    n.fog = (const unsigned int *)D_800D1FF0;
+    n.sz = (const unsigned int *)g_worldVtxDepth;
+    n.lit = (const unsigned int *)g_worldVtxLitColors;
+    n.fog = (const unsigned int *)g_worldVtxFogColors;
     n.alt = (const unsigned int *)g_worldCurTexArea;
     n.fog_params = (const unsigned int *)g_worldFogParams;
     n.variant = variant;
-    n.draw_x = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.x;
-    n.draw_y = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.y;
+    n.draw_x = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.x;
+    n.draw_y = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.y;
     if (port_native_world_block(&n)) return;
     if (variant == WORLD_FACES_FOG) g_worldPrimPtr = o0c_wm_blockFacesFog(arg0, g_worldPrimPtr, t);
     else if (variant == WORLD_FACES_NEAR) g_worldPrimPtr = o0c_wm_blockFacesNear(arg0, g_worldPrimPtr, t);
@@ -57,14 +57,14 @@ PORT_OVERLAY_CODE(0c) void o0c_wm_drawBackdrop(s32 arg0, s32 arg1) {
     NativeWorldBlock n;
     n.block = (const unsigned char *)arg0;
     n.sxy = (const unsigned int *)SCRATCHPAD;
-    n.sz = (const unsigned int *)D_800D29F8;
-    n.lit = (const unsigned int *)D_800D23F0;
-    n.fog = (const unsigned int *)D_800D1FF0;
+    n.sz = (const unsigned int *)g_worldVtxDepth;
+    n.lit = (const unsigned int *)g_worldVtxLitColors;
+    n.fog = (const unsigned int *)g_worldVtxFogColors;
     n.alt = NULL;
     n.fog_params = (const unsigned int *)&g_worldBackdropFog;
     n.variant = WORLD_BACKDROP;
-    n.draw_x = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.x;
-    n.draw_y = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.y;
+    n.draw_x = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.x;
+    n.draw_y = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.y;
     if (port_native_world_block(&n)) return;
     g_worldPrimPtr = o0c_wm_backdropFaces(arg0, g_worldPrimPtr, ot);
 }

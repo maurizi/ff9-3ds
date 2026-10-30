@@ -116,27 +116,27 @@ void port_scenario_battle_ready(void) {
  * (ovl_0c: its file's sectors as the return sectors, unkA 3; ovl_0b btl_initReturnInfo keeps the world id). */
 static void prepare_return_world(GameData *d) {
     u8 mode=g_gameState->mode;
-    d->unk7DC=(u16)scenario.world;
+    d->worldId=(u16)scenario.world;
     g_gameState->mode=3;o14_opening_findSceneSectors();g_gameState->mode=mode;
     if(d->sceneSectors[1]<=0) port_fatal("scenario: world map %d absent on disc %d",scenario.world,scenario.disc);
     for(int i=0;i<2;i++) {
         d->returnSector[i]=d->sceneSector[i];d->returnSectors[i]=d->sceneSectors[i];
     }
-    g_gameState->unkA=3;
+    g_gameState->prevMode=3;
     scenario.return_field_ready=1;
 }
 static void prepare_return_field(GameData *d) {
     typedef struct {u16 field,area;u32 sector;} FieldEntry;
     _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
-    FileDirEntry *dirs=(FileDirEntry *)g_gameState->dirs;
-    const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+0x14c700+(dirs[4].unk8<<11));
+    DirInfo *dirs=g_gameState->dirs;
+    const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+0x14c700+(dirs[4].tableSector<<11));
     int found=0;
-    for(int i=0;i<dirs[4].unk4;i++) if(entries[i].field==scenario.field) {found=1;break;}
+    for(int i=0;i<dirs[4].count;i++) if(entries[i].field==scenario.field) {found=1;break;}
     if(!found) {
         if(scenario.field_explicit) port_fatal("scenario: return field %d absent on disc %d",scenario.field,scenario.disc);
         /* A battle-only fixture still needs a field to return to: without one the game preloads stale sectors as the
          * return field while the rewards run, over ovl_65's own data. The disc's first field stands in. */
-        if(dirs[4].unk4<=0) port_fatal("scenario: no field on disc %d to return to",scenario.disc);
+        if(dirs[4].count<=0) port_fatal("scenario: no field on disc %d to return to",scenario.disc);
         scenario.field=entries[0].field;d->fieldId=(u16)scenario.field;
         port_log("scenario: battle returns to field %d (the disc's first)\n",scenario.field);
     }
@@ -157,10 +157,10 @@ static int n_field_ids=-1;
 static void cache_field_ids(void) {
     typedef struct {u16 field,area;u32 sector;} FieldEntry;
     _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
-    FileDirEntry *dirs=(FileDirEntry *)g_gameState->dirs;
-    const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+0x14c700+(dirs[4].unk8<<11));
+    DirInfo *dirs=g_gameState->dirs;
+    const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+0x14c700+(dirs[4].tableSector<<11));
     __builtin_memset(field_ids,0,sizeof field_ids);
-    for(n_field_ids=0;n_field_ids<dirs[4].unk4;n_field_ids++) {
+    for(n_field_ids=0;n_field_ids<dirs[4].count;n_field_ids++) {
         if(entries[n_field_ids].field>=4096) port_fatal("scenario: field %d past the bitmap",(int)entries[n_field_ids].field);
         field_ids[entries[n_field_ids].field>>5]|=1u<<(entries[n_field_ids].field&31);
     }
@@ -204,13 +204,13 @@ static void prepare_battle_resources(GameData *d) {
     /* The ordinary field/world transition supplies these two CD ranges.
      * Resolve the encounter's bundle and its background dependency directly
      * from the selected disc's own directories instead of fabricating them. */
-    FileDirEntry *dirs=(FileDirEntry *)g_gameState->dirs;
-    FileIdEntry *entries=(FileIdEntry *)(g_loadAreaEnd+0x14c700+(dirs[5].unk8<<11));
+    DirInfo *dirs=g_gameState->dirs;
+    FileIdEntry *entries=(FileIdEntry *)(g_loadAreaEnd+0x14c700+(dirs[5].tableSector<<11));
     int found=-1;
-    for(int i=0;i<dirs[5].unk4;++i) if(entries[i].unk0==scenario.battle) {found=i;break;}
+    for(int i=0;i<dirs[5].count;++i) if(entries[i].id==scenario.battle) {found=i;break;}
     if(found<0) port_fatal("scenario: battle %d is absent on disc %d",scenario.battle,scenario.disc);
-    d->sceneSector[0]=entries[found].unk4;
-    d->sceneSectors[0]=entries[found+1].unk4-entries[found].unk4;
+    d->sceneSector[0]=entries[found].sector;
+    d->sceneSectors[0]=entries[found+1].sector-entries[found].sector;
     int size=d->sceneSectors[0]<<11;if(size>0x2800) size=0x2800;
     if(size<=0) port_fatal("scenario: invalid encounter bundle extent");
     /* the bundle's DB container read a sector at a time (the heap has no room for its 10 KB head at bootstrap):
@@ -267,23 +267,23 @@ void port_scenario_bootstrap(void) {
             u8 flags=chr_getClassFlags(preset);
             if(chr_getClass(preset)!=D_8006CAA4[ch][(flags>>4)&1])
                 port_fatal("scenario: preset %d incompatible with character %d",preset,ch);
-            c->unk34.b.row=preset;
-            c->unkA=flags;
+            c->info.b.row=preset;
+            c->classFlags=flags;
             int defaults=chr_getDefaultSet(c);
-            chr_setDefaultName(c->unk0,defaults);
+            chr_setDefaultName(c->name,defaults);
             chr_setDefaultEquip(c->equip,defaults);
         }
         for(int j=0;j<5;++j) if(scenario.equip[i][j]>=0) c->equip[j]=(u8)scenario.equip[i][j];
-        c->unk34.b.unk4=chr_calcAppearance(c->unk34.b.id,(c->unkA>>4)&1,c->equip);
+        c->info.b.kind=chr_calcAppearance(c->info.b.id,(c->classFlags>>4)&1,c->equip);
         if(scenario.level>0 || scenario.preset[i]>=0) chr_resetToLevel(ch,scenario.level>0?scenario.level:c->level,1);
         if(scenario.trance[i]>=0) c->trance=(u8)scenario.trance[i];
         if(scenario.hp[i]>=0) {if(scenario.hp[i]>c->maxHp) port_fatal("scenario: HP exceeds maximum");c->hp=(u16)scenario.hp[i];}
     }
     rand_init((s32)scenario.seed);g_gameState->mode=(u8)scenario.kind;
-    g_gameState->unkA=1; /* ordinary battle entry from a field */
+    g_gameState->prevMode=1; /* ordinary battle entry from a field */
     d->fieldId=(u16)scenario.field;
     if(scenario.kind==1) o14_opening_findSceneSectors();
-    else if(scenario.kind==3) {d->unk7DC=(u16)scenario.world;o14_opening_findSceneSectors();} /* as a save made on the world map */
+    else if(scenario.kind==3) {d->worldId=(u16)scenario.world;o14_opening_findSceneSectors();} /* as a save made on the world map */
     else {
         if(scenario.world_explicit) prepare_return_world(d); else prepare_return_field(d);
         prepare_battle_resources(d);d->battleId=(u16)scenario.battle;

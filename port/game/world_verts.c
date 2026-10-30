@@ -7,10 +7,10 @@
 #include "port_hw.h"
 #include "native_mesh.h"
 
-extern SVECTOR D_800CD794[]; /* normals, indexed by the low byte of a vertex's pad */
-extern u32 D_800D1FF0[];     /* per-vertex fog colours */
-extern u32 D_800D23F0[];     /* per-vertex lit colours */
-extern u16 D_800D29F8[];     /* per-vertex depth: u32 SZ or u16 SZ / 8, depending on the routine */
+extern SVECTOR g_worldNormalTable[]; /* normals, indexed by the low byte of a vertex's pad */
+extern u32 g_worldVtxFogColors[];     /* per-vertex fog colours */
+extern u32 g_worldVtxLitColors[];     /* per-vertex lit colours */
+extern u16 g_worldVtxDepth[];     /* per-vertex depth: u32 SZ or u16 SZ / 8, depending on the routine */
 
 #ifdef PORT_GTE_APPROX
 #define WV_RTPT_DEPTHS() psx_gte_rtpt_depths()
@@ -160,7 +160,7 @@ static inline void wv_group(WvCtx *cx, const u32 *v, s32 flags, u32 *rgbc, u32 *
     for (int i = 0; i < 3; ++i) { /* (NCT's colour depends on the normal alone in a call: worked out once each) */
         const u32 ni = (w[2 * i + 1] >> 16) & 0xFF;
         if (!(cx->nct_have[ni >> 5] >> (ni & 31) & 1)) {
-            cx->nct[ni] = wv_nct(cx, &D_800CD794[ni], 0);
+            cx->nct[ni] = wv_nct(cx, &g_worldNormalTable[ni], 0);
             cx->nct_have[ni >> 5] |= 1u << (ni & 31);
         }
         rgb[i] = cx->nct[ni] | *rgbc >> 24 << 24;
@@ -203,11 +203,11 @@ __attribute__((target("arm"))) /* (its 64-bit products: Thumb makes each a call)
 PORT_OVERLAY_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
     s32 n = *(u32 *)o & 0xFF;
     u32 *v = *(u32 **)(o + 4);
-    u32 *fog = D_800D1FF0;
-    u32 *lit = D_800D23F0;
+    u32 *fog = g_worldVtxFogColors;
+    u32 *lit = g_worldVtxLitColors;
     u32 *sxy = (u32 *)SCRATCHPAD;
-    u32 *zs32 = (u32 *)D_800D29F8;
-    u16 *zs16 = D_800D29F8;
+    u32 *zs32 = (u32 *)g_worldVtxDepth;
+    u16 *zs16 = g_worldVtxDepth;
     u32 w[6]; /* three vertices as raw words: w[2i] = x | y << 16, w[2i + 1] = z | pad << 16 */
     u32 sz[3];
     u32 rgb[3];
@@ -241,8 +241,8 @@ PORT_OVERLAY_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
         }
         gte_ldv3c(w);
         WV_RTPT_DEPTHS();
-        gte_ldv3(&D_800CD794[(w[1] >> 16) & 0xFF], &D_800CD794[(w[3] >> 16) & 0xFF],
-                 &D_800CD794[(w[5] >> 16) & 0xFF]);
+        gte_ldv3(&g_worldNormalTable[(w[1] >> 16) & 0xFF], &g_worldNormalTable[(w[3] >> 16) & 0xFF],
+                 &g_worldNormalTable[(w[5] >> 16) & 0xFF]);
         v += 6;
         n -= 3;
         gte_nct();

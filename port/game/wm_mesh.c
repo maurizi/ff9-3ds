@@ -14,7 +14,7 @@ void o0c_wm_projectMesh(ModelObj *arg0, u8 arg1);
 PORT_OVERLAY_CODE(0c) void o0c_wm_projectMesh(ModelObj *arg0, u8 arg1) {
     MATRIX m;
     WmModelGroup *g = &arg0->model->groups[arg1];
-    gte_SetGeomScreen(g_gameState->gameData->unkA);
+    gte_SetGeomScreen(g_gameState->gameData->projDist);
     s32 k = 0;
     u32 cnt = arg0->model->boneCount;
     MATRIX *bone = (MATRIX *)arg0->boneMatrices;
@@ -24,8 +24,8 @@ PORT_OVERLAY_CODE(0c) void o0c_wm_projectMesh(ModelObj *arg0, u8 arg1) {
         s32 n = ((u16 *)g->boneVertexCounts)[i++];
         if (n == 0) continue;
         /* the bone's matrix: m = RT x bone (columns through rtir), t = RT x bone.t + TR (rtv0tr) */
-        gte_SetRotMatrix(&g_gameState->gameData->unk18);
-        gte_SetTransMatrix(&g_gameState->gameData->unk18);
+        gte_SetRotMatrix(&g_gameState->gameData->viewMatrix);
+        gte_SetTransMatrix(&g_gameState->gameData->viewMatrix);
         gte_ldclmv(bone);
         gte_rtir_b();
         gte_stclmv(&m);

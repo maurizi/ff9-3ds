@@ -46,12 +46,12 @@ static int in_buffer(const void *p) {
 
 /* The STR frame number at `bs` (in its ring slot): the sector header the slot keeps. */
 static u32 slot_frame(const u8 *bs) {
-    u8 *base = g_mbgStream.unk78;
-    u32 slot_bytes = g_mbgStream.unk5C * 0x8F4;
+    u8 *base = g_mbgStream.ringData;
+    u32 slot_bytes = g_mbgStream.slotSectors * 0x8F4;
     if (!slot_bytes || bs < base) return 0;
     u32 slot = (u32)(bs - base) / slot_bytes;
     if (slot >= g_mbgStream.slotCount) return 0;
-    const u8 *hdr = (const u8 *)PSX_PTR(g_mbgStream.unk74) + slot * 0x20;
+    const u8 *hdr = (const u8 *)PSX_PTR(g_mbgStream.ringHdrs) + slot * 0x20;
     return *(const u32 *)(hdr + 8);
 }
 
@@ -93,18 +93,18 @@ static int fv_take(u8 *bs, u32 *out) {
  * the PS1 the drive goes on delivering meanwhile, here virtual time only passes at frames, which polls advance
  * (VSync(-1)). Without them the player spun through its 1000 looks with the drive standing still, then seeked. */
 s32 o64_mbg_streamGetFrame(u8 **data, Ovl64RingHdr **hdr, Ovl64FrameInfo **arg2, Ovl64Pair **arg3, MbgRumble **arg4) {
-    Ovl64RingHdr *h = &g_mbgStream.unk74[g_mbgStream.readSlot];
+    Ovl64RingHdr *h = &g_mbgStream.ringHdrs[g_mbgStream.readSlot];
 
-    if (!(h->unk0 & 0x8000)) {
-        if (g_mbgStream.unk2 == 0) {
+    if (!(h->status & 0x8000)) {
+        if (g_mbgStream.endState == 0) {
             VSync(-1);
             return 3;
         }
         return 5;
     }
     *hdr = h;
-    *data = g_mbgStream.unk78 + (h->unk4 + g_mbgStream.readSlot * g_mbgStream.unk5C) * 0x8F4;
-    if (g_mbgStream.unk3 != 0) {
+    *data = g_mbgStream.ringData + (h->firstSector + g_mbgStream.readSlot * g_mbgStream.slotSectors) * 0x8F4;
+    if (g_mbgStream.hasCamera != 0) {
         *arg2 = &g_mbgSlotCameras[g_mbgStream.readSlot];
         *arg3 = &g_mbgSlotMasks[g_mbgStream.readSlot];
     } else {
@@ -127,8 +127,8 @@ void o64_mbg_vlcBuildTable(void *table) {
 /* mbg_vlcDecode(bs, out, table): the frame starts at `bs` in its ring slot, which bounds how far it can extend. */
 void o64_mbg_vlcDecode(u8 *bs, u32 *out, void *table) {
     if (fv_take(bs, out)) return;
-    u8 *base = g_mbgStream.unk78;
-    u32 slot_bytes = g_mbgStream.unk5C * 0x8F4;
+    u8 *base = g_mbgStream.ringData;
+    u32 slot_bytes = g_mbgStream.slotSectors * 0x8F4;
     u32 bytes = slot_bytes;
     if (slot_bytes != 0 && bs >= base) {
         u32 slot = (u32)(bs - base) / slot_bytes;
@@ -173,15 +173,15 @@ static void mask_rows(u16 *px, s32 col, s32 from, s32 to, u16 bit) {
 
 s32 o64_mbg_applyMask(Ovl64Vlc4C8 *c, u32 *out, u16 bit) {
     u16 *px = (u16 *)out;
-    const u8 *p = (const u8 *)c->unkC;
-    u32 pending = c->unk2, on = c->unk0;
+    const u8 *p = (const u8 *)c->cursor;
+    u32 pending = c->runLength, on = c->runMasked;
     s32 col = 0;
 
     if (pending != 0) {
         if (on != 0) {
             if (pending >= MASK_W) {
-                c->unk0 = 1;
-                c->unk2 = pending - MASK_W;
+                c->runMasked = 1;
+                c->runLength = pending - MASK_W;
                 for (s32 row = 0; row < MASK_ROWS; row++) {
                     for (s32 x = 0; x < MASK_W; x++) {
                         mask_px(px, x, row, bit);
@@ -196,12 +196,12 @@ s32 o64_mbg_applyMask(Ovl64Vlc4C8 *c, u32 *out, u16 bit) {
                 } while (++x < (s32)pending);
             }
         } else if (pending >= MASK_W) {
-            c->unk0 = 0;
-            c->unk2 = pending - MASK_W;
+            c->runMasked = 0;
+            c->runLength = pending - MASK_W;
             return 1;
         }
         col = pending;
-        c->unk2 = 0;
+        c->runLength = 0;
     }
     do {
         u32 b = *p;
@@ -217,8 +217,8 @@ s32 o64_mbg_applyMask(Ovl64Vlc4C8 *c, u32 *out, u16 bit) {
             p += 2;
             if (on) {
                 if (end >= MASK_W) {
-                    c->unk0 = 1;
-                    c->unk2 = end - MASK_W;
+                    c->runMasked = 1;
+                    c->runLength = end - MASK_W;
                     do {
                         mask_rows(px, col, 0, MASK_ROWS, bit);
                     } while (++col < MASK_W);
@@ -229,8 +229,8 @@ s32 o64_mbg_applyMask(Ovl64Vlc4C8 *c, u32 *out, u16 bit) {
                 } while (++col < (s32)n);
             } else {
                 if (end >= MASK_W) {
-                    c->unk0 = 0;
-                    c->unk2 = end - MASK_W;
+                    c->runMasked = 0;
+                    c->runLength = end - MASK_W;
                     break;
                 }
                 col = end;
@@ -275,7 +275,7 @@ s32 o64_mbg_applyMask(Ovl64Vlc4C8 *c, u32 *out, u16 bit) {
             col++;
         }
     } while (col < MASK_W);
-    c->unkC = (s32)p;
+    c->cursor = (s32)p;
     return 1;
 }
 

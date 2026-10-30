@@ -13,7 +13,7 @@ void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1);
 PORT_OVERLAY_CODE(0a) void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1) {
     MATRIX m;
     WmModelGroup *g = &arg0->model->groups[arg1];
-    gte_SetGeomScreen(g_gameState->gameData->unkA);
+    gte_SetGeomScreen(g_gameState->gameData->projDist);
     s32 k = 0;
     u32 cnt = arg0->model->boneCount;
     MATRIX *bone = (MATRIX *)arg0->boneMatrices;
@@ -23,8 +23,8 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1) {
         s32 n = ((u16 *)g->boneVertexCounts)[i++];
         if (n == 0) continue;
         /* the bone's matrix: m = RT x bone (columns through rtir), t = RT x bone.t + TR (rtv0tr) */
-        gte_SetRotMatrix(&g_gameState->gameData->unk18);
-        gte_SetTransMatrix(&g_gameState->gameData->unk18);
+        gte_SetRotMatrix(&g_gameState->gameData->viewMatrix);
+        gte_SetTransMatrix(&g_gameState->gameData->viewMatrix);
         gte_ldclmv(bone);
         gte_rtir_b();
         gte_stclmv(&m);
@@ -146,7 +146,7 @@ __attribute__((target("arm"))) /* (Thumb has no long multiply) */
 #endif
 PORT_OVERLAY_CODE(0a) void o0a_fldmdl_projectMeshClipY(ModelObj *arg0, u8 arg1) {
     WmModelGroup *g = &arg0->model->groups[arg1];
-    gte_SetGeomScreen(g_gameState->gameData->unkA);
+    gte_SetGeomScreen(g_gameState->gameData->projDist);
     const MATRIX *bone = (const MATRIX *)arg0->boneMatrices;
     const u32 cnt = arg0->model->boneCount;
     const s32 ymax = arg0->clipY;
@@ -172,8 +172,8 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_projectMeshClipY(ModelObj *arg0, u8 arg1) 
             sz[j] = z;
         }
         /* the camera's projection, three at a time, in place: (x, y) and the depth's low half as the vertex */
-        gte_SetRotMatrix(&g_gameState->gameData->unk18);
-        gte_SetTransMatrix(&g_gameState->gameData->unk18);
+        gte_SetRotMatrix(&g_gameState->gameData->viewMatrix);
+        gte_SetTransMatrix(&g_gameState->gameData->viewMatrix);
         const s32 groups = (n + 2) / 3;
         for (s32 q = 0; q < 3; ++q) { last_xy[q] = sxy[(groups - 1) * 3 + q]; last_z[q] = sz[(groups - 1) * 3 + q]; }
         enum { CHUNK = 48 };
@@ -282,18 +282,18 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     GameData *gd = g_gameState->gameData;
     u8 *grp = (u8 *)&model->model->groups[group];
     u8 *pkt = *(u8 **)((u8 *)model->groupOut + group * 12 + 4);
-    if (gd->unk8 != 0) pkt += *(u16 *)grp;
+    if (gd->drawBuf != 0) pkt += *(u16 *)grp;
     NativeFieldMesh n;
     n.model = model;
     n.group = grp;
     n.packets = pkt;
-    n.ot = (const unsigned int *)(gd->unk10[gd->unk8] - (s8)grp[0x13]);
+    n.ot = (const unsigned int *)(gd->ot[gd->drawBuf] - (s8)grp[0x13]);
     n.sxy = g_vtxScreenXY;
     n.sz = g_vtxScreenZ;
     n.nverts = 0;
     for (u32 i = 0; i < model->model->boneCount; ++i) n.nverts += ((u16 *)((WmModelGroup *)grp)->boneVertexCounts)[i];
-    n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
-    n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
+    n.draw_x = g_gameState->drawEnv[gd->drawBuf].clip.x;
+    n.draw_y = g_gameState->drawEnv[gd->drawBuf].clip.y;
     n.clip_y = 0;
     n.mirror = 0;
     int taken = port_native_field_mesh(&n);
@@ -310,18 +310,18 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshClipY(ModelObj *model, u8 group) {
     GameData *gd = g_gameState->gameData;
     u8 *grp = (u8 *)&model->model->groups[group];
     u8 *pkt = *(u8 **)((u8 *)model->groupOut + group * 12 + 4);
-    if (gd->unk8 != 0) pkt += *(u16 *)grp;
+    if (gd->drawBuf != 0) pkt += *(u16 *)grp;
     NativeFieldMesh n;
     n.model = model;
     n.group = grp;
     n.packets = pkt;
-    n.ot = (const unsigned int *)gd->unk10[gd->unk8];
+    n.ot = (const unsigned int *)gd->ot[gd->drawBuf];
     n.sxy = g_vtxScreenXY;
     n.sz = g_vtxScreenZ;
     n.nverts = 0;
     for (u32 i = 0; i < model->model->boneCount; ++i) n.nverts += ((u16 *)((WmModelGroup *)grp)->boneVertexCounts)[i];
-    n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
-    n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
+    n.draw_x = g_gameState->drawEnv[gd->drawBuf].clip.x;
+    n.draw_y = g_gameState->drawEnv[gd->drawBuf].clip.y;
     n.clip_y = 1;
     n.mirror = 0;
     int taken = port_native_field_mesh(&n);
@@ -337,18 +337,18 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshMirrored(ModelObj *model, u8 group
     GameData *gd = g_gameState->gameData;
     u8 *grp = (u8 *)&model->model->groups[group];
     u8 *pkt = *(u8 **)((u8 *)model->groupOut + group * 12 + 4);
-    if (gd->unk8 != 0) pkt += *(u16 *)grp;
+    if (gd->drawBuf != 0) pkt += *(u16 *)grp;
     NativeFieldMesh n;
     n.model = model;
     n.group = grp;
     n.packets = pkt;
-    n.ot = (const unsigned int *)(gd->unk10[gd->unk8] - (s8)grp[0x13]);
+    n.ot = (const unsigned int *)(gd->ot[gd->drawBuf] - (s8)grp[0x13]);
     n.sxy = g_vtxScreenXY;
     n.sz = g_vtxScreenZ;
     n.nverts = 0;
     for (u32 i = 0; i < model->model->boneCount; ++i) n.nverts += ((u16 *)((WmModelGroup *)grp)->boneVertexCounts)[i];
-    n.draw_x = g_gameState->drawEnv[gd->unk8].clip.x;
-    n.draw_y = g_gameState->drawEnv[gd->unk8].clip.y;
+    n.draw_x = g_gameState->drawEnv[gd->drawBuf].clip.x;
+    n.draw_y = g_gameState->drawEnv[gd->drawBuf].clip.y;
     n.clip_y = 0;
     n.mirror = 1;
     int taken = port_native_field_mesh(&n);

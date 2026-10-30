@@ -175,7 +175,7 @@ PORT_OVERLAY_CODE(0b) STRIP_COLD static void strip_order(BtlUnit9C8 *h) {
 
 /* a battle unit's own model or weapon (not an effect's, not the Zombie's) */
 PORT_OVERLAY_CODE(0b) STRIP_COLD static int strip_unit_model(const BtlUnit9C *m) {
-    Battle *bt = g_gameState->gameData->unk8E4.battle;
+    Battle *bt = g_gameState->gameData->ctx.battle;
     if (!bt) return 0;
     for (int i = 0; i < 8; ++i) {
         const BtlUnit *u = &bt->units[i];
@@ -189,7 +189,7 @@ void o0b_btl_projectMesh(BtlUnit9C *arg0, u8 arg1) {
     MATRIX m;
     if (!(arg0->header->flags & STRIP_ORDERED) && strip_unit_model(arg0)) strip_order(arg0->header);
     BtlMesh *g = &arg0->header->meshes[arg1];
-    gte_SetGeomScreen(g_gameState->gameData->unkA);
+    gte_SetGeomScreen(g_gameState->gameData->projDist);
     s32 k = 0;
     u32 cnt = arg0->header->boneCount;
     MATRIX *bone = (MATRIX *)arg0->bones;
@@ -199,8 +199,8 @@ void o0b_btl_projectMesh(BtlUnit9C *arg0, u8 arg1) {
         s32 n = g->vertexCounts[i++];
         if (n == 0) continue;
         /* the bone's matrix: m = RT x bone (columns through rtir), t = RT x bone.t + TR (rtv0tr) */
-        gte_SetRotMatrix(&g_gameState->gameData->unk18);
-        gte_SetTransMatrix(&g_gameState->gameData->unk18);
+        gte_SetRotMatrix(&g_gameState->gameData->viewMatrix);
+        gte_SetTransMatrix(&g_gameState->gameData->viewMatrix);
         gte_ldclmv(bone);
         gte_rtir_b();
         gte_stclmv(&m);
@@ -259,8 +259,8 @@ u8 *o0b_btl_drawMesh(BtlUnit9C *m, u8 meshIdx, u8 *out) {
     n.strips = (m->header->flags & STRIP_ORDERED) != 0;
     for (u32 i = 0; i < m->header->boneCount; ++i) n.nverts += g->vertexCounts[i];
     /* the buffer this frame's OT is drawn into (btl_endFrame: shown until then) */
-    n.draw_x = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.x;
-    n.draw_y = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.y;
+    n.draw_x = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.x;
+    n.draw_y = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.y;
     if (!port_native_mesh(&n)) return o0b_btl_drawMesh_packets(m, meshIdx, out);
     if (m->prims == 0) m->prims = (s32)out;
     out[7] = 0xFF;
@@ -280,8 +280,8 @@ u8 *o0b_btlbg_drawRecord(BtlBgRec *rec, u8 *out, u32 *ot, BtlBgGroup *grp) {
     n.ot = (const unsigned int *)ot;
     n.bright = *(u16 *)&g_btlbgBrightness;
     n.shift = *(u16 *)&g_btlbgOtShift & 31;
-    n.draw_x = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.x;
-    n.draw_y = g_gameState->drawEnv[g_gameState->gameData->unk8].clip.y;
+    n.draw_x = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.x;
+    n.draw_y = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.y;
     if (port_native_bg(&n)) return out;
     return o0b_btlbg_drawRecord_packets(rec, out, ot, grp);
 }

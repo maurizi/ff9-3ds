@@ -18,39 +18,39 @@ src/ovl_0b/btl_cmd.c | b->cmdPhase = 4; | b->cmdPhase = 4; port_scenario_battle_
 
 # CD-loaded battle-effect modules retain raw PSX pointers and MIPS code.
 src/ovl_0b/btlfx_pool.c | fh = *(u8 **)dst; | fh = (u8 *)PSX_ADDR(*(u32 *)dst); | 1
-src/ovl_0b/btlfx_pool.c | fn(d->unk38, g_btlfxEnv, g_btlfxEnv->exports); | port_effect_call((u32)fn, d->unk38, (u32)g_btlfxEnv, g_btlfxEnv->exports, 0, 0); | 1
+src/ovl_0b/btlfx_pool.c | fn(d->modArg, g_btlfxEnv, g_btlfxEnv->exports); | port_effect_call((u32)fn, d->modArg, (u32)g_btlfxEnv, g_btlfxEnv->exports, 0, 0); | 1
 src/ovl_0b/btlfx_script.c | e->handler(0, 0, 0, 0, &init) | port_effect_call((u32)e->handler, 0, 0, 0, 0, (u32)&init) | 1
 src/ovl_0b/btlfx_script.c | e->handler(1, e->work, g_btlfxEnv, e, args) | port_effect_call((u32)e->handler, 1, (u32)e->work, (u32)g_btlfxEnv, (u32)e, (u32)args) | 1
 src/ovl_0b/btlfx_script.c | e->handler(2, e->work, g_btlfxEnv, e, NULL) | port_effect_call((u32)e->handler, 2, (u32)e->work, (u32)g_btlfxEnv, (u32)e, 0) | 1
 # Effect descriptors are reused. Native pointers do not have KSEG0's sign bit;
 # only a remaining offset can be relocated, never a previously native pointer.
-src/ovl_0b/btlfx_heap.c | el->unk1C != -1 && !(el->unk1C & 0x80000000) | (u32)el->unk1C < PSX_RAM_SIZE | 1
-src/ovl_0b/btlfx_heap.c | el->unk20 != -1 && !(el->unk20 & 0x80000000) | (u32)el->unk20 < PSX_RAM_SIZE | 1
+src/ovl_0b/btlfx_heap.c | el->tex != -1 && !(el->tex & 0x80000000) | (u32)el->tex < PSX_RAM_SIZE | 1
+src/ovl_0b/btlfx_heap.c | el->tex2 != -1 && !(el->tex2 & 0x80000000) | (u32)el->tex2 < PSX_RAM_SIZE | 1
 # Position fields can also be rewritten by the module after pool registration.
 # Decode the local read without changing the module's stored pointer bits.
-src/ovl_0b/btlfx_heap.c | base = e->unk28; | base = (SVECTOR *)port_effect_data((u32)e->unk28); | 6
-src/ovl_0b/btlfx_heap.c | btlfx_aimAngles((s16 *)e->unk28, (s16 *)e->unk2C, &ang.vx); | btlfx_aimAngles((s16 *)port_effect_data((u32)e->unk28), (s16 *)port_effect_data((u32)e->unk2C), &ang.vx); | 1
-src/ovl_0b/btlfx_heap.c | btlfx_lerpVec((s16 *)e->unk28, (s16 *)e->unk2C, acc, &off.vx); | btlfx_lerpVec((s16 *)port_effect_data((u32)e->unk28), (s16 *)port_effect_data((u32)e->unk2C), acc, &off.vx); | 1
+src/ovl_0b/btlfx_heap.c | base = e->origin; | base = (SVECTOR *)port_effect_data((u32)e->origin); | 6
+src/ovl_0b/btlfx_heap.c | btlfx_aimAngles((s16 *)e->origin, (s16 *)e->unk2C, &ang.vx); | btlfx_aimAngles((s16 *)port_effect_data((u32)e->origin), (s16 *)port_effect_data((u32)e->unk2C), &ang.vx); | 1
+src/ovl_0b/btlfx_heap.c | btlfx_lerpVec((s16 *)e->origin, (s16 *)e->unk2C, acc, &off.vx); | btlfx_lerpVec((s16 *)port_effect_data((u32)e->origin), (s16 *)port_effect_data((u32)e->unk2C), acc, &off.vx); | 1
 # Effect output buffers may be supplied directly from a module-owned pool slot.
 src/ovl_0b/btlfx.c | n = ((Unk800D1494 *)p)->unk2; | p = (u8 *)port_effect_data((u32)p); out = (u8 *)port_effect_data((u32)out); n = ((Unk800D1494 *)p)->unk2; | 1
 # Particle motion and element hooks are also callbacks into loaded modules.
 src/ovl_0b/btlfx_heap.c | m->unk8(e, owner, &pos, func_800E0134(e, owner), frame, frames) | port_effect_call_words((u32)m->unk8, (u32[]){(u32)e, (u32)owner, (u32)&pos, (u32)func_800E0134(e, owner), frame, frames}, 6) | 1
 src/ovl_0b/btlfx_heap.c | el->unk24(e, owner, &pos, vp, &scale, &alpha, &cnt, frame, frames); | port_effect_call_words((u32)el->unk24, (u32[]){(u32)e, (u32)owner, (u32)&pos, (u32)vp, (u32)&scale, (u32)&alpha, (u32)&cnt, frame, frames}, 9); | 1
 # Custom work-pool setup/update functions also reside in loaded MIPS modules.
-src/ovl_0b/btlfx_pool.c | pool->unk4(1, d, g_btlfxEnv, pool->unk8, 0, pool, pool->unk8->unkC); | port_effect_call_words((u32)pool->unk4, (u32[]){1, (u32)d, (u32)g_btlfxEnv, (u32)pool->unk8, 0, (u32)pool, pool->unk8->unkC}, 7); | 1
-src/ovl_0b/btlfx_pool.c | fn(2, p + 2, g_btlfxEnv, pool->unk8, p[1], pool, pool->unk8->unkC) | port_effect_call_words((u32)fn, (u32[]){2, (u32)(p + 2), (u32)g_btlfxEnv, (u32)pool->unk8, (u32)(s32)p[1], (u32)pool, pool->unk8->unkC}, 7) | 1
-src/ovl_0b/btlfx_heap.c | ((EffTailSpawn *)e->unk24)->unk3C(&off, &rot, frame, dur) | port_effect_call_words((u32)((EffTailSpawn *)e->unk24)->unk3C, (u32[]){(u32)&off, (u32)&rot, (u32)frame, (u32)dur}, 4) | 1
+src/ovl_0b/btlfx_pool.c | pool->elemFn(1, d, g_btlfxEnv, pool->task, 0, pool, pool->task->work); | port_effect_call_words((u32)pool->elemFn, (u32[]){1, (u32)d, (u32)g_btlfxEnv, (u32)pool->task, 0, (u32)pool, pool->task->work}, 7); | 1
+src/ovl_0b/btlfx_pool.c | fn(2, p + 2, g_btlfxEnv, pool->task, p[1], pool, pool->task->work) | port_effect_call_words((u32)fn, (u32[]){2, (u32)(p + 2), (u32)g_btlfxEnv, (u32)pool->task, (u32)(s32)p[1], (u32)pool, pool->task->work}, 7) | 1
+src/ovl_0b/btlfx_heap.c | ((EffTailSpawn *)e->tail)->unk3C(&off, &rot, frame, dur) | port_effect_call_words((u32)((EffTailSpawn *)e->tail)->unk3C, (u32[]){(u32)&off, (u32)&rot, (u32)frame, (u32)dur}, 4) | 1
 # Framebuffer-warp grids invoke the raw callback supplied at export +0x248,
 # argument 13. Silver/Nova Dragon effects pass loaded MIPS code here.
 src/ovl_0b/btlfx_op.c | arg13(&v[1]); | port_effect_call_words((u32)arg13, (u32[]){(u32)&v[1]}, 1); | 1
 # Loaded effects consume DF738's forwarded primitive count in v0. Its void
 # C declaration lets native inlining discard the count calculation entirely.
 src/ovl_0b/hi_vertex.c | void Hi_GetMdlVertexPtr(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) | u32 Hi_GetMdlVertexPtr(s32 arg0, u16 arg1, s32 arg2, s32 *arg3, s32 arg4) | 1
-src/ovl_0b/hi_vertex.c | btlfx_getMeshPrims(btlfx_getEffModel(arg0, D_800A825C)->unk0, arg1, arg2, arg3, arg4); | return btlfx_getMeshPrims(btlfx_getEffModel(arg0, D_800A825C)->unk0, arg1, arg2, arg3, arg4); | 1
+src/ovl_0b/hi_vertex.c | btlfx_getMeshPrims(btlfx_getEffModel(arg0, D_800A825C)->model, arg1, arg2, arg3, arg4); | return btlfx_getMeshPrims(btlfx_getEffModel(arg0, D_800A825C)->model, arg1, arg2, arg3, arg4); | 1
 # Mesh-count wrappers likewise forward DD10C's v0; promote narrow values to
 # the effect bridge's full 32-bit result on both host and ARM ABIs.
 src/ovl_0b/hi_model.c | btl_getMeshCount(btl_getUnit(arg0)->model); | return btl_getMeshCount(btl_getUnit(arg0)->model); | 1
-src/ovl_0b/hi_model.c | btl_getMeshCount(btlfx_getEffModel(arg0, D_800A81A8)->unk0); | return btl_getMeshCount(btlfx_getEffModel(arg0, D_800A81A8)->unk0); | 1
+src/ovl_0b/hi_model.c | btl_getMeshCount(btlfx_getEffModel(arg0, D_800A81A8)->model); | return btl_getMeshCount(btlfx_getEffModel(arg0, D_800A81A8)->model); | 1
 
 # Battle sound panning accepts unit IDs 0..17 or an SVECTOR pointer. The PS1
 # address-bit test misses native ARM stack pointers (DS crash SystemError S/310).
@@ -60,7 +60,7 @@ src/ovl_0b/btlfx_op.c | if (arg0 & 0x90000000) { | if ((u32)arg0 >= PSX_RAM_SIZE
 # Full-screen TIM display follows OT[8]'s 24-bit link on the CPU (MIPS
 # 0x800B4DC4 / 0x800B4E40). Restore its native arena address before addPrim.
 # The raw link points into ITCM on DS and caused the post-briefing data abort.
-src/ovl_0a/tu_800B0124.c | (u32 *)g_gameState->gameData->unk10[g_gameState->gameData->unk8][8] | PSX_OT_PTR(g_gameState->gameData->unk10[g_gameState->gameData->unk8][8]) | 2
+src/ovl_0a/tu_800B0124.c | (u32 *)g_gameState->gameData->ot[g_gameState->gameData->drawBuf][8] | PSX_OT_PTR(g_gameState->gameData->ot[g_gameState->gameData->drawBuf][8]) | 2
 
 # Script values are 26 bits; on the PS1 a RAM pointer popped back (0x00xxxxxx, the RAM mirror) works as is. DS
 # pointers (0x02xxxxxx) set bit 25, which the 26-bit sign extension turns into 0xFExxxxxx: mask it back.
@@ -91,16 +91,16 @@ src/ovl_0b/btl_cmd.c | gd->party[i]->supportAbilities[arg0] & arg1 | PSX_NZ(gd->
 # wandered with the drive at its own rate)
 src/ovl_0b/btl_cmd.c | b->curCmd->cmdNo | PSX_NZ(b->curCmd)->cmdNo | 6
 # fx_0fb_1's rocks test their target (unk20) before one is set (NULL at the task's start): low RAM on the PS1
-src/fxmod/fx_0fb_1/fx_0fb_1.c | it->unk20->unk30 | PSX_NZ(it->unk20)->unk30 | 2
+src/fxmod/fx_0fb_1/fx_0fb_1.c | it->unk20->state | PSX_NZ(it->unk20)->state | 2
 # Bone matrices can be absent while an enemy is entering. Preserve the NULL
 # field, mapping the array base before indexing (C585C reads bone*32+0x18).
 # Ifrit's final bone queries outlive its model buffer. The original also reads
 # the sound-bank-overwritten bone base 0x3c30 as KUSEG, not only a NULL base.
 src/ovl_0b/hi_model.c | arg0->bones[arg1] | ((BtlBone *)PSX_PTR(arg0->bones))[arg1] | 4
 # akao_tick -> func_800589F0 with g_akaoSubSeq == NULL (the AKAO init leaves it NULL) and flag 0x100 set
-src/main/akao_voice.c | g_akaoSubSeq->unk3C, | PSX_NZ(g_akaoSubSeq)->unk3C, | 1
-src/main/akao_voice.c | g_akaoSubSeq->unk40, | PSX_NZ(g_akaoSubSeq)->unk40, | 1
-src/main/akao_voice.c | g_akaoSubSeq->unk44, | PSX_NZ(g_akaoSubSeq)->unk44, | 1
+src/main/akao_voice.c | g_akaoSubSeq->noiseMask, | PSX_NZ(g_akaoSubSeq)->noiseMask, | 1
+src/main/akao_voice.c | g_akaoSubSeq->reverbMask, | PSX_NZ(g_akaoSubSeq)->reverbMask, | 1
+src/main/akao_voice.c | g_akaoSubSeq->pitchModMask, | PSX_NZ(g_akaoSubSeq)->pitchModMask, | 1
 
 # Battle Item command confirmed on an empty item list: btlui_getItemListEntry returns NULL, and btlui_selectItem
 # reads p->unk0 for its item-table entry before its own NULL check (world map 9011, disc 4, walking input)
@@ -136,7 +136,7 @@ src/main/event.c | ((o->flags >> 4) ^ 1) & 1 | ((PSX_NZ(o)->flags >> 4) ^ 1) & 1
 
 # Cached mode overlays can arrive through StoreImage or a RAM copy, bypassing CD_getsector's relocation.
 # Patch only the restored prefix; trailing disc sectors still use psx_overlay_patch in the CD layer.
-src/main/main.c | loaded = e->unkC >> 11; | psx_overlay_patch(files[mode], (unsigned int)((u8 *)addrs.unk0[mode] - psx_ram), e->unkC); loaded = e->unkC >> 11; | 1
+src/main/main.c | loaded = e->loaded >> 11; | psx_overlay_patch(files[mode], (unsigned int)((u8 *)addrs.unk0[mode] - psx_ram), e->loaded); loaded = e->loaded >> 11; | 1
 
 # Battle effect setup queries target-selection before allocating g_btlUi. Verified on PSX:
 # g_btlUi == NULL at func_800EA004 entry; byte 0x12B4 is zero in readable kernel RAM.
@@ -145,14 +145,14 @@ src/main/main.c | loaded = e->unkC >> 11; | psx_overlay_patch(files[mode], (unsi
 # DS low addresses alias ITCM, so restore the PSX low-RAM semantics at every
 # such dereference (including cast/index forms). Pointer assignment and NULL
 # tests in the loader remain unchanged.
-src/ovl_0b/btl_status.c | m->texAnims[2].unk4 |= 1; | PSX_NZ(m->texAnims)[2].unk4 |= 1; | 1
-src/ovl_0b/hi_model.c | (u8 *)p->unk0->texAnims + off | (u8 *)PSX_NZ(p->unk0->texAnims) + off | 4
-src/ovl_0b/hi_model.c | &btlfx_getSummonModel(arg0, "Hi_StopSummonTexAnim()\nid:%d cannot use!")->unk0->texAnims[arg1] | &PSX_NZ(btlfx_getSummonModel(arg0, "Hi_StopSummonTexAnim()\nid:%d cannot use!")->unk0->texAnims)[arg1] | 1
+src/ovl_0b/btl_status.c | m->texAnims[2].flags |= 1; | PSX_NZ(m->texAnims)[2].flags |= 1; | 1
+src/ovl_0b/hi_model.c | (u8 *)p->model->texAnims + off | (u8 *)PSX_NZ(p->model->texAnims) + off | 4
+src/ovl_0b/hi_model.c | &btlfx_getSummonModel(arg0, "Hi_StopSummonTexAnim()\nid:%d cannot use!")->model->texAnims[arg1] | &PSX_NZ(btlfx_getSummonModel(arg0, "Hi_StopSummonTexAnim()\nid:%d cannot use!")->model->texAnims)[arg1] | 1
 src/ovl_0b/btlseq.c | e = m->texAnims + i | e = PSX_NZ(m->texAnims) + i | 1
 # A model's default motion may be 0xFFFF (Steiner model 0x028F). Original
 # 800AB8F8 reads its NULL motion header before the party selects a real clip.
 # Map the temporary dereference; keep the stored optional motion pointer NULL.
-src/ovl_0b/btl_main.c | c = e->unk8->motion; | c = PSX_NZ(e->unk8->motion); | 1
+src/ovl_0b/btl_main.c | c = e->model->motion; | c = PSX_NZ(e->model->motion); | 1
 # Idle battle animation checks curCmd before a command exists (PSX 0x80109888 == 0).
 # Status processing also reads the command's owner while curCmd is NULL.
 # Original 800BFE94 loads Battle+0x1088, then 800BFE9C reads word +4.
@@ -161,8 +161,8 @@ src/ovl_0b/btl_unit.c | u == cmd->caster && (u32)(cmd->cmdNo - 0x37) >= 7 | u ==
 # KO motion selection also reads curCmd+4 while no command is active.
 # MIPS B915C/B9514/B986C perform the read without a NULL branch. Preserve
 # the low-RAM value and stored NULL; do not skip the motion transition.
-src/ovl_0b/btl_cmd.c | && (!(u->flags & 1) || (s32)m->motion != u->motions[9]) && u != g_gameState->gameData->unk8E4.battle->curCmd->caster | && (!(u->flags & 1) || (s32)m->motion != u->motions[9]) && u != PSX_NZ(g_gameState->gameData->unk8E4.battle->curCmd)->caster | 2
-src/ovl_0b/btl_cmd.c | && (!(arg0->flags & 1) || (s32)m->motion != arg0->motions[9]) && arg0 != g_gameState->gameData->unk8E4.battle->curCmd->caster | && (!(arg0->flags & 1) || (s32)m->motion != arg0->motions[9]) && arg0 != PSX_NZ(g_gameState->gameData->unk8E4.battle->curCmd)->caster | 1
+src/ovl_0b/btl_cmd.c | && (!(u->flags & 1) || (s32)m->motion != u->motions[9]) && u != g_gameState->gameData->ctx.battle->curCmd->caster | && (!(u->flags & 1) || (s32)m->motion != u->motions[9]) && u != PSX_NZ(g_gameState->gameData->ctx.battle->curCmd)->caster | 2
+src/ovl_0b/btl_cmd.c | && (!(arg0->flags & 1) || (s32)m->motion != arg0->motions[9]) && arg0 != g_gameState->gameData->ctx.battle->curCmd->caster | && (!(arg0->flags & 1) || (s32)m->motion != arg0->motions[9]) && arg0 != PSX_NZ(g_gameState->gameData->ctx.battle->curCmd)->caster | 1
 # The definition takes a 12-byte struct by value to reproduce the MIPS stack homes (ovl_0b.h); its callers pass two
 # pointers. Natively the struct's third word lies past the callers' arguments, in the caller's frame, and the
 # definition stores to it: define it as the callers see it, with the struct a local.
@@ -179,8 +179,8 @@ src/main/akao.c | ((s32 (*)())akao_calcPitch) | akao_calcPitch | 3
 
 # The world map's CD image table: disc 1 has no image 0x3F3 (nor disc 4 0x3F6) in directory 12, so file_find returns
 # NULL and the PS1 reads its sector from kernel RAM at 4. Slot 0 is then unused on that disc.
-src/ovl_0c/w_frame.c | file_find(0xC, 0x3F3)->unk4 | PSX_NZ(file_find(0xC, 0x3F3))->unk4 | 1
-src/ovl_0c/w_frame.c | file_find(0xC, 0x3F6)->unk4 | PSX_NZ(file_find(0xC, 0x3F6))->unk4 | 1
+src/ovl_0c/w_frame.c | file_find(0xC, 0x3F3)->sector | PSX_NZ(file_find(0xC, 0x3F3))->sector | 1
+src/ovl_0c/w_frame.c | file_find(0xC, 0x3F6)->sector | PSX_NZ(file_find(0xC, 0x3F6))->sector | 1
 # World map 9001 (and battles returning there): a block node with no unk8 reads its +0x21 through NULL, low RAM on the
 # PS1 (the BIOS image's byte here).
 src/ovl_0c/tu_800BA528.c | u8 s = nd->block->fxId; | u8 s = PSX_NZ(nd->block)->fxId; | 1
@@ -199,8 +199,8 @@ src/ovl_0b/btl_init.c | arg0->model->texAnims | PSX_NZ(arg0->model->texAnims) | 
 src/ovl_0b/btl_status.c | u->model->texAnims | PSX_NZ(u->model->texAnims) | 2
 src/ovl_0b/btlfx_op.c | u->model->texAnims | PSX_NZ(u->model->texAnims) | 7
 src/ovl_0b/btlseq.c | arg1->model->texAnims | PSX_NZ(arg1->model->texAnims) | 6
-src/ovl_0b/btl_status.c | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != g_gameState->gameData->unk8E4.battle->curCmd->caster | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != PSX_NZ(g_gameState->gameData->unk8E4.battle->curCmd)->caster | 1
-src/ovl_0b/btl_unit.c | unk34.b.unk4 == 2 && cmd->cmdNo == BTL_CMD_SWD_MAG | unk34.b.unk4 == 2 && PSX_NZ(cmd)->cmdNo == BTL_CMD_SWD_MAG | 1
+src/ovl_0b/btl_status.c | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != g_gameState->gameData->ctx.battle->curCmd->caster | (arg0->status & BTL_STATUS_CONFUSE) && arg0 != PSX_NZ(g_gameState->gameData->ctx.battle->curCmd)->caster | 1
+src/ovl_0b/btl_unit.c | info.b.kind == 2 && cmd->cmdNo == BTL_CMD_SWD_MAG | info.b.kind == 2 && PSX_NZ(cmd)->cmdNo == BTL_CMD_SWD_MAG | 1
 src_equiv/ovl_0a/model_link.c | slot = &ot[z]; | slot = &ot[z]; if (PSX_OT_OUTSIDE(slot)) continue; | 1   # d2_f1750: a depth past the OT (psx_mem.h)
 src/main/akao.c | g_akaoOpsFE[vel](c, mask); | if (vel < 0x20) g_akaoOpsFE[vel](c, mask); else { extern void akao_opInvalid(AkaoChannel *, s32); akao_opInvalid(c, (s32)mask); } | 1   # d1_f0310: a sequence read from replaced memory; past the 0x20 handlers the PS1 jumps to data (an odd address), the unused slots' handler ends the track
 src_equiv/ovl_0c/model_link.c | slot = &ot[z]; | slot = &ot[z]; if (PSX_OT_OUTSIDE(slot)) continue; | 1   # wm_drawMesh: the same unclamped OT index as the field's (F35)

@@ -55,9 +55,9 @@ enum { WORLD_FACES_FOG, WORLD_FACES_NEAR, WORLD_FACES_FAR, WORLD_BACKDROP }; /* 
 typedef struct {
     const unsigned char *block;    /* WmBlock: vertex count (low byte of word 0), faces (16 bytes each) at +8 */
     const unsigned int *sxy;       /* the vertices' screen positions (the scratchpad) */
-    const unsigned int *sz;        /* their depths, SZ (D_800D29F8) */
-    const unsigned int *lit;       /* their lit colours (D_800D23F0) */
-    const unsigned int *fog;       /* their fog colours (D_800D1FF0) */
+    const unsigned int *sz;        /* their depths, SZ (g_worldVtxDepth) */
+    const unsigned int *lit;       /* their lit colours (g_worldVtxLitColors) */
+    const unsigned int *fog;       /* their fog colours (g_worldVtxFogColors) */
     const unsigned int *alt;       /* the block's alternate texture page entry (*g_worldCurTexArea, 3 words) */
     const unsigned int *fog_params;/* g_worldFogParams: two { colour, fog offset | lit offset << 16 }; the backdrop's:
                                     * g_worldBackdropFog */
