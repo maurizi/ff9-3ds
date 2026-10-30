@@ -1546,3 +1546,16 @@ and skinned: most vertices sit on bone, UV-seam or quad boundaries the collapses
 seams carry the texture). Not pursued (about 0.5 ms in the slowest fields); the tool's field support isn't kept.
 Notes for a later try: the header's u16 packet total wraps past 0xFFFF (200: groups sum to 0x12258), and a model's
 container item has a different padding in different field files (copy the changed span, not the item).
+
+### Battles still dropping polygons (60-battle sample, 2026-10-29 evening)
+
+59/60 ran (d2_b0920's stop was the melonDS FolderSync truncation of ovls.bin, fixed in tools/ds_profile.py; it runs).
+Median 25.2 ms per VBlank. 15 battles dropped some polygons over the run: Red Dragon d3_b0194 3,615, d4_b0359 3,355
+(effects), Grand Dragon d4_b0617 2,703, Worm Hydra d2_b0780 1,617, Zaghnol d1_b0014 1,308, Gigan Toad d2_b0135 776,
+Armstrong d3_b0583 537, and 8 more under 300. Why two passes fail there (counters in battle_two, three of them): the
+scenes are only 5-10% over (2,115-2,204 polygons, 7,100-7,300 vertices without strips), and every split tried fails
+on the second (nearer) pass's textures, which must fit banks C and D alone (A holds the first pass's capture, B the
+frame being captured; neither can hold textures read while it's written). Raising those enemies' simplification
+from 15% to 30% removes almost nothing more (bone, seam and sharp-feature vertices bind: Grand Dragon 11/4%, Armstrong
+4/5%, Zaghnol 14/2%); Dracozombie at 15% (11/15%) didn't measurably change d4_b0673's drops: not kept. Open: a second
+pass with fewer texture pages (split by texture use, not only by depth), or strips in two passes.
