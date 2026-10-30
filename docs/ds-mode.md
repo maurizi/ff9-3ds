@@ -1767,3 +1767,9 @@ run.
   coherent) and redrawing changed rectangles only was 1-3 ms slower: the copy and the per-rectangle clears cost more
   than the redraw. Next to try: per-buffer lists (each buffer diffed against its own last UI) with the game's
   covering fill skipped under the UI in battles, so nothing has to be copied.
+- **Per-buffer UI lists with the fill skipped (tried, kept out; diff kept outside the repo):** the covering fill can be
+  skipped (296 of 298 in d1_b0228, nothing else writes those buffers), but the UI lists of one buffer don't line up
+  from one flush to the next: ~106 of ~110 entries differ by index (the same entries in another order or split
+  across flushes: 403 flushes of ~55 entries for 300 presents), so every flush redrew the whole UI area and the run
+  was ~1.3 ms slower. psx_vram_touch isn't what splits them (flushing only on writes the list can see changed
+  nothing). Next: trace what triggers each flush during btlui_vsync, then compare by content rather than index.
