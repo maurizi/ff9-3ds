@@ -15,8 +15,11 @@ Gp0State gp0_state = {0, 0, 1023, 511, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 /* DS mode: the decoder in ITCM (gx_hybrid.c GXH_HOT: what the software polygon rasteriser left) */
 #if defined(__arm__) && defined(PORT_DS_MODE) && defined(PORT_GX_HYBRID)
 #define GP0_HOT __attribute__((section(".itcm"), noinline))
+/* (ITCM code that isn't a tight loop: Thumb, half the size, as fast there) */
+#define GP0_HOT_THUMB __attribute__((section(".itcm"), noinline, target("thumb")))
 #else
 #define GP0_HOT
+#define GP0_HOT_THUMB
 #endif
 void gp0_note_sprites(unsigned int texpage, unsigned int n);
 const Gp0Backend *gp0_backend;
@@ -105,7 +108,7 @@ static unsigned int state_command(unsigned int w0) {
     return 1;
 }
 
-GP0_HOT static unsigned int command(const unsigned int *w, unsigned int avail) {
+GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int avail) {
     unsigned int cmd = w[0] >> 24;
     if (cmd >= 0xE0) return state_command(w[0]);
     if ((cmd >= 0x20 && cmd < 0x80) || cmd == 2) {

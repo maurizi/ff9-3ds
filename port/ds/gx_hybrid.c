@@ -1417,7 +1417,7 @@ static inline int inside(int x, int y, int ax, int ay, int bx, int by, int cx, i
 /* x * a / 31 for x, a up to 31 (exact over that range; Thumb has no long multiply, so a division by a constant is a
  * call) */
 static inline u32 div31x(u32 x, int a) { return x * (u32)a * 2115u >> 16; }
-__attribute__((noinline, target("arm"))) static u32 light_under(const Prim *p, int alpha, u32 hue) {
+GXH_HOT static u32 light_under(const Prim *p, int alpha, u32 hue) {
     int x0 = p->x[0], x1 = x0, y0 = p->y[0], y1 = y0;
     for (int j = 1; j < p->n; ++j) {
         if (p->x[j] < x0) x0 = p->x[j]; else if (p->x[j] > x1) x1 = p->x[j];
