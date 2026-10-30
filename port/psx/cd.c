@@ -19,6 +19,8 @@
 #include "psyq_port.h"
 
 #include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "platform.h"
 #include "profile.h"
@@ -123,7 +125,18 @@ typedef void (*CdCallback)(u8 intr, u8 *result);
 /* the game's names for libcd's callback setters are still placeholders in the decomp */
 static CdCallback sync_cb, ready_cb, read_cb;
 
-static FILE *disc;
+/* (POSIX I/O, not stdio: on the DS a FILE costs the heap ~600 bytes more for each file open, which battles are short of) */
+static int disc = -1;
+/* n bytes at `at` (0: short or failed) */
+static int read_at(int fd, long at, void *buf, unsigned int n) {
+    if (at >= 0 && lseek(fd, at, SEEK_SET) != at) return 0;
+    for (u8 *q = buf; n;) {
+        const int got = (int)read(fd, q, n);
+        if (got <= 0) return 0;
+        q += got; n -= (unsigned int)got;
+    }
+    return 1;
+}
 static int disc_no = 1;
 
 int psx_cd_disc(void) {
@@ -132,7 +145,7 @@ int psx_cd_disc(void) {
 
 void psx_cd_select_disc(unsigned selected) {
     if(selected<1 || selected>4) port_fatal("invalid disc %u",selected);
-    if(disc) port_fatal("disc selection must precede game initialization");
+    if(disc >= 0) port_fatal("disc selection must precede game initialization");
     disc_no=(int)selected;
 }
 
@@ -183,20 +196,20 @@ static int sector_is_data; /* the last read_raw rebuilt a data record (no EDC/EC
 
 static unsigned int le32(const u8 *p);
 static void pack_read(long at, void *buf, unsigned int bytes) {
-    if (fseek(disc, at, SEEK_SET) != 0 || fread(buf, 1, bytes, disc) != bytes)
+    if (!read_at(disc, at, buf, bytes))
         port_fatal("disc %d: can't read discs.bin at %ld", disc_no, at);
     disc_at = at + (long)bytes;
 }
 #endif
 
 static int open_disc(void) {
-    if (disc) {
+    if (disc >= 0) {
         return 1;
     }
     char path[512];
 #ifdef PORT_DISC_PACK
     snprintf(path, sizeof path, "%s/discs.bin", plat_data_dir());
-    if ((disc = fopen(path, "rb")) != NULL) {
+    if ((disc = open(path, O_RDONLY)) >= 0) {
         u8 h[32];
         pack_read(0, h, 32);
         if (__builtin_memcmp(h, "FF9D", 4) != 0 || le32(h + 4) != 1 || le32(h + 8) < (unsigned int)disc_no)
@@ -213,8 +226,8 @@ static int open_disc(void) {
     }
 #endif
     snprintf(path, sizeof path, "%s/raw/FF9 CD%d.img", plat_data_dir(), disc_no);
-    disc = fopen(path, "rb");
-    if (!disc) {
+    disc = open(path, O_RDONLY);
+    if (disc < 0) {
         port_fatal("can't open disc image %s", path);
     }
     return 1;
@@ -275,7 +288,7 @@ static void read_raw(unsigned int lba, u8 *buf) {
         if (sector_is_data) dst = buf + USER_OFFSET;
     }
 #endif
-    if ((at != disc_at && fseek(disc, at, SEEK_SET) != 0) || fread(dst, 1, bytes, disc) != bytes) {
+    if (!read_at(disc, at != disc_at ? at : -1, dst, bytes)) {
         disc_at = -1;
         port_fatal("disc %d: can't read sector %u", disc_no, lba);
     }
@@ -312,28 +325,28 @@ static void read_user(unsigned int lba, u8 *buf2048) {
  * file offset} per run; each sector's 2048 bytes of user data. No file: none. */
 #define PATCH_RUNS 32
 static struct { unsigned int lba, count, off; } runs[PATCH_RUNS];
-static FILE *patch_file;
+static int patch_file = -1;
 
 static int iso_lookup(const char *name, unsigned int *lba, unsigned int *size);
 static unsigned int le32(const u8 *p);
 static void patch_load(void) {
     n_runs = 0; /* (iso_lookup below reads sectors: none patched meanwhile) */
     runs_disc = disc_no;
-    if (patch_file) { fclose(patch_file); patch_file = NULL; }
+    if (patch_file >= 0) { close(patch_file); patch_file = -1; }
     char path[512];
     snprintf(path, sizeof path, "%s/patches/disc%d.bin", plat_data_dir(), disc_no);
-    FILE *f = fopen(path, "rb");
-    if (!f) return;
+    const int f = open(path, O_RDONLY);
+    if (f < 0) return;
     u8 h[12];
     unsigned int base, size;
-    if (fread(h, 1, 8, f) != 8 || __builtin_memcmp(h, "FF9P", 4) != 0 || le32(h + 4) > PATCH_RUNS ||
+    if (!read_at(f, 0, h, 8) || __builtin_memcmp(h, "FF9P", 4) != 0 || le32(h + 4) > PATCH_RUNS ||
         !iso_lookup("\\FF9.IMG;1", &base, &size)) {
-        fclose(f);
+        close(f);
         return;
     }
     const int n = (int)le32(h + 4);
     for (int i = 0; i < n; i++) {
-        if (fread(h, 1, 12, f) != 12) { fclose(f); return; }
+        if (!read_at(f, 8 + 12 * i, h, 12)) { close(f); return; }
         runs[i].lba = base + le32(h); runs[i].count = le32(h + 4); runs[i].off = le32(h + 8);
     }
     patch_file = f;
@@ -343,8 +356,7 @@ static void patch_load(void) {
 static void patch_apply(unsigned int lba, u8 *raw) {
     for (int i = 0; i < n_runs; i++)
         if (lba - runs[i].lba < runs[i].count) {
-            if (fseek(patch_file, (long)(runs[i].off + (lba - runs[i].lba) * 2048), SEEK_SET) != 0 ||
-                fread(raw + USER_OFFSET, 1, 2048, patch_file) != 2048)
+            if (!read_at(patch_file, (long)(runs[i].off + (lba - runs[i].lba) * 2048), raw + USER_OFFSET, 2048))
                 port_fatal("disc %d: can't read patched sector %u", disc_no, lba);
             return;
         }

@@ -59,6 +59,7 @@ int port_sub_ui(int on) {
 }
 int port_sub_ui_on(void) { return sub_ui; }
 
+volatile unsigned int port_heap_now; /* the heap's free bytes at the last frame (mallinfo plus the unclaimed top) */
 static void status_row(int row, const char *fmt, ...) {
     if (sub_ui) return;
     char text[32];
@@ -211,6 +212,7 @@ void plat_wait_frame(void) {
             extern unsigned int psx_heap_free(void);
             static unsigned int heap_min = ~0u;
             unsigned int heap = psx_heap_free();
+            port_heap_now = heap; /* (readable from a saved state: the status rows are hidden in battles) */
             if (heap < heap_min) heap_min = heap;
             status_row(9, "heap %u (min %u) dbg %x %x", heap, heap_min, gxh_debug[0], gxh_debug[1]);
             status_row(21, "rg %d u%d/%d np%d col %d ui %d/%d", gxh_stats_regions, gxh_stats_units, gxh_stats_units_peak,
