@@ -61,6 +61,93 @@ static inline void wv_fog(u32 rgb, u32 sz, u32 attr, s32 flags, u32 *lit, u32 *f
     *fog = c;
 }
 
+#ifdef PORT_GTE_APPROX
+/* DS mode: a group's GTE steps as arithmetic (each the GTE's: NCT's two products and DPCS's and INTPL's
+ * interpolation in 64-bit sums, exact as gte.c's; the RTPTs as DS mode's 32-bit ones, psx_gte_project and
+ * psx_gte_rtpt_depths), for every group but the last, which wv_transform runs through the GTE so the registers end
+ * as the game leaves them. The one register a group reads from the one before is RGBC (the colour code NCT pushes
+ * with: the last fog colour loaded). */
+static inline s32 wv_clamp(long long v, s32 lo, s32 hi) { return v < lo ? lo : v > hi ? hi : (s32)v; }
+/* M x V for one of the GTE's matrices (rotation layout: 5 words from c) */
+static inline void wv_mat(const u32 *c, s32 x, s32 y, s32 z, long long *a, long long *b, long long *d) {
+    *a = (long long)(s16)c[0] * x + (long long)((s32)c[0] >> 16) * y + (long long)(s16)c[1] * z;
+    *b = (long long)((s32)c[1] >> 16) * x + (long long)(s16)c[2] * y + (long long)((s32)c[2] >> 16) * z;
+    *d = (long long)(s16)c[3] * x + (long long)((s32)c[3] >> 16) * y + (long long)(s16)c[4] * z;
+}
+/* NCT's colour for one normal (sf 1, lm 1), pushed with the code byte */
+static inline u32 wv_nct(const SVECTOR *nv, u32 code) {
+    const u32 *c = psx_gte.c;
+    long long a, b, d;
+    wv_mat(c + 8, nv->vx, nv->vy, nv->vz, &a, &b, &d); /* LLM x V */
+    const s32 i1 = wv_clamp(a >> 12, 0, 0x7FFF), i2 = wv_clamp(b >> 12, 0, 0x7FFF), i3 = wv_clamp(d >> 12, 0, 0x7FFF);
+    wv_mat(c + 16, i1, i2, i3, &a, &b, &d); /* BK + LCM x IR */
+    const s32 m1 = (s32)((((long long)(s32)c[13] << 12) + a) >> 12), m2 = (s32)((((long long)(s32)c[14] << 12) + b) >> 12);
+    const s32 m3 = (s32)((((long long)(s32)c[15] << 12) + d) >> 12);
+    return code << 24 | (u32)wv_clamp(m3 >> 4, 0, 0xFF) << 16 | (u32)wv_clamp(m2 >> 4, 0, 0xFF) << 8 |
+           (u32)wv_clamp(m1 >> 4, 0, 0xFF);
+}
+/* DPCS (sf 1, lm 0) of colour rgbc toward the far colour by dp */
+static inline u32 wv_dpcs(u32 rgbc, s32 dp) {
+    const u32 *c = psx_gte.c;
+    u32 out = rgbc & 0xFF000000u;
+    for (int k = 0; k < 3; ++k) {
+        const long long m = (long long)(rgbc >> (8 * k) & 0xFF) << 16;
+        const s32 ir = wv_clamp((((long long)(s32)c[21 + k] << 12) - m) >> 12, -0x8000, 0x7FFF);
+        const s32 mac = (s32)(((long long)ir * dp + m) >> 12);
+        out |= (u32)wv_clamp(mac >> 4, 0, 0xFF) << (8 * k);
+    }
+    return out;
+}
+/* one group's results; *rgbc: RGBC as the GTE would hold it, before and after */
+static inline void wv_group(const u32 *v, s32 flags, u32 *rgbc, u32 *lit, u32 *fog, u32 *sxy, u32 *zs32, u16 *zs16) {
+    const u32 *c = psx_gte.c;
+    u32 w[6], sz[3], rgb[3];
+    for (int i = 0; i < 6; i++) w[i] = v[i];
+    const s32 trz = (s32)c[7], c3 = (s32)c[3], c4 = (s16)c[4];
+    for (int i = 0; i < 3; ++i) { /* (the first RTPT's depths) */
+        const u32 vxy = w[2 * i];
+        const s32 mac3 = trz + (((s16)c3 * (s16)vxy + (c3 >> 16) * ((s32)vxy >> 16) + c4 * (s16)w[2 * i + 1]) >> 12);
+        sz[i] = mac3 > 0xFFFF ? 0xFFFF : mac3 < 0 ? 0 : (u32)mac3;
+    }
+    for (int i = 0; i < 3; ++i) rgb[i] = wv_nct(&D_800CD794[(w[2 * i + 1] >> 16) & 0xFF], *rgbc >> 24);
+    if (flags & WV_FOG) {
+        for (int i = 0; i < 3; ++i) {
+            const u32 *e = (const u32 *)g_worldFogParams + ((w[2 * i + 1] >> 25) & 1) * 2;
+            lit[i] = wv_dpcs(rgb[i], wv_depth(sz[i], e[1] >> 16, flags));
+            fog[i] = wv_dpcs(e[0], 0x1000 - wv_depth(sz[i], e[1] & 0xFFFF, flags));
+            *rgbc = e[0];
+        }
+    } else {
+        lit[0] = rgb[0]; lit[1] = rgb[1]; lit[2] = rgb[2];
+    }
+    if (flags & WV_CURVE_MUL) {
+        for (int i = 0; i < 3; i++) {
+            const u32 f = 0x1000 - ((sz[i] >> 4) + (sz[i] >> 6));
+            s32 y = (s32)(w[2 * i] & 0xFFFF0000) >> 16;
+            y = (s32)((u32)y * f) >> 12;
+            w[2 * i] = (w[2 * i] & 0xFFFF) | ((u32)y << 16);
+        }
+    }
+    if (flags & WV_CURVE_GTE) { /* (INTPL with the far colour's red 0: MAC1 = (clamp(-y) x IR0 + y << 12) >> 12) */
+        for (int i = 0; i < 3; i++) {
+            const s32 y = (s32)w[2 * i] >> 16, dp = (s16)((sz[i] >> 4) + (sz[i] >> 6));
+            const s32 ir = wv_clamp(-(long long)y, -0x8000, 0x7FFF);
+            const u32 m = (u32)(s32)(((long long)ir * dp + ((long long)y << 12)) >> 12);
+            w[2 * i] = (w[2 * i] & 0xFFFF) | m << 16;
+        }
+    }
+    for (int i = 0; i < 3; ++i) {
+        u32 mac0;
+        psx_gte_project(w[2 * i], w[2 * i + 1], &sxy[i], &sz[i], &mac0);
+    }
+    if (flags & WV_SZ16) { zs16[0] = (u16)(sz[0] >> 3); zs16[1] = (u16)(sz[1] >> 3); zs16[2] = (u16)(sz[2] >> 3); }
+    else { zs32[0] = sz[0]; zs32[1] = sz[1]; zs32[2] = sz[2]; }
+}
+#endif
+
+#if defined(__arm__)
+__attribute__((target("arm"))) /* (its 64-bit products: Thumb makes each a call) */
+#endif
 PORT_OVERLAY_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
     s32 n = *(u32 *)o & 0xFF;
     u32 *v = *(u32 **)(o + 4);
@@ -75,6 +162,18 @@ PORT_OVERLAY_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
     u32 f, m, rfc;
     s32 i, y;
 
+#ifdef PORT_GTE_APPROX
+    { /* all groups but the last as arithmetic (wv_group) */
+        u32 rgbc = psx_gte.d[6];
+        while (n > 3) {
+            wv_group(v, flags, &rgbc, lit, fog, sxy, zs32, zs16);
+            v += 6; n -= 3; lit += 3; sxy += 3;
+            if (flags & WV_FOG) fog += 3;
+            if (flags & WV_SZ16) zs16 += 3; else zs32 += 3;
+        }
+        gte_ldrgbc(rgbc);
+    }
+#endif
     do {
         for (i = 0; i < 6; i++) {
             w[i] = v[i];

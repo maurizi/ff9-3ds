@@ -1654,3 +1654,16 @@ the copy itself never waited on the FIFO there.
 Tried, no measurable gain (reverted): fldmdl_projectMeshClipY natively (as fldmdl_projectMesh; DS mode's MVMVAs there
 already take the 32-bit path), light_under's cell test with its edge functions stepped (its primitives are a cell or
 two: the cost is per call).
+
+### The world map's vertex pass as arithmetic (2026-10-30)
+
+World maps had slipped since 10-26 (d3_w9006 34.9 -> 37.8, d4_w9006 32.0 -> 33.9; the GTE's lighting left ITCM for
+the renderer in 59e8cbc). Their vertex pass (port/game/world_verts.c, port code already) ran each group of three
+vertices through the emulated GTE command by command: an RTPT for the depths, NCT, six DPCS for the lit and fog
+colours, INTPL for the far blocks' curve, the RTPT: ~30% of a world map's frame in gte_cmd, light, mat_mul,
+interpolate and rtp_sf1. In DS mode every group but the last is now computed directly (wv_group: NCT's products and
+the depth cue's interpolation in 64-bit sums, exact as gte.c's; the RTPTs as DS mode's 32-bit ones: the depths as
+psx_gte_rtpt_depths, the projection by psx_gte_project), in ARM (in Thumb each 64-bit product is a call); the last
+group goes through the GTE, so the registers end as the game leaves them (the only state a group takes from the one
+before is RGBC's code byte, tracked). Frames identical. ms per VBlank: d1_w9009 31.73 -> 28.16, d3_w9006 37.75 ->
+31.93, d4_w9006 33.89 -> 30.03.
