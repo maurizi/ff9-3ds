@@ -120,10 +120,15 @@ def main():
             # melonDS's FolderSync doesn't grow a file past the clusters the image gave it, and writes the image's
             # copy back to the folder at exit: a file that grew (ovls.bin past a 4 KB boundary) came back cut, its
             # last overlay unreadable ("code overlays: can't read overlay 65"). The folder's sizes are kept beside
-            # the image; when one changes, the image is made again from the folder.
+            # the image; when one changes, the image is made again from the folder. Small files (the packs, the
+            # scenario, the patches) are stamped by their contents too: a rebuilt ovls.bin of the same size stayed
+            # the old one on the image ("code overlays: ... is from another build", 2026-10-30).
             if a.sd_folder:
-                import json
-                sizes = {str(f.relative_to(a.sd_folder.resolve())): f.stat().st_size
+                import hashlib, json
+                def stamp_of(f):
+                    n = f.stat().st_size
+                    return [n, hashlib.sha1(f.read_bytes()).hexdigest()] if n < (16 << 20) else n
+                sizes = {str(f.relative_to(a.sd_folder.resolve())): stamp_of(f)
                          for f in a.sd_folder.resolve().rglob('*') if f.is_file()}
                 stamp = a.sd_image.with_suffix(a.sd_image.suffix + '.sizes')
                 if a.sd_image.exists() and (not stamp.exists() or json.loads(stamp.read_text()) != sizes):
