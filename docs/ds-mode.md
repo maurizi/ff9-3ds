@@ -1535,3 +1535,14 @@ shared-edge search and light_under's stacked-light estimate one by one. A transl
 (24) pixels wide and tall now takes polygon ID 1 + (n & 31) and the base whitening. d1_f0604 35.9 -> 34.2 ms per
 VBlank, d2_f0931 43.6 -> 42.1; d4_f0351, d4_f2110, d1_f0453, d2_f0955 within noise; frames' mean absolute difference
 at most 0.03 levels (the sparkles look the same in close-ups).
+
+### Simplifying non-party field models (2026-10-29): little to take
+
+With R28 (decomp docs/field-models.md, tools/field_models.py: field models are battle-format files, FT4/FT3 only,
+inside each field file that shows them or in dir 10 for the party), tools/simplify_battle_models.py's collapses were
+tried on the heaviest non-party field models at a 30% target, posed on their default motion: model 200 (2,732
+vertices, 15 fields) 1-2% per group, 534 7-12%, 625 1-7%, 252 2-4%, 294 0-7%, 488 0-4%. Field models are low-poly
+and skinned: most vertices sit on bone, UV-seam or quad boundaries the collapses must keep (positions are bone-local,
+seams carry the texture). Not pursued (about 0.5 ms in the slowest fields); the tool's field support isn't kept.
+Notes for a later try: the header's u16 packet total wraps past 0xFFFF (200: groups sum to 0x12258), and a model's
+container item has a different padding in different field files (copy the changed span, not the item).
