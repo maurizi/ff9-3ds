@@ -151,6 +151,7 @@ typedef struct {
     int mesh_quota_bound, mesh_quota; /* and the first mesh_quota below mesh_quota_bound */
     int bg_runs, bg_run_tiles; /* its background runs (bg_runs_of) and their tiles */
     int cap; /* prims_cap: prims_max less the runs' room (bg_runs_set) */
+    int units; /* field: it has background layers taken as units (gxh_bg_unit), recorded out of the walk's order */
 } Buffer;
 
 static Buffer buffers[2];
@@ -318,7 +319,7 @@ static void note_buffer(int x, int y, int w, int h) {
     ++buffers_version;
     Buffer *b = !buffers[0].valid ? &buffers[0] : !buffers[1].valid ? &buffers[1] : NULL;
     if (!b) b = displayed() == &buffers[0] ? &buffers[1] : &buffers[0]; /* a third area replaces the hidden one */
-    b->x = x; b->y = y; b->w = w; b->h = h; b->valid = 1; b->shown = 1; b->count = 0; b->submitted = 0;
+    b->x = x; b->y = y; b->w = w; b->h = h; b->valid = 1; b->shown = 1; b->count = 0; b->submitted = 0; b->units = 0;
     bg_runs_set(b, 0, 0);
 }
 
@@ -338,6 +339,7 @@ static void key_fill(Buffer *b) { fill_buffer(b, FIELD_KEY); }
 static void start_scene(Buffer *b, int filled /* the game's fill is about to cover it */) {
     b->shown = 0;
     b->count = 0;
+    b->units = 0;
     bg_runs_set(b, 0, 0);
     b->last_bucket = RANK_BUCKETS;
     b->scene_gen = ~0u;
@@ -1077,6 +1079,39 @@ static void bg_runs_replay(Buffer *b, int k);
 enum { L_3D, L_UI, L_ADD /* field: an additive primitive, drawn exactly in software into the added layer */,
        L_BACK /* field: a background sprite behind every 3D primitive: only in the composite (bgc) */,
        L_HIDDEN /* battle: hidden by nearer opaque polygons (battle_occlude): not drawn */ };
+/* With background layers taken as units (gxh_bg_unit), the records aren't in the walk's order: the walk's order is
+ * their depths' (slots: entries far to near), stably, which the replays follow by this index, a counting sort in the
+ * buffer's free rows (after emit_scene's order). NULL: in order. */
+static u16 *units_order(Buffer *b) {
+    if (!b->units || !b->slots) return NULL;
+    const int n = b->count;
+    if ((prims_cap(b) - n) * (int)sizeof(Prim) < 6 * n + 4) return NULL; /* (emit_scene's, then two of these) */
+    u16 *ord = (u16 *)((u8 *)&b->prims[n] + 2 * n), *tmp = ord + n;
+    u16 hist[256];
+    for (int i = 0; i < n; ++i) tmp[i] = (u16)i;
+    for (int pass = 0; pass < 2; ++pass) { /* (LSD radix on the slot, a byte a pass: stable) */
+        u16 *src = pass ? ord : tmp, *dst = pass ? tmp : ord;
+        memset(hist, 0, sizeof hist);
+        for (int i = 0; i < n; ++i) hist[b->slots[src[i]] >> (8 * pass) & 0xFF]++;
+        for (int c = 0, at = 0; c < 256; ++c) { const int k = hist[c]; hist[c] = (u16)at; at += k; }
+        for (int i = 0; i < n; ++i) dst[hist[b->slots[src[i]] >> (8 * pass) & 0xFF]++] = src[i];
+    }
+    return tmp; /* (the second pass's) */
+}
+/* units_order's, kept while the buffer's scene and records are the same (a software scene's replay is in many
+ * ranges) */
+static const u16 *replay_order;
+static const Buffer *replay_order_b;
+static unsigned replay_order_gen;
+static int replay_order_n;
+static const u16 *order_of(Buffer *b) {
+    if (!b->units) return NULL;
+    if (replay_order_b != b || replay_order_gen != b->scene_gen || replay_order_n != b->count) {
+        replay_order = units_order(b);
+        replay_order_b = b; replay_order_gen = b->scene_gen; replay_order_n = b->count;
+    }
+    return replay_order;
+}
 static void replay_clip(Buffer *b, int from, int to, int layer /* -1: all, -2: the background sprites */, const int *clip) {
     Gp0State saved = gp0_state;
     gp0_state.area_x0 = b->x; gp0_state.area_y0 = b->y;
@@ -1089,7 +1124,10 @@ static void replay_clip(Buffer *b, int from, int to, int layer /* -1: all, -2: t
     }
     gp0_state.twin_mask_x = gp0_state.twin_mask_y = 0;
     gp0_state.set_mask = gp0_state.check_mask = 0;
-    for (int k = from; k < to; ++k) {
+    /* (a layer's own replay is in order: units' records are the background's, the others keep the walk's order) */
+    const u16 *ord = layer < 0 ? order_of(b) : NULL;
+    for (int i = from; i < to; ++i) {
+        const int k = ord ? ord[i] : i;
         if (layer == -1 && b->bg_runs && ovl0a_resident()) bg_runs_replay(b, k); /* (the background runs met here) */
         const Prim *p = &b->prims[k];
         if (layer >= 0 ? prim_layer[k] != layer : layer == -2 && !bg_prim(p) && !(semi_sprite(p) && prim_layer[k] == L_BACK)) continue;
@@ -1139,15 +1177,18 @@ static void go_software(Buffer *b) {
     if (place->field && b->slots) {
         /* the native models' polygons among the recorded primitives by OT entry (the walk's order, far to near) */
         fm_soft_next = 0x7FFF;
-        for (int k = 0; k < b->count;) {
-            int k1 = k + 1;
-            while (k1 < b->count && b->slots[k1] == b->slots[k]) ++k1;
-            fm_soft_upto(b, 0x1010 - b->slots[k] / 4);
-            replay(b, k, k1, -1);
-            k = k1;
+        const u16 *ord = order_of(b); /* (layers taken as units: in their depths' order) */
+        for (int i = 0; i < b->count;) {
+            const int s0 = b->slots[ord ? ord[i] : i];
+            int i1 = i + 1;
+            while (i1 < b->count && b->slots[ord ? ord[i1] : i1] == s0) ++i1;
+            fm_soft_upto(b, 0x1010 - s0 / 4);
+            replay(b, i, i1, -1);
+            i = i1;
         }
     } else replay(b, 0, b->count, -1);
     b->count = 0;
+    b->units = 0;
     bg_runs_set(b, 0, 0); /* (replayed with the primitives) */
     b->soft = 1;
     dirty_cells(b->x, b->y, b->x + b->w - 1, b->y + b->h - 1);
@@ -4214,7 +4255,7 @@ PORT_OVERLAY_CODE(0a) static void bg_tune_scene(void) {
         if (bg_no_composite) { bg_runs_latched = 0; bg_runs_off = 0; } /* (the other phase's composite latched them off) */
         return;
     }
-    bg_no_composite = bg_tune.vbl[1] * 10 < bg_tune.vbl[0] * 9; /* (by 10%: measures of a few dozen scenes are noisy) */
+    bg_no_composite = bg_tune.vbl[1] * 20 < bg_tune.vbl[0] * 19; /* (by 5%: measures of a few dozen scenes are noisy) */
     bg_tune.wait = TUNE_AGAIN;
     if (bg_no_composite) { bg_runs_latched = 0; bg_runs_calm = 0; }
 }
@@ -4276,6 +4317,92 @@ PORT_OVERLAY_CODE(0a) int gxh_bg_run(unsigned int *head, int count) {
     r->tiles_at = (u16)b->bg_run_tiles;
     r->x0 = (s16)x0; r->y0 = (s16)y0; r->x1 = (s16)x1; r->y1 = (s16)y1;
     bg_runs_set(b, b->bg_runs + 1, b->bg_run_tiles + count);
+    return 1;
+}
+
+/* A field background layer taken as a unit (port/game/field_bg.c: while the runs are off, each layer's tiles lifted
+ * out of the OT, one marker at its farthest entry): its tiles recorded straight from their packets (BgSprt: a texture
+ * page and a SPRT_16, as gp0_tpage_sprite16 and hybrid_sprite16 take them), each with its own entry's depth, and
+ * none merged across depths or with what came before; without the walk's decoding and lookups for each. The records
+ * are then out of the walk's order: the replays go by their depths (units_order). 0: not taken (a scene in
+ * software, a tile the path doesn't take, no room): field_bg.c puts the runs back for the walk. */
+int gxh_bg_units_on(void) {
+    return active && place->field && bg_runs_off && !soft_hold && gp0_backend == &hybrid_backend && ovl0a_resident();
+}
+PORT_OVERLAY_CODE(0a) int gxh_bg_unit(const unsigned int *head, int count, const unsigned char *sprites,
+                                      const unsigned int *pos, int z, const unsigned int *ot) {
+    if (!active || !place->field || gp0_backend != &hybrid_backend || !bg_runs_off) return 0;
+    /* (the entries' depths are the main OT's: the layer's OT is part of it, from this entry) */
+    const int base = (int)(ot - (const unsigned int *)psx_main_ot);
+    if (base < 0 || base + 0xFF9 > (int)psx_main_ot_n) return 0;
+    if (gp0_state.twin_mask_x || gp0_state.twin_mask_y || gp0_state.set_mask || gp0_state.check_mask) return 0;
+    Buffer *shown, *b = target(&shown);
+    if (!b || b == shown || b->soft || !b->slots) return 0;
+    u32 tp = 0;
+    const u32 *p = (const u32 *)head;
+    for (int i = 0; i < count; ++i, p = bg_next(p)) { /* (every tile one this path takes, as gxh_bg_run checks them) */
+        if (p[0] >> 24 != 5 || p[1] >> 24 != 0xE1 || p[2] || p[3] >> 26 != 0x7C >> 2 || (p[3] >> 24 & 2)) return 0;
+        tp = p[1];
+        if ((tp & 0x10) && (tp & 15) >= 14) return 0;
+        if ((p[5] & 0xFF) > 240 || (p[5] >> 8 & 0xFF) > 240) return 0;
+    }
+    /* (room for them, and for the replays' order of all: units_order) */
+    const int after = b->count + count;
+    if (after > prims_cap(b) || (prims_cap(b) - after) * (int)sizeof(Prim) < 6 * after + 4) return 0;
+    ui_flush();
+    const int ofs_x = gp0_state.ofs_x, ofs_y = gp0_state.ofs_y;
+    const int ax0 = gp0_state.area_x0, ay0 = gp0_state.area_y0, ax1 = gp0_state.area_x1, ay1 = gp0_state.area_y1;
+    int last_entry = -1, last_slot = 0, run_first = b->count;
+    p = (const u32 *)head;
+    for (int i = 0; i < count; ++i, p = bg_next(p)) {
+        const int entry = (s16)(z + (int)(pos[((const u8 *)p - sprites) / 24] & 0xFFF));
+        if (entry != last_entry) { /* (a run: none merged into what came before, nor across depths) */
+            last_entry = entry; last_slot = world_entry_depth(base + entry); run_first = b->count;
+        }
+        const u32 t = p[1] & 0xFFFFFF, cmd = p[3], xy = p[4], uvc = p[5];
+        int u = (int)(uvc & 0xFF), v = (int)(uvc >> 8 & 0xFF);
+        int x = bg_sext11(xy) + ofs_x, y = bg_sext11(xy >> 16) + ofs_y;
+        /* clipped to the drawing area as hybrid_sprite16 clips it: one wholly outside is nothing */
+        int w = 16, h = 16;
+        if (x < ax0 || y < ay0 || x + 16 > ax1 + 1 || y + 16 > ay1 + 1) {
+            const int dx = ax0 - x, dy = ay0 - y;
+            if (dx > 0) { x += dx; u += dx; w -= dx; }
+            if (dy > 0) { y += dy; v += dy; h -= dy; }
+            if (x + w > ax1 + 1) w = ax1 + 1 - x;
+            if (y + h > ay1 + 1) h = ay1 + 1 - y;
+            if (w <= 0 || h <= 0) continue;
+        }
+        const u32 depth = t >> 7 & 3, flags = P_TEXTURED | (cmd >> 24 & 1 ? P_RAW : 0) | P_RECT | (t & 0x200 ? P_DITHER : 0);
+        const u32 w0 = 4 | flags << 8 | (t >> 5 & 3) << 16 | (depth == 3 ? 2 : depth) << 24;
+        const u32 w1 = (t & 15) * 64 | (t >> 4 & 1) * 256 << 16, w2 = (uvc >> 16 & 0x3F) * 16 | (uvc >> 22 & 0x1FF) << 16;
+        const int bx = x - b->x, by = y - b->y;
+        if (b->count > run_first) { /* (extend_rect: the last record's row continued) */
+            u32 *q = (u32 *)&b->prims[b->count - 1];
+            if (q[0] == w0 && q[1] == w1 && q[2] == w2 && (s16)(q[3] >> 16) == bx && (s16)q[5] == by && (s16)q[6] == by + h &&
+                ((q[7] ^ cmd) & 0xFF) == 0 && ((q[8] ^ cmd >> 8) & 0xFF) == 0 && ((q[9] ^ cmd >> 16) & 0xFF) == 0 &&
+                (int)(q[10] >> 8 & 0xFF) + 1 == u && (int)(q[11] & 0xFF) == v && (int)(q[11] >> 16 & 0xFF) == v + h - 1) {
+                Prim *pp = (Prim *)q;
+                pp->x[1] = pp->x[3] = (s16)(bx + w);
+                pp->u[1] = pp->u[3] = (u8)(u + w - 1);
+                continue;
+            }
+        }
+        PrimCopy c;
+        const u32 x0 = (u16)bx, x1 = (u16)(bx + w), y0 = (u16)by, y1 = (u16)(by + h);
+        const u32 u0 = (u8)u, u1 = (u8)(u + w - 1), v0 = (u8)v, v1 = (u8)(v + h - 1);
+        c.w[0] = w0; c.w[1] = w1; c.w[2] = w2;
+        c.w[3] = c.w[4] = x0 | x1 << 16;
+        c.w[5] = y0 | y0 << 16; c.w[6] = y1 | y1 << 16;
+        c.w[7] = (cmd & 0xFF) * 0x01010101u; c.w[8] = (cmd >> 8 & 0xFF) * 0x01010101u; c.w[9] = (cmd >> 16 & 0xFF) * 0x01010101u;
+        c.w[10] = u0 | u1 << 8 | u0 << 16 | u1 << 24;
+        c.w[11] = v0 | v0 << 8 | v1 << 16 | v1 << 24;
+        b->slots[b->count] = (u16)last_slot;
+        store_prim(&b->prims[b->count++], &c);
+    }
+    b->scene_gen = psx_ot_generation;
+    b->ofs_x = ofs_x - b->x; b->ofs_y = ofs_y - b->y;
+    b->units = 1;
+    gp0_note_sprites(tp, (unsigned)count);
     return 1;
 }
 

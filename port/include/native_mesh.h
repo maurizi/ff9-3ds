@@ -5,6 +5,13 @@
 
 /* Port code only an overlay's own code calls, linked into that overlay's native area (DS: gen_link.py's slot 0, read
  * from ovls.bin with the overlay; it takes no resident memory while the slot's largest overlay sets its size) */
+/* A field background layer taken as a unit (port/game/field_bg.c, gx_hybrid.c gxh_bg_unit): its tiles lifted out of
+ * the OT, chained through their own links from head (count of them); a tile's OT entry is z plus the low 12 bits of
+ * its position word (pos[(tile - sprites) / 24]) */
+int gxh_bg_unit(const unsigned int *head, int count, const unsigned char *sprites, const unsigned int *pos, int z,
+                const unsigned int *ot); /* (ot: the OT the entries are of) */
+int gxh_bg_units_on(void); /* whether field_bg.c lifts layers as units */
+
 #ifdef __arm__
 #define PORT_OVERLAY_CODE(id) __attribute__((section(".psxovl_" #id ".port"), noinline))
 #else

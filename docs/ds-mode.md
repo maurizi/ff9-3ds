@@ -1707,3 +1707,23 @@ any is culled and the scene takes two passes or software (an experiment, the CPU
 Still backgrounds: runs per OT entry can't carry them (each tile at its own entry); a layer taken as a unit needs
 the scene known to stay in 3D or a software fallback re-sorted by depth (go_software replays records in order).
 Estimated ~7% of a median field for the records alone, ~15% with the composite's hash and choice cached per layer.
+
+### Still background layers taken as units (2026-10-30)
+
+While the runs are off (the composite holds the field, or no layer moves), port/game/field_bg.c lifts each visible
+opaque layer's tiles out of the OT after the game links them (every run at the head of its entry, the runs chained
+through the tiles' own links; no tables, ovl_0a's data is short of room) and puts one marker per layer at the
+farthest entry any of them takes, the last drawn layer's first. gx_hybrid.c's gxh_bg_unit records each tile
+straight from its packet (texture page + SPRT_16) with its own main-OT entry's depth, without the walk's GP0
+decoding and per-tile lookups; merges only within an entry. Records are then out of the walk's order: the replays
+that paint (the composite, a scene going software, peeks) go by a stable depth order (units_order, a radix sort
+in the free rows, built only for them: per scene it cost ~1 ms when the UI layer's replay built it too). A unit the
+renderer can't take (a scene in software, a tile its path doesn't take, no room) has its runs put back at their
+entries for the walk. The background tuning now chooses no composite at a 5% gain (was 10%: units made the composite
+phase measure faster and kept d2_f1053 on it, 24.0 -> 26.0).
+OT walk in d3_f2607 4.89 -> 3.75 ms per VBlank. 60-field sample: median 20.63 -> 20.49, d1_f0814 27.6 -> 25.5,
+d4_f3057 22.4 -> 20.7, d4_f2101 29.5 -> 28.2, d1_f0501 38.6 -> 37.4; frames identical but d3_f2052 (the tuning
+now picks no composite there: 25.9 -> 24.8, the 3D path's shade) and d3_f1914 (382 pixels around one tile where
+layers overlap, slightly further from the host's frame: not yet understood; neither layer alone as a unit differs,
+nor do either unit order, cross-entry merges or the texture page state). d2_f0931, d2_f1403 (peeks), d3/d4_f1911
+run.
