@@ -74,6 +74,7 @@ typedef struct {
     u32 h;
     int fc32;          /* the far colour fits interpolate's 32-bit path */
     const u16 *unr;
+    u32 nct_have[8], nct[256]; /* NCT's colours by normal (without the code byte), those worked out */
 } WvCtx;
 static inline s32 wv_clamp(long long v, s32 lo, s32 hi) { return v < lo ? lo : v > hi ? hi : (s32)v; }
 static inline s32 wv_clamp32(s32 v, s32 lo, s32 hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -146,7 +147,7 @@ static inline void wv_project(const WvCtx *cx, u32 vxy, u32 vz, u32 *sxy, u32 *s
     *sz = sz3;
 }
 /* one group's results; *rgbc: RGBC as the GTE would hold it, before and after */
-static inline void wv_group(const WvCtx *cx, const u32 *v, s32 flags, u32 *rgbc, u32 *lit, u32 *fog, u32 *sxy,
+static inline void wv_group(WvCtx *cx, const u32 *v, s32 flags, u32 *rgbc, u32 *lit, u32 *fog, u32 *sxy,
                             u32 *zs32, u16 *zs16) {
     u32 w[6], sz[3], rgb[3];
     for (int i = 0; i < 6; i++) w[i] = v[i];
@@ -156,7 +157,14 @@ static inline void wv_group(const WvCtx *cx, const u32 *v, s32 flags, u32 *rgbc,
         const s32 mac3 = cx->tr[2] + (((s16)c[3] * (s16)vxy + ((s32)c[3] >> 16) * ((s32)vxy >> 16) + (s16)c[4] * (s16)w[2 * i + 1]) >> 12);
         sz[i] = mac3 > 0xFFFF ? 0xFFFF : mac3 < 0 ? 0 : (u32)mac3;
     }
-    for (int i = 0; i < 3; ++i) rgb[i] = wv_nct(cx, &D_800CD794[(w[2 * i + 1] >> 16) & 0xFF], *rgbc >> 24);
+    for (int i = 0; i < 3; ++i) { /* (NCT's colour depends on the normal alone in a call: worked out once each) */
+        const u32 ni = (w[2 * i + 1] >> 16) & 0xFF;
+        if (!(cx->nct_have[ni >> 5] >> (ni & 31) & 1)) {
+            cx->nct[ni] = wv_nct(cx, &D_800CD794[ni], 0);
+            cx->nct_have[ni >> 5] |= 1u << (ni & 31);
+        }
+        rgb[i] = cx->nct[ni] | *rgbc >> 24 << 24;
+    }
     if (flags & WV_FOG) {
         for (int i = 0; i < 3; ++i) {
             const u32 *e = (const u32 *)g_worldFogParams + ((w[2 * i + 1] >> 25) & 1) * 2;
@@ -216,6 +224,7 @@ PORT_OVERLAY_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
         cx.fc32 = 1;
         for (int k = 0; k < 3; ++k) if ((u32)cx.fc[k] + 0x20000u >= 0x40000u) cx.fc32 = 0; /* (interpolate's FITS(FC, 17)) */
         cx.unr = psx_gte_unr();
+        for (int k = 0; k < 8; ++k) cx.nct_have[k] = 0;
         u32 rgbc = psx_gte.d[6];
         while (n > 3) {
             wv_group(&cx, v, flags, &rgbc, lit, fog, sxy, zs32, zs16);

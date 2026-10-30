@@ -1672,7 +1672,9 @@ before is RGBC's code byte, tracked). Frames identical. ms per VBlank: d1_w9009 
 Then the GTE's constants read once a call (WvCtx), the projection inlined (the UNR table from psx_gte_unr), and
 NCT's products and the depth cue in 32 bits where gte.c's own mat_mul and interpolate take their 32-bit paths (the
 same conditions; they give what the 64-bit ones would), 64-bit otherwise: d1_w9009 28.16 -> 26.03, d3_w9006 31.93 ->
-29.97, d4_w9006 30.03 -> 28.06, frames identical to before either step.
+29.97, d4_w9006 30.03 -> 28.06, frames identical to before either step. NCT's colour worked out once per normal in a call
+(it depends on the normal alone there; the code byte added per use, as RGBC changes between groups; 1 KB on the
+stack): d1_w9009 -> 25.33, d3_w9006 -> 29.19, d4_w9006 -> 27.40, frames identical.
 
 ### The occlusion cull's cost (2026-10-30)
 
