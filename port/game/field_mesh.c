@@ -129,6 +129,75 @@ PORT_OVERLAY_CODE(0a) u8 *o0a_fld_emitSprite3D(u8 *src, FieldSprArgs *a, u8 *pkt
     return pkt;
 }
 
+/* fldmdl_projectMeshClipY (decomp tu_800B61A4.c), the same way: each bone's vertices through its matrix (MVMVA RT
+ * V0 TR, sf 1, as rtv0tr_b), IR2 raised to the model's clipY where it isn't below it (the depth word then flagged,
+ * gte_stsvclamp), then the camera's RTPT over the bone's vertices in whole groups of three (into the next bone's,
+ * which that bone rewrites first; gte_rtpt_batch), the depths as halfwords under the flags. The last group runs
+ * through the GTE again, so the registers end as the game leaves them. */
+void o0a_fldmdl_projectMeshClipY(ModelObj *arg0, u8 arg1);
+static inline s32 ir_of(long long mac) { return mac > 0x7FFF ? 0x7FFF : mac < -0x8000 ? -0x8000 : (s32)mac; }
+#ifdef PORT_GTE_APPROX /* (DS mode's MVMVA: 32-bit sums, as psx_gte_mvmva_rt12) */
+typedef s32 ClipMac;
+#else
+typedef long long ClipMac;
+#endif
+#if defined(__arm__)
+__attribute__((target("arm"))) /* (Thumb has no long multiply) */
+#endif
+PORT_OVERLAY_CODE(0a) void o0a_fldmdl_projectMeshClipY(ModelObj *arg0, u8 arg1) {
+    WmModelGroup *g = &arg0->model->groups[arg1];
+    gte_SetGeomScreen(g_gameState->gameData->unkA);
+    const MATRIX *bone = (const MATRIX *)arg0->boneMatrices;
+    const u32 cnt = arg0->model->boneCount;
+    const s32 ymax = arg0->clipY;
+    const SVECTOR *vtx = (const SVECTOR *)g->vertices;
+    s32 k = 0, last_k = -1;
+    u32 last_xy[3], last_z[3]; /* (the last group's vertices, for the GTE) */
+    for (u32 i = 0; i < cnt; bone++) {
+        const s32 n = ((u16 *)g->boneVertexCounts)[i++];
+        if (n == 0) continue;
+        u32 *sxy = (u32 *)&g_vtxScreenXY[k], *sz = (u32 *)&g_vtxScreenZ[k];
+        const s32 r11 = bone->m[0][0], r12 = bone->m[0][1], r13 = bone->m[0][2];
+        const s32 r21 = bone->m[1][0], r22 = bone->m[1][1], r23 = bone->m[1][2];
+        const s32 r31 = bone->m[2][0], r32 = bone->m[2][1], r33 = bone->m[2][2];
+        const s32 tx = bone->t[0], ty = bone->t[1], tz = bone->t[2];
+        for (s32 j = 0; j < n; ++j, ++vtx) {
+            const s32 vx = vtx->vx, vy = vtx->vy, vz = vtx->vz;
+            /* (TR << 12 + M V) >> 12 is TR + (M V >> 12) exactly) */
+            const s32 x = ir_of((long long)tx + (((ClipMac)r11 * vx + (ClipMac)r12 * vy + (ClipMac)r13 * vz) >> 12));
+            s32 y = ir_of((long long)ty + (((ClipMac)r21 * vx + (ClipMac)r22 * vy + (ClipMac)r23 * vz) >> 12));
+            u32 z = (u32)ir_of((long long)tz + (((ClipMac)r31 * vx + (ClipMac)r32 * vy + (ClipMac)r33 * vz) >> 12)) & 0xFFFF;
+            if (!(y < ymax)) { y = ymax; z |= 0x10000000; }
+            sxy[j] = (u32)(u16)x | (u32)y << 16;
+            sz[j] = z;
+        }
+        /* the camera's projection, three at a time, in place: (x, y) and the depth's low half as the vertex */
+        gte_SetRotMatrix(&g_gameState->gameData->unk18);
+        gte_SetTransMatrix(&g_gameState->gameData->unk18);
+        const s32 groups = (n + 2) / 3;
+        for (s32 q = 0; q < 3; ++q) { last_xy[q] = sxy[(groups - 1) * 3 + q]; last_z[q] = sz[(groups - 1) * 3 + q]; }
+        enum { CHUNK = 48 };
+        u32 v[CHUNK * 2], oxy[CHUNK], oz[CHUNK];
+        for (s32 at = 0; at < groups * 3; at += CHUNK) {
+            const s32 m = groups * 3 - at < CHUNK ? groups * 3 - at : CHUNK;
+            for (s32 q = 0; q < m; ++q) { v[q * 2] = sxy[at + q]; v[q * 2 + 1] = (u32)(s32)(s16)sz[at + q]; }
+            gte_rtpt_batch((const gte_u32 *)v, m, (gte_u32 *)oxy, (gte_u32 *)oz);
+            for (s32 q = 0; q < m; ++q) {
+                sxy[at + q] = oxy[q];
+                sz[at + q] = (sz[at + q] & 0xFFFF0000u) | (oz[q] & 0xFFFF);
+            }
+        }
+        last_k = k + (groups - 1) * 3;
+        k += n;
+    }
+    if (last_k >= 0) { /* the registers as the game's last group leaves them */
+        gte_ldv3xyz(last_xy, last_z);
+        gte_rtpt_b();
+        gte_stsxy3c(&g_vtxScreenXY[last_k]);
+        gte_stsz3h(&g_vtxScreenZ[last_k]);
+    }
+}
+
 /* fldmdl_drawMesh (decomp src_equiv/ovl_0a/model_link.c, renamed by config/renames.txt): the renderer may take the
  * group (gx_hybrid.c port_native_field_mesh) instead of the game linking its prebuilt primitives into the OT. */
 void o0a_fldmdl_drawMesh_link(ModelObj *model, u8 group);

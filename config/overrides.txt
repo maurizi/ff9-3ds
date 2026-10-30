@@ -29,6 +29,7 @@ o64_mbg_streamGetFrame
 # Model vertex projection: the per-vertex loop in port code (port/game/mesh_native.c, field_mesh.c, wm_mesh.c).
 o0b_btl_projectMesh
 o0a_fldmdl_projectMesh
+o0a_fldmdl_projectMeshClipY
 
 # Field 3D sprites: each corner projected in port code (port/game/field_mesh.c).
 o0a_fld_emitSprite3D

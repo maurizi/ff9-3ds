@@ -1651,9 +1651,11 @@ d4_f2404 28.90 -> 28.38-28.76, d1_b0228 25.14 -> 24.93, d3_b0194 26.82 -> 26.59;
 5,868 -> 5,356. d4_f0352 sits on the edge of the PS1's speed: 16.72 in the s60f and
 DMA-only builds and in one instrumented build of this one, 17.5-17.6 in the plain ones (which code lands where):
 the copy itself never waited on the FIFO there.
-Tried, no measurable gain (reverted): fldmdl_projectMeshClipY natively (as fldmdl_projectMesh; DS mode's MVMVAs there
-already take the 32-bit path), light_under's cell test with its edge functions stepped (its primitives are a cell or
-two: the cost is per call).
+Tried, no measurable gain (reverted): light_under's cell test with its edge functions stepped (its primitives are a
+cell or two: the cost is per call). fldmdl_projectMeshClipY natively was slower at first (d3_f1818 29.35 -> 30.13):
+ovl_0a's code is Thumb, where its 64-bit sums were library calls. In ARM with DS mode's 32-bit sums (the GTE's
+MVMVA path; 64-bit, exact, on the host) and the bones' vertices projected by gte_rtpt_batch, the last group through
+the GTE: d3_f1818 29.35 -> 28.13, d4_f2404 28.63 -> 27.89, frames identical, host RAM identical at frame 1400.
 
 ### The world map's vertex pass as arithmetic (2026-10-30)
 
