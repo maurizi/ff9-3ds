@@ -1603,3 +1603,14 @@ draft file the function had left (`portify.py` now refuses a patch whose file do
 
 The host prints the most primitives a displayed scene had (frame-limit line): over half the fields with walking and
 `--render`, median 1012, 90% 1681, maximum 2774 (field 1217).
+
+## Sweeps after the 2026-10-29 renderer, audio and decomp (R28) changes
+
+Host build, `field_coverage_all` (1131) at 3000 frames: 1129 pass, the two known invalid routes fail as before.
+`battlesweep11` (1085 encounters) at 12000 frames: 1085/1085. Walking (`tools/walk_presses.py 400 6000 1`, `--render`,
+6000 frames): 1084 pass; 37 are fixture limits the scenario layer reports (unavailable fields, other discs' world data);
+10 disc-3 fields segfaulted in `btlbg_init` with a NULL background: their walk reaches the world map, whose story
+state (the fixture's) starts encounter 247 there, whose background is only on discs 1, 2 and 4. A counted patch
+(btl_cmd.c) now stops such a run with "the encounter's battle background is not in this disc's archive (story
+state)", as the world map's own data check does; all ten now end on it. Disc-3 fixtures with the disc's own story
+state would let those walks go on.
