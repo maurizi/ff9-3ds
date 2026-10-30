@@ -3076,7 +3076,7 @@ PORT_ITCM_CODE(0b) static void native_strips(Buffer *b, EmitState *es) {
 
 
 /* The world map's terrain and backdrop faces (emit_scene; ARM in ovl_0c's area) */
-PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) static void terrain_emit(Buffer *b, struct Terrain *tr, EmitState *es,
+PORT_ITCM_CODE(0c) static void terrain_emit(Buffer *b, struct Terrain *tr, EmitState *es,
                                                                               int drop_below, int drop_quota) {
     u32 *wp = es->wp, *pack_header, pack_ids;
     int pack_shift;

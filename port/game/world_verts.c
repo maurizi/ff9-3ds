@@ -200,7 +200,7 @@ static inline void wv_group(WvCtx *cx, const u32 *v, s32 flags, u32 *rgbc, u32 *
 #if defined(__arm__)
 __attribute__((target("arm"))) /* (its 64-bit products: Thumb makes each a call) */
 #endif
-PORT_OVERLAY_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
+PORT_ITCM_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
     s32 n = *(u32 *)o & 0xFF;
     u32 *v = *(u32 **)(o + 4);
     u32 *fog = g_worldVtxFogColors;
