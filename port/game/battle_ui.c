@@ -54,8 +54,8 @@ void port_battle_ui_frame(void) {
 }
 
 static RECT r_cmd[4];
-static RECT r_defend = {6, 186, 70, 30}, r_change = {80, 186, 70, 30};
-static RECT r_cards = {156, 42, 160, 176};
+static RECT r_defend = {4, 188, 72, 30}, r_change = {80, 188, 72, 30};
+static RECT r_cards = {156, 44, 160, 176}; /* (rows of 43: a 32x32 face 5 px in, the text 6 px after it) */
 static BtlUnit *card_unit[4];
 static int cmd_shown;
 
@@ -92,12 +92,12 @@ static void bar(u32 *ot, int x, int y, int w, int h, u32 bgr) {
 static void draw_cards(void) {
     static const u8 hp[] = "HP", mp[] = "MP";
     u8 a[16];
-    int y = r_cards.y + 4;
+    int y = r_cards.y + 5;
     for (int i = 0; i < 4; i++, y += 43) {
         BtlUnit *u = card_unit[i] = party_unit(i);
         if (!u || !ram_ok(u->menu, 16) || !ram_ok(u->menu->chr, sizeof(Character)) || !ram_ok(u->max, 8)) continue;
         Character *c = u->menu->chr;
-        int x = r_cards.x + 4;
+        int x = r_cards.x + 6;
         const u8 *e = port_portrait(g_portraitByKind[c->info.b.kind]);
         if (e) {
             ctr_hud_image(4 + i, 0x200u | (u32)g_portraitByKind[c->info.b.kind], (const u16 *)e,
@@ -105,10 +105,10 @@ static void draw_cards(void) {
             ctr_hud_draw(4 + i, x, y + 1, 32, 32);
         }
         int dead = u->hp == 0;
-        text_drawBlock(x + 38, y, 2, c->name, dead ? 2 : 0);
+        text_drawBlock(x + 40, y, 2, c->name, dead ? 2 : 0);
         { /* its statuses: the game's icons (the battle status list's table), up to four after the name */
             u32 st = u->status | u->autoStatus;
-            int ix = x + 100, n = 0;
+            int ix = x + 104, n = 0;
             for (int k = 0; k < 16 && n < 4; k++)
                 if (st & g_btluiStatusIcons[k].status) {
                     ui_drawSprite(ix, y + 1, 2, g_btluiStatusIcons[k].icon, 0);
@@ -117,22 +117,22 @@ static void draw_cards(void) {
                 }
         }
         int low = dead ? 2 : (u->max->maxHp / 6 >= u->hp) ? 2 : 0;
-        ui_drawLabel(x + 38, y + 14, 2, (s32)hp, 0);
+        ui_drawLabel(x + 40, y + 14, 2, (s32)hp, 0);
         text_formatNumber(u->menu->gauges[0].shown, a, 4, 1);
-        ui_drawSmallDigits(x + 52, y + 15, 2, a, low);
-        ui_drawLabel(x + 84, y + 14, 2, (s32)mp, 0);
+        ui_drawSmallDigits(x + 54, y + 15, 2, a, low);
+        ui_drawLabel(x + 86, y + 14, 2, (s32)mp, 0);
         text_formatNumber(u->menu->gauges[1].shown, a, 3, 1);
-        ui_drawSmallDigits(x + 98, y + 15, 2, a, u->max->maxMp / 6 >= u->mp ? 2 : 0);
+        ui_drawSmallDigits(x + 100, y + 15, 2, a, u->max->maxMp / 6 >= u->mp ? 2 : 0);
         /* the ATB bar: white when the member is ready, the trance bar under it */
         int ready = u->inMenuQueue && !u->cmdIssued;
         int max = u->max->maxAtb > 0 ? u->max->maxAtb : 1, atb = u->atb > max ? max : u->atb < 0 ? 0 : u->atb;
-        bar(&g_ot[2], x + 38, y + 25, 110 * atb / max, 4, ready ? 0xF0F0F0 : 0xC09040);
-        bar(&g_ot[3], x + 38, y + 25, 110, 4, 0x302018);
+        bar(&g_ot[2], x + 40, y + 25, 102 * atb / max, 4, ready ? 0xF0F0F0 : 0xC09040);
+        bar(&g_ot[3], x + 40, y + 25, 102, 4, 0x302018);
         if (u->flags & 0x40000000u) {
-            bar(&g_ot[2], x + 38, y + 31, 110 * u->trance / 255, 3, 0x9060F0);
-            bar(&g_ot[3], x + 38, y + 31, 110, 3, 0x301830);
+            bar(&g_ot[2], x + 40, y + 31, 102 * u->trance / 255, 3, 0x9060F0);
+            bar(&g_ot[3], x + 40, y + 31, 102, 3, 0x301830);
         }
-        if (g_btlUi->cmdUnit == u) bar(&g_ot[2], r_cards.x + 1, y, 2, 34, 0x40E0F8); /* (the member choosing) */
+        if (g_btlUi->cmdUnit == u) bar(&g_ot[2], r_cards.x + 2, y + 1, 2, 32, 0x40E0F8); /* (the member choosing) */
     }
     win_drawBox(&r_cards, 4, 2);
 }
@@ -141,10 +141,10 @@ static void draw_commands(void) {
     static const u8 defend[] = "DEFEND", change[] = "CHANGE", command[] = "COMMAND";
     cmd_shown = g_btlUi->menuState == BTLUI_MENU_CMD && g_btlUi->cmdUnit != NULL;
     if (!cmd_shown) return;
-    ui_drawLabel(8, 39, 2, (s32)command, 0);
+    ui_drawLabel(10, 41, 2, (s32)command, 0);
     for (int i = 0; i < 4; i++) {
         RECT *r = &r_cmd[i];
-        r->x = 6; r->y = 44 + i * 35; r->w = 144; r->h = 31;
+        r->x = 4; r->y = 44 + i * 35; r->w = 148; r->h = 31;
         if (!g_btlCmdMenu.cmdIds[i]) continue;
         u8 *t = g_btlCmdNames + g_btlCmdTable[g_btlCmdMenu.cmdIds[i]].nameOfs;
         text_drawBlock(r->x + 14, r->y + 9, 2, t, g_btlCmdMenu.enabled[i] ? 0 : 2);

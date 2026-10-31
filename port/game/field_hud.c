@@ -35,14 +35,15 @@ u32 *ClearOTagR(u32 *ot, int n);
 static u32 hud_mem[OTN + BUF_WORDS];
 static u32 *const hud_ot = hud_mem;
 
-static RECT r_head = {4, 6, 312, 24};
-static RECT r_map = {4, 40, 172, 128};
-static RECT r_party = {180, 40, 136, 128};
-static RECT r_menu = {4, 178, 74, 38};
-static RECT r_cards = {82, 178, 74, 38};
-static RECT r_ate = {160, 178, 74, 38};
-static RECT r_log = {238, 178, 78, 38};
-static RECT r_logbox = {4, 40, 312, 128};
+/* the layout: 6 px inside every box, 4 px between them, labels on the boxes' top edges (as the PS1's) */
+static RECT r_head = {4, 4, 312, 24};
+static RECT r_map = {4, 34, 168, 152};
+static RECT r_party = {176, 34, 140, 152};
+static RECT r_menu = {4, 190, 75, 30};
+static RECT r_cards = {83, 190, 75, 30};
+static RECT r_ate = {162, 190, 75, 30};
+static RECT r_log = {241, 190, 75, 30};
+static RECT r_logbox = {4, 34, 312, 152};
 
 static int shown;
 
@@ -178,24 +179,25 @@ static void draw_party(void) {
     static const u8 hp[] = "HP", mp[] = "MP";
     GameData *g = g_gameState->gameData;
     u8 a[16];
-    int y = r_party.y + 1;
-    for (int i = 0; i < 4; i++, y += 31) {
+    int y = r_party.y + 6;
+    for (int i = 0; i < 4; i++, y += 36) { /* (a row: the 32x32 face, then name, HP, MP; 4 px between rows) */
         Character *c = g->party[i];
         if (!ram_ok(c, sizeof *c)) continue;
-        portrait(i, g_portraitByKind[g->characters[c->info.b.id].info.b.kind], r_party.x + 3, y);
-        text_drawBlock(r_party.x + 39, y + 1, 2, c->name, 0);
-        ui_drawStatusIcons(r_party.x + 98, y + 2, 2, c->status, 0);
+        int x = r_party.x + 6, tx = x + 38;
+        portrait(i, g_portraitByKind[g->characters[c->info.b.id].info.b.kind], x, y);
+        text_drawBlock(tx, y, 2, c->name, 0);
+        ui_drawStatusIcons(r_party.x + r_party.w - 30, y + 1, 2, c->status, 0);
         int low = c->hp == 0 ? 3 : (c->hp <= c->maxHp / 6) * 4;
-        ui_drawLabel(r_party.x + 39, y + 15, 2, (s32)hp, 0);
+        ui_drawLabel(tx, y + 14, 2, (s32)hp, 0);
         text_formatNumber(c->hp, a, 4, 1);
         a[4] = '/';
         text_formatNumber(c->maxHp, a + 5, -1, 1);
-        ui_drawSmallDigits(r_party.x + 54, y + 16, 2, a, low ? 2 : 0);
-        ui_drawLabel(r_party.x + 39, y + 23, 2, (s32)mp, 0);
+        ui_drawSmallDigits(tx + 14, y + 15, 2, a, low ? 2 : 0);
+        ui_drawLabel(tx, y + 23, 2, (s32)mp, 0);
         text_formatNumber(c->mp, a, 4, 1);
         a[4] = '/';
         text_formatNumber(c->maxMp, a + 5, -1, 1);
-        ui_drawSmallDigits(r_party.x + 54, y + 24, 2, a, c->mp < c->maxMp / 6 ? 2 : 0);
+        ui_drawSmallDigits(tx + 14, y + 24, 2, a, c->mp < c->maxMp / 6 ? 2 : 0);
     }
     win_drawBox(&r_party, 3, 2);
 }
@@ -252,7 +254,7 @@ void port_dialogue_log(const u8 *text) {
 /* the log in the middle area, newest at the bottom (log_scroll lines back) */
 static void draw_log(void) {
     static const u8 label[] = "LOG";
-    RECT box = {4, 40, 312, 128};
+    RECT box = r_logbox;
     ui_drawLabel(box.x + 8, box.y - 3, 2, (s32)label, 0);
     int y = box.y + box.h - 6;
     for (int i = log_scroll; i < log_count; i++) {
@@ -281,7 +283,7 @@ static int draw_choices(void) {
         else if (*t == TEXT_ESC) t += t[1] == 0x43 || t[1] == 0x44 || t[1] == 0x49 || t[1] == 0x4A || (t[1] >= 0x4B && t[1] <= 0x4E) || (t[1] >= 0x68 && t[1] <= 0x6F) ? 2 : 1;
     }
     int n = g_msgChoiceCount > 8 ? 8 : g_msgChoiceCount;
-    int h = n > 4 ? 22 : 30, gap = n > 4 ? 3 : 6, y0 = 40 + (128 - (n * h + (n - 1) * gap)) / 2;
+    int h = n > 4 ? 24 : 32, gap = n > 4 ? 3 : 6, y0 = 34 + (152 - (n * h + (n - 1) * gap)) / 2;
     static u8 lines[8][96];
     for (int i = 0; i < n; i++) {
         t = (u8 *)msg_plain(t, lines[i], sizeof lines[i], TEXT_NEWLINE);
@@ -300,7 +302,13 @@ static int draw_choices(void) {
 /* what the PS1 shows only through its menu is shown only when the menu can be opened: in the opening and other
  * cutscene stretches (GD_MENU_DISABLED) the party may be a placeholder, and there is no menu to offer */
 static int menu_allowed(void) {
-    return !(g_gameState->gameData->flags & GD_MENU_DISABLED);
+    /* once the player has had control in this field (the opening's party is a placeholder until then; a dialogue
+     * takes control away for a moment, which mustn't hide anything) */
+    static int field = -1, had_control;
+    GameData *g = g_gameState->gameData;
+    if (g->fieldId != field) field = g->fieldId, had_control = 0;
+    if (ram_ok(g_evtState, sizeof *g_evtState) && g_evtState->controlEnabled) had_control = 1;
+    return had_control && !(g->flags & GD_MENU_DISABLED);
 }
 
 static int card_count(void) {
@@ -317,8 +325,8 @@ static int cards_known(void) {
 static void button(RECT *r, const u8 *label, const u8 *count) {
     int w = ui_measureLabel((u8 *)label);
     int x = r->x + (r->w - w - (count ? 24 : 0)) / 2;
-    ui_drawLabel(x, r->y + 15, 2, (s32)label, 0);
-    if (count) ui_drawSmallDigits(x + w + 6, r->y + 16, 2, (u8 *)count, 0);
+    ui_drawLabel(x, r->y + (r->h - 6) / 2, 2, (s32)label, 0);
+    if (count) ui_drawSmallDigits(x + w + 6, r->y + (r->h - 6) / 2 + 1, 2, (u8 *)count, 0);
     win_drawBox(r, 3, 2);
 }
 
@@ -331,12 +339,12 @@ static void draw(void) {
 
     /* the header: where, and since when and with what */
     if (ram_ok(g->locationName, 1) && *g->locationName != 0xFF) text_drawBlock(r_head.x + 8, r_head.y + 6, 2, g->locationName, 0);
-    ui_drawSprite(r_head.x + 190, r_head.y + 8, 2, 0xB1, 0);
-    ui_drawSmallDigits(r_head.x + 203, r_head.y + 9, 2, buf, text_formatTime(game_getPlayTime(), buf, 1));
-    ui_drawSprite(r_head.x + 246, r_head.y + 8, 2, 0xB2, 0);
+    ui_drawSprite(r_head.x + 178, r_head.y + 8, 2, 0xB1, 0);
+    ui_drawSmallDigits(r_head.x + 191, r_head.y + 9, 2, buf, text_formatTime(game_getPlayTime(), buf, 1));
+    ui_drawSprite(r_head.x + 236, r_head.y + 8, 2, 0xB2, 0);
     text_formatNumber(g->gil, buf, 7, 1);
     strcat((char *)buf, (const char *)gil_suffix);
-    ui_drawSmallDigits(r_head.x + 259, r_head.y + 9, 2, buf, 0);
+    ui_drawSmallDigits(r_head.x + 249, r_head.y + 9, 2, buf, 0);
     win_drawBox(&r_head, 3, 2);
 
     if (!draw_choices() && log_on) draw_log();
@@ -368,7 +376,7 @@ static void draw(void) {
         static int t;
         t++;
         int w = ui_measureLabel((u8 *)ate);
-        ui_drawLabel(r_ate.x + (r_ate.w - w) / 2, r_ate.y + 15, 2, (s32)ate, (t / 22) & 1 ? 2 : 0);
+        ui_drawLabel(r_ate.x + (r_ate.w - w) / 2, r_ate.y + (r_ate.h - 6) / 2, 2, (s32)ate, (t / 22) & 1 ? 2 : 0);
         win_drawBox(&r_ate, 3, 2);
     }
 }
