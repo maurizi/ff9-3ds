@@ -82,7 +82,7 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 ## World map
 - **Top**: the 3D world without the minimap. **[done]**
 - **Bottom**: a large world map with the player or vehicle arrow and discovered places **[done]**; tapping a place
-  shows its name **[todo]**; a zoom toggle **[todo]**; in chocobo mode the Chocograph and dig hints **[todo]**.
+  shows its name **[todo]**; a zoom toggle **[done: a tap zooms 2x with the party in the middle, and back]**; in chocobo mode the Chocograph and dig hints **[todo]**.
 - Vehicle controls stay physical. **[done]**
 
 ## Tetra Master

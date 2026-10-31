@@ -1052,6 +1052,10 @@ static int ui_ox, ui_oy; /* the displayed buffer's origin, which the UI list dra
 static int ui_list_layer;  /* the layer the UI list draws into */
 static int ui_layer_for(int x, int y, int clear);
 static int ui_packet(void);
+static const u8 *zoom_lo, *zoom_hi; /* port_bottom_zoom's */
+static float zoom_cx, zoom_cy;
+static int zoom_factor;
+extern const u32 *psx_gpu_packet;
 static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, int bx1, int by1, C3D_Tex *tex,
                  unsigned tflags) {
     u16 sc[4];
@@ -1102,6 +1106,10 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     }
     if (layer >= 0) { /* into a UI layer, relative to its framebuffer; the mirror isn't touched */
         for (unsigned i = 0; i < n; i++) moved[i] = v[i], moved[i].x -= ox, moved[i].y -= oy;
+        if (zoom_factor > 1 && (const u8 *)psx_gpu_packet >= zoom_lo && (const u8 *)psx_gpu_packet < zoom_hi)
+            for (unsigned i = 0; i < n; i++) /* (the world map's navigation map, zoomed: the party in the middle) */
+                moved[i].x = 160 + (moved[i].x - zoom_cx) * zoom_factor,
+                moved[i].y = 112 + (moved[i].y - zoom_cy) * zoom_factor;
         v = moved;
         sc[0] = (u16)clampi(sc[0] - ox, 0, UI_W); sc[2] = (u16)clampi(sc[2] - ox, 0, UI_W);
         sc[1] = (u16)clampi(sc[1] - oy, 0, UI_H); sc[3] = (u16)clampi(sc[3] - oy, 0, UI_H);
@@ -1449,6 +1457,15 @@ static struct { const u8 *lo, *hi; int hit, age; } ranges[8];
 static int nranges;
 int port_game_mode(void);
 void port_bottom_packets(const void *lo, const void *hi);
+/* packets [lo, hi) of this frame are drawn on the bottom screen scaled by factor, (cx, cy) of them in the middle of
+ * the screen (the world map's zoom: port/game/world_navi.c); factor 1: as they are */
+void port_bottom_zoom(const void *lo, const void *hi, int cx, int cy, int factor) {
+    zoom_lo = lo;
+    zoom_hi = hi;
+    zoom_cx = (float)cx;
+    zoom_cy = (float)cy;
+    zoom_factor = factor;
+}
 void port_ui_packets(const void *lo, const void *hi) {
     /* In a field or on the world map, windows are speech bubbles and prompts anchored to the scene: they stay on the
      * top screen with the speaker (docs/ui-design.md). Menus go to the bottom whatever the mode. */

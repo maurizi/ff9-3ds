@@ -95,7 +95,9 @@ static int shown_battle;
 unsigned port_hud_drive(void) {
     return shown_battle ? port_battle_drive() : 0;
 }
+__attribute__((weak)) int port_world_tap(void) { return 0; }
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
+    if (g_gameState && g_gameState->mode == 3 && !port_menu_state()) return port_world_tap() ? -1 : 0; /* (zoom) */
     if (!shown) return 0;
     y -= oy;
     if (shown_battle) return port_battle_tap(x, y, seq, max);
