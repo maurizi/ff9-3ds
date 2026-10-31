@@ -197,16 +197,19 @@ static int equip_view(const u8 *st) {
     if (count <= 0) return 0;
     face(0, chr_portrait(c), 18, 16, 32);
     text_drawBlock(58, 24, 2, c->name, 0);
-    int rows = 9, first = cur - rows / 2;
+    /* a row per candidate: its name and what it changes, under them the abilities it teaches with the member's AP */
+    int rows = 6, first = cur - rows / 2;
     if (first > count - rows) first = count - rows;
     if (first < 0) first = 0;
     for (int i = 0; i < rows && first + i < count; i++) {
-        int id = st[0x3C + (first + i) * 2], y = 56 + i * 19;
+        int id = st[0x3C + (first + i) * 2], y = 56 + i * 28;
         if (id == 0xFF) continue;
-        if (first + i == cur) bar_at(18, y - 2, 364, 15);
+        if (first + i == cur) bar_at(18, y - 2, 364, 28);
         ui_drawItemIcon(22, y, 2, id, 1);
         text_drawBlock(40, y, 2, g_itemNames + g_itemTable[id].name, 0);
-        if (!changes(176, y + 3, c, slot, id, 4)) ui_drawLabel(176, y + 3, 2, (s32)"NO CHANGE", 2);
+        if (c->equip[slot] == id) ui_drawLabel(176, y + 3, 2, (s32)"EQUIPPED", 1);
+        else if (!changes(176, y + 3, c, slot, id, 4)) ui_drawLabel(176, y + 3, 2, (s32)"NO CHANGE", 2);
+        teaches(40, y + 13, 380, c, id);
     }
     win_drawBox(&box, 5, 2);
     return 1;

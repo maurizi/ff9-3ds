@@ -68,7 +68,7 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
   for every ability the gear teaches; Status: full stat sheet and a large portrait; Items: description and who can
   use it. Game logic pauses; never a dimmed field. **[partial (port/game/menu_top.c), only what the bottom doesn't show:
   Items: for equipment, every member, whether they can wear it and what it changes for them; Equip: all of a slot's
-  candidates at once with their changes (not yet seen running); Abilities: which equipment teaches it. The 3D model
+  candidates at once with their changes and the abilities each teaches with the member's AP (seen: weapon list); Abilities: which equipment teaches it. The 3D model
   todo (native model renderer); otherwise the top keeps the paused scene]**
 
 ## Shops and synthesis
