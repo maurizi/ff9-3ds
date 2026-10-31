@@ -23,6 +23,10 @@ SPU_HOT void psx_spu_source_set_loop(PsxSpuSource *source, uint16_t *loop_addres
 
 /* Key-on, increment, and loop redirects all align to 16 bytes. The last
  * block starts at 0x7fff0 and fits entirely inside the RAM image. */
+extern volatile unsigned psx_spu_irq_on, psx_spu_irq_addr, psx_spu_irq_hit; /* (spu.c) */
+static inline void irq_check(const PsxSpuSource *source) {
+    if (psx_spu_irq_on && !((source->address ^ psx_spu_irq_addr) & ~1u)) psx_spu_irq_hit = 1;
+}
 static inline const uint8_t *source_block(const PsxSpuSource *source, const uint8_t *ram) {
     unsigned byte_address = (unsigned)source->address * 8;
     static const uint8_t zeros[16] __attribute__((aligned(4)));
@@ -34,6 +38,7 @@ static inline const uint8_t *source_block(const PsxSpuSource *source, const uint
 SPU_HW_HOT void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
                           uint16_t *loop_address) {
     if (source->fetched) return;
+    irq_check(source);
     for (unsigned i = 0; i < 3; ++i)
         source->samples[i] = source->samples[PSX_SPU_BLOCK_SAMPLES + i];
     source->flags = psx_spu_decode_block(source_block(source, ram), &source->history,
@@ -48,6 +53,7 @@ SPU_HW_HOT void psx_spu_source_fetch(PsxSpuSource *source, const uint8_t *ram,
 SPU_HW_ONLY_HOT void psx_spu_source_fetch_to(PsxSpuSource *source, const uint8_t *ram, uint16_t *loop_address,
                                         int16_t *to, int negate) {
     if (source->fetched) return;
+    irq_check(source);
     source->flags = to == (int16_t *)1 ? source_block(source, ram)[1] /* (PSX_SPU_UNHEARD: its flags only) */
                   : psx_spu_decode_block_to(source_block(source, ram), &source->history, to, negate);
     source->fetched = 1;

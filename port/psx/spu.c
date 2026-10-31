@@ -5,7 +5,8 @@
  *   psx_spu_regs[] remains a shadow for direct hardware readbacks.
  * - Transfers complete immediately; the transfer callback runs before SpuWrite returns.
  * Host --audio and the DS stream use sample-clocked stereo PCM. DS playback
- * still underruns when the game cannot keep pace; IRQ/DMA fidelity is unfinished; see docs/audio-validation.md.
+ * still underruns when the game cannot keep pace; the IRQ is delivered at the frame step (SpuSetIRQ), DMA timing is
+ * unfinished; see docs/audio-validation.md.
  */
 #include "psyq_port.h"
 #include "psx_spu.h"
@@ -243,14 +244,28 @@ long SpuSetNoiseClock(long n) {
     return n;
 }
 
+/* The SPU IRQ: a voice reading the 16-byte block that holds the IRQ address (in 8-byte units, as register 0x1A4)
+ * while it is enabled. The mixer notes the hit (psx_spu_source_fetch, possibly on another core) and the game thread
+ * runs the callback at its next frame step (psx_spu_irq_poll, irq.c), as libspu's interrupt handler would: AKAO's
+ * ring streams (movie audio) refill their next block from it. */
+volatile unsigned psx_spu_irq_on, psx_spu_irq_addr, psx_spu_irq_hit;
+
 int SpuSetIRQ(int on_off) {
-    if (on_off == 0 || on_off == 3) psx_spu_write(0x1aa, psx_spu_read(0x1aa) & ~0x40);
-    if (on_off == 1 || on_off == 3) psx_spu_write(0x1aa, psx_spu_read(0x1aa) | 0x40);
+    if (on_off == 0 || on_off == 3) psx_spu_write(0x1aa, psx_spu_read(0x1aa) & ~0x40), psx_spu_irq_on = 0, psx_spu_irq_hit = 0;
+    if (on_off == 1 || on_off == 3) psx_spu_write(0x1aa, psx_spu_read(0x1aa) | 0x40), psx_spu_irq_on = 1;
     return on_off;
 }
 
 void SpuSetIRQAddr(u32 addr) {
     psx_spu_write(0x1a4, addr >> 3);
+    psx_spu_irq_addr = addr >> 3;
+    psx_spu_irq_hit = 0;
+}
+
+void psx_spu_irq_poll(void) {
+    if (!psx_spu_irq_hit || !psx_spu_irq_on) return;
+    psx_spu_irq_hit = 0;
+    if (irq_cb) irq_cb();
 }
 
 void *SpuSetIRQCallback(void (*func)(void)) {

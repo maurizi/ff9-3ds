@@ -217,6 +217,8 @@ void psx_frame(void) {
     port_canary("DrawSync callback");
     rcnt_frame();
     port_canary("root counters (SPU/AKAO)");
+    void psx_spu_irq_poll(void);
+    psx_spu_irq_poll(); /* (an SPU IRQ the mixer saw: its callback, here on the game thread) */
     movie_fv_idle();
     vblanks++;
     psx_pad_update();
