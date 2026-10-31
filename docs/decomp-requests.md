@@ -363,6 +363,20 @@ The field map marks shopkeepers and save moogles (port/game/field_map.c). A moog
 3 (the player's) and 7 (not instantiated), and the shopkeeper (actor, entry 11) reaches it some other way. Needed: how
 a talk function hands off to the function that opens a shop (which op, its operands: entry and tag), so the port can
 follow it from an actor's talk tag to the MENU, or else a per-field table of shopkeeper uids if the game has one.
+**Answered** (ff9-decomp docs/r32/3ds-requests-3.md): trigger functions walked with the op table, calls followed.
+
+### R33. Tetra Master state (2026-10-31)
+Phases, cursors, confirm blocks, board/hand structs, card images and panels for a native two-screen card game.
+**Answered** (ff9-decomp docs/r32/3ds-requests-4.md); used by port/game/tm_ui.c.
+
+### R34. Mognet (2026-10-31)
+The menu/overlay that runs Mognet, its state and cursors, the read/send functions, letter text, the unread/deliver
+flags (a field-screen badge) and how the field knows a moogle is present. Asked of the decomp session.
+
+### R35. 3D models for a native renderer (2026-10-31)
+Field, battle and world map model formats in RAM (mesh, skeleton, animation, faces with UV/CLUT/tpage), the draw
+path (bone matrices, camera, projection, the per-face emitters), how to load and pose a party member's model outside
+battle for the Equip view, and how model lighting/colour is computed. Asked of the decomp session.
 
 ---
 
