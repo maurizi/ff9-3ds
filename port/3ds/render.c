@@ -1399,41 +1399,9 @@ static void screen_fill(C3D_RenderTarget *rt, int x, int y, int w, int h, u32 rg
     C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
 }
 
-/* The field panel (touch.c's layout): in a field or on the world map while no window is up. Its icons are the game's
- * (texture page 960,256 with the menu cursor's CLUT), fetched before the screens are drawn (a conversion may sync). */
 __attribute__((weak)) int port_game_mode(void) { return 0; }
-static int panel_on;
-static C3D_Tex *panel_icons;
-int ctr_panel_shown(void) { return panel_on; }
-static void panel_prepare(void) {
-    int mode = port_game_mode();
-    panel_on = (mode == 1 || mode == 3) && !menu_state && shown_layer < 0;
-    if (!panel_on || !psx_vram) return;
-    Gp0Mode m;
-    memset(&m, 0, sizeof m);
-    m.textured = 1; m.raw = 1; m.depth = 0; m.tx = 960; m.ty = 256; m.clut_x = 576; m.clut_y = 236;
-    unsigned f;
-    panel_icons = texture_for(&m, 0, 0, 95, 31, &f);
-}
-static void panel_draw(void) {
-    if (!panel_on || !panel_icons) return;
-    /* the drag pad: the d-pad icon where the drag began (or at rest in the middle of its half), lit toward its
-     * direction */
-    int px = ctr_panel_pad_dir ? ctr_panel_pad_x : CTR_PANEL_PAD_W / 2, py = ctr_panel_pad_dir ? ctr_panel_pad_y : 150;
-    screen_fill(bottom_rt, px - 30, py - 30, 60, 60, 0x60202020, 0);
-    screen_quad_scaled(bottom_rt, panel_icons, K_TEX, NO_BLEND, ctr_panel_pad_dir ? 0xFFC0C0C0 : 0xFF808080, 24, 12, 11,
-                       11, px - 22, py - 22, 44, 44);
-    for (int i = 0; i < ctr_panel_nbuttons; i++) {
-        const CtrPanelButton *b = &ctr_panel_buttons[i];
-        int held = ctr_panel_held >> i & 1;
-        screen_fill(bottom_rt, b->x, b->y, b->w, b->h, held ? 0x80606060 : 0x80303030, 0);
-        int sz = b->w * 2 / 3;
-        screen_quad_scaled(bottom_rt, panel_icons, K_TEX, NO_BLEND, held ? 0xFFFFFFFF : 0xFF909090, b->icon_u, b->icon_v,
-                           11, 11, b->x + (b->w - sz) / 2, b->y + (b->h - sz) / 2, sz, sz);
-    }
-}
 
-/* The bottom screen: the UI layer of the displayed buffer over its scene, dimmed (the scene is on the top screen). */
+/* The bottom screen: the UI layer of the displayed buffer, on a plain backdrop (the scene is on the top screen only). */
 int ctr_ui_oy;
 static int bottom_layer(const PsxDisplayInfo *d) {
     int k = layers[0].x == d->x && layers[0].y == d->y ? 0 : layers[1].x == d->x && layers[1].y == d->y ? 1 : -1;
@@ -1457,8 +1425,7 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
         ctr_ui_nhands = scene_nhands;
         return;
     }
-    screen_quad(bottom_rt, &mirror_tex[0], K_SCENE, NO_BLEND, 0xFF383838, d->x, d->y, w, h, 0, ctr_ui_oy);
-    if (k < 0) { ctr_ui_nhands = 0; panel_draw(); return; }
+    if (k < 0) { ctr_ui_nhands = 0; return; }
     screen_quad(bottom_rt, &layers[k].tex, K_COMPOSITE, 5, 0xFFFFFFFF, 0, 0, w, h, 0, ctr_ui_oy);
     layers[k].shown = 1;
     ctr_ui_nhands = layers[k].nhands;
@@ -1516,7 +1483,6 @@ void ctr_present(long frame) {
     int ox = (400 - w) / 2, oy = (240 - h) / 2;
     unsigned profile_start = port_profile_begin();
     shown_layer = bottom_layer(&d);
-    panel_prepare(); /* (before any screen is drawn on: a texture conversion may sync the GPU) */
     if (d.rgb24) {
         submit();
         present_rgb24(&d, w, h, ox, oy);

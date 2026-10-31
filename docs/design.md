@@ -100,14 +100,13 @@ through the scratchpad are found through a per-frame table keyed by the word's v
 ### 4.4 Screens
 - **Top**: the scene (field, battle, world map, FMV), 400×240 per eye, the PS1 frame at 1:1 in 4:3, both edges
   masked by the largest parallax in stereo (a floating window).
-- **Bottom**: the game's UI at 1:1 over a dimmed copy of the scene. UI is: the battle's VBlank list
+- **Bottom**: the game's UI at 1:1 (being redesigned: docs/roadmap.md). UI is: the battle's VBlank list
   (`ContinueDraw`), and every packet the window system made (`win_drawAll` is wrapped: `port/game/ui_split.c`
   reports the packet range it filled). Those draw into one of two UI layers (one per PS1 framebuffer: a field's
   windows are drawn into the frame being built), RGBA8 with premultiplied alpha, which composites PS1 blend modes 0,
   1 and 3 over the scene exactly. While a menu is up (`GD_MENU_OPEN`, all of the frame once `GD_HIDE_ALL`), the whole
   frame is UI and the top shows the scene as it was when the menu was asked for. The card game (mode 9) is shown on
-  both. In a field or on the world map with no window up, the bottom screen is the **field panel**: a drag pad and the
-  face buttons, drawn with the game's own icons.
+  both.
 
 ## 5. Sound and threads
 AKAO (the game's sequencer) runs as decomp C on the game thread against the SPU register file it reads. The exact
@@ -125,8 +124,7 @@ ducked (`docs/voice-packs.md`).
   Select; the circle pad doubles the d-pad (FF9 reads a digital pad).
 - Touch (`port/3ds/touch.c`): FF9 points at the selected entry with a hand; the renderer records where it is drawn.
   A tap steers the game's own cursor there with d-pad presses (rows, then columns; cells in the card game) and
-  confirms; swipe left is back, swipe up/down scrolls. The game's cursor logic is never bypassed. The field panel's
-  buttons hold their PS1 button; its drag pad is the d-pad.
+  confirms; swipe left is back, swipe up/down scrolls. The game's cursor logic is never bypassed.
 - Saves: two memory cards, raw `.mcr` images (`port/psx/card.c`): emulator and PS1-card saves load, and the port's
   saves work in emulators. Disc changes: the disc the game's own screen asks for goes in the drive.
 - Suspend/resume through the HOME menu and sleep mode (libctru's applet handling).

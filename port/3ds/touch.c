@@ -22,51 +22,6 @@ enum { PAD_UP = 0x0010, PAD_RIGHT = 0x0020, PAD_DOWN = 0x0040, PAD_LEFT = 0x0080
 #define SETTLE 5  /* frames released after it, so the game moves the cursor and redraws the hand */
 #define MAX_STEPS 32
 
-/* ---- the field panel ---- */
-const CtrPanelButton ctr_panel_buttons[] = {
-    {230, 18, 60, 60, 0x1000, 68, 0}, /* triangle: the menu */
-    {180, 76, 60, 60, 0x8000, 56, 0}, /* square */
-    {268, 90, 52, 52, 0x2000, 44, 0}, /* circle: hold to walk */
-    {218, 140, 76, 76, 0x4000, 32, 0}, /* cross: talk, check */
-};
-const int ctr_panel_nbuttons = sizeof ctr_panel_buttons / sizeof ctr_panel_buttons[0];
-unsigned ctr_panel_held;
-int ctr_panel_pad_dir, ctr_panel_pad_x, ctr_panel_pad_y;
-
-static int panel_button_at(int x, int y) {
-    for (int i = 0; i < ctr_panel_nbuttons; i++) {
-        const CtrPanelButton *b = &ctr_panel_buttons[i];
-        if (x >= b->x - 6 && x < b->x + b->w + 6 && y >= b->y - 6 && y < b->y + b->h + 6) return i;
-    }
-    return -1;
-}
-
-/* the panel's buttons for this frame: the stylus on a button holds it; dragging on the pad's half is the d-pad */
-static unsigned panel(int touching, int x, int y, int went_down) {
-    static int on_pad;
-    ctr_panel_held = 0;
-    ctr_panel_pad_dir = 0;
-    if (!touching) { on_pad = 0; return 0; }
-    if (went_down) {
-        on_pad = x < CTR_PANEL_PAD_W;
-        ctr_panel_pad_x = x;
-        ctr_panel_pad_y = y;
-    }
-    if (on_pad) {
-        int dx = x - ctr_panel_pad_x, dy = y - ctr_panel_pad_y, d = 0;
-        if (dx * dx + dy * dy > 12 * 12) { /* (8 directions: 22.5-degree sectors, by slopes) */
-            if (abs(dx) * 5 > abs(dy) * 2) d |= dx > 0 ? PAD_RIGHT : PAD_LEFT;
-            if (abs(dy) * 5 > abs(dx) * 2) d |= dy > 0 ? PAD_DOWN : PAD_UP;
-        }
-        ctr_panel_pad_dir = d;
-        return (unsigned)d;
-    }
-    int i = panel_button_at(x, y);
-    if (i < 0) return 0;
-    ctr_panel_held = 1u << i;
-    return ctr_panel_buttons[i].pad;
-}
-
 static int goal, gx, gy, steps, timer;
 static unsigned held;
 /* the stylus while it is down: where it went down, and how far a vertical swipe has stepped */
@@ -164,12 +119,6 @@ unsigned int ctr_ui_pad_buttons(long frame) {
 #else
     (void)frame;
 #endif
-    if (ctr_panel_shown() && !ctr_ui_active()) { /* the field panel: no cursor to drive */
-        down = 0;
-        return panel(!!(kh & KEY_TOUCH), t.px, t.py, !!(kd & KEY_TOUCH));
-    }
-    ctr_panel_held = 0;
-    ctr_panel_pad_dir = 0;
     if (kh & KEY_TOUCH) {
         if (kd & KEY_TOUCH) down = 1, dx0 = t.px, dy0 = t.py, swiped = 0, vsteps = 0;
         last_x = t.px;
