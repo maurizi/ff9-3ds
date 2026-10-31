@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "input_script.h"
 #include "platform.h"
@@ -123,6 +124,10 @@ void plat_halt(void) {
 
 void plat_video_init(void) {
     ctr_video_init();
+}
+
+void plat_mkdir(const char *path) {
+    mkdir(path, 0777);
 }
 
 const char *plat_data_dir(void) {

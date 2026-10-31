@@ -14,6 +14,7 @@ void port_scenario_set_enemy_hp(const int *values);
 s32 chr_resetToLevel(s32,s32,u8);
 static struct {
     int enabled,consumed,kind,disc,field,battle,world,world_explicit,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil,tetra;
+    int menu,menu_arg; /* kind=field: menu=TYPE[,ARG] opens that menu once the field is ready (4,2: the save menu) */
     unsigned seed;
     int party[4],hp[4],enemy_hp[4],trance[4],preset[4],equip[4][5];
     u8 events[0x800],events_set[0x800/8]; /* (bytes and a bit each: the heap is tight) */
@@ -54,6 +55,11 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"level")) scenario.level=number(eq,1,99);
         else if(!__builtin_strcmp(s,"story")) scenario.story=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"gil")) scenario.gil=number(eq,0,9999999);
+        else if(!__builtin_strcmp(s,"menu")) {
+            char *comma=__builtin_strchr(eq,',');
+            if(comma) *comma=0,scenario.menu_arg=number(comma+1,0,255);
+            scenario.menu=1+number(eq,0,8);
+        }
         else if(!__builtin_strcmp(s,"tetra")) scenario.tetra=number(eq,0,1)?9:0; /* kind=field: then a card game */
         else if(!__builtin_strcmp(s,"field_exit")) { /* kind=field: then this exit: 4 the ending, 7 game over, 9 cards */
             scenario.tetra=number(eq,4,9);
@@ -181,6 +187,11 @@ void port_scenario_field_ready(int field) {
             port_scenario_field_exit(scenario.tetra);
             port_log("scenario: field exit %d\n",scenario.tetra);
             scenario.tetra=-1;
+        }
+        if(scenario.menu>0 && scenario.kind==1) {
+            menu_open(scenario.menu-1,scenario.menu_arg);
+            port_log("scenario: menu %d,%d\n",scenario.menu-1,scenario.menu_arg);
+            scenario.menu=-1;
         }
     }
 }

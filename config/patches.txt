@@ -206,3 +206,8 @@ src/main/akao.c | g_akaoOpsFE[vel](c, mask); | if (vel < 0x20) g_akaoOpsFE[vel](
 src_equiv/ovl_0c/model_link.c | slot = &ot[z]; | slot = &ot[z]; if (PSX_OT_OUTSIDE(slot)) continue; | 1   # wm_drawMesh: the same unclamped OT index as the field's (F35)
 src/ovl_0c/wm_main.c | f = file_find(1, id); | f = file_find(1, id); if (!f) port_fatal("scenario: world map data file %d not in this disc's archive (story state)", (int)id); | 1   # a fixture's story state the disc doesn't hold: a clear stop, not a NULL read
 src/ovl_0b/btl_cmd.c | btlbg_init(p->bgHeader, p->bgTexAnims); | if (!p->bgHeader) port_fatal("scenario: the encounter's battle background is not in this disc's archive (story state)"); btlbg_init(p->bgHeader, p->bgTexAnims); | 1   # (walking a fixture's world map into another disc's encounter: d3 world, encounter 247)
+
+# Loading a save from the title: menu_finish sees the save's mode (1, field) before any field context exists and
+# clears a flag through the NULL ctx.ovl65, which on the PS1 writes BIOS RAM at address 0 (and menu_doOpen sets it).
+src/main/menu.c | g_gameState->gameData->ctx.ovl65->unk0 | PSX_NZ(g_gameState->gameData->ctx.ovl65)->unk0 | 1
+src/main/menu.c | st->gameData->ctx.ovl65->unk0 | PSX_NZ(st->gameData->ctx.ovl65)->unk0 | 1

@@ -13,7 +13,8 @@
  * are queued and processed after it returns, without recursive sector delivery.
  * This preserves asynchronous progress; it does not model physical seek time.
  *
- * Disc layout: Mode 2 Form 1, user data at offset 24 of each raw sector. Disc swaps: TODO (M4).
+ * Disc layout: Mode 2 Form 1, user data at offset 24 of each raw sector. Disc swaps: psx_cd_swap (all four images
+ * are on the card: the disc-change screen's check finds the disc it asked for).
  */
 #include "blackbox.h"
 #include "psyq_port.h"
@@ -231,6 +232,25 @@ static int open_disc(void) {
         port_fatal("can't open disc image %s", path);
     }
     return 1;
+}
+
+static int n_code_files; /* (below: the code overlays' sectors, scanned per disc) */
+/* Put disc `n` (1-4) in the drive: the image is reopened at its next read; what the drive buffered is dropped. */
+void psx_cd_swap(unsigned n) {
+    if (n < 1 || n > 4 || (int)n == disc_no) return;
+    if (disc >= 0) close(disc);
+    disc = -1;
+    disc_no = (int)n;
+    disc_at = -1;
+    reading = 0;
+    sector_lba = ~0u;
+    sector_pos = 0;
+#ifdef PORT_DISC_PACK
+    packed = 0;
+    pack_first = pack_n = 0;
+#endif
+    n_code_files = -1;
+    port_log("cd: disc %u in the drive\n", n);
 }
 
 #ifdef PORT_DISC_PACK
@@ -506,8 +526,11 @@ static unsigned int code_file_of(unsigned int lba, unsigned int *file_off) {
 
 /* ---- commands ------------------------------------------------------------------------------------------- */
 
+/* a response of just the status byte: the rest of the caller's 8-byte result buffer cleared (the disc-change check
+ * tests result[1] after a seek, which would otherwise be whatever its stack held) */
 static void result_status(u8 *result) {
     if (result) {
+        __builtin_memset(result, 0, 8);
         result[0] = status;
     }
 }

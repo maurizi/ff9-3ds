@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 
 #include "input_script.h"
 #include "platform.h"
@@ -250,6 +251,14 @@ void plat_halt(void) {
 void render_gx_init(void) __attribute__((weak));
 void plat_video_init(void) {
     if (render_gx_init) render_gx_init();
+}
+
+const char *plat_save_dir(void) {
+    return "build";
+}
+
+void plat_mkdir(const char *path) {
+    mkdir(path, 0777);
 }
 
 const char *plat_data_dir(void) {
