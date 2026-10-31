@@ -1,5 +1,4 @@
-/* The PC build plays every movie through the MDEC (movie_fv.h: transcodes are for the DS's hardware). It reports
- * which transcode a movie would use, once per movie. */
+/* The 3DS plays every movie through the MDEC from the disc (movie_fv.h: transcodes were for the DS's hardware). */
 #include "movie_fv.h"
 #include "platform.h"
 #include "psx_runtime.h"
@@ -9,7 +8,7 @@ int psx_cd_disc(void);
 int movie_fv_start(void *work, unsigned int size, unsigned int lba) {
     (void)work;
     (void)size;
-    port_log("movie: transcode fmv/d%d/%u.fv\n", psx_cd_disc(), lba);
+    (void)lba; /* (the 3DS decodes every movie from the disc: no transcodes) */
     return 0;
 }
 
