@@ -85,6 +85,12 @@ typedef struct {
     int hands[CTR_MAX_HANDS][2], nhands;
 } UiLayer;
 static UiLayer layers[2];
+/* while a menu is up, the top screen shows the scene as it was when the menu was asked for (per eye) */
+static C3D_Tex freeze_tex[2];
+static C3D_RenderTarget *freeze_rt[2];
+static int freeze_w, freeze_h, frozen;
+static int menu_state; /* port_menu_state(), read at each present */
+__attribute__((weak)) int port_menu_state(void) { return 0; }
 static C3D_RenderTarget *bottom_rt;
 
 static int in_frame;
@@ -722,7 +728,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     Vtx moved[6];
     int layer = -1, ox = 0, oy = 0;
     if (ui_mode) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
-    else if (ui_packet()) {
+    else if (menu_state == 2 || ui_packet()) { /* (a menu: the whole frame) */
         int x, y, w, h;
         psx_gpu_draw_area(&x, &y, &w, &h);
         layer = ui_layer_for(x, y, 0);
@@ -904,7 +910,7 @@ static void note_hand(int x, int y) {
     int k = ui_mode ? ui_list_layer : -1;
     int ox = ui_ox, oy = ui_oy;
     if (k < 0) {
-        if (!ui_packet()) return;
+        if (menu_state != 2 && !ui_packet()) return;
         int w, h;
         psx_gpu_draw_area(&ox, &oy, &w, &h);
         k = ui_layer_for(ox, oy, 0);
@@ -1035,6 +1041,7 @@ void ctr_present(long frame) {
     stereo_on = want_stereo;
     gfxSet3D(stereo_on);
 
+    menu_state = port_menu_state();
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
     /* the displayed buffer is redrawn when something was drawn or the display moved (a static screen flips between
@@ -1063,8 +1070,32 @@ void ctr_present(long frame) {
         /* in stereo, both edges are masked by the largest parallax, in both eyes: what a layer's shift uncovers at
          * the frame's edge isn't seen (a floating window) */
         int edge = stereo_on ? (int)(STEREO_MAX_PX * slider + 0.99f) : 0;
-        for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++)
-            draw_to_screen(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, ox + edge, oy);
+        if (menu_state && !frozen) { /* a menu was asked for: keep the scene as it is now for the top screen */
+            for (int eye = 0; eye < 2; eye++) {
+                C3D_FrameDrawOn(freeze_rt[eye]);
+                set_proj_ortho(UI_W, UI_H, 0.0f);
+                C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 1, 1, -0.5f);
+                set_tev(K_BLIT);
+                set_blend(NO_BLEND, 0);
+                C3D_Tex *src = &mirror_tex[stereo_on ? eye : 0];
+                C3D_TexBind(0, src);
+                set_texscale(src);
+                C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+                Vtx *v = alloc_vtx(6);
+                quad(v, 0, 0, w, h, d.x, d.y, d.x + w, d.y + h, 0xFFFFFFFF);
+                GSPGPU_FlushDataCache(v, 6 * sizeof(Vtx));
+                vb_submitted = vb_used;
+                C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+            }
+            frozen = 1;
+            freeze_w = w;
+            freeze_h = h;
+        } else if (!menu_state) frozen = 0;
+        for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) {
+            if (frozen) draw_to_screen(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h,
+                                       (400 - freeze_w) / 2 + edge, (240 - freeze_h) / 2);
+            else draw_to_screen(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, ox + edge, oy);
+        }
     }
     present_bottom(&d, w, h);
     C3D_FrameEnd(0);
@@ -1174,6 +1205,11 @@ void ctr_video_init(void) {
         mirror_rt[eye] = C3D_RenderTargetCreateFromTex(&mirror_tex[eye], GPU_TEXFACE_2D, 0, -1);
         top_rt[eye] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, -1);
         C3D_RenderTargetSetOutput(top_rt[eye], GFX_TOP, eye ? GFX_RIGHT : GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
+    }
+    for (int eye = 0; eye < 2; eye++) {
+        if (!C3D_TexInitVRAM(&freeze_tex[eye], UI_W, UI_H, GPU_RGB565)) port_fatal("no VRAM for the menu snapshot");
+        C3D_TexSetFilter(&freeze_tex[eye], GPU_NEAREST, GPU_NEAREST);
+        freeze_rt[eye] = C3D_RenderTargetCreateFromTex(&freeze_tex[eye], GPU_TEXFACE_2D, 0, -1);
     }
     for (int k = 0; k < 2; k++) {
         if (!C3D_TexInitVRAM(&layers[k].tex, UI_W, UI_H, GPU_RGBA8)) port_fatal("no VRAM for the UI layers");
