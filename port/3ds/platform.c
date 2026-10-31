@@ -165,10 +165,41 @@ const char *plat_data_dir(void) {
     return "sdmc:/3ds/ff9";
 }
 
-/* the single-file build (make 3ds-full) carries the disc pack in its romfs */
-static int romfs_ok;
+/* Where the disc pack is when the build carries it: the single-file build (make 3ds-full) has it in its own romfs;
+ * any other build (a netloaded test build has no romfs) uses the one inside ff9-full.3dsx on the card, if there, so
+ * the card needs only one copy of the discs. NULL: the data folder's discs.bin or images (cd.c). */
+static const char *disc_pack;
+
+static void find_disc_pack(void) {
+    struct stat st;
+    if (R_SUCCEEDED(romfsInit()) && stat("romfs:/discs.bin", &st) == 0) {
+        disc_pack = "romfs:/discs.bin";
+        return;
+    }
+    static const char *const full[] = {"/3ds/ff9-full.3dsx", "/3ds/ff9/ff9-full.3dsx"};
+    for (unsigned i = 0; i < sizeof full / sizeof *full; i++) {
+        Handle fd;
+        u32 got = 0, hdr[11];
+        if (R_FAILED(FSUSER_OpenFileDirectly(&fd, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""),
+                                             fsMakePath(PATH_ASCII, full[i]), FS_OPEN_READ, 0)))
+            continue;
+        /* the 3DSX header (0x20 bytes) and its extended header: SMDH offset, SMDH size, romfs offset (+0x28) */
+        if (R_FAILED(FSFILE_Read(fd, &got, 0, hdr, sizeof hdr)) || got != sizeof hdr || hdr[0] != 0x58534433u ||
+            (hdr[1] & 0xFFFF) < 0x2C || !hdr[10] || R_FAILED(romfsMountFromFile(fd, hdr[10], "full"))) {
+            FSFILE_Close(fd);
+            continue;
+        }
+        if (stat("full:/discs.bin", &st) == 0) { /* (the mount keeps the handle) */
+            port_log("data: the disc pack in sdmc:%s\n", full[i]);
+            disc_pack = "full:/discs.bin";
+            return;
+        }
+        romfsUnmount("full");
+    }
+}
+
 const char *plat_disc_pack(void) {
-    return romfs_ok ? "romfs:/discs.bin" : NULL;
+    return disc_pack;
 }
 
 long ctr_frames(void) {
@@ -186,8 +217,7 @@ int main(void) {
     if (is_new3ds) osSetSpeedupEnable(true); /* 804 MHz and the L2 cache */
     gfxInitDefault();
     ctr_console_init();
-    romfs_ok = R_SUCCEEDED(romfsInit());
-    if (romfs_ok) port_log("data: romfs:/discs.bin when there\n");
+    find_disc_pack();
     port_log("ff9-3ds (%s 3DS)\n", is_new3ds ? "New" : "Old");
     ctr_audio_init();
     ctr_async_init();

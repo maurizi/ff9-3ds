@@ -134,6 +134,13 @@ ducked (`docs/voice-packs.md`).
 (voice, high-resolution models). The executable carries only code and the relocation images built from the
 user's executable at build time.
 
+For playing, `make 3ds-full` writes `build/ff9-full.3dsx`: the same program with the user's `discs.bin`
+(`tools/pack_discs.py`) in its romfs, one file to copy to the card (personal use only: it holds the game's data;
+never distributed or committed). Any other build, such as a netloaded test build, reads the pack inside
+`sdmc:/3ds/ff9-full.3dsx` (or `/3ds/ff9/ff9-full.3dsx`) when it's there, so the card holds one copy of the discs.
+Order: own romfs, ff9-full.3dsx on the card, `sdmc:/3ds/ff9/discs.bin`, then the images. A pack is sampled at
+start-up (each raw record must begin with the CD sync pattern), so an incomplete copy stops with its offset.
+
 ## 8. Old and New 3DS
 Everything in §1–7 must run at full speed on an Old 3DS. The New 3DS's 804 MHz, L2 and extra cores pay for
 extras: cel-shading outlines (an extra pass), high-resolution replacement models, 60 Hz interpolation.
