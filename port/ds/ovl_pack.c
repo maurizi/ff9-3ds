@@ -81,21 +81,21 @@ int port_ovl_native_extent(unsigned int id, uintptr_t *at, unsigned int *size) {
     return 0;
 }
 
-/* The overlays linked in their own MIPS code range in psx_ram (gen_link.py: those of slots 1 and 2): disc bytes just
- * landed at psx_ram + [off, off + len) for overlay `id`; read its native code there again. */
+/* The overlays linked in their own MIPS code range in psx_ram (gen_link.py: those of slots 1 and 2, and slot 0's
+ * psx_ram parts, entry 0x200 + id): disc bytes just landed at psx_ram + [off, off + len) for overlay `id`; read its
+ * native code there again. */
 void port_ovl_native_sector(unsigned int id, unsigned int off, unsigned int len) {
     open_pack();
     for (u32 i = 0; i < count; ++i) {
-        if (entries[i][0] != id) continue;
+        if (entries[i][0] != id && entries[i][0] != (id | 0x200)) continue;
         u32 lo = entries[i][1], hi = lo + entries[i][2], s_lo = (u32)psx_ram + off, s_hi = s_lo + len;
-        if (lo < (u32)psx_ram || lo >= (u32)psx_ram + 0x200000) return; /* in an overlay slot, not in psx_ram */
+        if (lo < (u32)psx_ram || lo >= (u32)psx_ram + 0x200000) continue; /* in an overlay slot, not in psx_ram */
         if (s_lo < lo) s_lo = lo;
         if (s_hi > hi) s_hi = hi;
-        if (s_lo >= s_hi) return;
+        if (s_lo >= s_hi) continue;
         if (!read_at(pack, (long)(entries[i][3] + (s_lo - lo)), (void *)s_lo, s_hi - s_lo))
             port_fatal("code overlays: can't read overlay %02X", id);
         DC_FlushRange((void *)s_lo, s_hi - s_lo);
         IC_InvalidateAll();
-        return;
     }
 }

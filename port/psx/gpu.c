@@ -691,12 +691,14 @@ s32 BreakDraw(void) {
 
 /* The platform may draw the list the game inserts at VBlank less often than every VBlank (DS: display.c). */
 __attribute__((weak)) int psx_skip_vblank_list(void) { return 0; }
+/* ... or draw it itself (the battle UI's native renderer: port/game/btlui_native.c); 1: drawn */
+__attribute__((weak)) int psx_vblank_list_native(u32 *list) { (void)list; return 0; }
 
 void ContinueDraw(u32 *insaddr, s32 contaddr) {
     /* Even when BreakDraw returns zero, the inserted list must execute. FF9
      * uses this at VBlank for battle commands, status bars and text. */
     if (!contaddr && psx_skip_vblank_list()) return;
-    if (insaddr) DrawOTag(insaddr);
+    if (insaddr && !(!contaddr && psx_vblank_list_native(insaddr))) DrawOTag(insaddr);
     if (contaddr && ((u32)contaddr & 0xFFFFFF) != OT_END)
         DrawOTag(link_ptr((u32)contaddr & 0xFFFFFF));
 }

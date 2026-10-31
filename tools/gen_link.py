@@ -477,6 +477,12 @@ def main():
     for k, (i, lo, hi) in enumerate(in_place):  # LMAs of their own: never loaded
         ld += [f"    .psxovl_{i} (psx_ram + 0x{lo & 0x1FFFFF:X}) : AT(0x0F{k + 1:02X}0000) {{ *(.psxovl_{i}.*) }} :NONE",
                f'    ASSERT(SIZEOF(.psxovl_{i}) <= 0x{hi - lo:X}, "ovl_{i}\'s native code is larger than its MIPS code")']
+    # ovl_0b's battle-only port code (native_mesh.h PORT_RAM_CODE) in the dead part of its MIPS code range
+    layout = (Path(__file__).resolve().parent.parent / "port/include/ovl0b_layout.h").read_text()
+    lo, hi, at = (int(re.search(rf"#define OVL0B_{k}\s+(0x[0-9A-Fa-f]+)", layout).group(1), 16)
+                  for k in ("RAMCODE_AT", "RAMCODE_END", "AT"))
+    ld += [f"    .ramovl_0b (psx_ram + 0x{at + lo:X}) : AT(0x0FF00000) {{ *(.ramovl_0b.*) }} :NONE",
+           f'    ASSERT(SIZEOF(.ramovl_0b) <= 0x{hi - lo:X}, "ovl_0b\'s psx_ram port code is larger than its room")']
     ld += ["    . = __psxovl_areas_end;"]
     (GEN / "psx_ovl_areas.ld").write_text("\n".join(ld) + "\n")
     # Slot 0's modes also keep their hottest code in ITCM (native_mesh.h PORT_ITCM_CODE): one place after the

@@ -172,10 +172,22 @@ static struct {
 } watches[16];
 static int n_watches;
 
+void btlui_check_mode(const char *mode);
+void btlui_check_frame(void);
+void btlui_check_dump(const char *dir, long frame);
+void btlui_check_report(void);
+
 void plat_wait_frame(void) {
     frames++;
+    {
+        static int shown_x = -1, shown_y = -1;
+        PsxDisplayInfo d;
+        psx_gpu_display_info(&d);
+        if (d.x != shown_x || d.y != shown_y) { shown_x = d.x; shown_y = d.y; btlui_check_frame(); }
+    }
     if (dump_every && frames % dump_every == 0) {
         dump_frame();
+        btlui_check_dump(dump_dir, frames);
     }
     if (frames == vram_at) {
         dump_area("vram", 0, 0, 1024, 512, 0);
@@ -258,6 +270,9 @@ int main(int argc, char **argv) {
             psx_spu_set_rendering(1);
         } else if (!strcmp(argv[i], "--scenario") && i + 1 < argc) {
             port_scenario_load(argv[++i]);
+        } else if (!strcmp(argv[i], "--native-ui") && i + 1 < argc) {
+            btlui_check_mode(argv[++i]);
+            atexit(btlui_check_report);
         } else if (!strcmp(argv[i], "--press") && i + 1 < argc) {
             if (!input_script_add(argv[++i])) {
                 fprintf(stderr, "bad --press %s (BUTTON@FRAME[+FRAMES])\n", argv[i]);

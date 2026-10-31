@@ -1795,3 +1795,24 @@ run.
   VBlank. The UI's real cost is 4.4-6.9 ms a VBlank (more than its profile share: its flushes interleave with the
   scene's), so a native bottom-screen UI that costs well under that is the battle lever (the user's choice, the same
   day, to draw it natively now).
+- **Native battle UI (2026-10-30, NATIVEUI=1, off by default for now):** port/game/btlui_native.c walks the battle UI's
+  VBlank list (ContinueDraw's, through gpu.c's psx_vblank_list_native) instead of the GP0 decoder, the hybrid's
+  deferral and the scaler: its primitives (sprites from the UI pages, tiles, gradient quads, lines) are rasterised
+  with softgpu.c's arithmetic into a 16-row RGB15 band and turned into the bottom screen's 8-bit indices, over a
+  cleared canvas. The game's row cache (DR_MOVEs to (960, 432) and the 15-bit sprites drawing them back) only
+  restores the scene under the panel's digits; without a scene under the UI it isn't drawn. Each list is compared
+  with the previous one record by record and only the areas of records that changed are cleared and drawn again
+  (every record over them, clipped: exact with blending). Host check (`--native-ui check`, the PS1's layout): all
+  1,738 lists of a d1_b0228 run with menus opened are pixel-identical to the software GPU over a black screen.
+  - Layout at 1:1 on the 256x192 canvas: the party panel (or the help window, which takes its place) shifted by
+    (-57, -104), the command and list windows below it (0, -26). The target cursors (OT entry 17,
+    btlui_drawTargetCursors) go to the top screen's 2D layer (free in battles), where the scene scaled to 4/5 has
+    their point.
+  - Memory: the store is the old UI lists' 32 KB (its tables, then ~200 records a list); the code (7.4 KB, Thumb,
+    -Os outside the pixel loops) is linked in ovl_0b's dead MIPS code range (native_mesh.h PORT_RAM_CODE(0b),
+    ovl0b_layout.h OVL0B_RAMCODE_AT: the effect-module area's top, which the largest module (14 KB) never reaches),
+    read from ovls.bin (entry 0x200 + id) where the overlay's sectors land. Slot 0 and the heap (~20 KB) unchanged.
+  - Palette: 255 entries found by a hash; when full, entries no canvas pixel shows (and this list didn't use) are
+    freed (the ATB gauges' pulse goes through more colours than fit).
+  - Speed (original DS, ms per VBlank; the old exact UI, then native, then no UI at all): d1_b0228 23.63 -> 17.65
+    (16.72), d1_b0186 23.28 -> 19.48 (18.85), d2_b0098 24.75 -> 20.33 (20.21).

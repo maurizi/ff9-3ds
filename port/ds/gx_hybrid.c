@@ -58,6 +58,15 @@ static const int drop_bounds[6] = {16, 64, 256, 1024, 4096, 1 << 30};
 
 int port_sub_ui(int on);
 static int layer_sub; /* battle: the 2D layer is the sub engine's (the bottom screen: gxh_enable) */
+#ifdef PORT_NATIVE_UI
+#include "btlui_native.h"
+/* layer_sub: the battle UI's VBlank list drawn natively there (port/game/btlui_native.c), in the UI lists' memory */
+static int nui_on;
+static void nui_palette(int index, u16 rgb15);
+static void nui_top_palette(int index, u16 rgb15);
+#else
+enum { nui_on = 0 };
+#endif
 int gxh_stats_polys, gxh_stats_dropped, gxh_stats_texture_fail, gxh_stats_palette_fail, gxh_stats_blocks;
 int gxh_stats_regions, gxh_stats_units, gxh_stats_unplaced, gxh_stats_units_peak;
 int gxh_stats_soft; /* field: why scenes went software (bits, go_software's callers) */
@@ -1617,6 +1626,9 @@ static int bgc_reads(int x, int y, int w, int h) {
 }
 void psx_vram_touch(int x, int y, int w, int h) {
     if (!active) return;
+#ifdef PORT_NATIVE_UI
+    if (nui_on) nui_vram_written(x, y, w, h);
+#endif
     ui_flush();
     if (place->field) {
         over_note(x, y, w, h);
@@ -3901,6 +3913,7 @@ static void ui_flush(void) {
 /* Defer a primitive drawn into the displayed buffer. Returns 0 when it has to be drawn now. */
 /* b: the displayed buffer, which the drawing area is in */
 static int ui_defer(Buffer *b, int kind, const Gp0Mode *m, const Gp0Vtx *v, int n, int w, int h) {
+    if (nui_on) return 0; /* (its lists' memory is the native UI's) */
     if (ui_buffer != b) {
         /* another buffer is shown: its previous list is stale, and everything it holds may differ */
         ui_flush();
@@ -5308,7 +5321,8 @@ void gxh_init(void) {
     memset(groups, 0, MAX_GROUPS * sizeof *groups);
     conv_scratch = psx_spare_alloc(CONV_SCRATCH_WORDS * sizeof *conv_scratch);
     memset(conv_scratch, 0, CONV_SCRATCH_WORDS * sizeof *conv_scratch);
-    for (int i = 0; i < 2; ++i) ui_list[i] = psx_spare_alloc(UI_MAX * sizeof(UiPrim));
+    ui_list[0] = psx_spare_alloc(2 * UI_MAX * sizeof(UiPrim)); /* (one block: the native UI's store) */
+    ui_list[1] = ui_list[0] + UI_MAX;
     memset(marks, 0, 1024 * 512 / 8);
 }
 
@@ -5351,6 +5365,19 @@ void gxh_enable(int on) {
          * user's dual-screen plan, docs/dual-screen.md; started 2026-10-30) */
         layer_sub = port_sub_ui(!place->field && !place->world);
         if (layer_sub) bgHide(layer_bg);
+#ifdef PORT_NATIVE_UI
+        if (layer_sub) {
+            ui_flush();
+            ui_count[0] = ui_count[1] = 0;
+            /* (the target cursors on the top screen's 2D layer, which is free) */
+            const NuiCanvas c = {256, 192, 0, nui_palette, ui_list[0], 2 * UI_MAX * sizeof(UiPrim),
+                                 (u8 *)BG_BMP_RAM_SUB(0), 256, scaled_block(), 16, (u8 *)BG_BMP_RAM(0), 256,
+                                 nui_top_palette};
+            nui_init(&c);
+            nui_on = 1;
+            bgShow(layer_bg);
+        }
+#endif
         if (place->field) {
             back_bg = bgInit(3, BgType_Bmp16, BgSize_B16_256x256, 8, 0);
             bgSetPriority(back_bg, 3);
@@ -5382,6 +5409,9 @@ void gxh_enable(int on) {
         if (layer_bg >= 0) bgHide(layer_bg);
         if (back_bg >= 0) bgHide(back_bg);
         if (layer_sub) { layer_sub = 0; port_sub_ui(0); }
+#ifdef PORT_NATIVE_UI
+        if (nui_on) { nui_on = 0; ui_count[0] = ui_count[1] = 0; }
+#endif
         gp0_backend = &psx_softgpu;
     }
 }
@@ -6634,6 +6664,15 @@ static const u8 cube_level[4] = {0, 10, 21, 31};
 /* the 2D layer's palette and bitmap: the main engine's (over the 3D layer), or in battles the sub engine's (the
  * bottom screen: port_sub_ui) */
 static inline volatile u16 *layer_palette(void) { return layer_sub ? BG_PALETTE_SUB : BG_PALETTE; }
+#ifdef PORT_NATIVE_UI
+static void nui_palette(int index, u16 rgb15) { BG_PALETTE_SUB[index] = rgb15; }
+static void nui_top_palette(int index, u16 rgb15) { BG_PALETTE[index] = rgb15; }
+/* gpu.c ContinueDraw: the battle UI's VBlank list (with ovl_0b resident: its code is there) */
+int psx_vblank_list_native(u32 *list) {
+    if (!nui_on || !active || psx_ovl_resident[0] != 0x0B) return 0;
+    return nui_list(list);
+}
+#endif
 static inline u16 *layer_bitmap(void) { return layer_sub ? (u16 *)BG_BMP_RAM_SUB(0) : (u16 *)BG_BMP_RAM(0); }
 static void reset_colours(void) {
     memset(colour_map, 0, 32768);
@@ -6781,6 +6820,14 @@ void gxh_present(const PsxDisplayInfo *d, void (*scale)(u16 *dst, int x, int y, 
         scale_fn = scale;
         if (!b->submitted) submit(b, d->h);
     }
+#ifdef PORT_NATIVE_UI
+    if (nui_on) { /* the bottom screen is the native UI's */
+        static int nui_x = -1, nui_y = -1;
+        if (d->x != nui_x || d->y != nui_y) { nui_x = d->x; nui_y = d->y; nui_frame(); }
+        nui_set_top((192 - (d->h > 0 && d->h <= 240 ? d->h : 224) * 4 / 5) / 2);
+        return;
+    }
+#endif
     if (place->field && layer_bg >= 0) {
         /* a scene that went software is all on the background layer */
         static int ui_hidden;
