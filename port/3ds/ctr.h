@@ -1,4 +1,4 @@
-/* 3DS platform internals shared by port/3ds/*.c. */
+/* 3DS platform internals shared by port/3ds. */
 #ifndef CTR_H
 #define CTR_H
 

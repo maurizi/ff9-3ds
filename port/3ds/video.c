@@ -1,5 +1,6 @@
-/* Bring-up presenter: the software renderer's PS1 display area copied by the CPU to the top screen, 1:1 and
+/* SOFT=1: the bring-up presenter: the software renderer's PS1 display area copied by the CPU to the top screen, 1:1 and
  * centred (the PS1's 320x224/240 in the 3DS's 400x240). Replaced by the PICA200 renderer (render.c) once it runs. */
+#ifdef PORT_SOFT_PRESENT
 #include <3ds.h>
 #include <string.h>
 
@@ -54,3 +55,4 @@ void ctr_shutdown(void) {
     ctr_audio_exit();
     gfxExit();
 }
+#endif

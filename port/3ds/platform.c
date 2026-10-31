@@ -86,6 +86,9 @@ void plat_wait_frame(void) {
     }
     read_input();
     ctr_present(frames);
+#ifdef PORT_DUMP_AT
+    if (frames == PORT_DUMP_AT) { void ctr_render_dump(void); ctr_render_dump(); }
+#endif
     /* wait for the next VBlank unless one already passed since the last one we waited for */
     u64 now = svcGetSystemTick();
     if (now - last_vblank_tick < (u64)(TICKS_PER_VBLANK * 0.9)) {

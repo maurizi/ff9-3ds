@@ -608,6 +608,9 @@ void DrawPrim(void *p) {
 const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi;
 __attribute__((weak)) void port_ot_marker(unsigned int *m) { (void)m; }
 
+/* A hardware renderer submits what an ordering table recorded (port/3ds/render.c). */
+__attribute__((weak)) void psx_gpu_ot_done(void) {}
+
 static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
     unsigned int profile_start = port_profile_begin();
     /* Explicit bounds disambiguate stack links whose low 24 bits alias arena RAM. */
@@ -646,6 +649,7 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     if (drawsync_cb) {
         drawsync_owed = 1;
     }
+    psx_gpu_ot_done();
     port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
 }
 void DrawOTag(u32 *p) { draw_ot(p, NULL, 0); }

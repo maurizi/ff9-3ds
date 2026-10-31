@@ -1,0 +1,60 @@
+; PS1 primitives on the PICA200 (port/3ds/render.c).
+;
+; in:  v0 = (x, y, Z): position in render-target pixels (PS1 framebuffer coordinates less the target's origin,
+;                     with the GTE's sub-pixel fraction when known); Z = the GTE's SZ, 0 for 2D primitives
+;      v1 = (u, v):    texel coordinates in the 256x256 texture page
+;      v2 = colour:    0..255 per channel
+;
+; A vertex with depth gets the stereo parallax of a camera moved along X: the PS1 projected it to
+; sx = OFX + H X / Z, so a camera moved by e sees it at sx - H e / Z. Relative to the convergence depth Zc, the
+; shift is k (1/Zc - 1/Z) with k = +-H e per eye (stereo.x, stereo.y = 1/Zc). Its clip w is proportional to Z,
+; so textures are interpolated perspective-correctly.
+
+.fvec proj[4]       ; render-target pixels -> clip space (an orthographic matrix)
+.fvec stereo        ; x = k, y = 1/Zc, z = w per unit of Z, w = depth plane (clip z, before w)
+.fvec texscale      ; texcoord = (u, v) * xy + zw: (1/width, -1/height, 0, 1), since t runs bottom-up while
+                    ; texture memory (and PS1 v) runs top-down
+
+.constf consts(0.0, 1.0, 0.00392156862745098, 0.0)
+.alias zero consts.xxxx
+.alias one consts.yyyy
+.alias inv255 consts.zzzz
+
+.out outpos position
+.out outtc0 texcoord0
+.out outclr color
+
+.alias inpos v0
+.alias intc  v1
+.alias inclr v2
+
+.proc main
+    mov r0.xy, inpos.xy
+    mov r0.z, stereo.w
+    mov r0.w, one
+    mov r1, one                 ; w = 1 (2D)
+
+    cmp zero, lt, lt, inpos.zz  ; cmp.x = 0 < Z
+    ifc cmp.x
+        rcp r2.x, inpos.z           ; 1/Z
+        add r2.y, stereo.y, -r2.x   ; 1/Zc - 1/Z
+        mul r2.z, stereo.x, r2.y
+        add r0.x, r0.x, r2.z        ; x += k (1/Zc - 1/Z)
+        mul r1, stereo.zzzz, inpos.zzzz
+    .end
+
+    dp4 r3.x, proj[0], r0
+    dp4 r3.y, proj[1], r0
+    dp4 r3.z, proj[2], r0
+    dp4 r3.w, proj[3], r0
+    mul outpos, r3, r1
+
+    mov r4.xy, texscale.zw
+    mul r5.xy, texscale.xy, intc.xy
+    add r4.xy, r4.xy, r5.xy
+    mov r4.zw, zero
+    mov outtc0, r4
+
+    mul outclr, inv255, inclr
+    end
+.end

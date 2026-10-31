@@ -11,6 +11,7 @@ typedef struct {
     int x, y;    /* VRAM coordinates, drawing offset applied */
     int r, g, b; /* 0..255 */
     int u, v;    /* texture coordinates 0..255 */
+    const unsigned int *xyw; /* the packet word the position came from (GTE depth lookup: gte.h) */
 } Gp0Vtx;
 
 typedef struct {

@@ -10,6 +10,7 @@
 #include <stdint.h>
 #define PORT_GTE_IMPL /* the real functions, not the inline wrappers */
 #include "gte.h"
+#include "psx_mem.h"
 #ifdef __ARM_FEATURE_DSP
 #include <arm_acle.h>
 #endif
@@ -140,11 +141,27 @@ static inline void push_sz(u32 z) {
     g.d[19] = z;
 }
 
-static inline void push_sxy(i32 x, i32 y) {
+#ifdef PORT_GTE_DEPTH
+GteDepth psx_gte_depth[3];
+/* a projection's depth info (gte.h): SZ and the 16.16 screen position's fraction, none when it was clamped */
+static inline u32 depth_info(u32 sz, i64 mx, i64 my, i32 sx, i32 sy) {
+    if (!sz || (mx >> 16) != sx || (my >> 16) != sy) return 0;
+    return sz << 16 | (u32)((my >> 8) & 0xFF) << 8 | (u32)((mx >> 8) & 0xFF);
+}
+#define DEPTH_PUSH(w_, i_) do { psx_gte_depth[0] = psx_gte_depth[1]; psx_gte_depth[1] = psx_gte_depth[2]; \
+                                psx_gte_depth[2].word = (w_); psx_gte_depth[2].info = (i_); } while (0)
+#else
+#define depth_info(sz, mx, my, sx, sy) 0u
+#define DEPTH_PUSH(w_, i_) ((void)(w_), (void)(i_))
+#endif
+
+static inline void push_sxy_d(i32 x, i32 y, u32 info) {
     g.d[12] = g.d[13];
     g.d[13] = g.d[14];
     g.d[14] = ((u32)y << 16) | ((u32)x & 0xFFFF);
+    DEPTH_PUSH(g.d[14], info);
 }
+static inline void push_sxy(i32 x, i32 y) { push_sxy_d(x, y, 0); }
 
 static inline void push_color(void) {
     u32 r = lim_color(1, MAC(1) >> 4);
@@ -203,6 +220,7 @@ GTE_HOT void gte_mtc2(int reg, gte_u32 v) {
         g.d[12] = g.d[13];
         g.d[13] = g.d[14];
         g.d[14] = v;
+        DEPTH_PUSH(v, 0);
         return;
     case 28: /* IRGB: expand to IR1-3 */
         g.d[9] = (v & 0x1F) << 7;
@@ -313,7 +331,7 @@ static inline __attribute__((always_inline)) void rtp_body(int v, int sf, int lm
     i64 sx = mx >> 16, sy = my >> 16;
     if (sx > 0x3FF) { f |= 1u << 14; sx = 0x3FF; } else if (sx < -0x400) { f |= 1u << 14; sx = -0x400; }
     if (sy > 0x3FF) { f |= 1u << 13; sy = 0x3FF; } else if (sy < -0x400) { f |= 1u << 13; sy = -0x400; }
-    push_sxy((i32)sx, (i32)sy);
+    push_sxy_d((i32)sx, (i32)sy, depth_info(sz3, mx, my, (i32)sx, (i32)sy));
     if (last) {
         i64 m0 = (i64)DQA * div + DQB;
         MAC0_FLAG(m0);
@@ -376,7 +394,7 @@ GTE_HOT static void rtp_sf1(int v, int lm, int last) {
     i32 sx = (i32)(mx >> 16), sy = (i32)(my >> 16);
     if (sx > 0x3FF) { f |= 1u << 14; sx = 0x3FF; } else if (sx < -0x400) { f |= 1u << 14; sx = -0x400; }
     if (sy > 0x3FF) { f |= 1u << 13; sy = 0x3FF; } else if (sy < -0x400) { f |= 1u << 13; sy = -0x400; }
-    push_sxy(sx, sy);
+    push_sxy_d(sx, sy, depth_info(sz3, mx, my, sx, sy));
     if (last) {
         i64 m0 = (i64)DQA * div + DQB;
         MAC0_FLAG(m0);
@@ -756,3 +774,52 @@ GTE_HOT void gte_cmd(gte_u32 op) {
     finish_flag();
     port_profile_end(PORT_PROFILE_GTE,profile_start);
 }
+
+#ifdef PORT_GTE_DEPTH
+/* Depth shadow (gte.h): for each word of psx_ram the SXY word last stored there by the GTE and its depth info;
+ * the scratchpad likewise, and the scratchpad's stores also by value, since projected vertices are often staged
+ * there and copied into packets by the CPU. */
+static u32 depth_word[PSX_RAM_SIZE / 4], depth_inf[PSX_RAM_SIZE / 4];
+static u32 sp_word[256], sp_inf[256];
+#define VALUE_SLOTS 4096
+static u32 val_word[VALUE_SLOTS], val_inf[VALUE_SLOTS];
+static inline unsigned value_slot(u32 w) { return (w * 0x9E3779B1u) >> (32 - 12); }
+
+void psx_depth_record(const void *p, gte_u32 w, gte_u32 info) {
+    uintptr_t off = (const unsigned char *)p - psx_ram;
+    if (off < PSX_RAM_SIZE) {
+        depth_word[off >> 2] = w;
+        depth_inf[off >> 2] = info;
+        return;
+    }
+    off = (const unsigned char *)p - psx_scratchpad;
+    if (off < 0x400) {
+        sp_word[off >> 2] = w;
+        sp_inf[off >> 2] = info;
+        if (info) {
+            unsigned k = value_slot(w);
+            val_word[k] = w;
+            val_inf[k] = info;
+        }
+    }
+}
+
+void gte_store_sxy(int reg, void *p) {
+    u32 w = g.d[reg];
+    *(u32 *)p = w;
+    const GteDepth *e = &psx_gte_depth[reg - 12];
+    psx_depth_record(p, w, e->word == w ? e->info : 0);
+}
+
+gte_u32 psx_depth_lookup(const gte_u32 *p) {
+    u32 w = *p;
+    uintptr_t off = (const unsigned char *)p - psx_ram;
+    if (off < PSX_RAM_SIZE) {
+        if (depth_word[off >> 2] == w && depth_inf[off >> 2]) return depth_inf[off >> 2];
+    } else if ((off = (const unsigned char *)p - psx_scratchpad) < 0x400) {
+        if (sp_word[off >> 2] == w) return sp_inf[off >> 2];
+    }
+    unsigned k = value_slot(w);
+    return val_word[k] == w ? val_inf[k] : 0;
+}
+#endif

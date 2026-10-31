@@ -7,6 +7,8 @@
 #   AUTOPRESS="..."   3DS: scripted presses, as the PC's --press ("CROSS@2500,UP@2900+3")
 #   SCENARIO=path     3DS: boot straight into a scenario (docs/scenario-testing.md)
 #   PROFILE=1         3DS: frame-time and per-category timers on the bottom screen
+#   DUMP_AT=N         3DS: at frame N write the VRAM mirror, shadow and textures to sdmc:/3ds/ff9/dump/
+#   SOFT=1            3DS: the software renderer, copied to the top screen by the CPU (reference)
 
 DECOMP   := decomp
 VERSION  := us
@@ -157,10 +159,10 @@ endef
 # ARM11. 3dsx relocations are word relocations only (-mword-relocations: no movw/movt pairs).
 DEVKITPRO ?= /opt/devkitpro
 CTRULIB   := $(DEVKITPRO)/libctru
-CTR_ARCH  := -D__3DS__ -DPORT_3DS -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -marm -mword-relocations
+CTR_ARCH  := -D__3DS__ -DPORT_3DS -DPORT_GTE_DEPTH -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -marm -mword-relocations
 PORT_EXTRA_3ds := -DPORT_DISC_PACK -I$(CTRULIB)/include \
                   $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') \
-                  $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE) -I$(BUILD)/3ds/shaders
+                  $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) -I$(BUILD)/3ds/shaders
 # Vertex shaders (PICA200 assembly, picasso) are embedded as binaries.
 SHADERS := $(wildcard port/3ds/*.v.pica)
 $(BUILD)/3ds/shaders/%.shbin: port/3ds/%.v.pica
@@ -178,7 +180,7 @@ $(eval $(call target_rules,3ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(CTR_ARC
 .PHONY: FORCE_3DS_CONFIG
 $(BUILD)/3ds/runtime-config: FORCE_3DS_CONFIG
 	@mkdir -p $(dir $@)
-	@printf '%s\n' '$(AUTOPRESS)' '$(SCENARIO)' '$(PROFILE)' > $@.tmp
+	@printf '%s\n' '$(AUTOPRESS)' '$(SCENARIO)' '$(PROFILE)' '$(SOFT)' '$(DUMP_AT)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(3ds_PORTOBJS): $(BUILD)/3ds/runtime-config $(3ds_EXTRAOBJS)

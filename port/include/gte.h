@@ -109,6 +109,22 @@ void gte_cmd(gte_u32 op);
 
 /* lwc2/swc2 */
 #define GTE_LWC2(reg, base, off) gte_mtc2((reg), *(const gte_u32 *)((const unsigned char *)(base) + (off)))
+#ifdef PORT_GTE_DEPTH
+/* Depth capture (docs/design.md 4.3): each SXY register's sub-pixel fraction and SZ, tagged with the word it
+ * belongs to (a direct mtc2 replaces the word, which then no longer matches), recorded wherever the game stores
+ * an SXY register, so the renderer finds a projected vertex's depth by its address. info: SZ << 16 | the y
+ * fraction (1/256 pixel) << 8 | the x fraction; 0 = none. */
+typedef struct { gte_u32 word, info; } GteDepth;
+extern GteDepth psx_gte_depth[3];
+void gte_store_sxy(int reg, void *p);
+/* the depth info recorded for the vertex word at p (in psx_ram or the scratchpad), 0 if none or stale */
+gte_u32 psx_depth_lookup(const gte_u32 *p);
+/* port code that projects vertices itself (gte_rtpt_batch, psx_gte_project) records them like a store */
+void psx_depth_record(const void *p, gte_u32 word, gte_u32 info);
+#define GTE_SWC2(reg, base, off) ((reg) >= 12 && (reg) <= 14 ? gte_store_sxy((reg), (unsigned char *)(base) + (off)) \
+                                  : (void)(*(gte_u32 *)((unsigned char *)(base) + (off)) = gte_mfc2(reg)))
+#else
 #define GTE_SWC2(reg, base, off) (*(gte_u32 *)((unsigned char *)(base) + (off)) = gte_mfc2(reg))
+#endif
 
 #endif

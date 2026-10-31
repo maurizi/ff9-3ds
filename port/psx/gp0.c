@@ -48,7 +48,9 @@ static inline int sext11(int v) {
 }
 
 /* a vertex, filled in place (returned by value it was a 28-byte copy per vertex) */
-static inline void vtx(Gp0Vtx *v, unsigned int xy, unsigned int col) {
+static inline void vtx(Gp0Vtx *v, const unsigned int *xyp, unsigned int col) {
+    const unsigned int xy = *xyp;
+    v->xyw = xyp;
     v->u = v->v = 0;
     v->x = sext11((int)(xy & 0x7FF)) + gp0_state.ofs_x;
     v->y = sext11((int)((xy >> 16) & 0x7FF)) + gp0_state.ofs_y;
@@ -147,7 +149,8 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
         unsigned int k = 1;
         for (int i = 0; i < nv; i++) {
             unsigned int col = (i == 0 || !m.gouraud) ? w[0] : w[k++];
-            vtx(&v[i], w[k++], col);
+            vtx(&v[i], &w[k], col);
+            k++;
             if (m.textured) {
                 unsigned int uv = w[k++];
                 v[i].u = uv & 0xFF;
@@ -173,7 +176,8 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
         int poly = (cmd >> 3) & 1;
         unsigned int k = 1;
         Gp0Vtx prev;
-        vtx(&prev, w[k++], w[0]);
+        vtx(&prev, &w[k], w[0]);
+        k++;
         for (;;) {
             if (k >= avail) {
                 return avail;
@@ -189,7 +193,8 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
                 }
             }
             Gp0Vtx next;
-            vtx(&next, w[k++], col);
+            vtx(&next, &w[k], col);
+            k++;
             if (gp0_backend && gp0_backend->line) {
                 ++psx_gpu_scene_prims;
                 gp0_backend->line(&m, &prev, &next);
@@ -210,7 +215,7 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
             return avail;
         }
         Gp0Vtx v;
-        vtx(&v, w[1], w[0]);
+        vtx(&v, &w[1], w[0]);
         unsigned int k = 2;
         if (m.textured) {
             unsigned int uv = w[k++];
@@ -313,7 +318,7 @@ GP0_HOT_THUMB int gp0_tpage_sprite16(const unsigned int *w) {
     apply_texpage(&m, tp);
     set_clut(&m, w[3]);
     Gp0Vtx v;
-    vtx(&v, w[2], w[1]);
+    vtx(&v, &w[2], w[1]);
     v.u = w[3] & 0xFF;
     v.v = (w[3] >> 8) & 0xFF;
     gp0_backend->rect(&m, &v, 16, 16);
