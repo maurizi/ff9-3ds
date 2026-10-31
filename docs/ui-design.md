@@ -21,10 +21,11 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 - **Bottom, when no window is open**:
   - **Area map** from the walkmesh (top-down), Zidane's position and facing **[done]**; the exits (gateways from the
     event scripts) **[todo: decomp request R30]**; save moogles and shops once visited **[todo]**.
-  - **Header line**: location name, gil, play time. **[todo: in separate boxes now]**
-  - **Compact party strip**: four rows of portrait, HP and MP, status icons. **[partial: names and HP]**
+  - **Header line**: location name, gil, play time. **[done]**
+  - **Compact party strip**: four rows of portrait, HP and MP, status icons. **[done]** (portraits read from the
+    menu's file by the port)
   - **Large edge buttons** (≥ 40×32): **Menu** (also △) **[done]**; **ATE**, pulsing when an Active Time Event is
-    available (Select stays Select) **[todo: R30]**; **Cards** with the collection count **[todo]**; **Mognet**
+    available (Select stays Select) **[todo: R30]**; **Cards** with the collection count **[partial: the count; tapping it to open the card screen todo]**; **Mognet**
     with unread letters, enabled at a moogle **[todo]**; **Chocograph / hints** when relevant **[todo]**.
   - Nothing here is needed while walking.
 
@@ -32,7 +33,7 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 - The text stays on top in FF9's speaker-anchored bubbles, at the screen plane. **[done]**
 - The bottom can show a scrollable **dialogue backlog** (new). **[todo]**
 - **Choice prompts**: the choices as large touch buttons on the bottom while the question stays on top; cursor and
-  A still work (an input aid, not a mirror). **[todo]**
+  A still work (an input aid, not a mirror). **[done in fields, not yet seen running: no fixture asks a question]**
 
 ## Battle
 - **Top**: the battle scene with no command or status windows **[done]**; damage and heal numbers **[done]**; the

@@ -339,6 +339,12 @@ static void read_user(unsigned int lba, u8 *buf2048) {
     __builtin_memcpy(buf2048, raw + USER_OFFSET, 2048);
 }
 
+/* n sectors' user data from lba on (the IMG's absolute sectors), now: for the port's own reads (the 3DS's bottom
+ * screen reads the menu's portraits in a field), outside the game's CD queue */
+void psx_cd_read_data(unsigned int lba, void *buf, unsigned int n) {
+    for (unsigned int i = 0; i < n; i++) read_user(lba + i, (u8 *)buf + i * 2048);
+}
+
 /* ---- sector patches ------------------------------------------------------------------------------------
  * Sectors of FF9.IMG served from <data>/patches/disc<N>.bin instead of the image (tools/simplify_battle_models.py:
  * the heaviest battle enemies' models, simplified at build time): "FF9P", a run count, then {IMG sector, sectors,

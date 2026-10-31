@@ -1423,6 +1423,39 @@ static int bottom_layer(const PsxDisplayInfo *d) {
     if (k >= 0 && frames_drawn - layers[k].drawn > 2) k = -1; /* (nothing drawn into it lately) */
     return k;
 }
+/* ---- images of the port's own on the bottom screen (the field screen's portraits: port/game/field_hud.c) ---- */
+#define HUD_IMAGES 8
+static struct { C3D_Tex tex; u32 key; int ok; } hud_img[HUD_IMAGES];
+static struct { int slot, x, y, w, h; } hud_draw[16];
+static int n_hud_draw;
+
+/* image slot: w x h (<= 64x64) 8-bit pixels through a CLUT of PS1 colours, kept while key is the same */
+void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h) {
+    if (slot < 0 || slot >= HUD_IMAGES || w > 64 || h > 64) return;
+    if (hud_img[slot].ok && hud_img[slot].key == key) return;
+    if (!hud_img[slot].ok) {
+        if (!C3D_TexInit(&hud_img[slot].tex, 64, 64, GPU_RGBA8)) return;
+        C3D_TexSetFilter(&hud_img[slot].tex, GPU_NEAREST, GPU_NEAREST);
+        hud_img[slot].ok = 1;
+    }
+    if (in_frame) gpu_sync(); /* (it may be drawn with in this frame's list) */
+    u32 *dst = hud_img[slot].tex.data;
+    memset(dst, 0, 64 * 64 * 4);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) dst[tiled(x, y, 64)] = rgba_lut[clut[pix[y * w + x]]];
+    mark_dirty(dst, 64 * 64 * 4);
+    hud_img[slot].key = key;
+}
+
+/* draw image slot at (x, y) of the bottom screen's UI (its 320x224 coordinates) this frame, w x h of it */
+void ctr_hud_draw(int slot, int x, int y, int w, int h) {
+    if (slot < 0 || slot >= HUD_IMAGES || !hud_img[slot].ok || n_hud_draw == 16) return;
+    hud_draw[n_hud_draw].slot = slot;
+    hud_draw[n_hud_draw].x = x; hud_draw[n_hud_draw].y = y;
+    hud_draw[n_hud_draw].w = w; hud_draw[n_hud_draw].h = h;
+    n_hud_draw++;
+}
+
 static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
     int k = shown_layer;
     ctr_ui_oy = (240 - h) / 2;
@@ -1441,6 +1474,9 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
     }
     if (k < 0) { ctr_ui_nhands = 0; return; }
     screen_quad(bottom_rt, &layers[k].tex, K_COMPOSITE, 5, 0xFFFFFFFF, 0, 0, w, h, 0, ctr_ui_oy);
+    for (int i = 0; i < n_hud_draw; i++) /* (texels x 2 x grey: as drawn; transparent ones not) */
+        screen_quad(bottom_rt, &hud_img[hud_draw[i].slot].tex, K_TEX, NO_BLEND, 0xFF808080, 0, 0, hud_draw[i].w,
+                    hud_draw[i].h, hud_draw[i].x, hud_draw[i].y + ctr_ui_oy);
     layers[k].shown = 1;
     ctr_ui_nhands = layers[k].nhands;
     memcpy(ctr_ui_hands, layers[k].hands, sizeof ctr_ui_hands);
@@ -1555,6 +1591,7 @@ void ctr_present(long frame) {
         }
     }
     present_bottom(&d, w, h);
+    n_hud_draw = 0;
     frame_end();
     in_frame = 0;
     frames_drawn++;

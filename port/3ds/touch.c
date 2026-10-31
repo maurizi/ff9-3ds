@@ -27,6 +27,8 @@ static unsigned held;
 /* the stylus while it is down: where it went down, and how far a vertical swipe has stepped */
 static int down, dx0, dy0, swiped, vsteps, last_x, last_y;
 static unsigned queued, nqueued; /* presses a swipe asked for, done one at a time */
+static unsigned seq[16];
+static int nseq, iseq; /* presses a tap on the bottom screen's own buttons stands for (port/game/field_hud.c) */
 
 extern int ctr_ui_oy; /* render.c: the UI layer's row 0 on the bottom screen */
 static void tap(int x, int y) {
@@ -139,10 +141,16 @@ unsigned int ctr_ui_pad_buttons(long frame) {
     } else if (down) {
         down = 0;
         /* a tap: on release, where it was; on the field screen's buttons (port/game/field_hud.c), their button */
-        int port_hud_button_at(int x, int y, int oy);
-        unsigned b = swiped ? 0 : (unsigned)port_hud_button_at(last_x, last_y, ctr_ui_oy);
-        if (b) queued = b, nqueued = 1;
+        int port_hud_tap(int x, int y, int oy, unsigned *seq, int max);
+        int n = swiped ? 0 : port_hud_tap(last_x, last_y, ctr_ui_oy, seq, 16);
+        if (n) nseq = n, iseq = 0;
         else if (!swiped) tap(last_x, last_y);
+    }
+    if (iseq < nseq && timer == 0) { /* (a sequence the bottom screen asked for: one press at a time) */
+        held = seq[iseq++];
+        timer = PRESS + SETTLE - 1;
+        goal = 0;
+        return held;
     }
     if (nqueued && timer == 0) {
         nqueued--;
