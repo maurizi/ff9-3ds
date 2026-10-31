@@ -184,8 +184,8 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
 #ifdef PORT_PROBE_AT
             extern long ctr_frames(void);
             static int nlog;
-            px = ctr_frames() >= PORT_PROBE_AT - 12 && ctr_frames() <= PORT_PROBE_AT && nlog++ < 4000 ? 60 : -2;
-            py = 60;
+            px = ctr_frames() >= PORT_PROBE_AT - 12 && ctr_frames() <= PORT_PROBE_AT && nlog++ < 4000 ? 120 : -2;
+            py = 160;
 #else
             if (px == -1) { const char *e = getenv("FF9_PROBE"); px = -2; if (e) sscanf(e, "%d,%d", &px, &py); }
 #endif
@@ -270,8 +270,8 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
             static int px = -1, py;
 #ifdef PORT_PROBE_AT
             extern long ctr_frames(void);
-            px = ctr_frames() >= PORT_PROBE_AT - 12 && ctr_frames() <= PORT_PROBE_AT ? 60 : -2;
-            py = 60;
+            px = ctr_frames() >= PORT_PROBE_AT - 12 && ctr_frames() <= PORT_PROBE_AT ? 120 : -2;
+            py = 160;
 #else
             if (px == -1) { const char *e = getenv("FF9_PROBE"); px = -2; if (e) sscanf(e, "%d,%d", &px, &py); }
 #endif

@@ -224,11 +224,16 @@ static void gpu_sync(void) {
 
 /* ---- batches ------------------------------------------------------------------------------------------------ */
 
-enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE };
+enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE, K_SCENE };
+#define MASK_SET 1   /* drawn pixels get the mask bit (alpha 1); else the texel's (textured) or 0 */
+#define MASK_CHECK 2 /* pixels with the mask bit keep their colour (opaque draws) */
+#define MASK_COPY 4  /* an upload: the source's mask bits as they are */
+static int cur_mask;  /* add_batch's: gp0_state's at the primitive (blits: MASK_SET, alpha from the source) */
 #define NO_BLEND 4
 
 typedef struct {
-    u8 kind, abr, eyes, target; /* target: 0 the VRAM mirror, 1 the bottom screen's UI layer */
+    u8 kind, abr, eyes, target; /* target: 0 the VRAM mirror, 1 + n UI layer n */
+    u8 mask, pad2[3];           /* MASK_SET | MASK_CHECK: the PS1's mask bit as the mirror's alpha (GP0 E6) */
     u16 sc[4]; /* scissor: x0, y0, x1, y1 (exclusive) */
     C3D_Tex *tex;
     u32 first, count;
@@ -258,7 +263,7 @@ static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex
     if (nbatches) {
         Batch *b = &batches[nbatches - 1];
         if (b->kind == kind && b->abr == abr && b->eyes == eyes && b->tex == tex && b->first + b->count == first &&
-            b->target == cur_target &&
+            b->target == cur_target && b->mask == cur_mask &&
             !memcmp(b->sc, sc, sizeof b->sc)) {
             b->count += n;
             return;
@@ -266,12 +271,15 @@ static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex
     }
     if (nbatches == MAX_BATCHES) submit();
     Batch *b = &batches[nbatches++];
-    b->kind = kind; b->abr = abr; b->eyes = eyes; b->tex = tex; b->target = (u8)cur_target;
+    b->kind = kind; b->abr = abr; b->eyes = eyes; b->tex = tex; b->target = (u8)cur_target; b->mask = (u8)cur_mask;
     memcpy(b->sc, sc, sizeof b->sc);
     b->first = first; b->count = n;
 }
 
-static void set_tev(int kind) {
+static void set_tev_for(int kind, int layer);
+static void set_tev(int kind) { set_tev_for(kind, 1); }
+/* (layer: a UI layer's, or a screen's; else the mirror's, whose alpha is the mask bit) */
+static void set_tev_for(int kind, int layer) {
     C3D_TexEnv *e0 = C3D_GetTexEnv(0), *e1 = C3D_GetTexEnv(1);
     C3D_TexEnvInit(e0);
     C3D_TexEnvInit(e1);
@@ -284,9 +292,14 @@ static void set_tev(int kind) {
         C3D_TexEnvSrc(e0, C3D_Both, GPU_TEXTURE0, 0, 0);
         C3D_TexEnvFunc(e0, C3D_Both, GPU_REPLACE);
         break;
-    case K_BLIT:
-        C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, 0, 0);
-        C3D_TexEnvFunc(e0, C3D_RGB, GPU_REPLACE);
+    case K_BLIT: /* a copy: colour and alpha (an upload's mask bits) as they are */
+        C3D_TexEnvSrc(e0, C3D_Both, GPU_TEXTURE0, 0, 0);
+        C3D_TexEnvFunc(e0, C3D_Both, GPU_REPLACE);
+        break;
+    case K_SCENE: /* the mirror shown (texel x vertex colour x 2), opaque whatever its mask bits */
+        C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+        C3D_TexEnvFunc(e0, C3D_RGB, GPU_MODULATE);
+        C3D_TexEnvScale(e0, C3D_RGB, GPU_TEVSCALE_2);
         C3D_TexEnvSrc(e0, C3D_Alpha, GPU_CONSTANT, 0, 0);
         C3D_TexEnvFunc(e0, C3D_Alpha, GPU_REPLACE);
         C3D_TexEnvColor(e0, 0xFF000000);
@@ -295,10 +308,23 @@ static void set_tev(int kind) {
         C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
         C3D_TexEnvFunc(e0, C3D_RGB, GPU_MODULATE);
         C3D_TexEnvScale(e0, C3D_RGB, GPU_TEVSCALE_2);
-        if (kind == K_TEX) { /* (x 2: semi-transparency texels drawn opaque get alpha 1 too, for the UI layers) */
+        if (kind == K_TEX && layer) { /* (x 2: texels with bit 15, drawn opaque here, get alpha 1 too) */
             C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, 0, 0);
             C3D_TexEnvFunc(e0, C3D_Alpha, GPU_REPLACE);
             C3D_TexEnvScale(e0, C3D_Alpha, GPU_TEVSCALE_2);
+        } else if (kind == K_TEX) {
+            /* min(1, 2a) x (1 - a + 1/8) x 2: 0 for a transparent texel, 1 for one with bit 15 (a = 0x80), 0.25 for one
+             * without (a = 1): drawn (alpha test > 0), and its alpha is the mask bit the mirror stores (0.25 -> 0) */
+            C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, 0, 0);
+            C3D_TexEnvFunc(e0, C3D_Alpha, GPU_REPLACE);
+            C3D_TexEnvScale(e0, C3D_Alpha, GPU_TEVSCALE_2);
+            C3D_TexEnvSrc(e1, C3D_RGB, GPU_PREVIOUS, 0, 0);
+            C3D_TexEnvFunc(e1, C3D_RGB, GPU_REPLACE);
+            C3D_TexEnvSrc(e1, C3D_Alpha, GPU_TEXTURE0, GPU_CONSTANT, GPU_PREVIOUS);
+            C3D_TexEnvOpAlpha(e1, GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_SRC_ALPHA);
+            C3D_TexEnvFunc(e1, C3D_Alpha, GPU_ADD_MULTIPLY);
+            C3D_TexEnvScale(e1, C3D_Alpha, GPU_TEVSCALE_2);
+            C3D_TexEnvColor(e1, 0x20000000);
         } else if (kind == K_TEX_P1) {
             /* opaque texels only: (a - 0x80) x 2 is ~1 for them, ~0 for semi-transparent ones */
             C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, GPU_CONSTANT, 0);
@@ -328,15 +354,33 @@ static void set_tev(int kind) {
  * layer later, still shows (premultiplied: shown = layer + scene x (1 - alpha)): an opaque pixel sets it to 1, mode 0
  * averages it with 1 (half the scene shows), modes 1-3 leave it (the scene shows fully, the layer adds to it). Over
  * the scene that is exactly the PS1's result for modes 0, 1 and 3; mode 2 (subtract) has nothing to subtract from. */
-static void set_blend(int abr, int layer) {
+static void set_blend_mask(int abr, int layer, int mask, int kind);
+static void set_blend(int abr, int layer) { set_blend_mask(abr, layer, MASK_COPY, K_BLIT); }
+/* The PS1's modes, and in the mirror its mask bit as the alpha bit: written as set_mask | (textured ? the texel's
+ * bit 15 : 0) (the combiners give 1 for a texel with bit 15 and 0.25 for one without, which stores as 0; the
+ * opaque-texel pass of a semi-transparent primitive draws only texels without it, the other only texels with it), an
+ * upload's copied; with check_mask a pixel with it is left alone (by its alpha). The blend colour's alpha is 1:
+ * set_mask writes it. */
+static void set_blend_mask(int abr, int layer, int mask, int kind) {
     GPU_BLENDFACTOR sa = GPU_ONE, da = GPU_ZERO;
     if (layer) {
         if (abr == 0) sa = GPU_CONSTANT_ALPHA, da = GPU_ONE_MINUS_CONSTANT_ALPHA;
         else if (abr != NO_BLEND) sa = GPU_ZERO, da = GPU_ONE;
+    } else {
+        int check = mask & MASK_CHECK;
+        if (mask & MASK_COPY) sa = GPU_ONE, da = GPU_ZERO;
+        else if (mask & MASK_SET) sa = GPU_CONSTANT_ALPHA, da = GPU_ZERO;           /* 1 (masked or not) */
+        else if (kind == K_TEX || kind == K_TEX_P2) sa = check ? GPU_ONE_MINUS_DST_ALPHA : GPU_ONE, da = check ? GPU_ONE : GPU_ZERO;
+        else sa = GPU_ZERO, da = check ? GPU_ONE : GPU_ZERO;                         /* 0, or kept where masked */
+        if (abr == NO_BLEND && check) { /* (opaque draws only: masked pixels keep their colour) */
+            C3D_BlendingColor(0xFF000000);
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE_MINUS_DST_ALPHA, GPU_DST_ALPHA, sa, da);
+            return;
+        }
     }
     switch (abr) {
     case 0: /* B/2 + F/2 */
-        C3D_BlendingColor(0x80808080);
+        C3D_BlendingColor(layer ? 0x80808080 : 0xFF808080);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_COLOR, GPU_ONE_MINUS_CONSTANT_COLOR, sa, da);
         break;
     case 1: /* B + F */
@@ -346,14 +390,15 @@ static void set_blend(int abr, int layer) {
         C3D_AlphaBlend(GPU_BLEND_REVERSE_SUBTRACT, GPU_BLEND_ADD, GPU_ONE, GPU_ONE, sa, da);
         break;
     case 3: /* B + F/4 */
-        C3D_BlendingColor(0x40404040);
+        C3D_BlendingColor(layer ? 0x40404040 : 0xFF404040);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_COLOR, GPU_ONE, sa, da);
         break;
     case 5: /* compositing a UI layer: premultiplied over */
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ZERO);
         break;
     default:
-        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+        C3D_BlendingColor(0xFF000000);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, layer ? GPU_ONE : sa, layer ? GPU_ZERO : da);
         break;
     }
 }
@@ -398,15 +443,17 @@ static void submit(void) {
             float k = eye ? stereo_k : -stereo_k;
             C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, k, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
         }
-        int kind = -1, abr = -1;
+        int kind = -1, abr = -1, bmask = -1;
         C3D_Tex *tex = (C3D_Tex *)-1;
         u16 sc[4] = {0xFFFF, 0, 0, 0};
         for (unsigned i = 0; i < nbatches; i++) {
             Batch *b = &batches[i];
             if (b->target != target) continue;
             if (!target && !(b->eyes & (1 << eye))) continue;
-            if (b->kind != kind) set_tev(kind = b->kind);
-            if (b->abr != abr) set_blend(abr = b->abr, target != 0);
+            if (b->abr != abr || b->mask != bmask || b->kind != kind) {
+                if (b->kind != kind) set_tev_for(kind = b->kind, target != 0);
+                set_blend_mask(abr = b->abr, target != 0, bmask = b->mask, kind);
+            }
             if (b->tex != tex) {
                 tex = b->tex;
                 if (tex) C3D_TexBind(0, tex);
@@ -434,12 +481,13 @@ static inline unsigned tiled(unsigned x, unsigned y, unsigned width) {
     return ((y >> 3) * (width >> 3) + (x >> 3)) * 64 + (morton_x[x & 7] | morton_y[y & 7]);
 }
 
-static inline u16 bgr555_to_rgb565(u16 c) {
+/* The mirror is RGBA5551: the PS1's 15-bit colour, and its mask bit (bit 15) as the alpha bit. */
+static inline u16 bgr555_to_rgba5551(u16 c) {
     unsigned r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
-    return (u16)(r << 11 | (g << 1 | g >> 4) << 5 | b);
+    return (u16)(r << 11 | g << 6 | b << 1 | c >> 15);
 }
-static inline u16 rgb565_to_bgr555(u16 p) {
-    return (u16)((p >> 11) | ((p >> 6) & 31) << 5 | (p & 31) << 10);
+static inline u16 rgba5551_to_bgr555(u16 p) {
+    return (u16)((p >> 11) | ((p >> 6) & 31) << 5 | ((p >> 1) & 31) << 10 | (p & 1) << 15);
 }
 
 static inline unsigned pow2_at_least(unsigned v) {
@@ -483,33 +531,42 @@ static void quad(Vtx *v, float x0, float y0, float x1, float y1, float u0, float
     v[3] = b; v[4] = d; v[5] = c;
 }
 
-/* Copy the shadow's pixels of cells [cx0,cx1)x[cy0,cy1) into the mirror, in drawing order. */
+/* Copy the shadow's pixels of the cells of [cx0,cx1)x[cy0,cy1) whose mirror is stale into the mirror, in drawing order:
+ * only those (a cell the GPU drew since has a stale shadow), as runs along each row of cells (pieces of at most 256
+ * pixels). */
+static void blit_run(int cx0, int cx1, int cy) {
+    for (int bx = cx0 * CELL; bx < cx1 * CELL; bx += 256) {
+        int w = cx1 * CELL - bx, h = CELL, by = cy * CELL;
+        if (w > 256) w = 256;
+        unsigned tw = pow2_at_least(w), th = pow2_at_least(h);
+        u16 *px = staging_alloc(tw * th * 2);
+        for (int y = 0; y < h; y++) {
+            const u16 *src = psx_vram + (by + y) * VW + bx;
+            for (int x = 0; x < w; x++) px[tiled(x, y, tw)] = bgr555_to_rgba5551(src[x]);
+        }
+        GSPGPU_FlushDataCache(px, tw * th * 2);
+        C3D_Tex *t = staging_tex(px, tw, th, GPU_RGBA5551);
+        Vtx *v = alloc_vtx(6);
+        quad(v, bx, by, bx + w, by + h, 0, 0, w, h, 0xFFFFFFFF);
+        int saved = cur_target, saved_mask = cur_mask;
+        cur_target = 0;       /* (into the mirror, whatever was drawn last) */
+        cur_mask = MASK_COPY; /* (the shadow's pixels with their mask bits) */
+        add_batch(K_BLIT, NO_BLEND, 3, full_scissor, t, v - vb, 6);
+        cur_target = saved;
+        cur_mask = saved_mask;
+        ctr_render_stats[2]++;
+    }
+}
 static void blit_cells(int cx0, int cy0, int cx1, int cy1) {
     if (!psx_vram) return;
-    /* (in pieces of at most 256x256) */
-    for (int by = cy0 * CELL; by < cy1 * CELL; by += 256)
-        for (int bx = cx0 * CELL; bx < cx1 * CELL; bx += 256) {
-            int w = cx1 * CELL - bx, h = cy1 * CELL - by;
-            if (w > 256) w = 256;
-            if (h > 256) h = 256;
-            unsigned tw = pow2_at_least(w), th = pow2_at_least(h);
-            u16 *px = staging_alloc(tw * th * 2);
-            for (int y = 0; y < h; y++) {
-                const u16 *src = psx_vram + (by + y) * VW + bx;
-                for (int x = 0; x < w; x++) px[tiled(x, y, tw)] = bgr555_to_rgb565(src[x]);
-            }
-            GSPGPU_FlushDataCache(px, tw * th * 2);
-            C3D_Tex *t = staging_tex(px, tw, th, GPU_RGB565);
-            Vtx *v = alloc_vtx(6);
-            quad(v, bx, by, bx + w, by + h, 0, 0, w, h, 0xFFFFFFFF);
-            int saved = cur_target;
-            cur_target = 0; /* (into the mirror, whatever was drawn last) */
-            add_batch(K_BLIT, NO_BLEND, 3, full_scissor, t, v - vb, 6);
-            cur_target = saved;
-            ctr_render_stats[2]++;
-        }
     for (int cy = cy0; cy < cy1; cy++)
-        for (int cx = cx0; cx < cx1; cx++) mirror_ok[cy][cx] = 1;
+        for (int cx = cx0; cx < cx1;) {
+            if (mirror_ok[cy][cx]) { cx++; continue; }
+            int run = cx;
+            while (run < cx1 && !mirror_ok[cy][run]) mirror_ok[cy][run++] = 1;
+            blit_run(cx, run, cy);
+            cx = run;
+        }
 }
 
 /* Read cells [cx0,cx1)x[cy0,cy1) whose shadow is stale back from the left eye's mirror. */
@@ -521,7 +578,7 @@ static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
             if (shadow_ok[cy][cx]) continue;
             for (int y = cy * CELL; y < (cy + 1) * CELL; y++) {
                 u16 *dst = psx_vram + y * VW;
-                for (int x = cx * CELL; x < (cx + 1) * CELL; x++) dst[x] = rgb565_to_bgr555(m[tiled(x, y, VW)]);
+                for (int x = cx * CELL; x < (cx + 1) * CELL; x++) dst[x] = rgba5551_to_bgr555(m[tiled(x, y, VW)]);
             }
             shadow_ok[cy][cx] = 1;
         }
@@ -536,10 +593,12 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
     unsigned r = (rgb15 & 31) << 3, g = ((rgb15 >> 5) & 31) << 3, b = ((rgb15 >> 10) & 31) << 3;
     Vtx *v = alloc_vtx(6);
     quad(v, x, y, x1, y1, 0, 0, 0, 0, 0xFF000000 | b << 16 | g << 8 | r);
-    int saved = cur_target;
+    int saved = cur_target, saved_mask = cur_mask;
     cur_target = 0; /* (a fill is VRAM's: the mirror, even right after a UI layer's primitives) */
+    cur_mask = 0;   /* (a fill clears the mask bit, and ignores it) */
     add_batch(K_UNTEX, NO_BLEND, 3, full_scissor, NULL, v - vb, 6);
     cur_target = saved;
+    cur_mask = saved_mask;
     filling = 1;
 }
 
@@ -826,6 +885,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         cur_target = 0;
         v = ot_depth(v, n, moved, bx1 - bx0, by1 - by0);
     }
+    cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0);
     ctr_render_stats[1]++;
     int passes[2], np = 0, abr = m->semi ? m->abr : NO_BLEND;
     if (!m->textured) passes[np++] = K_UNTEX;
@@ -1183,7 +1243,7 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
     C3D_RenderTargetClear(bottom_rt, C3D_CLEAR_ALL, 0x000000FF, 0);
     C3D_FrameDrawOn(bottom_rt);
     if (d->rgb24) return;
-    screen_quad(bottom_rt, &mirror_tex[0], K_TEX, NO_BLEND, 0xFF383838, d->x, d->y, w, h, 0, ctr_ui_oy);
+    screen_quad(bottom_rt, &mirror_tex[0], K_SCENE, NO_BLEND, 0xFF383838, d->x, d->y, w, h, 0, ctr_ui_oy);
     if (k < 0) { ctr_ui_nhands = 0; panel_draw(); return; }
     screen_quad(bottom_rt, &layers[k].tex, K_COMPOSITE, 5, 0xFFFFFFFF, 0, 0, w, h, 0, ctr_ui_oy);
     layers[k].shown = 1;
@@ -1218,6 +1278,7 @@ void ctr_present(long frame) {
         Vtx *v = alloc_vtx(6);
         quad(v, 0, 0, VW, VH, 0, 0, VW, VH, 0xFFFFFFFF);
         cur_target = 0;
+        cur_mask = MASK_COPY;
         add_batch(K_BLIT, NO_BLEND, 2, full_scissor, &mirror_tex[0], v - vb, 6);
         stereo_on = 1;
         submit();
@@ -1315,13 +1376,16 @@ static void write_ppm(const char *name, int w, int h, u32 (*px)(int x, int y, co
 }
 static u32 px_mirror(int x, int y, const void *ctx) {
     u16 p = ((const u16 *)ctx)[tiled(x, y, VW)];
-    unsigned r = p >> 11, g = (p >> 5) & 63, b = p & 31;
-    return (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2);
+    unsigned r = p >> 11, g = (p >> 6) & 31, b = (p >> 1) & 31;
+    return (r << 3 | r >> 2) << 16 | (g << 3 | g >> 2) << 8 | (b << 3 | b >> 2);
 }
 static u32 px_crop(int x, int y, const void *ctx) {
     u16 p = ((const u16 *)ctx)[y * 320 + x];
     unsigned r = p >> 11, g = (p >> 5) & 63, b = p & 31;
     return (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2);
+}
+static u32 px_mask(int x, int y, const void *ctx) {
+    return ((const u16 *)ctx)[tiled(x, y, VW)] & 1 ? 0xFFFFFF : 0;
 }
 static u32 px_shadow(int x, int y, const void *ctx) {
     u16 c = ((const u16 *)ctx)[y * VW + x];
@@ -1344,7 +1408,10 @@ void ctr_render_dump_display(long frame) {
     int w = d.w > 320 ? 320 : d.w, h = d.h > 240 ? 240 : d.h;
     const u16 *m = mirror_tex[0].data;
     for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++) crop[y * 320 + x] = m[tiled((d.x + x) & 1023, (d.y + y) & 511, VW)];
+        for (int x = 0; x < w; x++) { /* (as RGB565 for px_crop) */
+            u16 p = m[tiled((d.x + x) & 1023, (d.y + y) & 511, VW)];
+            crop[y * 320 + x] = (u16)((p & 0xF800) | (p & 0x7C0) | ((p >> 1) & 31));
+        }
     /* with the displayed buffer's UI layer composited as the PS1 frame has it (premultiplied: layer + scene (1 - a)) */
     int k = layers[0].x == d.x && layers[0].y == d.y ? 0 : layers[1].x == d.x && layers[1].y == d.y ? 1 : -1;
     if (k >= 0 && frames_drawn - layers[k].drawn <= 2) {
@@ -1373,6 +1440,7 @@ void ctr_render_dump(void) {
     mkdir("sdmc:/3ds/ff9/dump", 0777);
     gpu_sync();
     write_ppm("mirror0", VW, VH, px_mirror, mirror_tex[0].data);
+    write_ppm("mirror0_mask", VW, VH, px_mask, mirror_tex[0].data);
     if (stereo_on) write_ppm("mirror1", VW, VH, px_mirror, mirror_tex[1].data);
     write_ppm("shadow", VW, VH, px_shadow, psx_vram);
     for (int i = 0; i < nslots && i < 24; i++) {
@@ -1427,7 +1495,7 @@ void ctr_video_init(void) {
     vb = linearAlloc(VB_MAX * sizeof(Vtx));
     staging = linearAlloc(STAGING_SIZE);
     for (int eye = 0; eye < 2; eye++) {
-        if (!C3D_TexInitVRAM(&mirror_tex[eye], VW, VH, GPU_RGB565)) port_fatal("no VRAM for the PS1 VRAM mirror");
+        if (!C3D_TexInitVRAM(&mirror_tex[eye], VW, VH, GPU_RGBA5551)) port_fatal("no VRAM for the PS1 VRAM mirror");
         C3D_TexSetFilter(&mirror_tex[eye], GPU_NEAREST, GPU_NEAREST);
         mirror_rt[eye] = C3D_RenderTargetCreateFromTex(&mirror_tex[eye], GPU_TEXFACE_2D, 0, -1);
         top_rt[eye] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, -1);
