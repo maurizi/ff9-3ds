@@ -345,17 +345,22 @@ void help_update(void) { /* (help.c's, drawing with help_draw_port) */
     sprAnim_update(&g_menuHelp.iconAnim);
 }
 
-/* the help text along the top screen's foot (field_hud.c's top frame, over the menu's views): 1 if drawn */
-int port_help_top_draw(void) {
-    if (!help_moved()) return 0;
-    TextSize sz = text_measure(g_menuHelp.text);
+/* a help text along the top screen's foot, in the game's help frame */
+void port_help_panel(u8 *text) {
+    TextSize sz = text_measure(text);
     RECT r;
     r.w = 368;
     r.h = (s16)(sz.h + 18);
     r.x = 16;
     r.y = (s16)(232 - r.h);
     ui_drawSprite(r.x + 8, r.y, 1, 0xB7, 0);
-    text_drawBlock(r.x + 10, r.y + 10, 1, g_menuHelp.text, TEXT_PAL_HELP);
+    text_drawBlock(r.x + 10, r.y + 10, 1, text, TEXT_PAL_HELP);
     win_drawHelpFrame(&r, 1, HELP_TAIL_NONE, 0);
+}
+
+/* the menu's help text there (field_hud.c's top frame, over the menu's views): 1 if drawn */
+int port_help_top_draw(void) {
+    if (!help_moved()) return 0;
+    port_help_panel(g_menuHelp.text);
     return 1;
 }

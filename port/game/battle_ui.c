@@ -418,3 +418,15 @@ void o0b_btlui_targetInput(void) {
     if (k != TAP_NONE) tap_kind = TAP_NONE;
     o0b_btlui_targetInput_game();
 }
+
+/* Select help in battle (the game's help window, OT entry 2 of its UI list): the text on the top screen instead, as
+ * in menus; render.c leaves the window off the bottom while port_battle_help_on */
+int port_battle_help_on;
+void port_help_panel(u8 *text);
+int port_battle_help_top(void) {
+    u8 *text = (u8 *)g_btluiHelp.text; /* (an address held as s32) */
+    port_battle_help_on = port_battle_hud_on && ram_ok(g_btlUi, sizeof *g_btlUi) && g_btluiHelp.open && text &&
+                          ram_ok(text, 1) && *text != TEXT_END;
+    if (port_battle_help_on) port_help_panel(text);
+    return port_battle_help_on;
+}

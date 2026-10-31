@@ -560,6 +560,8 @@ __attribute__((unused)) static void party_overview(void) {
  * sheet and the overview below are ready for it). */
 int port_menu_top_draw(void);
 static int top_draw(void) {
+    int port_battle_help_top(void);
+    if (g_gameState->mode == 2 && !port_menu_state()) return port_battle_help_top(); /* (battle_ui.c) */
     if (port_menu_state() != 2 && !(g_menu.open && g_menu.type)) return 0;
     (void)member_sheet;
     (void)party_overview;
