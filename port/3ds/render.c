@@ -213,7 +213,6 @@ static void submit(void);
 
 /* everything recorded so far executed and finished (the CPU may then read the mirror, or rewrite a texture) */
 static void gpu_sync(void) {
-    unsigned pt = port_profile_begin();
     submit();
     if (in_frame) {
         C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
@@ -221,7 +220,6 @@ static void gpu_sync(void) {
     }
     frame_begin();
     ctr_render_stats[6]++;
-    port_profile_detail_end(PORT_PROFILE_MOVIE_VLC, pt); /* (reported as "vlc": GPU syncs) */
 }
 
 /* ---- batches ------------------------------------------------------------------------------------------------ */
@@ -542,7 +540,7 @@ typedef struct {
     u32 serial;  /* frame_serial when last drawn with */
     C3D_Tex tex;
     u32 stamp[64]; /* per 32x32 block: gen_counter when converted (0 = not yet) */
-    u32 epoch;     /* tex_epoch when all its converted blocks were last known current */
+    u32 epoch[64]; /* per block: tex_epoch when it was last known current (no write to any source cell since) */
     u8 flags[64];  /* per block: 1 = has opaque texels, 2 = has semi-transparent ones */
     u32 hash[64];  /* per block: its source texels' and CLUT's hash when converted */
 } TexSlot;
@@ -594,7 +592,7 @@ static TexSlot *slot_for(u32 key, u32 twin) {
     TexSlot *s = &slots[last = victim];
     s->key = key;
     s->twin = twin;
-    s->epoch = 0;
+    memset(s->epoch, 0, sizeof s->epoch);
     unsigned h = hash_of(key, twin);
     while (slot_hash[h]) h = (h + 1) & (SLOT_HASH - 1);
     slot_hash[h] = (u16)(victim + 1);
@@ -634,10 +632,12 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
                    ofy = (s->twin >> 15 & 31) * 8;
     if (s->twin) sx0 = m->tx, sw = 256 >> shift, sy0 = m->ty;
     int ncl = m->depth == 0 ? 16 : m->depth == 1 ? 256 : 0;
-    if (s->stamp[b] && (s->epoch == tex_epoch || (!cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]) &&
-        (!ncl || !cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b])))))
+    if (s->stamp[b] && s->epoch[b] == tex_epoch) return;
+    if (s->stamp[b] && !cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]) &&
+        (!ncl || !cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b]))) {
+        s->epoch[b] = tex_epoch;
         return;
-    unsigned pt = port_profile_begin();
+    }
     cpu_reads(sx0, sy0, sx0 + sw, sy0 + 32);
     if (ncl) cpu_reads(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
     /* a write near its sources (the 32x32 cells are coarse: the world map scrolls 16-wide strips of water and cycles
@@ -646,7 +646,7 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     if (ncl) hsh = shadow_hash(m->clut_x, m->clut_y, ncl, 1, hsh);
     if (s->stamp[b] && s->hash[b] == hsh) {
         s->stamp[b] = gen_counter;
-        port_profile_detail_end(PORT_PROFILE_MOVIE_MDEC, pt);
+        s->epoch[b] = tex_epoch;
         return;
     }
     if (s->serial == frame_serial) gpu_sync(); /* drawn with earlier in this frame: those draws keep the old texels */
@@ -674,9 +674,10 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     }
     s->flags[b] = flags;
     s->stamp[b] = gen_counter;
+    s->epoch[b] = tex_epoch;
     mark_source(sx0, sy0, sx0 + sw, sy0 + 32);
     if (ncl) mark_source(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
-    port_profile_detail_end(PORT_PROFILE_MOVIE_MDEC, pt); /* (reported as "mdec": block conversions) */
+
     /* (the block's four rows of tiles: 32 rows of the texture, contiguous) */
     GSPGPU_FlushDataCache(dst + by * 32 * 256, 32 * 256 * 4);
     ctr_render_stats[4]++;
@@ -700,21 +701,6 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
             f |= s->flags[by * 8 + bx];
         }
     s->serial = frame_serial;
-    /* (the blocks just checked are current; others are checked when used, as their stamp is 0 or old) */
-    if (s->epoch != tex_epoch) {
-        int all = 1;
-        for (int b = 0; b < 64 && all; b++)
-            if (s->stamp[b] && b != -1) {
-                int bx = b & 7, by = b >> 3, shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
-                int sx0 = m->tx + ((bx * 32) >> shift), sw = 32 >> shift, sy0 = m->ty + by * 32;
-                int ncl = m->depth == 0 ? 16 : m->depth == 1 ? 256 : 0;
-                if (s->twin) sx0 = m->tx, sw = 256 >> shift, sy0 = m->ty;
-                if (cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]) ||
-                    (ncl && cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b])))
-                    all = 0;
-            }
-        if (all) s->epoch = tex_epoch;
-    }
     *flags = f;
     return &s->tex;
 }
@@ -859,13 +845,9 @@ static C3D_Tex *prim_texture(const Gp0Mode *m, const Gp0Vtx *v, int n, unsigned 
 
 static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     unsigned tflags = 0;
-    unsigned pt = port_profile_begin();
     C3D_Tex *tex = prim_texture(m, v, n, &tflags);
-    port_profile_detail_end(PORT_PROFILE_TEXTURE, pt);
-    pt = port_profile_begin();
     Vtx t[6];
     for (int i = 0; i < n; i++) make_vtx(&t[i], m, &v[i]);
-    port_profile_detail_end(PORT_PROFILE_PALETTE, pt);
     if (n == 4) t[4] = t[3], t[3] = t[1], t[5] = t[2]; /* (0,1,2) (1,3,2) */
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
     for (int i = 0; i < n; i++) {
@@ -874,9 +856,7 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     }
     /* the PS1 skips polygons wider than 1023 or taller than 511 */
     if (x1 - x0 > 1023 || y1 - y0 > 511) return;
-    pt = port_profile_begin();
     emit(m, t, n == 4 ? 6 : 3, x0, y0, x1 + 1, y1 + 1, tex, tflags);
-    port_profile_detail_end(PORT_PROFILE_UPLOAD, pt);
 }
 
 static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1);

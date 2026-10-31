@@ -139,11 +139,19 @@ static inline void wv_project(const WvCtx *cx, u32 vxy, u32 vz, u32 *sxy, u32 *s
         const unsigned long long q = ((unsigned long long)n * d + 0x8000) >> 16;
         div = q > 0x1FFFF ? 0x1FFFF : (u32)q;
     }
-    s32 sx = (s32)(((long long)ir1 * div + cx->ofx) >> 16), sy = (s32)(((long long)ir2 * div + cx->ofy) >> 16);
+    const long long mx = (long long)ir1 * div + cx->ofx, my = (long long)ir2 * div + cx->ofy;
+    s32 sx = (s32)(mx >> 16), sy = (s32)(my >> 16);
+    const int clamped = sx != wv_clamp32(sx, -0x400, 0x3FF) || sy != wv_clamp32(sy, -0x400, 0x3FF);
     sx = wv_clamp32(sx, -0x400, 0x3FF);
     sy = wv_clamp32(sy, -0x400, 0x3FF);
     *sxy = (u32)sy << 16 | ((u32)sx & 0xFFFF);
     *sz = sz3;
+#ifdef PORT_GTE_DEPTH
+    /* (stereo depth, as gte.c records an RTPS's: SZ and the sub-pixel fractions) */
+    psx_depth_record(sxy, *sxy, !sz3 || clamped ? 0 : sz3 << 16 | (u32)((my >> 8) & 0xFF) << 8 | (u32)((mx >> 8) & 0xFF));
+#else
+    (void)clamped;
+#endif
 }
 /* one group's results; *rgbc: RGBC as the GTE would hold it, before and after */
 static inline void wv_group(WvCtx *cx, const u32 *v, s32 flags, u32 *rgbc, u32 *lit, u32 *fog, u32 *sxy,

@@ -541,7 +541,7 @@ void psx_gte_project(gte_u32 vxy, gte_u32 vz, gte_u32 *sxy, gte_u32 *sz, gte_u32
     *mac0 = (u32)(i32)((i64)DQA * div + DQB);
 }
 
-#ifdef PORT_GTE_APPROX
+#if 1 /* (always: world_verts.c's fast vertex pass uses them; gte.h dispatches to them only with PORT_GTE_APPROX) */
 /* gte.h's DS-mode commands for the game's constant ones: MVMVA sf=1 lm=0 with RT (rtir, rtv0tr, rtv0) in 32 bits as
  * RTPS, so without MAC1-3's 44-bit overflow flags (bone matrices: two of every three MVMVAs) */
 GTE_HOT void psx_gte_mvmva_rt12(gte_u32 op) {

@@ -164,6 +164,8 @@ CTR_ARCH  := -D__3DS__ -DPORT_3DS -DPORT_GTE_DEPTH -march=armv6k -mtune=mpcore -
 PORT_EXTRA_3ds := -DPORT_DISC_PACK -DPORT_SPU_WORKER -I$(CTRULIB)/include \
                   $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') \
                   $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') -I$(BUILD)/3ds/shaders
+# The world map's vertex pass in 32-bit arithmetic (exact but for overflows the game doesn't reach; the DS port's)
+PORT_ARCH_3ds_game/world_verts := -DPORT_GTE_APPROX
 # Vertex shaders (PICA200 assembly, picasso) are embedded as binaries.
 SHADERS := $(wildcard port/3ds/*.v.pica)
 $(BUILD)/3ds/shaders/%.shbin: port/3ds/%.v.pica
