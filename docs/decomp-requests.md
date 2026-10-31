@@ -357,6 +357,13 @@ render.c ctr_top_ui). Its detail views need, per menu screen: the highlighted it
 candidate (Equip, and how the before/after stats are computed), the highlighted ability and its AP (Ability), the
 highlighted save block and its summary (Save), the letter (Mognet). Asked of the decomp session 2026-10-31.
 
+### R32. Which field character opens a shop (2026-10-31)
+The field map marks shopkeepers and save moogles (port/game/field_map.c). A moogle's own script entry holds MENU
+(0x75, literal type 4), but a shopkeeper's doesn't: in Dali's weapon shop (field 354) the MENU type 2 sits in entries
+3 (the player's) and 7 (not instantiated), and the shopkeeper (actor, entry 11) reaches it some other way. Needed: how
+a talk function hands off to the function that opens a shop (which op, its operands: entry and tag), so the port can
+follow it from an actor's talk tag to the MENU, or else a per-field table of shopkeeper uids if the game has one.
+
 ---
 
 ## Open findings from the port (queued while the decomp session was offline)
