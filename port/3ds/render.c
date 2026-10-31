@@ -74,8 +74,18 @@ static C3D_RenderTarget *top_rt[2];
 /* the bottom screen's UI layer: PS1 screen coordinates at 1:1 (the bottom screen is the PS1's 320 wide) */
 #define UI_W 512
 #define UI_H 256
-static C3D_Tex ui_tex;
-static C3D_RenderTarget *ui_rt, *bottom_rt;
+/* Two layers, one per PS1 framebuffer (a field's windows are drawn into the frame being built and belong to it
+ * when it is shown), RGBA8, transparent where nothing was drawn: composited over the dimmed scene when presented. */
+typedef struct {
+    int x, y;              /* the framebuffer's origin in VRAM (-1: unused) */
+    C3D_Tex tex;
+    C3D_RenderTarget *rt;
+    int shown;             /* presented since it was last cleared: the next frame drawn into the buffer clears it */
+    unsigned drawn;        /* frames_drawn when UI was last drawn into it */
+    int hands[CTR_MAX_HANDS][2], nhands;
+} UiLayer;
+static UiLayer layers[2];
+static C3D_RenderTarget *bottom_rt;
 
 static int in_frame;
 static unsigned frame_serial = 1; /* bumped at each C3D frame: what was recorded since */
@@ -200,7 +210,7 @@ static void gpu_sync(void) {
 
 /* ---- batches ------------------------------------------------------------------------------------------------ */
 
-enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT };
+enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE };
 #define NO_BLEND 4
 
 typedef struct {
@@ -223,12 +233,13 @@ static Vtx *alloc_vtx(unsigned n) {
 }
 
 /* the batch the next n vertices (just allocated at first) belong to */
-static int ui_mode; /* drawing the inserted list (the battle UI): to the UI layer */
+static int ui_mode;    /* drawing the inserted list (the battle UI): to the UI layer */
+static int cur_target; /* where add_batch records: 0 the mirror, 1 + n UI layer n */
 static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n) {
     if (nbatches) {
         Batch *b = &batches[nbatches - 1];
         if (b->kind == kind && b->abr == abr && b->eyes == eyes && b->tex == tex && b->first + b->count == first &&
-            b->target == ui_mode &&
+            b->target == cur_target &&
             !memcmp(b->sc, sc, sizeof b->sc)) {
             b->count += n;
             return;
@@ -236,7 +247,7 @@ static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex
     }
     if (nbatches == MAX_BATCHES) submit();
     Batch *b = &batches[nbatches++];
-    b->kind = kind; b->abr = abr; b->eyes = eyes; b->tex = tex; b->target = (u8)ui_mode;
+    b->kind = kind; b->abr = abr; b->eyes = eyes; b->tex = tex; b->target = (u8)cur_target;
     memcpy(b->sc, sc, sizeof b->sc);
     b->first = first; b->count = n;
 }
@@ -246,12 +257,13 @@ static void set_tev(int kind) {
     C3D_TexEnvInit(e0);
     C3D_TexEnvInit(e1);
     switch (kind) {
-    case K_UNTEX:
-        C3D_TexEnvSrc(e0, C3D_RGB, GPU_PRIMARY_COLOR, 0, 0);
-        C3D_TexEnvFunc(e0, C3D_RGB, GPU_REPLACE);
-        C3D_TexEnvSrc(e0, C3D_Alpha, GPU_CONSTANT, 0, 0);
-        C3D_TexEnvFunc(e0, C3D_Alpha, GPU_REPLACE);
-        C3D_TexEnvColor(e0, 0xFF000000);
+    case K_UNTEX: /* (alpha from the vertex: 1, or 0 for a UI layer's clear) */
+        C3D_TexEnvSrc(e0, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
+        C3D_TexEnvFunc(e0, C3D_Both, GPU_REPLACE);
+        break;
+    case K_COMPOSITE: /* a UI layer: its colour and alpha */
+        C3D_TexEnvSrc(e0, C3D_Both, GPU_TEXTURE0, 0, 0);
+        C3D_TexEnvFunc(e0, C3D_Both, GPU_REPLACE);
         break;
     case K_BLIT:
         C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, 0, 0);
@@ -264,9 +276,10 @@ static void set_tev(int kind) {
         C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
         C3D_TexEnvFunc(e0, C3D_RGB, GPU_MODULATE);
         C3D_TexEnvScale(e0, C3D_RGB, GPU_TEVSCALE_2);
-        if (kind == K_TEX) {
+        if (kind == K_TEX) { /* (x 2: semi-transparency texels drawn opaque get alpha 1 too, for the UI layers) */
             C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, 0, 0);
             C3D_TexEnvFunc(e0, C3D_Alpha, GPU_REPLACE);
+            C3D_TexEnvScale(e0, C3D_Alpha, GPU_TEVSCALE_2);
         } else if (kind == K_TEX_P1) {
             /* opaque texels only: (a - 0x80) x 2 is ~1 for them, ~0 for semi-transparent ones */
             C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, GPU_CONSTANT, 0);
@@ -292,21 +305,33 @@ static void set_tev(int kind) {
     else C3D_AlphaTest(false, GPU_ALWAYS, 0);
 }
 
-static void set_blend(int abr) {
+/* The PS1's modes. In a UI layer (layer != 0) the alpha channel tracks how much of the scene, composited under the
+ * layer later, still shows (premultiplied: shown = layer + scene x (1 - alpha)): an opaque pixel sets it to 1, mode 0
+ * averages it with 1 (half the scene shows), modes 1-3 leave it (the scene shows fully, the layer adds to it). Over
+ * the scene that is exactly the PS1's result for modes 0, 1 and 3; mode 2 (subtract) has nothing to subtract from. */
+static void set_blend(int abr, int layer) {
+    GPU_BLENDFACTOR sa = GPU_ONE, da = GPU_ZERO;
+    if (layer) {
+        if (abr == 0) sa = GPU_CONSTANT_ALPHA, da = GPU_ONE_MINUS_CONSTANT_ALPHA;
+        else if (abr != NO_BLEND) sa = GPU_ZERO, da = GPU_ONE;
+    }
     switch (abr) {
     case 0: /* B/2 + F/2 */
         C3D_BlendingColor(0x80808080);
-        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_COLOR, GPU_ONE_MINUS_CONSTANT_COLOR, GPU_ONE, GPU_ZERO);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_COLOR, GPU_ONE_MINUS_CONSTANT_COLOR, sa, da);
         break;
     case 1: /* B + F */
-        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE, GPU_ONE, GPU_ZERO);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE, sa, da);
         break;
     case 2: /* B - F */
-        C3D_AlphaBlend(GPU_BLEND_REVERSE_SUBTRACT, GPU_BLEND_ADD, GPU_ONE, GPU_ONE, GPU_ONE, GPU_ZERO);
+        C3D_AlphaBlend(GPU_BLEND_REVERSE_SUBTRACT, GPU_BLEND_ADD, GPU_ONE, GPU_ONE, sa, da);
         break;
     case 3: /* B + F/4 */
         C3D_BlendingColor(0x40404040);
-        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_COLOR, GPU_ONE, GPU_ONE, GPU_ZERO);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_COLOR, GPU_ONE, sa, da);
+        break;
+    case 5: /* compositing a UI layer: premultiplied over */
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ZERO);
         break;
     default:
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
@@ -336,16 +361,16 @@ static void submit(void) {
     frame_begin();
     /* the GPU reads main memory, not the CPU's data cache */
     GSPGPU_FlushDataCache(vb + vb_submitted, (vb_used - vb_submitted) * sizeof(Vtx));
-    int any_ui = 0;
-    for (unsigned i = 0; i < nbatches && !any_ui; i++) any_ui = batches[i].target;
-    /* passes: each eye's mirror, then the UI layer (no stereo: the bottom screen is flat) */
-    for (int pass = 0; pass < 3; pass++) {
-        int eye = pass == 1, target = pass == 2;
+    unsigned any_ui = 0;
+    for (unsigned i = 0; i < nbatches; i++) any_ui |= 1u << batches[i].target;
+    /* passes: each eye's mirror, then each UI layer (no stereo: the bottom screen is flat) */
+    for (int pass = 0; pass < 4; pass++) {
+        int eye = pass == 1, target = pass >= 2 ? pass - 1 : 0;
         if (pass == 1 && !stereo_on) continue;
-        if (target && !any_ui) continue;
+        if (target && !(any_ui & (1u << target))) continue;
         int height = target ? UI_H : VH;
         if (target) {
-            C3D_FrameDrawOn(ui_rt);
+            C3D_FrameDrawOn(layers[target - 1].rt);
             set_proj_ortho(UI_W, UI_H, 0.0f);
             C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
         } else {
@@ -362,7 +387,7 @@ static void submit(void) {
             if (b->target != target) continue;
             if (!target && !(b->eyes & (1 << eye))) continue;
             if (b->kind != kind) set_tev(kind = b->kind);
-            if (b->abr != abr) set_blend(abr = b->abr);
+            if (b->abr != abr) set_blend(abr = b->abr, target != 0);
             if (b->tex != tex) {
                 tex = b->tex;
                 if (tex) C3D_TexBind(0, tex);
@@ -497,6 +522,7 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
 
 typedef struct {
     u32 key;     /* depth << 30 | page x / 64 << 26 | page y / 256 << 25 | CLUT x / 16 << 9 | CLUT y; 0 = free */
+    u32 twin;    /* the texture window baked in (GP0 E2: mask x, y, offset x, y in 8-texel units), 0 = none */
     u32 serial;  /* frame_serial when last drawn with */
     C3D_Tex tex;
     u32 stamp[64]; /* per 32x32 block: gen_counter when converted (0 = not yet) */
@@ -508,12 +534,12 @@ static TexSlot slots[MAX_SLOTS];
 static int nslots;
 static u32 rgba_lut[65536];
 
-static TexSlot *slot_for(u32 key) {
+static TexSlot *slot_for(u32 key, u32 twin) {
     static int last = -1;
-    if (last >= 0 && slots[last].key == key) return &slots[last];
+    if (last >= 0 && slots[last].key == key && slots[last].twin == twin) return &slots[last];
     int victim = -1;
     for (int i = 0; i < nslots; i++) {
-        if (slots[i].key == key) return &slots[last = i];
+        if (slots[i].key == key && slots[i].twin == twin) return &slots[last = i];
         if (slots[i].serial != frame_serial && (victim < 0 || slots[i].serial < slots[victim].serial)) victim = i;
     }
     if (nslots < MAX_SLOTS && C3D_TexInit(&slots[nslots].tex, 256, 256, GPU_RGBA8)) {
@@ -527,6 +553,7 @@ static TexSlot *slot_for(u32 key) {
     }
     TexSlot *s = &slots[last = victim];
     s->key = key;
+    s->twin = twin;
     memset(s->stamp, 0, sizeof s->stamp);
     return s;
 }
@@ -543,6 +570,10 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     int b = by * 8 + bx;
     int shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
     int sx0 = m->tx + ((bx * 32) >> shift), sw = 32 >> shift, sy0 = m->ty + by * 32;
+    /* a texture window reads only inside it: check (and read back) the whole page instead of the block */
+    const unsigned mx = (s->twin & 31) * 8, my = (s->twin >> 5 & 31) * 8, ofx = (s->twin >> 10 & 31) * 8,
+                   ofy = (s->twin >> 15 & 31) * 8;
+    if (s->twin) sx0 = m->tx, sw = 256 >> shift, sy0 = m->ty;
     int ncl = m->depth == 0 ? 16 : m->depth == 1 ? 256 : 0;
     if (s->stamp[b] && !cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]) &&
         (!ncl || !cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b])))
@@ -558,14 +589,14 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     u32 *dst = s->tex.data;
     unsigned flags = 0;
     for (int y = 0; y < 32; y++) {
-        const u16 *row = psx_vram + ((sy0 + y) & 511) * VW;
-        int v = by * 32 + y;
+        int v = by * 32 + y, sv = (int)(((unsigned)v & ~my) | (ofy & my));
+        const u16 *row = psx_vram + ((m->ty + sv) & 511) * VW;
         for (int x = 0; x < 32; x++) {
-            int u = bx * 32 + x;
+            int u = bx * 32 + x, su = (int)(((unsigned)u & ~mx) | (ofx & mx));
             u32 c;
-            if (m->depth == 0) c = clut[(row[(m->tx + (u >> 2)) & 1023] >> ((u & 3) * 4)) & 15];
-            else if (m->depth == 1) c = clut[(row[(m->tx + (u >> 1)) & 1023] >> ((u & 1) * 8)) & 255];
-            else c = rgba_lut[row[(m->tx + u) & 1023]];
+            if (m->depth == 0) c = clut[(row[(m->tx + (su >> 2)) & 1023] >> ((su & 3) * 4)) & 15];
+            else if (m->depth == 1) c = clut[(row[(m->tx + (su >> 1)) & 1023] >> ((su & 1) * 8)) & 255];
+            else c = rgba_lut[row[(m->tx + su) & 1023]];
             unsigned a = c & 0xFF;
             flags |= a == 0xFF ? 1 : a == 0x80 ? 2 : 0;
             dst[tiled(u, v, 256)] = c;
@@ -583,7 +614,9 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
 static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
     u32 key = (u32)m->depth << 30 | (u32)(m->tx >> 6) << 26 | (u32)(m->ty >> 8) << 25 |
               (m->depth < 2 ? (u32)(m->clut_x >> 4) << 9 | (u32)m->clut_y : 0) | 1u << 24;
-    TexSlot *s = slot_for(key);
+    u32 twin = (gp0_state.twin_mask_x / 8) | (gp0_state.twin_mask_y / 8) << 5 | (gp0_state.twin_off_x / 8) << 10 |
+               (gp0_state.twin_off_y / 8) << 15;
+    TexSlot *s = slot_for(key, twin);
     int bx0 = u0 >> 5, bx1 = u1 >> 5, by0 = v0 >> 5, by1 = v1 >> 5;
     if (bx1 < bx0) bx0 = 0, bx1 = 7;
     if (by1 < by0) by0 = 0, by1 = 7;
@@ -631,6 +664,9 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
 
 /* the vertices of one primitive (6 for a quad, 3 for a triangle) in each pass its kind needs */
 static int ui_ox, ui_oy; /* the displayed buffer's origin, which the UI list draws at */
+static int ui_list_layer;  /* the layer the UI list draws into */
+static int ui_layer_for(int x, int y, int clear);
+static int ui_packet(void);
 static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, int bx1, int by1, C3D_Tex *tex,
                  unsigned tflags) {
     u16 sc[4];
@@ -641,14 +677,26 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     if (by1 > sc[3]) by1 = sc[3];
     if (bx0 >= bx1 || by0 >= by1) return;
     Vtx moved[6];
-    if (ui_mode) { /* into the UI layer, relative to the displayed buffer; the mirror isn't touched */
-        for (unsigned i = 0; i < n; i++) moved[i] = v[i], moved[i].x -= ui_ox, moved[i].y -= ui_oy;
+    int layer = -1, ox = 0, oy = 0;
+    if (ui_mode) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
+    else if (ui_packet()) {
+        int x, y, w, h;
+        psx_gpu_draw_area(&x, &y, &w, &h);
+        layer = ui_layer_for(x, y, 0);
+        ox = x;
+        oy = y;
+    }
+    if (layer >= 0) { /* into a UI layer, relative to its framebuffer; the mirror isn't touched */
+        for (unsigned i = 0; i < n; i++) moved[i] = v[i], moved[i].x -= ox, moved[i].y -= oy;
         v = moved;
-        sc[0] = (u16)clampi(sc[0] - ui_ox, 0, UI_W); sc[2] = (u16)clampi(sc[2] - ui_ox, 0, UI_W);
-        sc[1] = (u16)clampi(sc[1] - ui_oy, 0, UI_H); sc[3] = (u16)clampi(sc[3] - ui_oy, 0, UI_H);
+        sc[0] = (u16)clampi(sc[0] - ox, 0, UI_W); sc[2] = (u16)clampi(sc[2] - ox, 0, UI_W);
+        sc[1] = (u16)clampi(sc[1] - oy, 0, UI_H); sc[3] = (u16)clampi(sc[3] - oy, 0, UI_H);
         if (sc[0] >= sc[2] || sc[1] >= sc[3]) return;
+        layers[layer].drawn = frames_drawn;
+        cur_target = layer + 1;
     } else {
         gpu_draws(bx0, by0, bx1, by1);
+        cur_target = 0;
     }
     ctr_render_stats[1]++;
     int passes[2], np = 0, abr = m->semi ? m->abr : NO_BLEND;
@@ -695,15 +743,12 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
 }
 
 static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1);
+static void note_hand(int x, int y);
 static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (w <= 0 || h <= 0) return;
     if (ui_mode && m->textured && ui_reads_cache(m, v->u, v->v, v->u + w - 1, v->v + h - 1)) return;
-    if (ui_mode && m->textured && w == 23 && h == 13 && m->tx == 960 && m->ty == 256 && v->u == 227 && v->v == 21 &&
-        ctr_ui_nhands < CTR_MAX_HANDS) { /* the pointing hand: where the game's cursor is (touch.c) */
-        ctr_ui_hands[ctr_ui_nhands][0] = v->x - ui_ox;
-        ctr_ui_hands[ctr_ui_nhands][1] = v->y - ui_oy;
-        ctr_ui_nhands++;
-    }
+    if (m->textured && w == 23 && h == 13 && m->tx == 960 && m->ty == 256 && v->u == 227 && v->v == 21)
+        note_hand(v->x, v->y); /* the pointing hand: where the game's cursor is (touch.c) */
 #ifdef PORT_LOGUI_AT
     if (ui_mode && frames_drawn == PORT_LOGUI_AT)
         port_log("ui rect %d,%d %dx%d tex %d uv %d,%d page %d,%d clut %d,%d col %02x%02x%02x\n", v->x - ui_ox, v->y - ui_oy,
@@ -743,19 +788,89 @@ static void r_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
 static const Gp0Backend pica_backend = {r_poly, r_line, r_rect, 0, 0, 0};
 
 /* gpu.c: the end of an ordering table */
-void psx_gpu_ot_done(void) {
-    submit();
-}
+void psx_gpu_ot_done(void);
 
 /* ---- the UI layer (the battle UI's inserted list, gpu.c ContinueDraw) ----------------------------------------
  * Drawn over a dimmed copy of the displayed scene, so its translucent windows look as they do over the PS1's scene.
  * The list's row cache (VRAM copies of the scene under changing digits, drawn back before them) restores scene
  * pixels the layer doesn't have: its copies and the sprites reading them are skipped. */
-static unsigned ui_last_frame = ~0u;
 int ctr_ui_hands[CTR_MAX_HANDS][2], ctr_ui_nhands;
-int ctr_ui_active(void) { return frames_drawn - ui_last_frame < 30; }
+static int shown_layer = -1; /* the layer of the displayed buffer, when it has UI */
+int ctr_ui_active(void) { return shown_layer >= 0; }
 static struct { int x0, y0, x1, y1; } ui_cache[8];
 static int n_ui_cache;
+
+/* the layer of the framebuffer at (x, y): taken over from the older one when new (clear: cleared now) */
+static int ui_layer_for(int x, int y, int clear) {
+    int k = layers[0].x == x && layers[0].y == y ? 0 : layers[1].x == x && layers[1].y == y ? 1 : -1;
+    if (k < 0) {
+        k = layers[0].drawn <= layers[1].drawn ? 0 : 1;
+        layers[k].x = x;
+        layers[k].y = y;
+        layers[k].nhands = 0;
+        clear = 1;
+    }
+    if (clear || layers[k].shown) {
+        static const u16 sc[4] = {0, 0, UI_W, UI_H};
+        int saved = cur_target;
+        cur_target = k + 1;
+        Vtx *v = alloc_vtx(6);
+        quad(v, 0, 0, UI_W, UI_H, 0, 0, 0, 0, 0x00000000);
+        add_batch(K_UNTEX, NO_BLEND, 1, sc, NULL, v - vb, 6);
+        cur_target = saved;
+        layers[k].shown = 0;
+        layers[k].nhands = 0;
+    }
+    return k;
+}
+
+/* window-system packets (port/game/ui_split.c), until an ordering table has drawn them */
+static struct { const u8 *lo, *hi; } ranges[8];
+static int nranges, ranges_hit;
+void port_ui_packets(const void *lo, const void *hi) {
+    for (int i = 0; i < nranges; i++) /* (the buffer was reused: a range there is a past frame's) */
+        if ((const u8 *)lo < ranges[i].hi && (const u8 *)hi > ranges[i].lo) ranges[i] = ranges[--nranges], i--;
+    if (nranges == 8) nranges--;
+    ranges[nranges].lo = lo;
+    ranges[nranges].hi = hi;
+    nranges++;
+}
+extern const u32 *psx_gpu_packet;
+static int ui_packet(void) {
+    const u8 *p = (const u8 *)psx_gpu_packet;
+    for (int i = 0; i < nranges; i++)
+        if (p >= ranges[i].lo && p < ranges[i].hi) return ranges_hit = 1;
+    return 0;
+}
+
+/* gpu.c: an ordering table drawn into a framebuffer starts that frame's UI layer afresh, once it has been shown */
+void psx_gpu_ot_begin(const u32 *ot) {
+    (void)ot;
+    if (ui_mode) return;
+    ranges_hit = 0;
+    int x, y, w, h;
+    psx_gpu_draw_area(&x, &y, &w, &h);
+    if (w >= 256 && h >= 192) {
+        int k = layers[0].x == x && layers[0].y == y ? 0 : layers[1].x == x && layers[1].y == y ? 1 : -1;
+        if (k >= 0 && layers[k].shown) ui_layer_for(x, y, 1);
+    }
+}
+
+static void note_hand(int x, int y) {
+    int k = ui_mode ? ui_list_layer : -1;
+    int ox = ui_ox, oy = ui_oy;
+    if (k < 0) {
+        if (!ui_packet()) return;
+        int w, h;
+        psx_gpu_draw_area(&ox, &oy, &w, &h);
+        k = ui_layer_for(ox, oy, 0);
+    }
+    if (layers[k].nhands < CTR_MAX_HANDS) {
+        layers[k].hands[layers[k].nhands][0] = x - ox;
+        layers[k].hands[layers[k].nhands][1] = y - oy;
+        layers[k].nhands++;
+    }
+}
 
 static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1) {
     int shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
@@ -776,58 +891,71 @@ int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int h) {
     return 1;
 }
 
+/* gpu.c ContinueDraw: the battle UI's list, drawn over the displayed buffer every VBlank: its layer anew each time */
 void psx_ui_list_begin(void) {
     submit();
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
-    int w = d.w ? d.w : 320, h = d.h ? d.h : 240;
-    if (w > UI_W) w = UI_W;
-    if (h > UI_H) h = UI_H;
-    /* the scene must be current in the mirror before it is copied */
-    int cx0, cy0, cx1, cy1;
-    if (cell_range(d.x, d.y, d.x + w, d.y + h, &cx0, &cy0, &cx1, &cy1))
-        for (int cy = cy0; cy < cy1; cy++)
-            for (int cx = cx0; cx < cx1; cx++)
-                if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
     ui_mode = 1;
-    ctr_ui_nhands = 0;
     ui_ox = d.x;
     ui_oy = d.y;
     n_ui_cache = 0;
-    static const u16 ui_scissor[4] = {0, 0, UI_W, UI_H};
-    Vtx *v = alloc_vtx(12);
-    quad(v, 0, 0, UI_W, UI_H, 0, 0, 0, 0, 0xFF000000);
-    add_batch(K_UNTEX, NO_BLEND, 1, ui_scissor, NULL, v - vb, 6);
-    quad(v + 6, 0, 0, w, h, d.x, d.y, d.x + w, d.y + h, 0xFF383838); /* (x 0.44: modulation is x2) */
-    add_batch(K_TEX, NO_BLEND, 1, ui_scissor, &mirror_tex[0], v + 6 - vb, 6);
+    ui_list_layer = ui_layer_for(d.x, d.y, 1);
 }
 
 void psx_ui_list_end(void) {
     submit();
     ui_mode = 0;
-    ui_last_frame = frames_drawn;
+}
+
+void psx_gpu_ot_done(void) {
+    submit();
+    if (ranges_hit && !ui_mode) nranges = 0, ranges_hit = 0;
 }
 
 /* ---- presenting ------------------------------------------------------------------------------------------ */
 
-static void draw_to_screen(C3D_RenderTarget *rt, C3D_Tex *src, int sx, int sy, int w, int h, int ox, int oy) {
-    C3D_RenderTargetClear(rt, C3D_CLEAR_ALL, 0x000000FF, 0);
-    C3D_FrameDrawOn(rt);
-    if (!src) return;
+/* a textured quad on a screen's render target (already drawn on): texels (sx, sy) w x h at (ox, oy) */
+static void screen_quad(C3D_RenderTarget *rt, C3D_Tex *src, int kind, int abr, u32 rgba, int sx, int sy, int w, int h,
+                        int ox, int oy) {
     C3D_Mtx p;
     Mtx_OrthoTilt(&p, 0.0f, rt == bottom_rt ? 320.0f : 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &p);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
-    set_tev(K_BLIT);
-    set_blend(NO_BLEND);
+    set_tev(kind);
+    set_blend(abr, 0);
     C3D_TexBind(0, src);
     set_texscale(src);
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     Vtx *v = alloc_vtx(6);
-    quad(v, ox, oy, ox + w, oy + h, sx, sy, sx + w, sy + h, 0xFFFFFFFF);
+    quad(v, ox, oy, ox + w, oy + h, sx, sy, sx + w, sy + h, rgba);
     GSPGPU_FlushDataCache(v, 6 * sizeof(Vtx));
     vb_submitted = vb_used;
     C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+}
+
+static void draw_to_screen(C3D_RenderTarget *rt, C3D_Tex *src, int sx, int sy, int w, int h, int ox, int oy) {
+    C3D_RenderTargetClear(rt, C3D_CLEAR_ALL, 0x000000FF, 0);
+    C3D_FrameDrawOn(rt);
+    if (src) screen_quad(rt, src, K_BLIT, NO_BLEND, 0xFFFFFFFF, sx, sy, w, h, ox, oy);
+}
+
+/* The bottom screen: the UI layer of the displayed buffer over its scene, dimmed (the scene is on the top screen). */
+int ctr_ui_oy;
+static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
+    int k = layers[0].x == d->x && layers[0].y == d->y ? 0 : layers[1].x == d->x && layers[1].y == d->y ? 1 : -1;
+    if (k >= 0 && frames_drawn - layers[k].drawn > 2) k = -1; /* (nothing drawn into it lately) */
+    shown_layer = k;
+    ctr_ui_oy = (240 - h) / 2;
+    C3D_RenderTargetClear(bottom_rt, C3D_CLEAR_ALL, 0x000000FF, 0);
+    C3D_FrameDrawOn(bottom_rt);
+    if (d->rgb24) return;
+    screen_quad(bottom_rt, &mirror_tex[0], K_TEX, NO_BLEND, 0xFF383838, d->x, d->y, w, h, 0, ctr_ui_oy);
+    if (k < 0) { ctr_ui_nhands = 0; return; }
+    screen_quad(bottom_rt, &layers[k].tex, K_COMPOSITE, 5, 0xFFFFFFFF, 0, 0, w, h, 0, ctr_ui_oy);
+    layers[k].shown = 1;
+    ctr_ui_nhands = layers[k].nhands;
+    memcpy(ctr_ui_hands, layers[k].hands, sizeof ctr_ui_hands);
 }
 
 static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy) {
@@ -891,9 +1019,7 @@ void ctr_present(long frame) {
         for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++)
             draw_to_screen(top_rt[eye], &mirror_tex[eye], d.x, d.y, w, h, ox, oy);
     }
-    /* the bottom screen: the UI layer while the game draws one (within the last half second) */
-    if (frames_drawn - ui_last_frame < 30) draw_to_screen(bottom_rt, &ui_tex, 0, 0, 320, 240, 0, 0);
-    else draw_to_screen(bottom_rt, NULL, 0, 0, 0, 0, 0, 0);
+    present_bottom(&d, w, h);
     C3D_FrameEnd(0);
     in_frame = 0;
     frames_drawn++;
@@ -1001,9 +1127,13 @@ void ctr_video_init(void) {
         top_rt[eye] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, -1);
         C3D_RenderTargetSetOutput(top_rt[eye], GFX_TOP, eye ? GFX_RIGHT : GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
     }
-    if (!C3D_TexInitVRAM(&ui_tex, UI_W, UI_H, GPU_RGB565)) port_fatal("no VRAM for the UI layer");
-    C3D_TexSetFilter(&ui_tex, GPU_NEAREST, GPU_NEAREST);
-    ui_rt = C3D_RenderTargetCreateFromTex(&ui_tex, GPU_TEXFACE_2D, 0, -1);
+    for (int k = 0; k < 2; k++) {
+        if (!C3D_TexInitVRAM(&layers[k].tex, UI_W, UI_H, GPU_RGBA8)) port_fatal("no VRAM for the UI layers");
+        C3D_TexSetFilter(&layers[k].tex, GPU_NEAREST, GPU_NEAREST);
+        layers[k].rt = C3D_RenderTargetCreateFromTex(&layers[k].tex, GPU_TEXFACE_2D, 0, -1);
+        layers[k].x = layers[k].y = -1;
+        C3D_RenderTargetClear(layers[k].rt, C3D_CLEAR_ALL, 0, 0);
+    }
     bottom_rt = C3D_RenderTargetCreate(240, 320, GPU_RB_RGBA8, -1);
     C3D_RenderTargetSetOutput(bottom_rt, GFX_BOTTOM, GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
     if (!vb || !staging) port_fatal("no linear memory for the renderer");

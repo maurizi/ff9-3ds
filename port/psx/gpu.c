@@ -562,8 +562,12 @@ unsigned int psx_gp0_len(const u32 *w, unsigned int avail) {
 
 /* One packet: walked command by command; VRAM fills and copies go to the shadow, everything goes to the
  * renderer. */
+/* the packet being drawn (a renderer may route packets by where they are: port/3ds/render.c) */
+const u32 *psx_gpu_packet;
+
 static void draw_packet(u32 *p) {
     unsigned int len = ((P_TAG *)p)->len;
+    psx_gpu_packet = p;
     u32 *w = p + 1;
     psx_gpu_packets++;
     psx_gpu_words += len;
@@ -621,8 +625,11 @@ __attribute__((weak)) int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int
 /* A hardware renderer submits what an ordering table recorded (port/3ds/render.c). */
 __attribute__((weak)) void psx_gpu_ot_done(void) {}
 
+__attribute__((weak)) void psx_gpu_ot_begin(const u32 *ot) { (void)ot; }
+
 static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
     unsigned int profile_start = port_profile_begin();
+    psx_gpu_ot_begin(p);
     /* Explicit bounds disambiguate stack links whose low 24 bits alias arena RAM. */
     u32 head_window = (u32)p & 0xFF000000;
     unsigned int guard = 0;

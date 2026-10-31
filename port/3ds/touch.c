@@ -14,6 +14,7 @@
 enum { PAD_UP = 0x0010, PAD_RIGHT = 0x0020, PAD_DOWN = 0x0040, PAD_LEFT = 0x0080, PAD_CROSS = 0x4000 };
 #define HAND_W 23
 #define HAND_H 13
+#define ROW_AT 2  /* the middle of the entry the hand points at, from the hand's top (its text is 4 pixels higher) */
 #define PRESS 2   /* frames a press is held */
 #define SETTLE 5  /* frames released after it, so the game moves the cursor and redraws the hand */
 #define MAX_STEPS 32
@@ -21,7 +22,9 @@ enum { PAD_UP = 0x0010, PAD_RIGHT = 0x0020, PAD_DOWN = 0x0040, PAD_LEFT = 0x0080
 static int goal, gx, gy, steps, timer;
 static unsigned held;
 
+extern int ctr_ui_oy; /* render.c: the UI layer's row 0 on the bottom screen */
 static void tap(int x, int y) {
+    y -= ctr_ui_oy;
     port_log("touch: tap %d,%d (UI %s, %d hands)\n", x, y, ctr_ui_active() ? "on" : "off", ctr_ui_nhands);
     if (!ctr_ui_active()) return;
     goal = 1;
@@ -58,11 +61,11 @@ static unsigned step(void) {
     /* the hand nearest the goal (the battle shows one; lists with a second, inactive hand are rare) */
     int best = 0, bestd = 1 << 30;
     for (int i = 0; i < ctr_ui_nhands; i++) {
-        int dx = gx - (ctr_ui_hands[i][0] + HAND_W), dy = gy - (ctr_ui_hands[i][1] + HAND_H / 2);
+        int dx = gx - (ctr_ui_hands[i][0] + HAND_W), dy = gy - (ctr_ui_hands[i][1] + ROW_AT);
         int d = abs(dx) + abs(dy);
         if (d < bestd) bestd = d, best = i;
     }
-    int hx = ctr_ui_hands[best][0], hy = ctr_ui_hands[best][1] + HAND_H / 2;
+    int hx = ctr_ui_hands[best][0], hy = ctr_ui_hands[best][1] + ROW_AT;
     if (++steps > MAX_STEPS) { goal = 0; return 0; }
     if (gy > hy + 7) return PAD_DOWN;
     if (gy < hy - 7) return PAD_UP;

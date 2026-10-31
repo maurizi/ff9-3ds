@@ -13,3 +13,5 @@ src/ovl_0a/tu_800B61A4 o0a_fldmdl_drawMeshClipY o0a_fldmdl_drawMeshClipY_game
 src/ovl_0a/tu_800B61A4 o0a_fldmdl_drawMeshMirrored o0a_fldmdl_drawMeshMirrored_game
 # Field background layers: their tiles' runs lifted into markers for the hybrid renderer (port/game/field_bg.c).
 src/ovl_0a/tu_800B61A4 o0a_fldbg_draw o0a_fldbg_draw_game
+# The window system: the packets it makes each frame are the UI the 3DS shows on its bottom screen (port/game/ui_split.c).
+src/main/window win_drawAll win_drawAll_game
