@@ -1171,6 +1171,139 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
 
 static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1);
 static void note_hand(int x, int y);
+
+/* ---- the 3DS's buttons in place of the PS1's (docs/ui-design.md) ----------------------------------------------
+ * Wherever the game draws one of its button icons (help text, tutorials, menus, the config screen), a 3DS one is
+ * drawn instead: A for cross, B for circle, X for triangle, Y for square (the port's mapping), L / R for L1 / R1,
+ * ZL / ZR for L2 / R2. The game says where its icons are (port_button_sprites); a sprite drawn from exactly that page,
+ * CLUT, uv and size is one. Start, Select and the d-pad are the same on the 3DS and stay as they are. */
+__attribute__((weak)) int port_button_sprites(int out[8][8]) { (void)out; return 0; }
+static int btn_def[8][8], n_btn;
+static C3D_Tex btn_tex[8];
+static int btn_made[8];
+
+static const u8 glyph5x7[][7] = {
+    {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}, /* A */
+    {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E}, /* B */
+    {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11}, /* X */
+    {0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04}, /* Y */
+    {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F}, /* L */
+    {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11}, /* R */
+    {0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F}, /* Z */
+};
+
+static void icon_glyph(u32 *px, int g, int x0, int y0, u32 c, int w, int h) {
+    for (int y = 0; y < 7; y++)
+        for (int x = 0; x < 5; x++)
+            if (glyph5x7[g][y] >> (4 - x) & 1 && x0 + x >= 0 && x0 + x < w && y0 + y >= 0 && y0 + y < h)
+                px[tiled(x0 + x, y0 + y, 32)] = c;
+}
+
+/* The system font's own button glyph (U+E000 A, E001 B, E002 X, E003 Y, E004 L, E005 R: the HOME menu's) for icon k,
+ * box-filtered to w x h into px (light, as the 3DS draws them); 0 if the font hasn't it (an emulator's replacement
+ * font). */
+static int font_button(u32 *px, int k, int w, int h) {
+    static int mapped = -1;
+    if (mapped < 0) mapped = R_SUCCEEDED(fontEnsureMapped());
+    if (!mapped || k > 5) return 0;
+    CFNT_s *font = fontGetSystemFont();
+    if (!font) return 0;
+    int g = fontGlyphIndexFromCodePoint(font, 0xE000 + k);
+    if (g < 0 || g == font->finf.alterCharIndex) return 0;
+    TGLP_s *tg = fontGetGlyphInfo(font);
+    if (!tg || tg->sheetFmt != GPU_A4) return 0;
+    int per = tg->nRows * tg->nLines, sheet = g / per, i = g % per;
+    const u8 *tex = fontGetGlyphSheetTex(font, sheet);
+    int gx = (i % tg->nRows) * (tg->cellWidth + 1) + 1, gy = (i / tg->nRows) * (tg->cellHeight + 1) + 1;
+    charWidthInfo_s *cw = fontGetCharWidthInfo(font, g);
+    int gw = cw && cw->glyphWidth ? cw->glyphWidth : tg->cellWidth, gh = tg->cellHeight;
+    /* the glyph's height fits h; its width scaled the same (round buttons stay round) */
+    float sc = (float)gh / h;
+    int ow = (int)(gw / sc + 0.5f);
+    if (ow > w) ow = w, sc = (float)gw / w;
+    int ox = (w - ow) / 2;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < ow; x++) {
+            int a = 0, n = 0;
+            for (float sy = y * sc; sy < (y + 1) * sc; sy += 1)
+                for (float sx = x * sc; sx < (x + 1) * sc; sx += 1) {
+                    int tx = gx + (int)sx, ty = gy + (int)sy;
+                    if (tx >= tg->sheetWidth || ty >= tg->sheetHeight) continue;
+                    unsigned o = tiled((unsigned)tx, (unsigned)ty, tg->sheetWidth);
+                    a += (tex[o >> 1] >> ((o & 1) * 4)) & 15;
+                    n++;
+                }
+            if (n && a * 2 > n * 15) px[tiled((unsigned)(ox + x), (unsigned)y, 32)] = 0x80E8E8E8u;
+        }
+    return 1;
+}
+
+/* the 3DS icon k (0-7: A B X Y L R ZL ZR) at w x h, RGBA8 in a 32x32 texture; opaque texels have alpha 0x80 (as a
+ * PS1 texel with bit 15: drawn, in UI layers too). The system font's glyph when there is one, else drawn here. */
+static void make_button_icon(int k, int w, int h) {
+    if (!btn_made[k]) {
+        if (!C3D_TexInit(&btn_tex[k], 32, 32, GPU_RGBA8)) return;
+        C3D_TexSetFilter(&btn_tex[k], GPU_NEAREST, GPU_NEAREST);
+        btn_made[k] = 1;
+    }
+    u32 *px = btn_tex[k].data;
+    memset(px, 0, 32 * 32 * 4);
+    if (font_button(px, k, w, h)) {
+        mark_dirty(px, 32 * 32 * 4);
+        return;
+    }
+#define RGBA(r, g, b) (0x80000000u | (u32)(b) << 16 | (u32)(g) << 8 | (u32)(r))
+    static const u32 letter[4] = {RGBA(232, 72, 64), RGBA(240, 200, 56), RGBA(80, 144, 240), RGBA(72, 192, 104)};
+    const u32 face = RGBA(48, 48, 52), rim = RGBA(176, 176, 184), text = RGBA(240, 240, 240);
+    if (k < 4) { /* a round button with its coloured letter */
+        float cx = (w - 1) / 2.0f, cy = (h - 1) / 2.0f, r = (w < h ? w : h) / 2.0f;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                float dx = x - cx, dy = y - cy, d2 = dx * dx + dy * dy;
+                if (d2 <= r * r) px[tiled(x, y, 32)] = d2 >= (r - 1.2f) * (r - 1.2f) ? rim : face;
+            }
+        icon_glyph(px, k, (w - 5) / 2, (h - 7) / 2, letter[k], w, h);
+    } else { /* a shoulder button: a rounded bar with L, R, ZL or ZR */
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int corner = (x == 0 || x == w - 1) && (y == 0 || y == h - 1);
+                if (!corner) px[tiled(x, y, 32)] = (x == 0 || x == w - 1 || y == 0 || y == h - 1) ? rim : face;
+            }
+        int z = k >= 6, g = (k & 1) ? 5 : 4, tw = z ? 11 : 5, x0 = (w - tw) / 2, y0 = (h - 7) / 2;
+        if (z) icon_glyph(px, 6, x0, y0, text, w, h), x0 += 6;
+        icon_glyph(px, g, x0, y0, text, w, h);
+    }
+#undef RGBA
+    mark_dirty(px, 32 * 32 * 4);
+}
+
+/* each frame: where the game's button icons are (they come with its common images) */
+static void button_icons_frame(void) {
+    int def[8][8];
+    int n = port_button_sprites(def);
+    n_btn = 0;
+    for (int k = 0; k < n; k++) {
+        if (def[k][6] < 6 || def[k][6] > 32 || def[k][7] < 6 || def[k][7] > 32) return; /* (not loaded yet) */
+        if (!btn_made[k] || memcmp(def[k], btn_def[k], sizeof def[k])) {
+            memcpy(btn_def[k], def[k], sizeof def[k]);
+            if (in_frame) gpu_sync();
+            make_button_icon(k, def[k][6], def[k][7]);
+        }
+    }
+    n_btn = n;
+}
+
+/* the 3DS icon a sprite stands for, -1 if it isn't a button icon */
+static int button_icon(const Gp0Mode *m, int u, int v, int w, int h) {
+    for (int k = 0; k < n_btn; k++) {
+        const int *d = btn_def[k];
+        if (u == d[4] && v == d[5] && w == d[6] && h == d[7] && m->tx == d[0] && m->ty == d[1] && m->clut_x == d[2] &&
+            m->clut_y == d[3] && btn_made[k])
+            return k;
+    }
+    return -1;
+}
+
 static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (w <= 0 || h <= 0) return;
     if (ui_mode && m->textured && ui_reads_cache(m, v->u, v->v, v->u + w - 1, v->v + h - 1)) return;
@@ -1181,6 +1314,13 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         port_log("ui rect %d,%d %dx%d tex %d uv %d,%d page %d,%d clut %d,%d col %02x%02x%02x\n", v->x - ui_ox, v->y - ui_oy,
                  w, h, m->textured ? m->depth : -1, v->u, v->v, m->tx, m->ty, m->clut_x, m->clut_y, v->r, v->g, v->b);
 #endif
+    int icon = m->textured ? button_icon(m, v->u, v->v, w, h) : -1;
+    if (icon >= 0) { /* (its texels all "with bit 15": tflags 2) */
+        Vtx t[6];
+        quad(t, v->x, v->y, v->x + w, v->y + h, 0, 0, w, h, vcolor(m, v));
+        emit(m, t, 6, v->x, v->y, v->x + w, v->y + h, &btn_tex[icon], 2);
+        return;
+    }
     unsigned tflags = 0;
     C3D_Tex *tex = NULL;
     if (m->textured) {
@@ -1517,6 +1657,7 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
 void ctr_present(long frame) {
     (void)frame;
     submit(); /* (with the parallax its runs were ordered for: stereo_k changes below) */
+    button_icons_frame(); /* (for the next frame's sprites) */
     float slider = osGet3DSliderState();
     int want_stereo = slider > 0.01f;
     stereo_k = slider * STEREO_MAX_PX / stereo_inv_zc; /* up to STEREO_MAX_PX of parallax at infinity */

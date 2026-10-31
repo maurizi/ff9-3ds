@@ -281,3 +281,23 @@ void port_bottom_hud(void) {
     shown = 1;
     shown_battle = battle;
 }
+
+/* The PS1 button icons the game draws (g_uiSprites: Cross 4, Circle 5, Square 6, Triangle 7, L1 8, L2 9, R1 10, R2 11),
+ * for the renderer to draw the 3DS's buttons in their place (port/3ds/render.c): per 3DS button A, B, X, Y, L, R, ZL,
+ * ZR, the sprite's texture page, CLUT, uv and size as {tx, ty, clut_x, clut_y, u, v, w, h}. */
+int port_button_sprites(int out[8][8]) {
+    static const u8 ids[8] = {4, 5, 7, 6, 8, 10, 9, 11}; /* (A = cross, B = circle, X = triangle, Y = square, ...) */
+    for (int k = 0; k < 8; k++) {
+        const SpriteDef *d = &g_uiSprites[ids[k]];
+        u32 clut = d->uvclut >> 16;
+        out[k][0] = (d->tpage & 0xF) * 64;
+        out[k][1] = (d->tpage >> 4 & 1) * 256;
+        out[k][2] = (int)(clut & 0x3F) * 16;
+        out[k][3] = (int)(clut >> 6 & 0x1FF);
+        out[k][4] = (int)(d->uvclut & 0xFF);
+        out[k][5] = (int)(d->uvclut >> 8 & 0xFF);
+        out[k][6] = d->w;
+        out[k][7] = d->h;
+    }
+    return 8;
+}
