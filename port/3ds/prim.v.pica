@@ -4,6 +4,7 @@
 ;                     with the GTE's sub-pixel fraction when known); Z = the GTE's SZ, 0 for 2D primitives
 ;      v1 = (u, v):    texel coordinates in the 256x256 texture page
 ;      v2 = colour:    0..255 per channel
+;      v3 = d:         a reordered run's primitive: its place in drawing order (depth = stereo.w - d / 16384)
 ;
 ; A vertex with depth gets the stereo parallax of a camera moved along X: the PS1 projected it to
 ; sx = OFX + H X / Z, so a camera moved by e sees it at sx - H e / Z. Relative to the convergence depth Zc, the
@@ -11,14 +12,15 @@
 ; so textures are interpolated perspective-correctly.
 
 .fvec proj[4]       ; render-target pixels -> clip space (an orthographic matrix)
-.fvec stereo        ; x = k, y = 1/Zc, z = w per unit of Z, w = depth plane (clip z, before w)
+.fvec stereo        ; x = k, y = 1/Zc, z = w per unit of Z, w = depth plane (clip z, before w, less d / 16384)
 .fvec texscale      ; texcoord = (u, v) * xy + zw: (1/width, -1/height, 0, 1), since t runs bottom-up while
                     ; texture memory (and PS1 v) runs top-down
 
-.constf consts(0.0, 1.0, 0.00392156862745098, 0.0)
+.constf consts(0.0, 1.0, 0.00392156862745098, -0.00006103515625)
 .alias zero consts.xxxx
 .alias one consts.yyyy
 .alias inv255 consts.zzzz
+.alias dstep consts.wwww
 
 .out outpos position
 .out outtc0 texcoord0
@@ -27,10 +29,12 @@
 .alias inpos v0
 .alias intc  v1
 .alias inclr v2
+.alias ind v3
 
 .proc main
     mov r0.xy, inpos.xy
-    mov r0.z, stereo.w
+    mul r6.x, dstep, ind.x
+    add r0.z, stereo.w, r6.x
     mov r0.w, one
     mov r1, one                 ; w = 1 (2D)
 

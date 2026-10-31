@@ -26,6 +26,7 @@
 #ifndef PORT_SOFT_PRESENT
 #include <3ds.h>
 #include <citro3d.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,15 +55,53 @@ typedef struct {
     float x, y, z;
     float u, v;
     u32 rgba; /* 0xAABBGGRR as bytes R, G, B, A */
+    float d;  /* a reordered run's primitive: its place in drawing order, as depth (run_flush); else 0 */
 } Vtx;
 
 #define VB_MAX (96 * 1024)
 static Vtx *vb;
-static unsigned vb_used, vb_submitted;
+static unsigned vb_used, vb_flushed;
 
 #define STAGING_SIZE (3 * 1024 * 1024)
 static u8 *staging;
-static unsigned staging_used;
+static unsigned staging_used, staging_flushed;
+
+/* The GPU reads main memory, not the CPU's data cache, and only once a command list is sent (C3D_FrameEnd): what the
+ * CPU wrote for it is flushed then, each buffer once (a flush is a request to the GSP service: one per vertex quad or
+ * texture block cost more than the drawing). Vertices and staging grow contiguously; texture blocks are listed. */
+#define MAX_DIRTY 64
+static struct { u8 *p; unsigned n; } dirty[MAX_DIRTY];
+static unsigned ndirty;
+unsigned ctr_flushes, ctr_batch_why[6], ctr_kind_pairs[8][8];
+static void flush_range(void *p, unsigned n) {
+    if (!n) return;
+    GSPGPU_FlushDataCache(p, n);
+    ctr_flushes++;
+}
+static void flush_pending(void);
+static void mark_dirty(void *p, unsigned n) {
+    u8 *b = p;
+    for (unsigned i = 0; i < ndirty; i++) { /* (adjacent blocks of one texture: one range) */
+        if (dirty[i].p + dirty[i].n == b) { dirty[i].n += n; return; }
+        if (b + n == dirty[i].p) { dirty[i].p = b; dirty[i].n += n; return; }
+    }
+    if (ndirty == MAX_DIRTY) flush_pending();
+    dirty[ndirty].p = b;
+    dirty[ndirty++].n = n;
+}
+static void flush_pending(void) {
+    flush_range(vb + vb_flushed, (vb_used - vb_flushed) * sizeof(Vtx));
+    vb_flushed = vb_used;
+    flush_range(staging + staging_flushed, staging_used - staging_flushed);
+    staging_flushed = staging_used;
+    for (unsigned i = 0; i < ndirty; i++) flush_range(dirty[i].p, dirty[i].n);
+    ndirty = 0;
+}
+/* the command list goes to the GPU (the frame's end, or a sync) */
+static void frame_end(void) {
+    flush_pending();
+    C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
+}
 
 static DVLB_s *shader_dvlb;
 static shaderProgram_s shader;
@@ -193,17 +232,28 @@ void psx_vram_read(int x, int y, int w, int h) {
 static C3D_AttrInfo attr;
 static C3D_BufInfo bufinfo;
 
+/* the mirrors' depth buffer, for reordered runs (run_add): */
+#define DEPTH_MAX 16000 /* depth values per clear (1/16384 apart, as the shader maps them) */
+static void *mirror_depth;
+static unsigned depth_next = 1, depth_submitted = 1; /* the next depth value; the first of this submit's */
+
 static void frame_begin(void) {
     if (in_frame) return;
+    unsigned profile_start = port_profile_begin();
     C3D_FrameBegin(0); /* waits for the GPU to finish the previous frame: its vertices and staging are free */
+    port_profile_end(PORT_PROFILE_SCALE, profile_start); /* ("scale": the wait for the GPU) */
+    if (mirror_depth && depth_next > DEPTH_MAX / 2) { /* (runs' depth values used up: from 0 again) */
+        C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
+        depth_next = depth_submitted = 1;
+    }
     in_frame = 1;
-    vb_used = vb_submitted = 0;
-    staging_used = 0;
+    vb_used = vb_flushed = 0;
+    staging_used = staging_flushed = 0;
     frame_serial++;
     C3D_BindProgram(&shader);
     C3D_SetAttrInfo(&attr);
     BufInfo_Init(&bufinfo);
-    BufInfo_Add(&bufinfo, vb, sizeof(Vtx), 3, 0x210);
+    BufInfo_Add(&bufinfo, vb, sizeof(Vtx), 4, 0x3210);
     C3D_SetBufInfo(&bufinfo);
     C3D_CullFace(GPU_CULL_NONE);
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
@@ -215,7 +265,7 @@ static void submit(void);
 static void gpu_sync(void) {
     submit();
     if (in_frame) {
-        C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
+        frame_end();
         in_frame = 0;
     }
     frame_begin();
@@ -233,7 +283,8 @@ static int cur_mask;  /* add_batch's: gp0_state's at the primitive (blits: MASK_
 
 typedef struct {
     u8 kind, abr, eyes, target; /* target: 0 the VRAM mirror, 1 + n UI layer n */
-    u8 mask, pad2[3];           /* MASK_SET | MASK_CHECK: the PS1's mask bit as the mirror's alpha (GP0 E6) */
+    u8 mask, ordered, pad2[2];  /* MASK_SET | MASK_CHECK: the PS1's mask bit as the mirror's alpha (GP0 E6);
+                                 * ordered: a run's (drawn in order by depth, run_flush) */
     u16 sc[4]; /* scissor: x0, y0, x1, y1 (exclusive) */
     C3D_Tex *tex;
     u32 first, count;
@@ -259,19 +310,148 @@ static const int getenv_nodepth = 0;
 #endif
 static int ui_mode;    /* drawing the inserted list (the battle UI): to the UI layer */
 static int cur_target; /* where add_batch records: 0 the mirror, 1 + n UI layer n */
+
+/* ---- reordering within a run of alternating states -----------------------------------------------------------
+ * The world map draws each terrain triangle twice, textured and then again untextured with additive shading, so
+ * the state alternates with every primitive (a draw call each). A primitive that replaces the pixels it draws (no
+ * blending, no mask check) may be drawn earlier than primitives before it, if those then don't draw over it: the
+ * run's primitives get their place in drawing order as depth (a 16-bit depth buffer shared by both eyes' mirrors),
+ * and draw where it is at least the depth there. So a run keeps two batches open, one of replacing primitives and
+ * the one after it, and a replacing primitive joins the first even when the second has come since: its pixels are
+ * exactly the PS1's whatever overlaps, in either eye. Everything else draws without depth, after the run. */
+#define RUN_V 1536 /* vertices per open batch */
+typedef struct {
+    u8 kind, abr, mask;
+    u16 sc[4];
+    C3D_Tex *tex;
+    unsigned nv;
+} RunGroup;
+static RunGroup run_g[2];
+static int run_n;
+static unsigned run_prims; /* primitives in the run (their place: Vtx.d, from 0) */
+static Vtx run_v[2][RUN_V];
+static int cur_ordered;
+unsigned ctr_run_reorders;
+
+static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n);
+static Vtx *alloc_vtx(unsigned n);
+static void gpu_sync(void);
+
+/* the open batches into the batch list, in order, their depth values from here */
+static void run_flush(void) {
+    int n = run_n;
+    if (!n) return;
+    run_n = 0;
+    unsigned prims = run_prims;
+    run_prims = 0;
+    /* (both eyes' values of this submit must fit before the next clear: frame_begin clears) */
+    if (2 * (depth_next - depth_submitted + prims) + depth_submitted > DEPTH_MAX) gpu_sync();
+    unsigned total = 0;
+    for (int i = 0; i < n; i++) total += run_g[i].nv;
+    Vtx *o = alloc_vtx(total); /* (one allocation: a sync it makes leaves the run's values valid) */
+    float base = (float)depth_next;
+    depth_next += prims;
+    int saved_target = cur_target, saved_mask = cur_mask;
+    for (int i = 0; i < n; i++) {
+        RunGroup *g = &run_g[i];
+        for (unsigned k = 0; k < g->nv; k++) o[k] = run_v[i][k], o[k].d += base;
+        cur_target = 0;
+        cur_mask = g->mask;
+        cur_ordered = 1;
+        add_batch(g->kind, g->abr, 3, g->sc, g->tex, o - vb, g->nv);
+        o += g->nv;
+    }
+    cur_ordered = 0;
+    cur_target = saved_target;
+    cur_mask = saved_mask;
+}
+
+static inline int run_same(const RunGroup *g, int kind, int abr, const u16 sc[4], const C3D_Tex *tex) {
+    return g->kind == kind && g->abr == abr && g->mask == cur_mask && g->tex == tex && !memcmp(g->sc, sc, sizeof g->sc);
+}
+
+/* whether a batch's primitives replace what they draw (so they may move ahead of others: their depth keeps later ones
+ * off them) */
+static inline int replaces(const RunGroup *g) {
+    return g->abr == NO_BLEND && !(g->mask & MASK_CHECK) && (g->kind == K_TEX || g->kind == K_TEX_P1 || g->kind == K_UNTEX);
+}
+
+static void run_put(int i, const Vtx *v, unsigned n) {
+    Vtx *o = run_v[i] + run_g[i].nv;
+    for (unsigned k = 0; k < n; k++) o[k] = v[k], o[k].d = (float)run_prims;
+    run_g[i].nv += n;
+    run_prims++;
+}
+
+static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
+    RunGroup *g = &run_g[i];
+    g->kind = (u8)kind; g->abr = (u8)abr; g->mask = (u8)cur_mask; g->tex = tex; g->nv = 0;
+    memcpy(g->sc, sc, sizeof g->sc);
+    run_n = i + 1;
+}
+
+/* a primitive into the mirror (triangles) */
+static void run_add(int kind, int abr, const u16 sc[4], C3D_Tex *tex, const Vtx *v, unsigned n) {
+    if (cur_target != 0 || n > RUN_V || !mirror_depth) {
+        run_flush();
+        Vtx *o = alloc_vtx(n);
+        memcpy(o, v, n * sizeof *v);
+        add_batch(kind, abr, 3, sc, tex, o - vb, n);
+        return;
+    }
+    if (run_n) {
+        int last = run_n - 1;
+        if (run_same(&run_g[last], kind, abr, sc, tex) && run_g[last].nv + n <= RUN_V) {
+            run_put(last, v, n);
+            return;
+        }
+        if (run_n == 2 && run_same(&run_g[0], kind, abr, sc, tex) && replaces(&run_g[0]) && run_g[0].nv + n <= RUN_V) {
+            run_put(0, v, n);
+            ctr_run_reorders++;
+            return;
+        }
+        if (run_n == 1 && replaces(&run_g[0])) {
+            run_open(1, kind, abr, sc, tex);
+            run_put(1, v, n);
+            return;
+        }
+        run_flush();
+    }
+    run_open(0, kind, abr, sc, tex);
+    run_put(0, v, n);
+}
+
 static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n) {
+    if (run_n) run_flush(); /* (anything else drawn ends the run: it keeps its place after it) */
     if (nbatches) {
         Batch *b = &batches[nbatches - 1];
         if (b->kind == kind && b->abr == abr && b->eyes == eyes && b->tex == tex && b->first + b->count == first &&
-            b->target == cur_target && b->mask == cur_mask &&
+            b->target == cur_target && b->mask == cur_mask && b->ordered == cur_ordered &&
             !memcmp(b->sc, sc, sizeof b->sc)) {
             b->count += n;
             return;
         }
     }
+#ifdef PORT_PROFILE
+    if (nbatches) { /* why a new batch: kind, blend, texture, scissor, mask/target, not contiguous */
+        extern unsigned ctr_batch_why[6];
+        Batch *p = &batches[nbatches - 1];
+        if (p->kind != kind) {
+            extern unsigned ctr_kind_pairs[8][8];
+            ctr_batch_why[0]++;
+            ctr_kind_pairs[p->kind & 7][kind & 7]++;
+        }
+        else if (p->abr != abr) ctr_batch_why[1]++;
+        else if (p->tex != tex) ctr_batch_why[2]++;
+        else if (memcmp(p->sc, sc, sizeof p->sc)) ctr_batch_why[3]++;
+        else if (p->mask != cur_mask || p->target != cur_target || p->eyes != eyes) ctr_batch_why[4]++;
+        else ctr_batch_why[5]++;
+    }
+#endif
     if (nbatches == MAX_BATCHES) submit();
     Batch *b = &batches[nbatches++];
     b->kind = kind; b->abr = abr; b->eyes = eyes; b->tex = tex; b->target = (u8)cur_target; b->mask = (u8)cur_mask;
+    b->ordered = (u8)cur_ordered;
     memcpy(b->sc, sc, sizeof b->sc);
     b->first = first; b->count = n;
 }
@@ -408,7 +588,7 @@ static void set_proj_ortho(float w, float h, float zplane) {
     Mtx_Zeros(&m);
     m.r[0].x = 2.0f / w; m.r[0].w = -1.0f;
     m.r[1].y = -2.0f / h; m.r[1].w = 1.0f; /* (a render target's row 0 is at clip y +1) */
-    m.r[2].w = zplane;
+    m.r[2].z = 1.0f; m.r[2].w = zplane; /* (z: the shader's depth plane, less a run's depth) */
     m.r[3].w = 1.0f;
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &m);
 }
@@ -420,11 +600,10 @@ static void set_texscale(const C3D_Tex *t) {
 
 /* Replay the recorded batches into each eye's mirror. */
 static void submit(void) {
+    run_flush();
     if (!nbatches) return;
     unsigned profile_start = port_profile_begin();
     frame_begin();
-    /* the GPU reads main memory, not the CPU's data cache */
-    GSPGPU_FlushDataCache(vb + vb_submitted, (vb_used - vb_submitted) * sizeof(Vtx));
     unsigned any_ui = 0;
     for (unsigned i = 0; i < nbatches; i++) any_ui |= 1u << batches[i].target;
     /* passes: each eye's mirror, then each UI layer (no stereo: the bottom screen is flat) */
@@ -440,16 +619,24 @@ static void submit(void) {
         } else {
             C3D_FrameDrawOn(mirror_rt[eye]);
             set_proj_ortho(VW, VH, 0.0f);
-            float k = eye ? stereo_k : -stereo_k;
-            C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, k, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, eye ? stereo_k : -stereo_k, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
         }
-        int kind = -1, abr = -1, bmask = -1;
+        int kind = -1, abr = -1, bmask = -1, ordered = 0;
         C3D_Tex *tex = (C3D_Tex *)-1;
         u16 sc[4] = {0xFFFF, 0, 0, 0};
+        float k = eye ? stereo_k : -stereo_k;
+        /* a run's depth values: this submit's, then the same again past them for the other eye */
+        float depth_off = (float)(eye ? depth_next - depth_submitted : 0);
         for (unsigned i = 0; i < nbatches; i++) {
             Batch *b = &batches[i];
             if (b->target != target) continue;
             if (!target && !(b->eyes & (1 << eye))) continue;
+            if (b->ordered != ordered) {
+                ordered = b->ordered;
+                C3D_DepthTest(ordered, GPU_GEQUAL, ordered ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
+                C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, target ? 0 : k, stereo_inv_zc, 1.0f / 4096.0f,
+                              ordered ? -depth_off * (1.0f / 16384) : -0.5f);
+            }
             if (b->abr != abr || b->mask != bmask || b->kind != kind) {
                 if (b->kind != kind) set_tev_for(kind = b->kind, target != 0);
                 set_blend_mask(abr = b->abr, target != 0, bmask = b->mask, kind);
@@ -466,10 +653,13 @@ static void submit(void) {
             }
             C3D_DrawArrays(GPU_TRIANGLES, b->first, b->count);
         }
+        if (ordered) C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     }
     ctr_render_stats[0] += nbatches;
     nbatches = 0;
-    vb_submitted = vb_used;
+    /* (the other eye's values were past this submit's: the next ones are past those) */
+    depth_next += depth_next - depth_submitted;
+    depth_submitted = depth_next;
     port_profile_end(PORT_PROFILE_GPU, profile_start);
 }
 
@@ -544,7 +734,6 @@ static void blit_run(int cx0, int cx1, int cy) {
             const u16 *src = psx_vram + (by + y) * VW + bx;
             for (int x = 0; x < w; x++) px[tiled(x, y, tw)] = bgr555_to_rgba5551(src[x]);
         }
-        GSPGPU_FlushDataCache(px, tw * th * 2);
         C3D_Tex *t = staging_tex(px, tw, th, GPU_RGBA5551);
         Vtx *v = alloc_vtx(6);
         quad(v, bx, by, bx + w, by + h, 0, 0, w, h, 0xFFFFFFFF);
@@ -749,7 +938,7 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     if (ncl) mark_source(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
 
     /* (the block's four rows of tiles: 32 rows of the texture, contiguous) */
-    GSPGPU_FlushDataCache(dst + by * 32 * 256, 32 * 256 * 4);
+    mark_dirty(dst + by * 32 * 256, 32 * 256 * 4);
     ctr_render_stats[4]++;
 }
 
@@ -804,6 +993,7 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
     o->u = (float)v->u;
     o->v = (float)v->v;
     o->rgba = vcolor(m, v);
+    o->d = 0;
 }
 
 /* the vertices of one primitive (6 for a quad, 3 for a triangle) in each pass its kind needs */
@@ -895,9 +1085,14 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         if (tflags & 2) passes[np++] = K_TEX_P2;
     }
     for (int p = 0; p < np; p++) {
+        int pabr = passes[p] == K_TEX_P1 ? NO_BLEND : abr;
+        if (layer < 0 && n % 3 == 0) {
+            run_add(passes[p], pabr, sc, tex, v, n);
+            continue;
+        }
         Vtx *o = alloc_vtx(n);
         memcpy(o, v, n * sizeof *v);
-        add_batch(passes[p], passes[p] == K_TEX_P1 ? NO_BLEND : abr, 3, sc, tex, o - vb, n);
+        add_batch(passes[p], pabr, 3, sc, tex, o - vb, n);
     }
 }
 
@@ -1181,8 +1376,6 @@ static void screen_quad_scaled(C3D_RenderTarget *rt, C3D_Tex *src, int kind, int
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     Vtx *v = alloc_vtx(6);
     quad(v, ox, oy, ox + ow, oy + oh, sx, sy, sx + w, sy + h, rgba);
-    GSPGPU_FlushDataCache(v, 6 * sizeof(Vtx));
-    vb_submitted = vb_used;
     C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
 }
 
@@ -1203,8 +1396,6 @@ static void screen_fill(C3D_RenderTarget *rt, int x, int y, int w, int h, u32 rg
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     Vtx *v = alloc_vtx(6);
     quad(v, x, y, x + w, y + h, 0, 0, 0, 0, rgba);
-    GSPGPU_FlushDataCache(v, 6 * sizeof(Vtx));
-    vb_submitted = vb_used;
     C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
 }
 
@@ -1285,13 +1476,13 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
             o[0] = src[x * 3 + 2]; o[1] = src[x * 3 + 1]; o[2] = src[x * 3];
         }
     }
-    GSPGPU_FlushDataCache(px, tw * th * 3);
     C3D_Tex *t = staging_tex(px, tw, th, GPU_RGB8);
     for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) draw_to_screen(top_rt[eye], t, 0, 0, w, h, ox, oy);
 }
 
 void ctr_present(long frame) {
     (void)frame;
+    submit(); /* (with the parallax its runs were ordered for: stereo_k changes below) */
     float slider = osGet3DSliderState();
     int want_stereo = slider > 0.01f;
     stereo_k = slider * STEREO_MAX_PX / stereo_inv_zc; /* up to STEREO_MAX_PX of parallax at infinity */
@@ -1353,8 +1544,6 @@ void ctr_present(long frame) {
                 C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
                 Vtx *v = alloc_vtx(6);
                 quad(v, 0, 0, w, h, d.x, d.y, d.x + w, d.y + h, 0xFFFFFFFF);
-                GSPGPU_FlushDataCache(v, 6 * sizeof(Vtx));
-                vb_submitted = vb_used;
                 C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
             }
             frozen = 1;
@@ -1368,7 +1557,7 @@ void ctr_present(long frame) {
         }
     }
     present_bottom(&d, w, h);
-    C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
+    frame_end();
     in_frame = 0;
     frames_drawn++;
     extern unsigned int psx_depth_frame;
@@ -1514,6 +1703,7 @@ void ctr_video_init(void) {
     AttrInfo_AddLoader(&attr, 0, GPU_FLOAT, 3);
     AttrInfo_AddLoader(&attr, 1, GPU_FLOAT, 2);
     AttrInfo_AddLoader(&attr, 2, GPU_UNSIGNED_BYTE, 4);
+    AttrInfo_AddLoader(&attr, 3, GPU_FLOAT, 1);
 
     vb = linearAlloc(VB_MAX * sizeof(Vtx));
     staging = linearAlloc(STAGING_SIZE);
@@ -1521,6 +1711,8 @@ void ctr_video_init(void) {
         if (!C3D_TexInitVRAM(&mirror_tex[eye], VW, VH, GPU_RGBA5551)) port_fatal("no VRAM for the PS1 VRAM mirror");
         C3D_TexSetFilter(&mirror_tex[eye], GPU_NEAREST, GPU_NEAREST);
         mirror_rt[eye] = C3D_RenderTargetCreateFromTex(&mirror_tex[eye], GPU_TEXFACE_2D, 0, -1);
+        if (eye == 0) mirror_depth = vramAlloc(VW * VH * 2);
+        if (mirror_depth) C3D_FrameBufDepth(&mirror_rt[eye]->frameBuf, mirror_depth, GPU_RB_DEPTH16);
         top_rt[eye] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, -1);
         C3D_RenderTargetSetOutput(top_rt[eye], GFX_TOP, eye ? GFX_RIGHT : GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
     }
@@ -1543,7 +1735,9 @@ void ctr_video_init(void) {
     memset(shadow_ok, 1, sizeof shadow_ok);
     memset(mirror_ok, 0, sizeof mirror_ok);
     gp0_backend = &pica_backend;
-    port_log("renderer: PICA200, %u KB linear free\n", (unsigned)(linearSpaceFree() >> 10));
+    if (mirror_depth) C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
+    port_log("renderer: PICA200, %u KB linear, %u KB VRAM free%s\n", (unsigned)(linearSpaceFree() >> 10),
+             (unsigned)(vramSpaceFree() >> 10), mirror_depth ? "" : " (no depth for the mirror: runs not reordered)");
 }
 
 void ctr_shutdown(void) {
@@ -1553,7 +1747,7 @@ void ctr_shutdown(void) {
     ctr_spu_exit();
     ctr_voice_exit();
     ctr_audio_exit();
-    if (in_frame) C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
+    if (in_frame) frame_end();
     C3D_Fini();
     gfxExit();
 }

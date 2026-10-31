@@ -53,10 +53,29 @@ void ctr_profile_frame(void) {
     ctr_vblank_waits = ctr_vblank_skips = 0;
     extern unsigned int ctr_render_stats[8];
     static unsigned last[8];
-    port_log("[gpu] per frame: prims %u batches %u blits %u readbacks %u blocks %u syncs %u slots %u\n",
+    extern unsigned ctr_flushes, ctr_batch_why[6];
+    static unsigned last_flushes;
+    port_log("[gpu] per frame: prims %u batches %u blits %u readbacks %u blocks %u syncs %u slots %u flushes %u\n",
              (ctr_render_stats[1] - last[1]) / frames, (ctr_render_stats[0] - last[0]) / frames,
              (ctr_render_stats[2] - last[2]) / frames, ctr_render_stats[3] - last[3], (ctr_render_stats[4] - last[4]) / frames,
-             ctr_render_stats[6] - last[6], ctr_render_stats[5]);
+             ctr_render_stats[6] - last[6], ctr_render_stats[5], (ctr_flushes - last_flushes) / frames);
+    last_flushes = ctr_flushes;
+    static unsigned last_why[6];
+    port_log("[gpu] new batch for: kind %u blend %u tex %u scissor %u mask %u gap %u\n", (ctr_batch_why[0] - last_why[0]) / frames,
+             (ctr_batch_why[1] - last_why[1]) / frames, (ctr_batch_why[2] - last_why[2]) / frames,
+             (ctr_batch_why[3] - last_why[3]) / frames, (ctr_batch_why[4] - last_why[4]) / frames,
+             (ctr_batch_why[5] - last_why[5]) / frames);
+    memcpy(last_why, ctr_batch_why, sizeof last_why);
+    extern unsigned ctr_kind_pairs[8][8], ctr_run_reorders, ctr_run_overlaps;
+    static unsigned last_reorders, last_overlaps;
+    port_log("[gpu] reordered %u, overlapping %u\n", (ctr_run_reorders - last_reorders) / frames,
+             (ctr_run_overlaps - last_overlaps) / frames);
+    last_reorders = ctr_run_reorders;
+    last_overlaps = ctr_run_overlaps;
+    for (int a = 0; a < 8; a++)
+        for (int b = 0; b < 8; b++)
+            if (ctr_kind_pairs[a][b] / frames) port_log("[gpu]   kind %d -> %d: %u\n", a, b, ctr_kind_pairs[a][b] / frames);
+    memset(ctr_kind_pairs, 0, sizeof ctr_kind_pairs);
     for (int i = 0; i < 8; i++) last[i] = ctr_render_stats[i];
     ctr_depth_stats[0] = ctr_depth_stats[1] = 0;
     memset(acc, 0, sizeof acc);
