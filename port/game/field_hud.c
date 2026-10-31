@@ -106,15 +106,19 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (!shown) return 0;
     y -= oy;
     if (shown_battle) return port_battle_tap(x, y, seq, max);
-    if (n_choices) {
+    if (n_choices) { /* (a choice, directly: the game's choice set and its window answered, as msg_input does on cross) */
         for (int i = 0; i < n_choices; i++) {
             if (!inside(&r_choice[i], x, y)) continue;
-            int n = 0, d = i - (g_msgChoice - choice_first);
-            while (d && n < max - 1) seq[n++] = d > 0 ? 0x40u : 0x10u, d += d > 0 ? -1 : 1; /* down / up */
-            seq[n++] = 0x4000; /* cross */
-            return n;
+            MsgWindow *w = NULL;
+            for (int k = 0; k < 10; k++)
+                if (g_msgWindows[k].open && g_msgWindows[k].id == g_msgChoiceWindow) w = &g_msgWindows[k];
+            if (!w || g_msgChoiceLine < 0 || w->waitFrames != MSGW_WAIT_INPUT || (w->flags & MSGW_NO_INPUT)) return -1;
+            g_msgChoice = choice_first + i;
+            w->waitFrames = 1;
+            g_gameState->gameData->soundHook(SND_SE_PLAY, SE_CURSOR, 0x800000, SND_PAN_CENTER, SND_VOL_MAX);
+            return -1;
         }
-        return 0;
+        return -1;
     }
     if (menu_shown && inside(&r_menu, x, y) && max > 0) { seq[0] = 0x1000; return 1; } /* triangle */
     if (menu_shown && cards_rect && inside(cards_rect, x, y) && max > 0) {

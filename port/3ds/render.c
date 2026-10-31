@@ -131,6 +131,7 @@ static int freeze_w, freeze_h, frozen;
 #define MAG_W 200 /* the card game's magnified area (to 400x240 on the top screen) */
 #define MAG_H 120
 static int menu_state; /* port_menu_state(), read at each present */
+static int have_freeze; /* freeze_tex holds a scene */
 __attribute__((weak)) int port_menu_state(void) { return 0; }
 static C3D_RenderTarget *bottom_rt;
 
@@ -1674,19 +1675,21 @@ static void draw_to_top(C3D_RenderTarget *rt, C3D_Tex *src, int sx, int sy, int 
     if (s > 1.0f) C3D_TexSetFilter(src, GPU_NEAREST, GPU_NEAREST);
 }
 
-/* an untextured rectangle on a screen's render target (already drawn on) */
-static void screen_fill(C3D_RenderTarget *rt, int x, int y, int w, int h, u32 rgba, int abr) {
+/* what is on a screen's render target (already drawn on), darkened to frac (0-255 of 256): destination x constant */
+static void screen_dim(C3D_RenderTarget *rt, unsigned frac) {
     C3D_Mtx p;
     Mtx_OrthoTilt(&p, 0.0f, rt == bottom_rt ? 320.0f : 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &p);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
     set_tev(K_UNTEX);
-    set_blend(abr, 0);
+    C3D_BlendingColor(0xFF000000u | frac << 16 | frac << 8 | frac);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ZERO, GPU_CONSTANT_COLOR, GPU_ZERO, GPU_ONE);
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     Vtx *v = alloc_vtx(6);
-    quad(v, x, y, x + w, y + h, 0, 0, 0, 0, rgba);
+    quad(v, 0, 0, rt == bottom_rt ? 320 : 400, 240, 0, 0, 0, 0, 0xFFFFFFFF);
     C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
 }
+
 
 __attribute__((weak)) int port_game_mode(void) { return 0; }
 
@@ -1844,7 +1847,10 @@ void ctr_present(long frame) {
         /* in stereo, both edges are masked by the largest parallax, in both eyes: what a layer's shift uncovers at
          * the frame's edge isn't seen (a floating window) */
         int edge = stereo_on ? (int)(STEREO_MAX_PX * slider + 0.99f) : 0;
-        if ((menu_state == 1 || menu_state == 2) && !frozen) { /* a menu was asked for: keep the scene for the top */
+        /* the scene kept for the top while a menu is up: copied every frame without one (a menu opens with a fade,
+         * which a copy taken then would hold), frozen when one opens */
+        int want_menu = menu_state == 1 || menu_state == 2;
+        if (!menu_state && w >= 256) {
             for (int eye = 0; eye < 2; eye++) {
                 C3D_FrameDrawOn(freeze_rt[eye]);
                 set_proj_ortho(UI_W, UI_H, 0.0f);
@@ -1859,10 +1865,12 @@ void ctr_present(long frame) {
                 quad(v, 0, 0, w, h, d.x, d.y, d.x + w, d.y + h, 0xFFFFFFFF);
                 C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
             }
-            frozen = 1;
             freeze_w = w;
             freeze_h = h;
-        } else if (!menu_state || menu_state == 3) frozen = 0;
+            have_freeze = 1;
+        }
+        if (want_menu && have_freeze) frozen = 1;
+        else if (!menu_state || menu_state == 3) frozen = 0;
         /* the card game: the board is on the bottom screen; the top magnifies (2x) where the game's cursor is, so
          * the card it points at (its art, arrows and stats) is large and readable */
         static float mag_x = -1, mag_y;
@@ -1884,7 +1892,7 @@ void ctr_present(long frame) {
                                    MAG_H, 0, 0, 400, 240);
             } else if (frozen) { /* a menu is up: the paused scene, dimmed to half (its panels are drawn over it after) */
                 draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h, freeze_w, freeze_h, edge);
-                screen_fill(top_rt[eye], 0, 0, 400, 240, 0xFF000000, 0); /* (black, ABGR) */
+                screen_dim(top_rt[eye], 0x80);
             }
             else draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, w, h, edge);
         }
