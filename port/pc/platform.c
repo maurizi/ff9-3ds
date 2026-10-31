@@ -180,6 +180,7 @@ void btlui_check_report(void);
 
 void plat_wait_frame(void) {
     frames++;
+    { extern unsigned int psx_probe_top; if (getenv("FF9_PROBE")) fprintf(stderr, "frame %ld\n", frames); psx_probe_top = 0; }
     {
         static int shown_x = -1, shown_y = -1;
         PsxDisplayInfo d;

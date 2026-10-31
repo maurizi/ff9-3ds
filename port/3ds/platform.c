@@ -82,12 +82,19 @@ void plat_vsync_begin(unsigned int n) {
 
 void plat_wait_frame(void) {
     frames++;
+#ifdef PORT_PROBE_AT
+    { extern int psx_trace_gpu; psx_trace_gpu = frames >= PORT_PROBE_AT - 5 && frames < PORT_PROBE_AT; }
+    { extern unsigned int psx_probe_top; if (frames >= PORT_PROBE_AT - 10 && frames <= PORT_PROBE_AT) port_log("top polys f%ld: %u\n", frames, psx_probe_top); psx_probe_top = 0; }
+#endif
     if (!aptMainLoop()) {
         ctr_shutdown();
         exit(0);
     }
     read_input();
     ctr_present(frames);
+#ifdef PORT_DUMP_EVERY
+    if (frames % PORT_DUMP_EVERY == 0) { void ctr_render_dump_display(long); ctr_render_dump_display(frames); }
+#endif
 #ifdef PORT_DUMP_AT
     if (frames == PORT_DUMP_AT) { void ctr_render_dump(void); ctr_render_dump(); }
 #endif
@@ -141,6 +148,10 @@ void plat_mkdir(const char *path) {
 
 const char *plat_data_dir(void) {
     return "sdmc:/3ds/ff9";
+}
+
+long ctr_frames(void) {
+    return frames;
 }
 
 int ctr_is_new3ds(void) {

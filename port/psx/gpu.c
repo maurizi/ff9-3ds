@@ -88,6 +88,10 @@ static void vram_fill(int x, int y, int w, int h, u16 c) {
     if (!psx_vram) {
         return;
     }
+#ifdef PORT_PROBE_AT
+    { extern long ctr_frames(void); if (ctr_frames() >= PORT_PROBE_AT - 12 && ctr_frames() <= PORT_PROBE_AT)
+        port_log("probe: fill %d,%d %dx%d %04x\n", x, y, w, h, c); }
+#endif
     psx_vram_filled(x, y, w, h, c);
     psx_vram_generation++;
     psx_raster_rows_written(y, h);

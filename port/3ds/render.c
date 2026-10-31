@@ -247,6 +247,11 @@ static Vtx *alloc_vtx(unsigned n) {
 }
 
 /* the batch the next n vertices (just allocated at first) belong to */
+#ifdef PORT_NODEPTH
+static const int getenv_nodepth = 1;
+#else
+static const int getenv_nodepth = 0;
+#endif
 static int ui_mode;    /* drawing the inserted list (the battle UI): to the UI layer */
 static int cur_target; /* where add_batch records: 0 the mirror, 1 + n UI layer n */
 static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n) {
@@ -497,7 +502,10 @@ static void blit_cells(int cx0, int cy0, int cx1, int cy1) {
             C3D_Tex *t = staging_tex(px, tw, th, GPU_RGB565);
             Vtx *v = alloc_vtx(6);
             quad(v, bx, by, bx + w, by + h, 0, 0, w, h, 0xFFFFFFFF);
+            int saved = cur_target;
+            cur_target = 0; /* (into the mirror, whatever was drawn last) */
             add_batch(K_BLIT, NO_BLEND, 3, full_scissor, t, v - vb, 6);
+            cur_target = saved;
             ctr_render_stats[2]++;
         }
     for (int cy = cy0; cy < cy1; cy++)
@@ -528,7 +536,10 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
     unsigned r = (rgb15 & 31) << 3, g = ((rgb15 >> 5) & 31) << 3, b = ((rgb15 >> 10) & 31) << 3;
     Vtx *v = alloc_vtx(6);
     quad(v, x, y, x1, y1, 0, 0, 0, 0, 0xFF000000 | b << 16 | g << 8 | r);
+    int saved = cur_target;
+    cur_target = 0; /* (a fill is VRAM's: the mirror, even right after a UI layer's primitives) */
     add_batch(K_UNTEX, NO_BLEND, 3, full_scissor, NULL, v - vb, 6);
+    cur_target = saved;
     filling = 1;
 }
 
@@ -724,7 +735,7 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
     o->x = (float)v->x;
     o->y = (float)v->y;
     o->z = 0;
-    u32 info = v->xyw ? psx_depth_lookup(v->xyw) : 0;
+    u32 info = v->xyw && !getenv_nodepth ? psx_depth_lookup(v->xyw) : 0;
     ctr_depth_stats[info ? 0 : 1]++;
     if (info) {
         o->x += (info & 0xFF) * (1.0f / 256);
@@ -847,16 +858,44 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     unsigned tflags = 0;
     C3D_Tex *tex = prim_texture(m, v, n, &tflags);
     Vtx t[6];
-    for (int i = 0; i < n; i++) make_vtx(&t[i], m, &v[i]);
-    if (n == 4) t[4] = t[3], t[3] = t[1], t[5] = t[2]; /* (0,1,2) (1,3,2) */
+    int with_depth = 0;
+    for (int i = 0; i < n; i++) make_vtx(&t[i], m, &v[i]), with_depth += t[i].z > 0;
+    /* depth for all its vertices or none: a vertex the GTE clamped (near the camera, or far off screen) has none, and
+     * mixing w = 1 with w ~ Z would warp the texture across the polygon */
+    if (with_depth && with_depth < n)
+        for (int i = 0; i < n; i++) t[i].z = 0;
+    /* The PS1 draws a quad as triangles (0,1,2) and (1,3,2), and skips a triangle 1024 or more wide or 512 or more
+     * high on its own: of a quad reaching far off the screen, the half on it is still drawn. */
+    static const u8 tri[2][3] = {{0, 1, 2}, {1, 3, 2}};
+    Vtx out[6];
+    unsigned nout = 0;
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
-    for (int i = 0; i < n; i++) {
-        x0 = imin(x0, v[i].x); x1 = imax(x1, v[i].x);
-        y0 = imin(y0, v[i].y); y1 = imax(y1, v[i].y);
+    for (int k = 0; k < (n == 4 ? 2 : 1); k++) {
+        int tx0 = 1 << 30, ty0 = 1 << 30, tx1 = -(1 << 30), ty1 = -(1 << 30);
+        for (int i = 0; i < 3; i++) {
+            const Gp0Vtx *p = &v[tri[k][i]];
+            tx0 = imin(tx0, p->x); tx1 = imax(tx1, p->x);
+            ty0 = imin(ty0, p->y); ty1 = imax(ty1, p->y);
+        }
+        if (tx1 - tx0 > 1023 || ty1 - ty0 > 511) continue;
+        for (int i = 0; i < 3; i++) out[nout++] = t[tri[k][i]];
+        x0 = imin(x0, tx0); x1 = imax(x1, tx1);
+        y0 = imin(y0, ty0); y1 = imax(y1, ty1);
     }
-    /* the PS1 skips polygons wider than 1023 or taller than 511 */
-    if (x1 - x0 > 1023 || y1 - y0 > 511) return;
-    emit(m, t, n == 4 ? 6 : 3, x0, y0, x1 + 1, y1 + 1, tex, tflags);
+    if (!nout) return;
+#ifdef PORT_PROBE_AT
+    { /* PROBE_AT=frame: from that frame on, the first semi-transparent untextured polygons covering (160, 4) */
+        extern long ctr_frames(void);
+        static int logged;
+        int px = gp0_state.area_x0 + 160, py = gp0_state.area_y0 + 4;
+        if (ctr_frames() >= PORT_PROBE_AT && !m->textured && x0 <= px && x1 >= px && y0 <= py && y1 >= py &&
+            logged++ < 12)
+            port_log("probe f%ld: semi %d abr %d %d,%d %d,%d %d,%d %d,%d rgb %02x%02x%02x %02x%02x%02x %02x%02x%02x | out %u\n",
+                     ctr_frames(), m->semi, m->abr, v[0].x, v[0].y, v[1].x, v[1].y, v[2].x, v[2].y, n > 3 ? v[3].x : 0,
+                     n > 3 ? v[3].y : 0, v[0].r, v[0].g, v[0].b, v[1].r, v[1].g, v[1].b, v[2].r, v[2].g, v[2].b, nout);
+    }
+#endif
+    emit(m, out, nout, x0, y0, x1 + 1, y1 + 1, tex, tflags);
 }
 
 static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1);
@@ -888,6 +927,7 @@ static void r_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
     Vtx va, vb2;
     make_vtx(&va, m, a);
     make_vtx(&vb2, m, b);
+    if ((va.z > 0) != (vb2.z > 0)) va.z = vb2.z = 0;
     float dx = vb2.x - va.x, dy = vb2.y - va.y;
     /* a one-pixel-wide quad along the major axis, covering both end points */
     float ox = 0, oy = 0;
@@ -941,30 +981,40 @@ static int ui_layer_for(int x, int y, int clear) {
     return k;
 }
 
-/* window-system packets (port/game/ui_split.c), until an ordering table has drawn them */
-static struct { const u8 *lo, *hi; } ranges[8];
-static int nranges, ranges_hit;
+/* Window-system packets (port/game/ui_split.c): a range lives until an ordering table (any: the battle draws its
+ * windows in the VBlank list) has drawn from it, or two presents have gone by, as the game's packet buffers are
+ * reused and a stale range would take the scene's packets there (a boss's ceiling went to the bottom screen). */
+static struct { const u8 *lo, *hi; int hit, age; } ranges[8];
+static int nranges;
 void port_ui_packets(const void *lo, const void *hi) {
     for (int i = 0; i < nranges; i++) /* (the buffer was reused: a range there is a past frame's) */
         if ((const u8 *)lo < ranges[i].hi && (const u8 *)hi > ranges[i].lo) ranges[i] = ranges[--nranges], i--;
     if (nranges == 8) nranges--;
     ranges[nranges].lo = lo;
     ranges[nranges].hi = hi;
+    ranges[nranges].hit = ranges[nranges].age = 0;
     nranges++;
 }
 extern const u32 *psx_gpu_packet;
 static int ui_packet(void) {
     const u8 *p = (const u8 *)psx_gpu_packet;
     for (int i = 0; i < nranges; i++)
-        if (p >= ranges[i].lo && p < ranges[i].hi) return ranges_hit = 1;
+        if (p >= ranges[i].lo && p < ranges[i].hi) return ranges[i].hit = 1;
     return 0;
+}
+static void ranges_drawn(void) { /* (an ordering table is done: what it drew from is spent) */
+    for (int i = 0; i < nranges; i++)
+        if (ranges[i].hit) ranges[i] = ranges[--nranges], i--;
+}
+static void ranges_age(void) {
+    for (int i = 0; i < nranges; i++)
+        if (++ranges[i].age > 2) ranges[i] = ranges[--nranges], i--;
 }
 
 /* gpu.c: an ordering table drawn into a framebuffer starts that frame's UI layer afresh, once it has been shown */
 void psx_gpu_ot_begin(const u32 *ot) {
     (void)ot;
     if (ui_mode) return;
-    ranges_hit = 0;
     int x, y, w, h;
     psx_gpu_draw_area(&x, &y, &w, &h);
     if (w >= 256 && h >= 192) {
@@ -1027,7 +1077,7 @@ void psx_ui_list_end(void) {
 
 void psx_gpu_ot_done(void) {
     submit();
-    if (ranges_hit && !ui_mode) nranges = 0, ranges_hit = 0;
+    ranges_drawn();
 }
 
 /* ---- presenting ------------------------------------------------------------------------------------------ */
@@ -1101,6 +1151,7 @@ void ctr_present(long frame) {
         submit();
         Vtx *v = alloc_vtx(6);
         quad(v, 0, 0, VW, VH, 0, 0, VW, VH, 0xFFFFFFFF);
+        cur_target = 0;
         add_batch(K_BLIT, NO_BLEND, 2, full_scissor, &mirror_tex[0], v - vb, 6);
         stereo_on = 1;
         submit();
@@ -1170,6 +1221,7 @@ void ctr_present(long frame) {
     frames_drawn++;
     extern unsigned int psx_depth_frame;
     psx_depth_frame++;
+    ranges_age();
     fit_frame();
     port_profile_end(PORT_PROFILE_GPU, profile_start);
 }
@@ -1198,6 +1250,11 @@ static u32 px_mirror(int x, int y, const void *ctx) {
     unsigned r = p >> 11, g = (p >> 5) & 63, b = p & 31;
     return (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2);
 }
+static u32 px_crop(int x, int y, const void *ctx) {
+    u16 p = ((const u16 *)ctx)[y * 320 + x];
+    unsigned r = p >> 11, g = (p >> 5) & 63, b = p & 31;
+    return (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2);
+}
 static u32 px_shadow(int x, int y, const void *ctx) {
     u16 c = ((const u16 *)ctx)[y * VW + x];
     unsigned r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
@@ -1209,6 +1266,24 @@ static u32 px_slot(int x, int y, const void *ctx) {
     if (!a) return ((x ^ y) & 8) ? 0xFF00FF : 0x800080; /* transparent: magenta checks */
     return c >> 8;
 }
+/* DUMP_EVERY=N: the displayed buffer every N frames, as dump/f<frame>.ppm (a timeline of one run) */
+void ctr_render_dump_display(long frame) {
+    PsxDisplayInfo d;
+    psx_gpu_display_info(&d);
+    mkdir("sdmc:/3ds/ff9/dump", 0777);
+    gpu_sync();
+    static u16 crop[320 * 240];
+    int w = d.w > 320 ? 320 : d.w, h = d.h > 240 ? 240 : d.h;
+    const u16 *m = mirror_tex[0].data;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) crop[y * 320 + x] = m[tiled((d.x + x) & 1023, (d.y + y) & 511, VW)];
+    char name[32];
+    snprintf(name, sizeof name, "f%06ld", frame);
+    static u16 *src;
+    src = crop;
+    write_ppm(name, w, h, px_crop, src);
+}
+
 void ctr_render_dump(void) {
     mkdir("sdmc:/3ds/ff9/dump", 0777);
     gpu_sync();

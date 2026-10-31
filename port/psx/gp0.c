@@ -1,5 +1,7 @@
 /* PS1 GPU command decoding (gp0.h), following psx-spx "GPU Render Polygon/Line/Rectangle Commands" and
  * "GPU Rendering Attributes". */
+#include <stdio.h>
+#include <stdlib.h>
 #include "blackbox.h"
 #include "gp0.h"
 #include "profile.h"
@@ -23,6 +25,7 @@ Gp0State gp0_state = {0, 0, 1023, 511, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 #endif
 void gp0_note_sprites(unsigned int texpage, unsigned int n);
 const Gp0Backend *gp0_backend;
+unsigned int psx_probe_top;
 /* psx_display.h; weak here and in gpu.c, since unit tests link either file alone */
 __attribute__((weak)) unsigned int psx_vram_generation;
 __attribute__((weak)) unsigned int psx_display_generation;
@@ -105,6 +108,10 @@ static unsigned int state_command(unsigned int w0) {
     case 0xE6:
         gp0_state.set_mask = w0 & 1;
         gp0_state.check_mask = (w0 >> 1) & 1;
+#ifdef PORT_PROBE_AT
+        { extern long ctr_frames(void); static int n; if ((w0 & 3) && ctr_frames() >= PORT_PROBE_AT - 12 && ctr_frames() <= PORT_PROBE_AT && n++ < 20)
+            port_log("probe: E6 set %d check %d\n", gp0_state.set_mask, gp0_state.check_mask); }
+#endif
         break;
     default:
         break;
@@ -164,6 +171,32 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
                 }
             }
         }
+#if defined(PORT_GP0_PROBE) || defined(PORT_PROBE_AT)
+        { /* polygons with a vertex in the top 6 rows of the drawing area, per frame (debug) */
+            extern unsigned int psx_probe_top;
+            for (int i = 0; i < nv; i++) if (v[i].y - gp0_state.area_y0 < 6 && v[i].y >= gp0_state.area_y0) { psx_probe_top++; break; }
+        }
+#endif
+#if defined(PORT_GP0_PROBE) || defined(PORT_PROBE_AT)
+        { /* (debug: FF9_PROBE=x,y on the host, PROBE_AT=frame on the 3DS: every polygon whose bounds hold that point of
+           * the drawing area) */
+            static int px = -1, py;
+#ifdef PORT_PROBE_AT
+            extern long ctr_frames(void);
+            static int nlog;
+            px = ctr_frames() >= PORT_PROBE_AT - 12 && ctr_frames() <= PORT_PROBE_AT && nlog++ < 4000 ? 60 : -2;
+            py = 60;
+#else
+            if (px == -1) { const char *e = getenv("FF9_PROBE"); px = -2; if (e) sscanf(e, "%d,%d", &px, &py); }
+#endif
+            int qx = gp0_state.area_x0 + px, qy = gp0_state.area_y0 + py, inx = 0, iny = 0;
+            for (int i = 0; i < nv; i++) { inx |= (v[i].x <= qx) | (v[i].x >= qx) << 1; iny |= (v[i].y <= qy) | (v[i].y >= qy) << 1; }
+            if (px >= 0 && inx == 3 && iny == 3)
+                port_log("probe: cmd %02x abr %d page %d,%d d%d clut %d,%d %d,%d %d,%d %d,%d %d,%d rgb %02x%02x%02x %02x%02x%02x %02x%02x%02x\n", cmd, m.abr, m.tx, m.ty, m.depth, m.clut_x, m.clut_y,
+                         v[0].x, v[0].y, v[1].x, v[1].y, v[2].x, v[2].y, nv > 3 ? v[3].x : 0, nv > 3 ? v[3].y : 0,
+                         v[0].r, v[0].g, v[0].b, v[1].r, v[1].g, v[1].b, v[2].r, v[2].g, v[2].b);
+        }
+#endif
         if (gp0_backend && gp0_backend->poly) {
             ++psx_gpu_scene_prims;
             gp0_backend->poly(&m, v, nv);
@@ -232,6 +265,23 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
         } else if (size == 3) {
             wd = ht = 16;
         }
+#if defined(PORT_GP0_PROBE) || defined(PORT_PROBE_AT)
+        { /* (debug: FF9_PROBE as for polygons, rectangles too) */
+            static int px = -1, py;
+#ifdef PORT_PROBE_AT
+            extern long ctr_frames(void);
+            px = ctr_frames() >= PORT_PROBE_AT - 12 && ctr_frames() <= PORT_PROBE_AT ? 60 : -2;
+            py = 60;
+#else
+            if (px == -1) { const char *e = getenv("FF9_PROBE"); px = -2; if (e) sscanf(e, "%d,%d", &px, &py); }
+#endif
+            int qx = gp0_state.area_x0 + px, qy = gp0_state.area_y0 + py;
+            if (px >= 0 && v.x <= qx && v.x + wd > qx && v.y <= qy && v.y + ht > qy)
+                port_log("probe: rect %02x tex%d semi%d abr%d d%d page %d,%d clut %d,%d %d,%d %dx%d uv %d,%d rgb %02x%02x%02x\n",
+                         cmd, m.textured, m.semi, m.abr, m.depth, m.tx, m.ty, m.clut_x, m.clut_y, v.x, v.y, wd, ht, v.u, v.v,
+                         v.r, v.g, v.b);
+        }
+#endif
         if (gp0_backend && gp0_backend->rect) {
             if (ht == 13 && wd <= 16 && m.textured) {
                 psx_gp0_font_probe[0]++;

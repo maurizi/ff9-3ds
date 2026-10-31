@@ -163,7 +163,7 @@ CTRULIB   := $(DEVKITPRO)/libctru
 CTR_ARCH  := -D__3DS__ -DPORT_3DS -DPORT_GTE_DEPTH -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -marm -mword-relocations
 PORT_EXTRA_3ds := -DPORT_DISC_PACK -DPORT_SPU_WORKER -I$(CTRULIB)/include \
                   $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') \
-                  $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') -I$(BUILD)/3ds/shaders
+                  $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(DUMP_EVERY),-DPORT_DUMP_EVERY=$(DUMP_EVERY)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(PROBE_AT),-DPORT_PROBE_AT=$(PROBE_AT)) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') -I$(BUILD)/3ds/shaders
 # The world map's vertex pass in 32-bit arithmetic (exact but for overflows the game doesn't reach; the DS port's)
 PORT_ARCH_3ds_game/world_verts := -DPORT_GTE_APPROX
 # Vertex shaders (PICA200 assembly, picasso) are embedded as binaries.
@@ -183,7 +183,7 @@ $(eval $(call target_rules,3ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(CTR_ARC
 .PHONY: FORCE_3DS_CONFIG
 $(BUILD)/3ds/runtime-config: FORCE_3DS_CONFIG
 	@mkdir -p $(dir $@)
-	@printf '%s\n' '$(AUTOPRESS)' '$(SCENARIO)' '$(PROFILE)' '$(SOFT)' '$(DUMP_AT)' '$(LOGUI_AT)' '$(AUTOTOUCH)' > $@.tmp
+	@printf '%s\n' '$(AUTOPRESS)' '$(SCENARIO)' '$(PROFILE)' '$(SOFT)' '$(DUMP_AT)' '$(LOGUI_AT)' '$(AUTOTOUCH)' '$(PROBE_AT)' '$(DUMP_EVERY)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(3ds_PORTOBJS): $(BUILD)/3ds/runtime-config $(3ds_EXTRAOBJS)
@@ -204,7 +204,7 @@ $(BUILD)/ff9.3dsx: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh
 # --- PC host build -----------------------------------------------------------------------------------------
 # 32-bit, non-PIE: psx_ram is mapped at a fixed address (port/pc/platform.c), so OT links rebuild as on the 3DS.
 PC_ARCH  := -m32 -malign-double -fno-pie
-PORT_EXTRA_pc := -DPORT_DISC_PACK -DNUI_DEBUG
+PORT_EXTRA_pc := -DPORT_DISC_PACK -DNUI_DEBUG -DPORT_GP0_PROBE
 PORT_ARCH_pc_psx/softgpu := $(if $(filter 1,$(RASTER_REFERENCE)),-DPORT_SOFTGPU_REFERENCE)
 $(eval $(call target_rules,pc,gcc,objcopy,$(PC_ARCH),pc,x86,-no-pie -Wl$(,)-z$(,)noexecstack -Wl$(,)--defsym=psx_ram=0x02000000,-lm))
 pc: $(BUILD)/pc/ff9ds
