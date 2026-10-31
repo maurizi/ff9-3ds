@@ -50,23 +50,35 @@ The game builds GPU packets in ordering tables (OTs) with screen-space coordinat
 replaces the PS1 GPU at two levels:
 
 ### 4.1 The primitive renderer (all packets, `port/3ds/render.c`)
-`DrawOTag` walks the OT in PS1 order as before (`port/psx/gpu.c`, `gp0.c`), and each decoded primitive becomes
-PICA200 geometry, drawn in OT order (painter's algorithm, as on the PS1). What the PICA200 adds:
-- **Exact blending.** PS1 modes 0–3 are GL blend equations: B/2+F/2 (constant alpha ½), B+F (one, one), B−F
-  (reverse subtract), B+F/4 (constant colour ¼). Semi-transparent textures draw in two passes split by the
-  texel's semi-transparency bit (opaque texels, then blended ones), as on the PS1.
-- **Textures.** The PICA200 has no palettes, so CLUT pages are converted to RGBA8 textures (alpha encodes
-  transparent / opaque / semi-transparent texels) by a cache keyed on (page, depth, CLUT), converted lazily in
-  32×32 blocks and invalidated by VRAM writes (`psx_vram_touch`). The CPU keeps the 1 MB VRAM shadow for
-  uploads, CLUTs and readbacks.
-- **Depth from the GTE.** The software GTE records, for every screen coordinate it stores, its sub-pixel
-  position and its depth (SZ), keyed by the address it was stored to (§4.3). A primitive whose vertices all
-  have one is drawn with sub-pixel precision (no PS1 wobble), perspective-correct texturing, and **stereoscopic
-  parallax**: a camera moved by e along X sees the vertex at sx − H·e/Z, so each eye's view is exact for
-  every projected vertex, effects included. Primitives without depth (2D, UI) sit at the screen plane.
-- **Render targets.** The PS1 draws into VRAM rectangles (two display buffers, offscreen effect areas). Each
-  drawing area the game uses gets a GPU render target; the displayed one is presented; one sampled as a texture
-  (screen-capture effects) is used as one directly; a CPU readback (`StoreImage`) downloads it.
+`DrawOTag` walks the OT in PS1 order (`port/psx/gpu.c`, `gp0.c`), and each decoded primitive becomes PICA200
+geometry, recorded as batches in drawing order (painter's algorithm, as on the PS1) and replayed at the end of each
+ordering table.
+- **The VRAM mirror.** All of PS1 VRAM is a 1024x512 RGBA5551 render target per eye: GPU coordinates are PS1 VRAM
+  coordinates, so double buffers, offscreen passes and screen captures land where the PS1 drew them. The alpha bit is
+  the PS1's **mask bit**: draws write it as the PS1 does (set_mask, else a textured pixel's texel bit 15, untextured 0;
+  fills clear it), opaque draws with check_mask leave masked pixels alone (destination-alpha blending), uploads carry
+  it. The CPU keeps the 1 MB shadow for uploads, CLUTs and readbacks; per 32x32 cell either side may be stale: a CPU
+  write is copied up (only the stale cells) before anything draws over it or it is shown; a CPU read of a cell the
+  GPU drew reads it back first (bit 15 from the alpha).
+- **Exact blending.** PS1 modes 0-3 are GL blend equations: B/2+F/2 (constant ½), B+F (one, one), B−F (reverse
+  subtract), B+F/4 (constant ¼). Semi-transparent textures draw in two passes split by the texel's bit 15 (opaque
+  texels, then blended ones), as on the PS1.
+- **Textures.** No palettes on the PICA200: CLUT pages become RGBA8 textures (alpha: transparent / texel without bit
+  15 / with it) keyed by (page, depth, CLUT, texture window), converted lazily in 32x32 blocks. A block is checked
+  against the cells it was made from (a texture epoch skips the check when nothing it used was written), then by a hash
+  of its source texels and CLUT, so the world map's per-frame palette cycling and water scrolling reconvert only what
+  changed. Texture windows (GP0 E2) are baked into their own slots. A slot drawn with earlier in a frame forces a GPU
+  sync before it changes.
+- **Depth from the GTE** (§4.3): sub-pixel positions, perspective-correct texturing and stereo parallax for every
+  projected vertex; a primitive uses depth only if all its vertices have it. 2D primitives in the scene get the depth
+  of their ordering-table entry (a per-frame fit of SZ against entry over the projected ones): layered stereo for
+  field backgrounds. Full-screen ones stay at the screen plane.
+- PS1 rules kept: quads are two triangles, each skipped when 1024+ wide or 512+ high.
+
+Debugging: `DUMP_AT=N` (mirror, shadow, mask plane, texture slots to the SD card), `DUMP_EVERY=N` (the displayed
+frame every N frames, UI composited), `PROBE_AT=N` (GP0 commands, fills and transfers around a frame), and
+`tools/render_diff.py`, which runs a scenario on the host's software renderer and on the 3DS (`SPUSYNC=1` keeps the
+two in step) and compares them frame by frame.
 
 ### 4.2 Native scene renderers (replacing the game's per-vertex work)
 Where the game's own functions are known (the DS port identified most of them: `config/overrides.txt`), the
@@ -86,27 +98,37 @@ vertex word, so packets the game rewrites or builds by hand simply lose depth. P
 through the scratchpad are found through a per-frame table keyed by the word's value.
 
 ### 4.4 Screens
-- **Top**: the scene (field, battle, world map, FMV), 400×240 per eye, the PS1 frame at 1:1 horizontally and
-  ×1.07 vertically in 4:3, later widescreen.
-- **Bottom**: the game's UI at 1:1: battle commands and party status, menus, dialogue choices, the world map's
-  minimap, Tetra Master's board; touchable (§6).
+- **Top**: the scene (field, battle, world map, FMV), 400×240 per eye, the PS1 frame at 1:1 in 4:3, both edges
+  masked by the largest parallax in stereo (a floating window).
+- **Bottom**: the game's UI at 1:1 over a dimmed copy of the scene. UI is: the battle's VBlank list
+  (`ContinueDraw`), and every packet the window system made (`win_drawAll` is wrapped: `port/game/ui_split.c`
+  reports the packet range it filled). Those draw into one of two UI layers (one per PS1 framebuffer: a field's
+  windows are drawn into the frame being built), RGBA8 with premultiplied alpha, which composites PS1 blend modes 0,
+  1 and 3 over the scene exactly. While a menu is up (`GD_MENU_OPEN`, all of the frame once `GD_HIDE_ALL`), the whole
+  frame is UI and the top shows the scene as it was when the menu was asked for. The card game (mode 9) is shown on
+  both. In a field or on the world map with no window up, the bottom screen is the **field panel**: a drag pad and the
+  face buttons, drawn with the game's own icons.
 
-Primitives are routed to a screen by what drew them: the game's UI drawing paths (windows, text, cursors) are
-identified in the decomp and tagged, and a tagged primitive goes to the bottom screen's render target.
-
-## 5. Sound
-AKAO (the game's sequencer) runs as decomp C against the emulated SPU register file (`port/game/spu_regs.c`), as
-in ff9-ds. The exact software SPU (24 voices, Gaussian interpolation, ADSR, reverb; `port/psx/spu_*.c`) mixes at
-44.1 kHz and NDSP plays the mix. The mixing moves to the second CPU core (a thread on the system core on Old
-3DS, a full core on New 3DS) once it measures as a cost on the game thread. Voice acting (optional) streams Opus
+## 5. Sound and threads
+AKAO (the game's sequencer) runs as decomp C on the game thread against the SPU register file it reads. The exact
+software SPU (24 voices, Gaussian interpolation, ADSR, reverb; `port/psx/spu_*.c` built as `spuw_*`) runs on a
+thread on the other core (core 2 of a New 3DS, the system core at up to 80% on an Old 3DS), fed through a ring of
+register writes, sample advances and SPU RAM transfers (`port/3ds/spu_client.c`, the DS port's spu7 protocol); what
+the game reads back comes back after each advance, at most one AKAO tick late. NDSP plays its mix. Movies: the MDEC
+decodes each frame on a worker on the same core as soon as its run-length data is complete (`port/game/movie.c`).
+Frames are paced by citro3d's VBlank counter. Voice acting (optional) streams Opus
 files from the SD card, keyed by dialogue text id.
 
 ## 6. Input and UX
 - Buttons: A = ✕ (confirm), B = ○ (cancel), X = △ (menu), Y = □, L/R = L1/R1, ZL/ZR (or L+R) = L2/R2, Start,
   Select; the circle pad doubles the d-pad (FF9 reads a digital pad).
-- Touch: every bottom-screen UI is tappable (list rows, commands, targets, the Tetra Master board) by writing
-  the game's own cursor state or synthesising the button the game expects; buttons always work too.
-- Suspend/resume through the HOME menu and sleep mode; saves on the SD card (memory-card images).
+- Touch (`port/3ds/touch.c`): FF9 points at the selected entry with a hand; the renderer records where it is drawn.
+  A tap steers the game's own cursor there with d-pad presses (rows, then columns; cells in the card game) and
+  confirms; swipe left is back, swipe up/down scrolls. The game's cursor logic is never bypassed. The field panel's
+  buttons hold their PS1 button; its drag pad is the d-pad.
+- Saves: two memory cards, raw `.mcr` images (`port/psx/card.c`): emulator and PS1-card saves load, and the port's
+  saves work in emulators. Disc changes: the disc the game's own screen asks for goes in the drive.
+- Suspend/resume through the HOME menu and sleep mode (libctru's applet handling).
 
 ## 7. Data
 `sdmc:/3ds/ff9/`: `raw/FF9 CD1.img`…`CD4.img` (or a packed `discs.bin`), cards, and later optional asset packs
