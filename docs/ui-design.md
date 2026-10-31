@@ -66,7 +66,9 @@ with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
 - Wait mode: opening a sub-list pauses ATB exactly as on PS1; no timing changes. **[done: game logic unchanged]**
 
 ## Main menu
-- **Bottom**: the PS1 menu with touch zones. **[partial: 1:1, taps steer its hand cursor]**
+- **Bottom**: the PS1 menu with touch zones. **[partial: 1:1; direct taps on the main menu (menu_touch.c), every list
+  drawn with the game's list box (list_touch.c: Item, Ability, Equip candidates, shops, ...) and the Item screen's member
+  window; the rest (Equip slots, Status, Config, the save screen) still steer the hand]**
 - **Top**, per sub-menu: Equip: a rotating 3D model in the selected gear, before→after stats; Abilities: AP progress
   for every ability the gear teaches; Status: full stat sheet and a large portrait; Items: description and who can
   use it. Game logic pauses; the top shows the paused scene dimmed to half, so opening the menu (on the bottom) visibly
