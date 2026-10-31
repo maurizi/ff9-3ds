@@ -46,7 +46,9 @@ void ctr_profile_frame(void) {
     for (int i = 0; i < PORT_PROFILE_DETAIL_CATEGORIES; i++)
         if (detail[i] / frames > TICKS_PER_MS / 10 && n < (int)sizeof line - 24)
             n += snprintf(line + n, sizeof line - n, " %s %.1f", detail_names[i], detail[i] / (double)frames / TICKS_PER_MS);
-    port_log("[prof] %s\n", line);
+    extern unsigned int ctr_depth_stats[2];
+    port_log("[prof] %s | depth %u/%u\n", line, ctr_depth_stats[0] / frames, (ctr_depth_stats[0] + ctr_depth_stats[1]) / frames);
+    ctr_depth_stats[0] = ctr_depth_stats[1] = 0;
     memset(acc, 0, sizeof acc);
     memset(detail, 0, sizeof detail);
     draw_acc = 0;

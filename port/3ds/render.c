@@ -78,7 +78,8 @@ static int stereo_on;            /* eye 1 drawn as well */
 static float stereo_k;           /* parallax constant of eye 1 (eye 0 gets -k) */
 static float stereo_inv_zc = 1.0f / 1500.0f;
 static unsigned display_shown_gen = ~0u, frames_drawn;
-unsigned int ctr_render_stats[8]; /* batches, primitives, blits, readbacks, texture blocks, slots, syncs */
+unsigned int ctr_render_stats[8];
+unsigned int ctr_depth_stats[2]; /* vertices with / without GTE depth */ /* batches, primitives, blits, readbacks, texture blocks, slots, syncs */
 
 /* ---- cell bookkeeping ------------------------------------------------------------------------------------- */
 
@@ -596,6 +597,7 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
     o->y = (float)v->y;
     o->z = 0;
     u32 info = v->xyw ? psx_depth_lookup(v->xyw) : 0;
+    ctr_depth_stats[info ? 0 : 1]++;
     if (info) {
         o->x += (info & 0xFF) * (1.0f / 256);
         o->y += ((info >> 8) & 0xFF) * (1.0f / 256);
@@ -781,6 +783,8 @@ void ctr_present(long frame) {
     C3D_FrameEnd(0);
     in_frame = 0;
     frames_drawn++;
+    extern unsigned int psx_depth_frame;
+    psx_depth_frame++;
     port_profile_end(PORT_PROFILE_GPU, profile_start);
 }
 
@@ -823,6 +827,7 @@ void ctr_render_dump(void) {
     mkdir("sdmc:/3ds/ff9/dump", 0777);
     gpu_sync();
     write_ppm("mirror0", VW, VH, px_mirror, mirror_tex[0].data);
+    if (stereo_on) write_ppm("mirror1", VW, VH, px_mirror, mirror_tex[1].data);
     write_ppm("shadow", VW, VH, px_shadow, psx_vram);
     for (int i = 0; i < nslots && i < 24; i++) {
         char name[48];

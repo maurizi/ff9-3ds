@@ -8,6 +8,7 @@
  * every partial addition, which only matters for FLAG on pathological inputs.
  */
 #include <stdint.h>
+#include <string.h>
 #define PORT_GTE_IMPL /* the real functions, not the inline wrappers */
 #include "gte.h"
 #include "psx_mem.h"
@@ -469,13 +470,23 @@ GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *
 #else
     gte_u32 saved[32], flag = FLAG;
     for (int k = 0; k < 32; ++k) saved[k] = g.d[k];
+#ifdef PORT_GTE_DEPTH
+    GteDepth saved_depth[3];
+    memcpy(saved_depth, psx_gte_depth, sizeof saved_depth);
+#endif
     for (int i = 0; i < count; ++i, v += 2) {
         g.d[0] = v[0]; g.d[1] = v[1];
         rtp_sf1(0, 0, 1);
         sxy[i] = g.d[14];
         sz[i] = g.d[19] & 0xFFFF;
+#ifdef PORT_GTE_DEPTH
+        psx_depth_record(&sxy[i], g.d[14], psx_gte_depth[2].info);
+#endif
     }
     for (int k = 0; k < 32; ++k) g.d[k] = saved[k];
+#ifdef PORT_GTE_DEPTH
+    memcpy(psx_gte_depth, saved_depth, sizeof saved_depth);
+#endif
     FLAG = flag;
 #endif
 }
@@ -515,10 +526,17 @@ void psx_gte_project(gte_u32 vxy, gte_u32 vz, gte_u32 *sxy, gte_u32 *sz, gte_u32
         const uint64_t q = ((uint64_t)n * d + 0x8000) >> 16;
         div = q > 0x1FFFF ? 0x1FFFF : (u32)q;
     }
-    i32 sx = (i32)(((i64)ir1 * div + OFX) >> 16), sy = (i32)(((i64)ir2 * div + OFY) >> 16);
+    const i64 mx = (i64)ir1 * div + OFX, my = (i64)ir2 * div + OFY;
+    i32 sx = (i32)(mx >> 16), sy = (i32)(my >> 16);
+    const u32 info = depth_info(sz3, mx, my, sx, sy);
     if (sx > 0x3FF) sx = 0x3FF; else if (sx < -0x400) sx = -0x400;
     if (sy > 0x3FF) sy = 0x3FF; else if (sy < -0x400) sy = -0x400;
     *sxy = (u32)sy << 16 | ((u32)sx & 0xFFFF);
+#ifdef PORT_GTE_DEPTH
+    psx_depth_record(sxy, *sxy, info);
+#else
+    (void)info;
+#endif
     *sz = sz3;
     *mac0 = (u32)(i32)((i64)DQA * div + DQB);
 }
@@ -782,10 +800,14 @@ GTE_HOT void gte_cmd(gte_u32 op) {
 static u32 depth_word[PSX_RAM_SIZE / 4], depth_inf[PSX_RAM_SIZE / 4];
 static u32 sp_word[256], sp_inf[256];
 #define VALUE_SLOTS 4096
-static u32 val_word[VALUE_SLOTS], val_inf[VALUE_SLOTS];
+static u32 val_word[VALUE_SLOTS], val_inf[VALUE_SLOTS], val_frame[VALUE_SLOTS];
+/* the renderer's frame count (presents): a value entry older than 8 is stale (battles project every 4 VBlanks) */
+unsigned int psx_depth_frame;
 static inline unsigned value_slot(u32 w) { return (w * 0x9E3779B1u) >> (32 - 12); }
 
+static inline void record_value(u32 w, u32 info);
 void psx_depth_record(const void *p, gte_u32 w, gte_u32 info) {
+    record_value(w, info);
     uintptr_t off = (const unsigned char *)p - psx_ram;
     if (off < PSX_RAM_SIZE) {
         depth_word[off >> 2] = w;
@@ -796,12 +818,17 @@ void psx_depth_record(const void *p, gte_u32 w, gte_u32 info) {
     if (off < 0x400) {
         sp_word[off >> 2] = w;
         sp_inf[off >> 2] = info;
-        if (info) {
-            unsigned k = value_slot(w);
-            val_word[k] = w;
-            val_inf[k] = info;
-        }
     }
+}
+
+/* also by value: projected vertices staged in a buffer (the scratchpad, or the port's projection overrides'
+ * g_vtxScreenXY) reach the packets by CPU copies */
+static inline void record_value(u32 w, u32 info) {
+    if (!info) return;
+    unsigned k = value_slot(w);
+    val_word[k] = w;
+    val_inf[k] = info;
+    val_frame[k] = psx_depth_frame;
 }
 
 void gte_store_sxy(int reg, void *p) {
@@ -820,6 +847,6 @@ gte_u32 psx_depth_lookup(const gte_u32 *p) {
         if (sp_word[off >> 2] == w) return sp_inf[off >> 2];
     }
     unsigned k = value_slot(w);
-    return val_word[k] == w ? val_inf[k] : 0;
+    return val_word[k] == w && psx_depth_frame - val_frame[k] <= 8 ? val_inf[k] : 0;
 }
 #endif
