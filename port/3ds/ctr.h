@@ -32,6 +32,8 @@ int ctr_ui_active(void); /* the bottom screen shows a UI layer */
 void ctr_async_init(void);
 void ctr_async_exit(void);
 
+unsigned ctr_frames_presented(void); /* render.c: frames presented so far */
+
 /* voice.c: a voice pack's recording of a dialogue line, while its window is up */
 void ctr_voice_line(unsigned bank, unsigned message);
 void ctr_voice_stop(void);

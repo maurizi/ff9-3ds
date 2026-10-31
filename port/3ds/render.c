@@ -1737,6 +1737,8 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
     for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) draw_to_screen(top_rt[eye], t, 0, 0, w, h, ox, oy);
 }
 
+unsigned ctr_frames_presented(void) { return frames_drawn; }
+
 void ctr_present(long frame) {
     (void)frame;
     submit(); /* (with the parallax its runs were ordered for: stereo_k changes below) */

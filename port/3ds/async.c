@@ -12,6 +12,7 @@ static LightEvent go, done;
 static void (*volatile job_fn)(void *);
 static void *volatile job_arg;
 static volatile int busy, quit, started;
+unsigned ctr_async_jobs, ctr_async_done; /* (the heartbeat: platform.c) */
 
 static void worker_main(void *unused) {
     (void)unused;
@@ -21,6 +22,7 @@ static void worker_main(void *unused) {
         started = 1;
         __sync_synchronize();
         job_fn(job_arg);
+        ctr_async_done++;
         __sync_synchronize();
         busy = 0;
         LightEvent_Signal(&done);
@@ -49,6 +51,7 @@ int plat_async(void (*fn)(void *), void *arg) {
     if (dead) return 0;
     job_fn = fn;
     job_arg = arg;
+    ctr_async_jobs++;
     started = 0;
     busy = 1;
     __sync_synchronize();

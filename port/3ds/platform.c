@@ -91,6 +91,12 @@ void plat_wait_frame(void) {
         exit(0);
     }
     read_input();
+    if (frames % 120 == 0) { /* (a heartbeat in the log: where a hang on hardware happens) */
+        extern unsigned ctr_async_jobs, ctr_async_done;
+        int port_game_mode(void);
+        port_log("beat %ld: mode %d, worker jobs %u/%u, presents %u\n", frames, port_game_mode(), ctr_async_done,
+                 ctr_async_jobs, ctr_frames_presented());
+    }
     void port_voice_poll(void);
     port_voice_poll();
     void port_bottom_hud(void);
