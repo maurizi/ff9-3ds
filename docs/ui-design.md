@@ -29,7 +29,8 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
     with unread letters, enabled at a moogle **[todo]**; **Chocograph / hints** when relevant **[todo]**.
   - Nothing here is needed while walking. The party and MENU show only while the game allows the menu (the opening
     and cutscene stretches may hold a placeholder party); CARDS once the card game has been met. **[done]**
-  - Mark the part of the walkmesh the camera shows (a field's walkmesh can extend past its screen). **[todo]**
+  - The area connected to where the player stands is bright, other parts of the walkmesh (off this screen) dimmed.
+    **[done]**
 
 ## Dialogue
 - The text stays on top in FF9's speaker-anchored bubbles, at the screen plane. **[done]**

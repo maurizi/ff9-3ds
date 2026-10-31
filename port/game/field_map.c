@@ -1,11 +1,14 @@
 /* The field's area map on the bottom screen (port/game/field_hud.c draws it in its box): the walkmesh seen from above
  * (each walkable triangle filled, its outer edges outlined), and the player as an arrow pointing where he faces. The
  * field's x runs right and its z away from the camera, so the map's up is the camera's forward: the map looks the
- * way the room does. Floors that move (lifts, bridges) move on the map too: it is rebuilt each frame. */
+ * way the room does. Floors that move (lifts, bridges) move on the map too: it is rebuilt each frame. A walkmesh may
+ * hold areas the camera doesn't show (Dali's field: the yard and, apart, the path beyond it): the area connected to
+ * the player's triangle is drawn bright, the rest dimmed. */
 #include "psyq_port.h"
 #include "ovl_0a.h"
 
 #define MAP_FILL 0x5888A8   /* walkable floor (BGR as the GPU takes it): sand */
+#define MAP_FILL_AWAY 0x3A4A58 /* walkable floor not connected to where the player stands (another screen's) */
 #define MAP_EDGE 0xC8E0F0   /* its outline */
 #define MAP_PLAYER 0x30E8F8 /* the player */
 
@@ -19,6 +22,34 @@ static void world_xz(const BgiTriangle *t, int k, int *x, int *z) {
     const BgiVertex *v = &g_fieldBgi.vertices[t->vertices[k]];
     *x = h->curPos[0] + (s16)f->curPos[0] + v->vx;
     *z = h->curPos[2] + (s16)f->curPos[2] + v->vz;
+}
+
+#define MAX_TRIS 1024
+static u8 near_player[MAX_TRIS]; /* triangles connected to the player's (walkable neighbours) */
+
+static void mark_connected(int n, int start) {
+    static s16 stack[MAX_TRIS];
+    __builtin_memset(near_player, 0, sizeof near_player);
+    if (start < 0 || start >= n) { __builtin_memset(near_player, 1, sizeof near_player); return; }
+    int sp = 0;
+    stack[sp++] = (s16)start;
+    near_player[start] = 1;
+    while (sp) {
+        const BgiTriangle *t = &g_fieldBgi.triangles[stack[--sp]];
+        for (int k = 0; k < 3; k++) {
+            int nb = t->neighbors[k];
+            if (nb < 0 || nb >= n || near_player[nb] || !bound_tri(&g_fieldBgi.triangles[nb])) continue;
+            near_player[nb] = 1;
+            stack[sp++] = (s16)nb;
+        }
+    }
+}
+
+/* the player's walkmesh triangle, -1 if unknown */
+static int player_triangle(EvtObject *pl) {
+    for (int i = 0; pl && i < g_fieldBgi.actorCount; i++)
+        if ((EvtObject *)g_fieldBgi.actors[i].actor == pl) return g_fieldBgi.actors[i].triangle;
+    return -1;
 }
 
 static inline u32 xy(int x, int y) { return (u32)(x & 0xFFFF) | (u32)y << 16; }
@@ -41,7 +72,10 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
             if (z > z1) z1 = z;
         }
     }
-    if (x1 <= x0 || z1 <= z0) return pkt;
+    if (x1 <= x0 || z1 <= z0 || n > MAX_TRIS) return pkt;
+    GameData *g = g_gameState->gameData;
+    EvtObject *pl = g->ctx.field ? (EvtObject *)g->npcModels[g->ctx.field->playerObj].actor : NULL;
+    mark_connected(n, player_triangle(pl));
     /* scale (16.16) to fit with a margin, centred */
     const int m = 8;
     int sx = ((bw - 2 * m) << 16) / (x1 - x0), sz = ((bh - 2 * m) << 16) / (z1 - z0), s = sx < sz ? sx : sz;
@@ -73,7 +107,7 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
             p += 4;
         }
         p[0] = 4u << 24;
-        p[1] = 0x20000000u | MAP_FILL;
+        p[1] = 0x20000000u | (near_player[i] ? MAP_FILL : MAP_FILL_AWAY);
         p[2] = xy(x[0], y[0]);
         p[3] = xy(x[1], y[1]);
         p[4] = xy(x[2], y[2]);
@@ -81,8 +115,6 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         p += 5;
     }
     /* the player: an arrow from where he stands, the way he faces (rotY: 0 toward the camera, 1024 a quarter turn) */
-    GameData *g = g_gameState->gameData;
-    EvtObject *pl = g->ctx.field ? (EvtObject *)g->npcModels[g->ctx.field->playerObj].actor : NULL;
     if (pl && (u8 *)(p + 5) <= pkt_end) {
         int px = MX(pl->pos.vx), py = MY(pl->pos.vz);
         int a = pl->pos.rotY & 0xFFF;
