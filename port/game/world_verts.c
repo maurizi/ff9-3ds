@@ -72,11 +72,11 @@ typedef struct {
     u32 rot[5], llm[5], lcm[5];
     s32 tr[3], bk[3], fc[3], ofx, ofy;
     u32 h;
-    int fc32;          /* the far colour fits interpolate's 32-bit path */
+    s32 fcc[3];        /* the far colour, clamped to where DPCS's IR clamps anyway (wv_ir) */
+    s32 fog_ir[2][3];  /* DPCS's IR for each fog entry's colour (wv_ir) */
     const u16 *unr;
     u32 nct_have[8], nct[256]; /* NCT's colours by normal (without the code byte), those worked out */
 } WvCtx;
-static inline s32 wv_clamp(long long v, s32 lo, s32 hi) { return v < lo ? lo : v > hi ? hi : (s32)v; }
 static inline s32 wv_clamp32(s32 v, s32 lo, s32 hi) { return v < lo ? lo : v > hi ? hi : v; }
 /* M x V >> 12 plus T, as mat_mul's results (rotation layout: 5 words) */
 static inline void wv_mat(const u32 *c, const s32 *t, s32 x, s32 y, s32 z, s32 *o) {
@@ -102,21 +102,17 @@ static inline u32 wv_nct(const WvCtx *cx, const SVECTOR *nv, u32 code) {
     return code << 24 | (u32)wv_clamp32(m[2] >> 4, 0, 0xFF) << 16 | (u32)wv_clamp32(m[1] >> 4, 0, 0xFF) << 8 |
            (u32)wv_clamp32(m[0] >> 4, 0, 0xFF);
 }
-/* DPCS (sf 1, lm 0) of colour rgbc toward the far colour by dp */
-static inline u32 wv_dpcs(const WvCtx *cx, u32 rgbc, s32 dp) {
+/* DPCS (sf 1, lm 0) of colour c toward the far colour fc by dp, in gte.c's terms: IR = clamp((FC << 12 - C << 16) >> 12)
+ * = clamp(FC - 16 C) (both terms multiples of 4096), then the colour clamp((IR dp + C << 16) >> 12 >> 4)
+ * = clamp(C + (IR dp >> 16)), whose sum stays in 32 bits (|IR dp| < 2^27). wv_ir is the first step (a far colour
+ * clamped to +-40000 gives the same IR), wv_dpcs_ir the second. */
+static inline void wv_ir(const s32 *fcc, u32 rgb, s32 *ir) {
+    for (int k = 0; k < 3; ++k) ir[k] = wv_clamp32(fcc[k] - 16 * (s32)(rgb >> (8 * k) & 0xFF), -0x8000, 0x7FFF);
+}
+static inline u32 wv_dpcs_ir(u32 rgbc, const s32 *ir, s32 dp) {
     u32 out = rgbc & 0xFF000000u;
-    for (int k = 0; k < 3; ++k) {
-        const s32 m = (s32)(rgbc >> (8 * k) & 0xFF) << 16;
-        s32 mac;
-        if (cx->fc32) { /* (every sum within 32 bits: interpolate's own condition) */
-            const s32 ir = wv_clamp32((cx->fc[k] * 4096 - m) >> 12, -0x8000, 0x7FFF);
-            mac = (ir * dp + m) >> 12;
-        } else {
-            const s32 ir = wv_clamp((((long long)cx->fc[k] << 12) - m) >> 12, -0x8000, 0x7FFF);
-            mac = (s32)(((long long)ir * dp + m) >> 12);
-        }
-        out |= (u32)wv_clamp32(mac >> 4, 0, 0xFF) << (8 * k);
-    }
+    for (int k = 0; k < 3; ++k)
+        out |= (u32)wv_clamp32((s32)(rgbc >> (8 * k) & 0xFF) + ((ir[k] * dp) >> 16), 0, 0xFF) << (8 * k);
     return out;
 }
 /* RTPS's projection of one vertex in DS mode (rtp_sf1's arithmetic): its SXY and SZ */
@@ -168,8 +164,11 @@ static inline void wv_group(WvCtx *cx, const u32 *v, s32 flags, u32 *rgbc, u32 *
     if (flags & WV_FOG) {
         for (int i = 0; i < 3; ++i) {
             const u32 *e = (const u32 *)g_worldFogParams + ((w[2 * i + 1] >> 25) & 1) * 2;
-            lit[i] = wv_dpcs(cx, rgb[i], wv_depth(sz[i], e[1] >> 16, flags));
-            fog[i] = wv_dpcs(cx, e[0], 0x1000 - wv_depth(sz[i], e[1] & 0xFFFF, flags));
+            const int which = (w[2 * i + 1] >> 25) & 1;
+            s32 ir[3];
+            wv_ir(cx->fcc, rgb[i], ir);
+            lit[i] = wv_dpcs_ir(rgb[i], ir, wv_depth(sz[i], e[1] >> 16, flags));
+            fog[i] = wv_dpcs_ir(e[0], cx->fog_ir[which], 0x1000 - wv_depth(sz[i], e[1] & 0xFFFF, flags));
             *rgbc = e[0];
         }
     } else {
@@ -221,8 +220,8 @@ PORT_ITCM_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
         for (int k = 0; k < 5; ++k) { cx.rot[k] = c[k]; cx.llm[k] = c[8 + k]; cx.lcm[k] = c[16 + k]; }
         for (int k = 0; k < 3; ++k) { cx.tr[k] = (s32)c[5 + k]; cx.bk[k] = (s32)c[13 + k]; cx.fc[k] = (s32)c[21 + k]; }
         cx.ofx = (s32)c[24]; cx.ofy = (s32)c[25]; cx.h = (u16)c[26];
-        cx.fc32 = 1;
-        for (int k = 0; k < 3; ++k) if ((u32)cx.fc[k] + 0x20000u >= 0x40000u) cx.fc32 = 0; /* (interpolate's FITS(FC, 17)) */
+        for (int k = 0; k < 3; ++k) cx.fcc[k] = wv_clamp32(cx.fc[k], -40000, 40000);
+        for (int e = 0; e < 2; ++e) wv_ir(cx.fcc, ((const u32 *)g_worldFogParams)[2 * e], cx.fog_ir[e]);
         cx.unr = psx_gte_unr();
         for (int k = 0; k < 8; ++k) cx.nct_have[k] = 0;
         u32 rgbc = psx_gte.d[6];
