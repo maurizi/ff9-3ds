@@ -15,6 +15,7 @@
 #define MAP_EDGE 0xC8E0F0   /* its outline */
 #define MAP_PLAYER 0x30E8F8 /* the player */
 #define MAP_EXIT 0x48D860   /* an exit (a region whose "player inside" function changes field or goes to the world) */
+#define MAP_SCALE 4588     /* the map's scale, 16.16 pixels per field unit (0.07) */
 #define MAP_SHOP 0x20C0F8   /* a shopkeeper (amber) */
 #define MAP_SAVE 0xE070F0   /* a save moogle (pink) */
 
@@ -40,10 +41,10 @@ static void world_xz(const BgiTriangle *t, int k, int *x, int *z) {
 }
 
 #define MAX_TRIS 1024
-static u8 near_player[MAX_TRIS]; /* triangles connected to the player's (walkable neighbours) */
+static u8 near_player[MAX_TRIS]; /* triangles connected to the player's (walkable neighbours): 1, or 2 in an exit */
 
 /* the field's exits (their polygons), collected before the map is built */
-static struct { int n, here; s16 x[8], z[8]; } exits[16]; /* here: at the drawn area's edge */
+static struct { int n; s16 x[8], z[8]; } exits[16];
 static int n_exits;
 static int region_is_exit(int entry);
 
@@ -90,6 +91,32 @@ static int tri_in_exit(const BgiTriangle *t) {
     return in_exit(cx / 3, cz / 3);
 }
 
+/* a triangle within EXIT_NEAR of an exit's polygon (some regions stop short of the walkmesh): shaded as the exit */
+#define EXIT_NEAR 48
+static int tri_near_exit(const BgiTriangle *t) {
+    int cx = 0, cz = 0;
+    for (int k = 0; k < 3; k++) {
+        int x, z;
+        world_xz(t, k, &x, &z);
+        cx += x;
+        cz += z;
+        if (in_exit(x, z)) return 1;
+    }
+    cx /= 3;
+    cz /= 3;
+    for (int e = 0; e < n_exits; e++)
+        for (int i = 0, n = exits[e].n; i < n; i++) {
+            int j = (i + 1) % n;
+            long ax = exits[e].x[i], az = exits[e].z[i], dx = exits[e].x[j] - ax, dz = exits[e].z[j] - az;
+            long len2 = dx * dx + dz * dz, tq = len2 ? ((cx - ax) * dx + (cz - az) * dz) * 256 / len2 : 0;
+            if (tq < 0) tq = 0;
+            if (tq > 256) tq = 256;
+            long px = ax + dx * tq / 256 - cx, pz = az + dz * tq / 256 - cz;
+            if (px * px + pz * pz <= (long)EXIT_NEAR * EXIT_NEAR) return 1;
+        }
+    return 0;
+}
+
 static void mark_connected(int n, int start) {
     static s16 stack[MAX_TRIS];
     __builtin_memset(near_player, 0, sizeof near_player);
@@ -101,9 +128,8 @@ static void mark_connected(int n, int start) {
         const BgiTriangle *t = &g_fieldBgi.triangles[stack[--sp]];
         for (int k = 0; k < 3; k++) {
             int nb = t->neighbors[k];
-            if (nb < 0 || nb >= n || near_player[nb] || !bound_tri(&g_fieldBgi.triangles[nb]) ||
-                tri_in_exit(&g_fieldBgi.triangles[nb]))
-                continue;
+            if (nb < 0 || nb >= n || near_player[nb] || !bound_tri(&g_fieldBgi.triangles[nb])) continue;
+            if (tri_in_exit(&g_fieldBgi.triangles[nb])) { near_player[nb] = 2; continue; } /* (shown, not walked past) */
             near_player[nb] = 1;
             stack[sp++] = (s16)nb;
         }
@@ -211,30 +237,11 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         }
     }
     if (x1 <= x0 || z1 <= z0) return pkt;
-    /* the exits at the area's edge (within an eighth of its size: a region can stop short of the walkmesh) fit in too;
-     * the others belong to other areas and aren't drawn */
-    {
-        int mx = (x1 - x0) / 8, mz = (z1 - z0) / 8;
-        int ax0 = x0 - mx, az0 = z0 - mz, ax1 = x1 + mx, az1 = z1 + mz;
-        for (int e = 0; e < n_exits; e++) {
-            int ex0 = 0x7FFFFFFF, ez0 = 0x7FFFFFFF, ex1 = -0x7FFFFFFF, ez1 = -0x7FFFFFFF;
-            for (int k = 0; k < exits[e].n; k++) {
-                if (exits[e].x[k] < ex0) ex0 = exits[e].x[k];
-                if (exits[e].x[k] > ex1) ex1 = exits[e].x[k];
-                if (exits[e].z[k] < ez0) ez0 = exits[e].z[k];
-                if (exits[e].z[k] > ez1) ez1 = exits[e].z[k];
-            }
-            exits[e].here = !(ex1 < ax0 || ex0 > ax1 || ez1 < az0 || ez0 > az1);
-            if (!exits[e].here) continue; /* (another area's) */
-            if (ex0 < x0) x0 = ex0;
-            if (ex1 > x1) x1 = ex1;
-            if (ez0 < z0) z0 = ez0;
-            if (ez1 > z1) z1 = ez1;
-        }
-    }
-    /* scale (16.16) to fit with a margin, centred */
+    /* scale (16.16): one for all areas (0.07 px per field unit: a room as large as Dali's weapon shop fills the box),
+     * less to fit a larger one, centred */
     const int m = 8;
     int sx = ((bw - 2 * m) << 16) / (x1 - x0), sz = ((bh - 2 * m) << 16) / (z1 - z0), s = sx < sz ? sx : sz;
+    if (s > MAP_SCALE) s = MAP_SCALE; /* (the same scale everywhere: smaller only for an area too big for the box) */
     const int ox = bx + bw / 2, oy = by + bh / 2, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
     __builtin_memset(edges, 0, sizeof edges);
     for (int i = 0; i < n; i++) {
@@ -272,36 +279,12 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
             p += 4;
         }
         p[0] = 4u << 24;
-        p[1] = 0x20000000u | MAP_FILL;
+        p[1] = 0x20000000u | (near_player[i] == 2 || tri_near_exit(t) ? MAP_EXIT : MAP_FILL);
         p[2] = xy(x[0], y[0]);
         p[3] = xy(x[1], y[1]);
         p[4] = xy(x[2], y[2]);
         addPrim(ot, p); /* (after its edges in the list: added later, drawn first) */
         p += 5;
-    }
-    /* the exits */
-    for (int e = 0; e < n_exits; e++) {
-        int cnt = exits[e].n;
-        if (!exits[e].here) continue;
-        if ((u8 *)(p + 5 * 6 + 4 * 8) > pkt_end) break;
-        for (int k = 0; k < cnt; k++) { /* its outline */
-            int j = (k + 1) % cnt;
-            p[0] = 3u << 24;
-            p[1] = 0x40000000u | MAP_EXIT;
-            p[2] = xy(MX(exits[e].x[k]), MY(exits[e].z[k]));
-            p[3] = xy(MX(exits[e].x[j]), MY(exits[e].z[j]));
-            addPrim(ot - 1, p);
-            p += 4;
-        }
-        for (int k = 1; k + 1 < cnt; k++) { /* filled (convex: a fan) */
-            p[0] = 4u << 24;
-            p[1] = 0x20000000u | MAP_EXIT;
-            p[2] = xy(MX(exits[e].x[0]), MY(exits[e].z[0]));
-            p[3] = xy(MX(exits[e].x[k]), MY(exits[e].z[k]));
-            p[4] = xy(MX(exits[e].x[k + 1]), MY(exits[e].z[k + 1]));
-            addPrim(ot - 1, p);
-            p += 5;
-        }
     }
     /* shopkeepers and save moogles: a diamond where each stands */
     int guard = 0;

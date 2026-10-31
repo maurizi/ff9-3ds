@@ -249,6 +249,14 @@ static int ability_view(const u8 *st) {
     return 1;
 }
 
+/* the panel with nothing in it: while a screen that has top views points at something without one (a potion in the
+ * shop), so the top doesn't flick between a panel and the scene as the cursor moves */
+static int empty_panel(void) {
+    static RECT box = {8, 8, 384, 224};
+    win_drawBox(&box, 5, 2);
+    return 1;
+}
+
 /* field_hud.c's top-screen frame while a menu is up: 1 if drawn */
 int port_menu_top_draw(void) {
     GameData *g = g_gameState->gameData;
@@ -261,10 +269,10 @@ int port_menu_top_draw(void) {
             if (st[1] != 2 || st[0] == 2) return 0; /* (the list, not Key items) */
             MenuList *L = (MenuList *)(st + 0xC);
             int slot = (L->top + L->cursor) * 2 + L->col;
-            if (slot < 0 || slot > 255 || !g->items.slots[slot].count) return 0;
-            return item_view(g->items.slots[slot].id);
+            if (slot < 0 || slot > 255 || !g->items.slots[slot].count) return empty_panel();
+            return item_view(g->items.slots[slot].id) || empty_panel();
         }
-        case 2: return ability_view(s_menuAbility);
+        case 2: return ability_view(s_menuAbility) || (s_menuAbility[1] == 2 && empty_panel());
         case 3: return equip_view(s_menuEquip);
         default: return 0;
         }
@@ -289,7 +297,7 @@ int port_menu_top_draw(void) {
             if (slot >= 0 && slot < 256 && g->items.slots[slot].count) id = g->items.slots[slot].id;
         }
         (void)help;
-        return item_view(id);
+        return item_view(id) || empty_panel();
     }
     default: return 0;
     }

@@ -1639,12 +1639,6 @@ static void screen_quad_scaled(C3D_RenderTarget *rt, C3D_Tex *src, int kind, int
     C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
 }
 
-static void draw_to_screen(C3D_RenderTarget *rt, C3D_Tex *src, int sx, int sy, int w, int h, int ox, int oy) {
-    C3D_RenderTargetClear(rt, C3D_CLEAR_ALL, 0x000000FF, 0);
-    C3D_FrameDrawOn(rt);
-    if (src) screen_quad(rt, src, K_BLIT, NO_BLEND, 0xFFFFFFFF, sx, sy, w, h, ox, oy);
-}
-
 /* The top screen shows the frame as large as it fits whole: scaled to the screen's 240 lines (a 320x224 field or
  * battle becomes 343x240), the same in both directions, centred; filtered, as the scale isn't whole. */
 static float top_scale(int w, int h) {

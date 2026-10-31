@@ -24,7 +24,9 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
   bubbles stay here. **[done]**
 - **Bottom, when no window is open**:
   - **Area map** from the walkmesh (top-down), Zidane's position and facing **[done]**; the exits (gateways from the
-    event scripts) **[done: regions whose player-inside function changes field, in green]**; save moogles and shops once visited **[todo]**.
+    event scripts) **[done: the floor in or by a region whose player-inside function changes field, shaded green]**;
+    save moogles and shops **[done: moogles; shopkeepers that open their shop from another script entry not yet]**.
+    One scale for every area (smaller only when an area doesn't fit), so rooms compare. **[done]**
   - **Header line**: location name, gil, play time. **[done]**
   - **Compact party strip**: four rows of portrait, HP and MP, status icons. **[done]** (portraits read from the
     menu's file by the port)
