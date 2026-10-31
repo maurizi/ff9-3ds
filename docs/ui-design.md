@@ -99,10 +99,12 @@ with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
 - Vehicle controls stay physical. **[done]**
 
 ## Tetra Master
-- **Bottom**: the 4×4 board with both hands (cards ~42×51: four columns ~176 px, the two 5-card hands as
-  overlapping columns either side); tap or drag to place. **[partial: the PS1 frame 1:1, taps steer the cursor]**
-- **Top**: the highlighted card large and readable (arrows, the "1P2A" string), the opponent's portrait and the
-  score, battle and combo flips in stereo depth. **[partial: a 2x magnifier following the cursor]**
+- **Bottom**: the game's own frame 1:1, the play surface (board, hands, the stock grid, its Yes/No windows). Touch acts
+  on it directly: a tap on a stock card picks it, on a hand card takes it up, on a square places the card taken up (or
+  the one under the cursor), on Yes/No answers, on a captured card takes it, anywhere continues a result.
+  **[done: port/game/tm_ui.c; the cursor fields set at the game's frame and its own confirm run (decomp R33)]**
+- **Top**: the card in focus large (picture, name, the "1P2A" string, arrows), the score and whose turn, and the game's
+  hint text (its bubbles covered the board). **[done; no opponent portrait: the PS1 has none]**
 - D-pad and A still place cards. **[done]**
 
 ## Mognet

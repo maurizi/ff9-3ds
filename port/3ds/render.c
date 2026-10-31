@@ -1885,11 +1885,11 @@ void ctr_present(long frame) {
             mag_ry = clampi((int)mag_y - MAG_H / 2, 0, h - MAG_H);
         } else mag_x = -1;
         for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) {
-            if (menu_state == 3) {
+            if (menu_state == 3) { /* (the card game: its own top view, port/game/tm_ui.c, over black) */
                 C3D_RenderTargetClear(top_rt[eye], C3D_CLEAR_ALL, 0x000000FF, 0);
                 C3D_FrameDrawOn(top_rt[eye]);
-                screen_quad_scaled(top_rt[eye], &mirror_tex[0], K_BLIT, NO_BLEND, 0xFFFFFFFF, d.x + mag_rx, d.y + mag_ry, MAG_W,
-                                   MAG_H, 0, 0, 400, 240);
+                (void)mag_rx;
+                (void)mag_ry;
             } else if (frozen) { /* a menu is up: the paused scene, dimmed to half (its panels are drawn over it after) */
                 draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h, freeze_w, freeze_h, edge);
                 screen_dim(top_rt[eye], 0x80);

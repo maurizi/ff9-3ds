@@ -113,6 +113,7 @@ int port_name_tap(int x, int y, unsigned *seq, int max);
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     { int n = port_name_tap(x, y - oy, seq, max); if (n) return n; } /* (name entry: port/game/name_touch.c) */
     { int port_menu_tap(int, int); if (port_menu_tap(x, y - oy)) return -1; } /* (main menu: menu_touch.c) */
+    { int port_tm_tap(int, int); if (port_tm_tap(x, y - oy)) return -1; } /* (the card game: tm_ui.c) */
     if (g_gameState && g_gameState->mode == 3 && !port_menu_state()) return port_world_tap(x, y - oy) ? -1 : 0; /* (zoom, names) */
     if (!shown) return 0;
     y -= oy;
@@ -576,6 +577,8 @@ int port_menu_top_draw(void);
 static int top_draw(void) {
     int port_battle_help_top(void);
     if (g_gameState->mode == 2 && !port_menu_state()) return port_battle_help_top(); /* (battle_ui.c) */
+    int port_tm_top_draw(void);
+    if (g_gameState->mode == GS_MODE_TETRA_MASTER) return port_tm_top_draw(); /* (tm_ui.c) */
     if (port_menu_state() != 2 && !(g_menu.open && g_menu.type)) return 0;
     (void)member_sheet;
     (void)party_overview;

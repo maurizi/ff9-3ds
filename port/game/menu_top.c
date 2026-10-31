@@ -315,8 +315,8 @@ void help_draw(void);
 void func_8003573C(void);
 
 static int help_moved(void) {
-    int st = port_menu_state();
-    return (st == 1 || st == 2) && g_menuHelp.isOpen && g_menuHelp.textShown && g_menuHelp.text &&
+    int st = port_menu_state(); /* (a menu, or the card game: tm_ui.c shows its hints on top) */
+    return (st == 1 || st == 2 || st == 3) && g_menuHelp.isOpen && g_menuHelp.textShown && g_menuHelp.text &&
            *g_menuHelp.text != TEXT_END;
 }
 
@@ -360,7 +360,7 @@ void port_help_panel(u8 *text) {
 
 /* the menu's help text there (field_hud.c's top frame, over the menu's views): 1 if drawn */
 int port_help_top_draw(void) {
-    if (!help_moved()) return 0;
+    if (!help_moved() || port_menu_state() == 3) return 0;
     port_help_panel(g_menuHelp.text);
     return 1;
 }

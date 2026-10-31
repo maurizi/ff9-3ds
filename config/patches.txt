@@ -211,3 +211,6 @@ src/ovl_0b/btl_cmd.c | btlbg_init(p->bgHeader, p->bgTexAnims); | if (!p->bgHeade
 # clears a flag through the NULL ctx.ovl65, which on the PS1 writes BIOS RAM at address 0 (and menu_doOpen sets it).
 src/main/menu.c | g_gameState->gameData->ctx.ovl65->flags | PSX_NZ(g_gameState->gameData->ctx.ovl65)->flags | 1
 src/main/menu.c | st->gameData->ctx.ovl65->flags | PSX_NZ(st->gameData->ctx.ovl65)->flags | 1
+
+# Tetra Master on the 3DS (port/game/tm_ui.c): the card game's state and the frame's touch, right after its pad read.
+src/ovl_0d/tm_game.c | tm_updatePad(&s); | tm_updatePad(&s); port_tm_frame(&s); | 1

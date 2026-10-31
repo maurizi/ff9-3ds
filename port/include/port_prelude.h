@@ -56,5 +56,6 @@
 #include "effect_bridge.h"
 void battleEnd_main(void);
 void port_draw_ot_buffer(unsigned int *head, const void *buffer, unsigned int size);
+void port_tm_frame(void *tm_state); /* port/game/tm_ui.c: the card game's frame, after its pad read (a patch) */
 
 #endif
