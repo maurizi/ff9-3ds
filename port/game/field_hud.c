@@ -66,9 +66,10 @@ static RECT *cards_rect; /* where CARDS is this frame (NULL: not shown) */
 static int ate_shown;
 static int cards_pending; /* frames left to wait for the main menu to open onto the card screen */
 
-/* an Active Time Event can be watched now (the field script's byte b[0xEE]: decomp-requests R30) */
+/* an Active Time Event can be watched now (the field script's byte b[0xEE]: decomp-requests R30). (By symbol: a PS1
+ * address isn't one in port code; an emulator reads unmapped memory as 0, a 3DS faults.) */
 static int ate_available(void) {
-    return *PSX_RAM(volatile u8 *, 0x8007AFDE) == 1;
+    return g_evtGlobalVars.b[0xEE] == 1;
 }
 
 /* CARDS: the main menu, then its card screen (once the menu runs: the cursor on Card, the slide-in over, the screen
@@ -77,7 +78,8 @@ static void cards_step(void) {
     if (!cards_pending) return;
     cards_pending--;
     if (g_menuScreen.active != 1 || g_menuScreen.screen != 0) return;
-    *PSX_RAM(u8 *, 0x800CB188) = 5; /* (s_menuMain.cursor: row 5 is Card) */
+    extern u8 o0a_s_menuMain[]; /* (the field's main menu: its cursor first; row 5 is Card) */
+    o0a_s_menuMain[0] = 5;
     g_menuScreen.slideIn = 0;
     menuScreen_open(6);
     cards_pending = 0;
