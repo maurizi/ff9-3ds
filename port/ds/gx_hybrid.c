@@ -3153,6 +3153,7 @@ PORT_ITCM_CODE(0c) static void terrain_emit(Buffer *b, struct Terrain *tr, EmitS
         if (depth < 2) { use_image[i] |= index0_transparent(u->palette); use_palette[i] = (u32)u->palette * 512 / 16; }
     }
     const int zb = world_entry_depth(0xFA0 + 8);
+    int listing = 0; /* a triangle list is open (texture and palette words apply per polygon; the attributes at BEGIN) */
     for (int f = 0; f < tr->nfaces; ++f) {
         const TFace tf = tr->faces[f];
         if (tf.tier < drop_below) continue;
@@ -3185,9 +3186,10 @@ PORT_ITCM_CODE(0c) static void terrain_emit(Buffer *b, struct Terrain *tr, EmitS
             pack_begin();
             if (set_palette != ~0u) { pack(CMD_PLTTBASE); put(set_palette); es->palette = set_palette; }
             if (want_image != es->image) { pack(CMD_TEXIMAGE); put(want_image); es->image = want_image; }
-            if (want_attr != es->attr) { pack(CMD_POLYATTR); put(want_attr); es->attr = want_attr; }
-            pack(CMD_BEGIN); put(0);
-            pack_end();
+            if (want_attr != es->attr) { pack(CMD_POLYATTR); put(want_attr); es->attr = want_attr; listing = 0; }
+            if (!listing) { pack(CMD_BEGIN); put(0); listing = 1; }
+            if (pack_ids) pack_end();
+            else --wp; /* (nothing to set: no header) */
             u32 bf = tr->backdrop_fog, lit_of[3], inv_scale = textured ? use_inv[tf.use] : 0;
             if (textured) { /* (TV_ALL_FOG: another vertex's colour) */
                 u32 other = 0;
