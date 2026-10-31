@@ -1217,24 +1217,44 @@ static int font_button(u32 *px, int k, int w, int h) {
     int gx = (i % tg->nRows) * (tg->cellWidth + 1) + 1, gy = (i / tg->nRows) * (tg->cellHeight + 1) + 1;
     charWidthInfo_s *cw = fontGetCharWidthInfo(font, g);
     int gw = cw && cw->glyphWidth ? cw->glyphWidth : tg->cellWidth, gh = tg->cellHeight;
-    /* the glyph's height fits h; its width scaled the same (round buttons stay round) */
-    float sc = (float)gh / h;
-    int ow = (int)(gw / sc + 0.5f);
-    if (ow > w) ow = w, sc = (float)gw / w;
-    int ox = (w - ow) / 2;
-    for (int y = 0; y < h; y++)
+#define A4(x, y) (tex[tiled((unsigned)(gx + (x)), (unsigned)(gy + (y)), tg->sheetWidth) >> 1] >> \
+                  ((tiled((unsigned)(gx + (x)), (unsigned)(gy + (y)), tg->sheetWidth) & 1) * 4) & 15)
+    /* the glyph's own extent in its cell */
+    int bx0 = gw, by0 = gh, bx1 = -1, by1 = -1;
+    for (int y = 0; y < gh; y++)
+        for (int x = 0; x < gw; x++)
+            if (A4(x, y) > 3) {
+                if (x < bx0) bx0 = x;
+                if (x > bx1) bx1 = x;
+                if (y < by0) by0 = y;
+                if (y > by1) by1 = y;
+            }
+    if (bx1 < bx0) return 0;
+    int ew = bx1 - bx0 + 1, eh = by1 - by0 + 1;
+    /* to fit w x h, the same scale both ways (round buttons stay round), centred */
+    float sc = (float)ew / w > (float)eh / h ? (float)ew / w : (float)eh / h;
+    int ow = (int)(ew / sc + 0.5f), oh = (int)(eh / sc + 0.5f), ox = (w - ow) / 2, oy = (h - oh) / 2;
+    const u32 light = 0xE8E8E880u, dark = 0x30303480u; /* (RGBA8 texels: r << 24 | g << 16 | b << 8 | a) */
+    for (int y = 0; y < oh; y++)
         for (int x = 0; x < ow; x++) {
             int a = 0, n = 0;
-            for (float sy = y * sc; sy < (y + 1) * sc; sy += 1)
-                for (float sx = x * sc; sx < (x + 1) * sc; sx += 1) {
-                    int tx = gx + (int)sx, ty = gy + (int)sy;
-                    if (tx >= tg->sheetWidth || ty >= tg->sheetHeight) continue;
-                    unsigned o = tiled((unsigned)tx, (unsigned)ty, tg->sheetWidth);
-                    a += (tex[o >> 1] >> ((o & 1) * 4)) & 15;
+            for (float sy = by0 + y * sc; sy < by0 + (y + 1) * sc; sy += 0.5f)
+                for (float sx = bx0 + x * sc; sx < bx0 + (x + 1) * sc; sx += 0.5f) {
+                    a += A4((int)sx, (int)sy);
                     n++;
                 }
-            if (n && a * 2 > n * 15) px[tiled((unsigned)(ox + x), (unsigned)y, 32)] = 0x80E8E8E8u;
+            if (n && a * 10 > n * 15 * 3) px[tiled((unsigned)(ox + x), (unsigned)(oy + y), 32)] = light; /* (>30% inked) */
         }
+#undef A4
+    if (k < 4) { /* a round button: its inside dark, so its rim and letter read as the console's */
+        float cx = ox + (ow - 1) / 2.0f, cy = oy + (oh - 1) / 2.0f, rx = ow / 2.0f - 0.5f, ry = oh / 2.0f - 0.5f;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                float dx = (x - cx) / rx, dy = (y - cy) / ry;
+                u32 *t = &px[tiled((unsigned)x, (unsigned)y, 32)];
+                if (dx * dx + dy * dy < 0.85f && !*t) *t = dark;
+            }
+    }
     return 1;
 }
 
@@ -1252,7 +1272,7 @@ static void make_button_icon(int k, int w, int h) {
         mark_dirty(px, 32 * 32 * 4);
         return;
     }
-#define RGBA(r, g, b) (0x80000000u | (u32)(b) << 16 | (u32)(g) << 8 | (u32)(r))
+#define RGBA(r, g, b) ((u32)(r) << 24 | (u32)(g) << 16 | (u32)(b) << 8 | 0x80u)
     static const u32 letter[4] = {RGBA(232, 72, 64), RGBA(240, 200, 56), RGBA(80, 144, 240), RGBA(72, 192, 104)};
     const u32 face = RGBA(48, 48, 52), rim = RGBA(176, 176, 184), text = RGBA(240, 240, 240);
     if (k < 4) { /* a round button with its coloured letter */
@@ -1297,8 +1317,8 @@ static void button_icons_frame(void) {
 static int button_icon(const Gp0Mode *m, int u, int v, int w, int h) {
     for (int k = 0; k < n_btn; k++) {
         const int *d = btn_def[k];
-        if (u == d[4] && v == d[5] && w == d[6] && h == d[7] && m->tx == d[0] && m->ty == d[1] && m->clut_x == d[2] &&
-            m->clut_y == d[3] && btn_made[k])
+        /* (the message system draws them under another texture page: matched by CLUT, uv and size) */
+        if (u == d[4] && v == d[5] && w == d[6] && h == d[7] && m->clut_x == d[2] && m->clut_y == d[3] && btn_made[k])
             return k;
     }
     return -1;

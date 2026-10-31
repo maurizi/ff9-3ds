@@ -346,6 +346,10 @@ player on it. Asked, to complete it: (1) where a field's exits live (the event s
 field: their trigger polygon or line on the walkmesh, and the field each leads to), so the map can mark them; (2)
 what makes the PS1 show the "Active Time Event" prompt (the flag or script variable that says an ATE can be viewed
 with Select now), so the bottom screen can offer it as a button.
+**Answered 2026-10-31** (ff9-decomp docs/r32/3ds-requests.md, commit 7966d2f5): exits are region objects (op 08) whose
+tag-0 function sets the polygon (op 29) and tag-2 function goes to the field (op 2B / B6); the ATE is viewable when
+the global byte b[0xEE] (0x8007AFDE) is 1 (op D7 / g_atePromptMode draws the prompt). Button sprites, the main menu's
+cursor and opening it onto a screen: same document.
 
 ---
 

@@ -4,6 +4,10 @@ The spec for the 3DS UI, from the study of DS/3DS ports and remakes (Dragon Ques
 Chrono Trigger DS, Shin Megami Tensei IV, Fire Emblem Awakening, Xenoblade 3D, Ocarina of Time 3D, Pokémon). Each
 item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**.
 
+## Button icons
+- The PS1's button icons, wherever the game draws them (dialogue, help, menus), are the 3DS's: A for ✕, B for ○,
+  X for △, Y for □, L/R, ZL/ZR, from the system font's own glyphs (U+E000-E005). **[done]**
+
 ## Principles
 - The top screen is the world; the bottom screen is information and decisions. **No mirroring anywhere.**
 - No virtual D-pad or face buttons: the 3DS has them. Touch is an optional shortcut; every touch action is also
@@ -46,8 +50,8 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 - **Bottom**:
   - **Left ~45%: command list**, large rows (Attack, Steal/Skill, Defend, Item, Change/Run); sub-lists (abilities,
     items) replace it in place with MP cost and count, and a description line at the bottom (the PS1 help text).
-    **[partial: large rows and DEFEND / CHANGE buttons, touchable (port/game/battle_ui.c); sub-lists are still the
-    PS1's list window at 1:1, the help text the PS1's window]**
+    **[done: large rows, DEFEND / CHANGE; ability / item / throw lists as large rows drawn by the game's own row code
+    with the entry's description and BACK (port/game/battle_ui.c)]**
   - **Right: four party cards**: name, HP, MP, ATB bar and Trance bar, status icons; tapping a ready character's
     card switches to them (PS1 △/✕). **[partial: portrait, name, HP, MP, ATB, Trance, a ready card's tap; status
     icons todo]**

@@ -28,7 +28,7 @@ void psx_ui_list_end(void);
 int port_menu_state(void);
 u32 *ClearOTagR(u32 *ot, int n);
 
-#define OTN 8
+#define OTN 12 /* (entries 0-10 for drawing: the game's list rows draw at 7, their boxes behind at 9) */
 #define BUF_WORDS 0x3000
 /* the ordering table and the packets in one array: links are 24-bit, so they share their high byte */
 static u32 hud_mem[OTN + BUF_WORDS];
