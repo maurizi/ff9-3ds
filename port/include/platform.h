@@ -27,4 +27,9 @@ void plat_halt(void) __attribute__((noreturn));
  * raw disc images for the read-the-image-directly CD backend. */
 const char *plat_data_dir(void);
 
+/* Run fn(arg) on another CPU core, one job at a time; 0 if there is none (the caller then runs it itself). The job
+ * must touch only memory the caller leaves alone until plat_async_wait() returns. (3DS: the second core; PC: none.) */
+int plat_async(void (*fn)(void *), void *arg);
+void plat_async_wait(void);
+
 #endif

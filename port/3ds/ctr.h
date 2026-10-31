@@ -23,6 +23,10 @@ void ctr_audio_exit(void);
 /* ui.c: PS1 buttons the touch screen holds this frame */
 unsigned int ctr_ui_pad_buttons(void);
 
+/* async.c: the worker on the other core (plat_async) */
+void ctr_async_init(void);
+void ctr_async_exit(void);
+
 /* profile.c */
 void ctr_profile_frame(void);
 

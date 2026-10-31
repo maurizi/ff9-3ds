@@ -142,6 +142,7 @@ int main(void) {
     ctr_console_init();
     printf("ff9-3ds (%s 3DS)\n", is_new3ds ? "New" : "Old");
     ctr_audio_init();
+    ctr_async_init();
 #ifdef PORT_AUTOPRESS
     input_script_add_list(PORT_AUTOPRESS);
 #endif

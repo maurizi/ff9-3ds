@@ -902,6 +902,7 @@ void ctr_video_init(void) {
 
 void ctr_shutdown(void) {
     void ctr_audio_exit(void);
+    ctr_async_exit();
     ctr_audio_exit();
     if (in_frame) C3D_FrameEnd(0);
     C3D_Fini();

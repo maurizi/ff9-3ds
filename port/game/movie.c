@@ -28,6 +28,10 @@
 
 extern int psx_load_image_skip;
 
+__attribute__((weak)) int plat_async(void (*fn)(void *), void *arg) { (void)fn; (void)arg; return 0; }
+__attribute__((weak)) void plat_async_wait(void) {}
+static void ahead_start(u32 *out);
+
 /* ---- transcoded frames -------------------------------------------------------------------------------------- */
 
 /* per VLC buffer: the STR frame it stands for when the transcode plays it (0: VLC data) */
@@ -147,6 +151,7 @@ void o64_mbg_vlcDecode(u8 *bs, u32 *out, void *table) {
             port_log("movie: VLC error %d at frame %d\n", r, g_mbgFrame);
         }
     }
+    ahead_start(out);
 }
 
 /* ---- MBG mask ---------------------------------------------------------------------------------------------- */
@@ -304,8 +309,86 @@ static void in_skip_padding(void) {
     }
 }
 
+/* ---- decoding ahead (plat_async) --------------------------------------------------------------------------
+ * The PS1's MDEC decodes frame N while the CPU reads and VLC-decodes frame N+1; here the MDEC is the CPU. So as
+ * soon as a frame's run-length data is complete (mbg_vlcDecode), another core decodes all of it into `pixels`; the
+ * frame's DecDCTin then finds it there, and DecDCTout's slices are copies (waiting only for macroblocks not done
+ * yet). The command word is the one DecDCTin will build (its mode is the player's rgb24 flag, set before the VLC);
+ * a DecDCTin whose buffer or command differs decodes as before. The input buffer isn't written again before then:
+ * the player VLC-decodes the next frame into its other buffer. */
+#define AHEAD_BYTES (24 * 15 * 768) /* (320x240: 20 x 15 macroblocks of 16x16 RGB24) */
+typedef struct {
+    const u32 *buf;      /* the input buffer (VLC output: command word, then the run-length halfwords) */
+    u32 cmd;
+    u8 *pixels;
+    volatile u32 done;   /* macroblocks decoded so far */
+    volatile int finished, error;
+} Ahead;
+static Ahead ahead;
+static int ahead_on;      /* the current DecDCTin's input is being decoded ahead */
+static u32 ahead_taken;   /* macroblocks DecDCTout has copied */
+
+static u32 movie_cmd(u32 word0, int mode) {
+    word0 = mode & 1 ? word0 & ~0x08000000u : word0 | 0x08000000u;
+    return mode & 2 ? word0 | 0x02000000u : word0 & ~0x02000000u;
+}
+
+static void ahead_job(void *arg) {
+    Ahead *a = arg;
+    const u16 *rl = (const u16 *)(a->buf + 1);
+    u32 left = (a->cmd & 0xFFFF) * 2, mb = (a->cmd & 0x08000000) ? 512 : 768, n = 0;
+    while (left) {
+        while (left && *rl == 0xFE00) rl++, left--;
+        if (!left || (n + 1) * mb > AHEAD_BYTES) break;
+        size_t used = 0;
+        if (psx_mdec_macroblock(&env, rl, left, a->cmd, a->pixels + n * mb, mb, &used) != PSX_MDEC_OK) {
+            a->error = 1;
+            break;
+        }
+        rl += used;
+        left -= used;
+        __sync_synchronize(); /* (the pixels before the count) */
+        a->done = ++n;
+    }
+    __sync_synchronize();
+    a->finished = 1;
+}
+
+static void ahead_start(u32 *out) {
+    static u8 pixels[AHEAD_BYTES] __attribute__((aligned(32)));
+    if (fv_now || fv_mbg) return;
+    plat_async_wait(); /* (the previous frame's job, done long ago) */
+    ahead.buf = PSX_PTR(out);
+    ahead.cmd = movie_cmd(ahead.buf[0], (s8)g_mbgPlayer.rgb24);
+    ahead.pixels = pixels;
+    ahead.done = 0;
+    ahead.finished = ahead.error = 0;
+    if (!plat_async(ahead_job, &ahead)) ahead.buf = NULL;
+}
+
+/* An out request from the frame decoded ahead: 0 if it has fewer macroblocks than asked (input ran out). */
+static int ahead_request(u32 *dst, u32 words) {
+    u32 mb = (in_cmd & 0x08000000) ? 512 : 768, n = words * 4 / mb;
+    while (ahead.done < ahead_taken + n && !ahead.finished) {}
+    __sync_synchronize();
+    u32 have = ahead.done - ahead_taken;
+    if (have > n) have = n;
+    __builtin_memcpy(dst, ahead.pixels + ahead_taken * mb, have * mb);
+    ahead_taken += have;
+    if (have < n) {
+        in_busy = 0;
+        return 0;
+    }
+    /* busy while macroblocks remain (the worker knows once it has skipped the trailing padding) */
+    while (ahead.done == ahead_taken && !ahead.finished) {}
+    __sync_synchronize();
+    in_busy = !(ahead.finished && ahead.done == ahead_taken);
+    return 1;
+}
+
 /* Fill one out request; returns 0 if the input ran out first. */
 static int decode_request(u32 *dst, u32 words) {
+    if (ahead_on) return ahead_request(dst, words);
     u32 mb = (in_cmd & 0x08000000) ? 512 : 768; /* bit 27 set: 15-bit, clear: 24-bit */
     u8 *o = (u8 *)dst;
     u32 bytes = words * 4;
@@ -331,6 +414,9 @@ static int decode_request(u32 *dst, u32 words) {
 }
 
 int o64_DecDCTReset(int mode) {
+    plat_async_wait();
+    ahead.buf = NULL;
+    ahead_on = 0;
     if (mode == 0) {
         movie_fv_stop(); /* (a new movie) */
         movie_fv_mbg_stop();
@@ -382,6 +468,9 @@ int o64_DecDCTin(u32 *buf, int mode) {
     in_rl = (const u16 *)(buf + 1);
     in_left = (in_cmd & 0xFFFF) * 2;
     in_busy = in_left != 0;
+    ahead_on = ahead.buf == buf && ahead.cmd == in_cmd;
+    ahead_taken = 0;
+    if (!ahead_on && ahead.buf) plat_async_wait(); /* (not the frame decoded ahead: it decodes here, with env) */
     return 0;
 }
 
