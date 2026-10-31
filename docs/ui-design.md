@@ -68,7 +68,7 @@ with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
 ## Main menu
 - **Bottom**: the PS1 menu with touch zones. **[partial: 1:1; direct taps on the main menu (menu_touch.c), every list
   drawn with the game's list box (list_touch.c: Item, Ability, Equip candidates, shops, ...) and the Item screen's member
-  window; the rest (Equip slots, Status, Config, the save screen) still steer the hand]**
+  window, Equip's slots (equip_touch.c); the rest (Status, Config, Ability's use-on window) still steer the hand]**
 - **Top**, per sub-menu: Equip: a rotating 3D model in the selected gear, before→after stats; Abilities: AP progress
   for every ability the gear teaches; Status: full stat sheet and a large portrait; Items: description and who can
   use it. Game logic pauses; the top shows the paused scene dimmed to half, so opening the menu (on the bottom) visibly
@@ -89,7 +89,8 @@ with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
   Item screen). Ingredients stay on the bottom: the PS1's synthesis window already lists them and marks the missing]**
 
 ## Save screens (moogle)
-- **Bottom**: large slot buttons. **[partial: the PS1 save screen 1:1]**
+- **Bottom**: large slot buttons. **[partial: the PS1 save screen 1:1; taps on card slots, files and Yes/No act
+  directly (save_touch.c)]**
 - **Top**: the selected slot's details (party, location, time, gil). **[dropped: the PS1's file list already shows
   them; the top keeps the paused scene]**
 - Overwriting needs a separate confirmation, never one tap. **[done: the game's own confirm]**
