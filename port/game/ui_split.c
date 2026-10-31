@@ -29,3 +29,8 @@ int port_menu_state(void) {
 int port_game_mode(void) {
     return g_gameState ? g_gameState->mode : 0;
 }
+
+/* the current field's id (the 3DS's heartbeat), -1 outside one */
+int port_field_id(void) {
+    return g_gameState && g_gameState->gameData && g_gameState->mode == 1 ? g_gameState->gameData->fieldId : -1;
+}

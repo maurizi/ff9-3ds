@@ -285,8 +285,11 @@ static unsigned int pack_run(unsigned int lba) {
 static void patch_load(void);
 static void patch_apply(unsigned int lba, u8 *raw);
 static int n_runs = -1, runs_disc;
+unsigned int psx_cd_sectors_read, psx_cd_last_lba; /* (the 3DS's heartbeat) */
 static void read_raw(unsigned int lba, u8 *buf) {
     unsigned int t = port_profile_begin();
+    psx_cd_sectors_read++;
+    psx_cd_last_lba = lba;
     open_disc();
     /* (before this sector's read: loading the table reads others through read_user's buffer, which may be buf) */
     if (n_runs < 0 || runs_disc != disc_no) patch_load();
