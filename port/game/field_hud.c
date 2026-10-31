@@ -290,9 +290,11 @@ static void draw(void) {
 int port_battle_hud_draw(void);
 void psx_ui_list_begin_keep(void);
 extern int port_battle_hud_on;
+static void top_hud(void);
 void port_bottom_hud(void) {
     shown = shown_battle = 0;
     if (g_gameState && g_gameState->gameData) cards_step();
+    if (g_gameState && g_gameState->gameData && g_gameState->gameData->font) top_hud();
     if (!g_gameState || !g_gameState->gameData || port_menu_state()) return;
     int battle = g_gameState->mode == 2;
     if (!battle) port_battle_hud_on = 0;
@@ -351,4 +353,127 @@ int port_button_sprites(int out[8][8]) {
         out[k][7] = d->h;
     }
     return 8;
+}
+
+/* ---- the top screen's detail views (docs/ui-design.md), drawn with the game's window and text code like the bottom
+ * screen, onto the top screen over its scene (port/3ds/render.c ctr_top_ui) ------------------------------------------
+ * The main menu: the party at a glance; in Status, Equip or Abilities, the chosen member's sheet (a large portrait,
+ * level, HP, MP, EXP, the eight stats, the equipment). The game's logic pauses as on the PS1. */
+__attribute__((weak)) void ctr_top_ui(unsigned *head, const void *buf, unsigned size) { (void)head; (void)buf; (void)size; }
+__attribute__((weak)) void ctr_hud_draw_top(int slot, int x, int y, int w, int h, int dw, int dh) {
+    (void)slot; (void)x; (void)y; (void)w; (void)h; (void)dw; (void)dh;
+}
+#define TOP_WORDS 0x2000
+static u32 top_mem[OTN + TOP_WORDS];
+
+static void big_portrait(int slot, Character *c, int x, int y, int size) {
+    const u8 *e = port_portrait(g_portraitByKind[c->info.b.kind]);
+    if (!e) return;
+    ctr_hud_image(slot, 0x300u | (u32)g_portraitByKind[c->info.b.kind], (const u16 *)e, e + 0x100, 32, 32);
+    ctr_hud_draw_top(slot, x, y, 32, 32, size, size);
+}
+
+static void stat(int x, int y, const char *label, int value) {
+    u8 a[12];
+    ui_drawLabel(x, y, 2, (s32)label, 0);
+    text_formatNumber(value, a, 4, 1);
+    ui_drawDigits(x + 72, y - 1, 2, a, 0);
+}
+
+static void hp_mp(int x, int y, Character *c) {
+    static const u8 hp[] = "HP", mp[] = "MP";
+    u8 a[16];
+    ui_drawLabel(x, y, 2, (s32)hp, 0);
+    text_formatNumber(c->hp, a, 4, 1);
+    a[4] = '/';
+    text_formatNumber(c->maxHp, a + 5, -1, 1);
+    ui_drawDigits(x + 16, y - 1, 2, a, c->hp <= c->maxHp / 6 ? 4 : 0);
+    ui_drawLabel(x, y + 13, 2, (s32)mp, 0);
+    text_formatNumber(c->mp, a, 4, 1);
+    a[4] = '/';
+    text_formatNumber(c->maxMp, a + 5, -1, 1);
+    ui_drawDigits(x + 16, y + 12, 2, a, 0);
+}
+
+__attribute__((unused)) static void member_sheet(Character *c) {
+    static const u8 lv[] = "LV", exp[] = "EXP", stats[] = "STATUS", equip[] = "EQUIPMENT";
+    static RECT box = {8, 8, 384, 224}, rs = {150, 92, 234, 76}, re = {16, 92, 128, 132};
+    u8 a[12];
+    big_portrait(4, c, 18, 18, 64);
+    text_drawBlock(96, 20, 2, c->name, 0);
+    ui_drawLabel(220, 22, 2, (s32)lv, 0);
+    text_formatNumber(c->level, a, 2, 1);
+    ui_drawDigits(236, 21, 2, a, 0);
+    hp_mp(96, 42, c);
+    ui_drawLabel(96, 70, 2, (s32)exp, 0);
+    text_formatNumber((s32)c->exp, a, 7, 1);
+    ui_drawDigits(124, 69, 2, a, 0);
+    ui_drawLabel(rs.x + 6, rs.y - 3, 2, (s32)stats, 0);
+    stat(rs.x + 10, rs.y + 10, "SPEED", c->speed);
+    stat(rs.x + 10, rs.y + 26, "STRENGTH", c->strength);
+    stat(rs.x + 10, rs.y + 42, "MAGIC", c->magic);
+    stat(rs.x + 10, rs.y + 58, "SPIRIT", c->spirit);
+    stat(rs.x + 122, rs.y + 10, "DEFENSE", c->defense);
+    stat(rs.x + 122, rs.y + 26, "EVADE", c->evade);
+    stat(rs.x + 122, rs.y + 42, "MAGIC DEF", c->magicDef);
+    stat(rs.x + 122, rs.y + 58, "MAGIC EVA", c->magicEva);
+    win_drawBox(&rs, 4, 2);
+    ui_drawLabel(re.x + 6, re.y - 3, 2, (s32)equip, 0);
+    for (int i = 0; i < 5; i++) {
+        int id = c->equip[i];
+        if (id == 0xFF) continue;
+        ui_drawItemIcon(re.x + 6, re.y + 8 + i * 24, 2, id, 1);
+        text_drawBlock(re.x + 22, re.y + 8 + i * 24, 2, g_itemNames + g_itemTable[id].name, 0);
+    }
+    win_drawBox(&re, 4, 2);
+    win_drawBox(&box, 5, 2);
+}
+
+__attribute__((unused)) static void party_overview(void) {
+    static const u8 lv[] = "LV";
+    GameData *g = g_gameState->gameData;
+    u8 a[12];
+    for (int i = 0; i < 4; i++) {
+        Character *c = g->party[i];
+        if (!ram_ok(c, sizeof *c)) continue;
+        RECT r = {(s16)(8 + (i & 1) * 194), (s16)(8 + (i >> 1) * 114), 190, 110};
+        big_portrait(4 + i, c, r.x + 10, r.y + 10, 48);
+        text_drawBlock(r.x + 66, r.y + 12, 2, c->name, 0);
+        ui_drawLabel(r.x + 66, r.y + 32, 2, (s32)lv, 0);
+        text_formatNumber(c->level, a, 2, 1);
+        ui_drawDigits(r.x + 82, r.y + 31, 2, a, 0);
+        hp_mp(r.x + 66, r.y + 52, c);
+        win_drawBox(&r, 4, 2);
+    }
+}
+
+/* What the top screen shows while a menu is up: the main menu keeps the paused scene (the bottom has the party); a
+ * sub-screen shows what the bottom can't, about what is highlighted there (decomp-requests R31: pending; the member
+ * sheet and the overview below are ready for it). */
+static int top_draw(void) {
+    if (port_menu_state() != 2 || !g_menuScreen.active) return 0;
+    (void)member_sheet;
+    (void)party_overview;
+    return 0;
+}
+
+static void top_hud(void) {
+    u32 *ot = top_mem;
+    ClearOTagR(ot, OTN);
+    u32 *saved_ot = g_ot;
+    u8 *saved_prim = g_primPtr;
+    u32 *p = top_mem + OTN;
+    p[0] = 3u << 24; /* (the top screen's 400x240 from 0, 0) */
+    p[1] = 0xE3000000u;
+    p[2] = 0xE4000000u | 399u | 239u << 10;
+    p[3] = 0xE5000000u;
+    addPrim(&ot[OTN - 1], p);
+    g_ot = ot;
+    g_primPtr = (u8 *)(p + 4);
+    int drew = top_draw();
+    unsigned used = (unsigned)(g_primPtr - (u8 *)top_mem);
+    g_ot = saved_ot;
+    g_primPtr = saved_prim;
+    if (used > sizeof top_mem) port_fatal("top screen UI: packet buffer overrun");
+    if (drew) ctr_top_ui((unsigned *)&ot[OTN - 1], top_mem, sizeof top_mem);
 }

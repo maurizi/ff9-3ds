@@ -609,12 +609,19 @@ static void submit(void) {
     unsigned any_ui = 0;
     for (unsigned i = 0; i < nbatches; i++) any_ui |= 1u << batches[i].target;
     /* passes: each eye's mirror, then each UI layer (no stereo: the bottom screen is flat) */
-    for (int pass = 0; pass < 4; pass++) {
-        int eye = pass == 1, target = pass >= 2 ? pass - 1 : 0;
-        if (pass == 1 && !stereo_on) continue;
+    for (int pass = 0; pass < 6; pass++) {
+        int eye = pass == 1 || pass == 5, target = pass >= 4 ? 3 : pass >= 2 ? pass - 1 : 0;
+        if ((pass == 1 || pass == 5) && !stereo_on) continue;
         if (target && !(any_ui & (1u << target))) continue;
-        int height = target ? UI_H : VH;
-        if (target) {
+        int height = target == 3 ? 240 : target ? UI_H : VH;
+        if (target == 3) { /* the top screen (its render target is the rotated 240x400): no scissor, as screen_quad */
+            C3D_FrameDrawOn(top_rt[eye]);
+            C3D_Mtx pm;
+            Mtx_OrthoTilt(&pm, 0.0f, 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
+            C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &pm);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
+            C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+        } else if (target) {
             C3D_FrameDrawOn(layers[target - 1].rt);
             set_proj_ortho(UI_W, UI_H, 0.0f);
             C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
@@ -648,7 +655,7 @@ static void submit(void) {
                 if (tex) C3D_TexBind(0, tex);
                 set_texscale(tex);
             }
-            if (memcmp(sc, b->sc, sizeof sc)) {
+            if (target != 3 && memcmp(sc, b->sc, sizeof sc)) {
                 memcpy(sc, b->sc, sizeof sc);
                 /* (in window coordinates, which run bottom-up) */
                 C3D_SetScissor(GPU_SCISSOR_NORMAL, sc[0], height - sc[3], sc[2], height - sc[1]);
@@ -1065,6 +1072,26 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         if (port_battle_hud_targets && (slot == 4 || slot == 5)) return; /* (the target window: the port's targets) */
     }
     /* the battle list's entry 17 (btlui_drawTargetCursors): the hands pointing into the scene, drawn in it */
+    if (ui_mode == 2) { /* the top screen's UI list (ctr_top_ui): straight onto the top screen, at the screen plane */
+        u16 tsc[4] = {(u16)clampi(sc[0], 0, 400), (u16)clampi(sc[1], 0, 240), (u16)clampi(sc[2], 0, 400), (u16)clampi(sc[3], 0, 240)};
+        if (tsc[0] >= tsc[2] || tsc[1] >= tsc[3]) return;
+        cur_target = 3;
+        cur_mask = 0;
+        ctr_render_stats[1]++;
+        int passes2[2], np2 = 0, abr2 = m->semi ? m->abr : NO_BLEND;
+        if (!m->textured) passes2[np2++] = K_UNTEX;
+        else if (!m->semi) passes2[np2++] = K_TEX;
+        else {
+            if (tflags & 1) passes2[np2++] = K_TEX_P1;
+            if (tflags & 2) passes2[np2++] = K_TEX_P2;
+        }
+        for (int p = 0; p < np2; p++) {
+            Vtx *o = alloc_vtx(n);
+            memcpy(o, v, n * sizeof *v);
+            add_batch(passes2[p], passes2[p] == K_TEX_P1 ? NO_BLEND : abr2, 3, tsc, tex, o - vb, n);
+        }
+        return;
+    }
     if (ui_mode && !(psx_ui_list_battle && 0x17 - psx_ot_entry == 17)) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
     else if (menu_state == 2 || ui_packet()) { /* (a menu: the whole frame) */
         int x, y, w, h;
@@ -1601,10 +1628,21 @@ static int bottom_layer(const PsxDisplayInfo *d) {
     if (k >= 0 && frames_drawn - layers[k].drawn > 2) k = -1; /* (nothing drawn into it lately) */
     return k;
 }
+/* ---- the top screen's UI list: the port's own drawing (menus' detail views: port/game/field_hud.c), built with the
+ * game's window and text code as the bottom screen's, decoded onto the top screen after its scene each present ---- */
+static u32 *top_ui_head;
+static const void *top_ui_buf;
+static unsigned top_ui_size;
+void ctr_top_ui(unsigned *head, const void *buf, unsigned size) {
+    top_ui_head = (u32 *)head;
+    top_ui_buf = buf;
+    top_ui_size = size;
+}
+
 /* ---- images of the port's own on the bottom screen (the field screen's portraits: port/game/field_hud.c) ---- */
 #define HUD_IMAGES 8
 static struct { C3D_Tex tex; u32 key; int ok; } hud_img[HUD_IMAGES];
-static struct { int slot, x, y, w, h; } hud_draw[16];
+static struct { int slot, x, y, w, h, dw, dh; } hud_draw[16];
 static int n_hud_draw;
 
 /* image slot: w x h (<= 64x64) 8-bit pixels through a CLUT of PS1 colours, kept while key is the same */
@@ -1631,7 +1669,14 @@ void ctr_hud_draw(int slot, int x, int y, int w, int h) {
     hud_draw[n_hud_draw].slot = slot;
     hud_draw[n_hud_draw].x = x; hud_draw[n_hud_draw].y = y;
     hud_draw[n_hud_draw].w = w; hud_draw[n_hud_draw].h = h;
+    hud_draw[n_hud_draw].dw = w; hud_draw[n_hud_draw].dh = h;
     n_hud_draw++;
+}
+
+/* the same on the top screen (its 400x240), scaled to dw x dh */
+void ctr_hud_draw_top(int slot, int x, int y, int w, int h, int dw, int dh) {
+    ctr_hud_draw(slot, x + 1000, y, w, h);
+    if (n_hud_draw && hud_draw[n_hud_draw - 1].x == x + 1000) hud_draw[n_hud_draw - 1].dw = dw, hud_draw[n_hud_draw - 1].dh = dh;
 }
 
 static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
@@ -1653,7 +1698,7 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
     if (k < 0) { ctr_ui_nhands = 0; return; }
     screen_quad(bottom_rt, &layers[k].tex, K_COMPOSITE, 5, 0xFFFFFFFF, 0, 0, w, h, 0, ctr_ui_oy);
     for (int i = 0; i < n_hud_draw; i++) /* (texels x 2 x grey: as drawn; transparent ones not) */
-        screen_quad(bottom_rt, &hud_img[hud_draw[i].slot].tex, K_TEX, NO_BLEND, 0xFF808080, 0, 0, hud_draw[i].w,
+        if (hud_draw[i].x < 1000) screen_quad(bottom_rt, &hud_img[hud_draw[i].slot].tex, K_TEX, NO_BLEND, 0xFF808080, 0, 0, hud_draw[i].w,
                     hud_draw[i].h, hud_draw[i].x, hud_draw[i].y + ctr_ui_oy);
     layers[k].shown = 1;
     ctr_ui_nhands = layers[k].nhands;
@@ -1768,6 +1813,25 @@ void ctr_present(long frame) {
                                        (400 - freeze_w) / 2 + edge, (240 - freeze_h) / 2);
             else draw_to_screen(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, ox + edge, oy);
         }
+    }
+    if (top_ui_head) { /* (over the top screen's scene, both eyes) */
+        void port_draw_ot_buffer(unsigned int *head, const void *buffer, unsigned int size);
+        submit();
+        Gp0State saved = gp0_state;
+        ui_mode = 2;
+        port_draw_ot_buffer((unsigned *)top_ui_head, top_ui_buf, top_ui_size);
+        submit();
+        ui_mode = 0;
+        gp0_state = saved;
+        top_ui_head = NULL;
+        for (int i = 0; i < n_hud_draw; i++) /* (the images meant for the top: x >= 1000) */
+            if (hud_draw[i].x >= 1000)
+                for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) {
+                    C3D_FrameDrawOn(top_rt[eye]);
+                    screen_quad_scaled(top_rt[eye], &hud_img[hud_draw[i].slot].tex, K_TEX, NO_BLEND, 0xFF808080, 0, 0,
+                                       hud_draw[i].w, hud_draw[i].h, hud_draw[i].x - 1000, hud_draw[i].y,
+                                       hud_draw[i].dw, hud_draw[i].dh);
+                }
     }
     present_bottom(&d, w, h);
     n_hud_draw = 0;

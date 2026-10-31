@@ -351,6 +351,12 @@ tag-0 function sets the polygon (op 29) and tag-2 function goes to the field (op
 the global byte b[0xEE] (0x8007AFDE) is 1 (op D7 / g_atePromptMode draws the prompt). Button sprites, the main menu's
 cursor and opening it onto a screen: same document.
 
+### R31. What the main menu's screens point at, for the top screen (2026-10-31)
+The 3DS port can now draw onto the top screen with the game's window and text code (port/game/field_hud.c top_hud,
+render.c ctr_top_ui). Its detail views need, per menu screen: the highlighted item (Item, Shop), the slot and
+candidate (Equip, and how the before/after stats are computed), the highlighted ability and its AP (Ability), the
+highlighted save block and its summary (Save), the letter (Mognet). Asked of the decomp session 2026-10-31.
+
 ---
 
 ## Open findings from the port (queued while the decomp session was offline)
