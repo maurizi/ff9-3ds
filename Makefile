@@ -161,7 +161,7 @@ endef
 DEVKITPRO ?= /opt/devkitpro
 CTRULIB   := $(DEVKITPRO)/libctru
 CTR_ARCH  := -D__3DS__ -DPORT_3DS -DPORT_GTE_DEPTH -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -marm -mword-relocations
-PORT_EXTRA_3ds := -DPORT_DISC_PACK -I$(CTRULIB)/include \
+PORT_EXTRA_3ds := -DPORT_DISC_PACK -DPORT_SPU_WORKER -I$(CTRULIB)/include \
                   $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') \
                   $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') -I$(BUILD)/3ds/shaders
 # Vertex shaders (PICA200 assembly, picasso) are embedded as binaries.

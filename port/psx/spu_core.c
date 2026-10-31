@@ -1,6 +1,24 @@
 /* Register/timing integration for the shared SPU voice stage. Streamed
  * CD input and IRQ delivery remain unfinished; see audio-validation.md. */
 #if !defined(PORT_SPU_ARM7) || defined(ARM7) /* (with the SPU on the ARM7, the ARM9 has port/ds/spu7_client.c) */
+#ifdef PORT_SPU_WORKER
+/* 3DS: this copy of the SPU runs on the audio core with a register file of its own, driven by the game-facing one
+ * (port/3ds/spu_client.c, which takes the psx_spu_* names) */
+#define psx_spu_set_rendering spuw_set_rendering
+#define psx_spu_snapshot_size spuw_snapshot_size
+#define psx_spu_snapshot spuw_snapshot
+#define psx_spu_restore spuw_restore
+#define psx_spu_reset spuw_reset
+#define psx_spu_read spuw_read
+#define psx_spu_voice_register spuw_voice_register
+#define psx_spu_write spuw_write
+#define psx_spu_set_hw spuw_set_hw
+#define psx_spu_reverb_state spuw_reverb_state
+#define psx_spu_noise_hz spuw_noise_hz
+#define psx_spu_voice_output spuw_voice_output
+#define psx_spu_advance spuw_advance
+#define psx_spu_regs spuw_regs
+#endif
 #include "psx_spu.h"
 #include "spu_hot.h"
 #include "psx_spu_voice.h"

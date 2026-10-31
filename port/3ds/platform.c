@@ -10,6 +10,7 @@
  * Data: sdmc:/3ds/ff9/ holds raw/FF9 CDn.img (or the packed discs.bin), as the PC's --data directory does.
  */
 #include <3ds.h>
+#include <citro3d.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,8 +73,8 @@ unsigned int plat_pad_buttons(int port) {
  * (VSync(n)), so pacing to the 3DS's VBlank keeps it 0.2% slow, which nobody hears. VBlanks that passed while the
  * game worked count toward a VSync(n) (plat_vsync_begin), as on the PS1, so a slow frame doesn't wait again. */
 static unsigned int vsync_owed;
-static u64 last_vblank_tick;
-#define TICKS_PER_VBLANK (SYSCLOCK_ARM11 / 59.83)
+unsigned int ctr_vblank_waits, ctr_vblank_skips;
+static u32 next_vblank; /* the VBlank count (citro3d's) at which the current virtual frame ends */
 
 void plat_vsync_begin(unsigned int n) {
     vsync_owed = n;
@@ -90,17 +91,25 @@ void plat_wait_frame(void) {
 #ifdef PORT_DUMP_AT
     if (frames == PORT_DUMP_AT) { void ctr_render_dump(void); ctr_render_dump(); }
 #endif
-    /* wait for the next VBlank unless one already passed since the last one we waited for */
-    u64 now = svcGetSystemTick();
-    if (now - last_vblank_tick < (u64)(TICKS_PER_VBLANK * 0.9)) {
+    /* each virtual frame ends at its own VBlank: wait for it unless the game is already late (then catch up, but
+     * never by more than 4: after a long stall, start again from now) */
+#ifndef PORT_SOFT_PRESENT
+    u32 now = C3D_FrameCounter(0);
+    if ((s32)(now - next_vblank) < 0) {
         unsigned int w = port_profile_wait_begin();
-        gspWaitForVBlank();
+        ctr_vblank_waits++;
+        while ((s32)(C3D_FrameCounter(0) - next_vblank) < 0) gspWaitForVBlank();
         port_profile_wait_end(w);
-        last_vblank_tick = svcGetSystemTick();
     } else {
-        last_vblank_tick += (u64)TICKS_PER_VBLANK;
-        if (now - last_vblank_tick > (u64)(TICKS_PER_VBLANK * 4)) last_vblank_tick = now;
+        ctr_vblank_skips++;
+        if (now - next_vblank > 4) next_vblank = now;
     }
+    next_vblank++;
+#else
+    unsigned int w = port_profile_wait_begin();
+    gspWaitForVBlank();
+    port_profile_wait_end(w);
+#endif
     ctr_profile_frame();
 }
 
