@@ -22,7 +22,12 @@ for t in $SHOTS; do
     import -display "$DISP" -window root "$OUT/shot_$t.png" 2>/dev/null || true
 done
 now=$(date +%s.%N); d=$(echo "$start + $SECS - $now" | bc); [ "${d:0:1}" = "-" ] || sleep "$d"
+# SIGTERM first (exact process name: never a pattern, which could match other shells), so its log is flushed
+pkill -TERM -x azahar 2>/dev/null || true
+for _ in 1 2 3 4 5 6; do pgrep -x azahar >/dev/null || break; sleep 0.5; done
 flatpak kill org.azahar_emu.Azahar 2>/dev/null || true
 wait $PID 2>/dev/null || true
-grep -a "Debug.Emulated\|Fatal\|Critical" "$LOG" | sed 's/^.*Debug.Emulated[^>]*> *//' > "$OUT/game.log" || true
+# the game's own log (port/3ds/console.c), and the emulator's errors
+cp ~/.var/app/org.azahar_emu.Azahar/data/azahar-emu/sdmc/3ds/ff9/log.txt "$OUT/game.log" 2>/dev/null || : > "$OUT/game.log"
+grep -a "Fatal\|Critical" "$LOG" >> "$OUT/game.log" || true
 echo "log: $OUT/game.log ($(wc -l < "$OUT/game.log") lines)"

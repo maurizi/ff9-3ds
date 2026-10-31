@@ -11,8 +11,11 @@ static char lines[KEEP][64];
 static int next_line;
 static PrintConsole console;
 static int shown;
+static FILE *logfile; /* sdmc:/3ds/ff9/log.txt: the same lines, flushed one by one (tools/azahar.sh reads it) */
 
-void ctr_console_init(void) {}
+void ctr_console_init(void) {
+    logfile = fopen("sdmc:/3ds/ff9/log.txt", "w");
+}
 
 void ctr_console_vlog(const char *fmt, va_list ap) {
     static char line[512];
@@ -27,6 +30,7 @@ void ctr_console_vlog(const char *fmt, va_list ap) {
     if (n > 0) len += n < (int)sizeof line - len ? n : (int)sizeof line - 1 - len;
     if (len && (line[len - 1] == '\n' || len >= (int)sizeof line - 1)) {
         svcOutputDebugString(line, len);
+        if (logfile) { fwrite(line, 1, len, logfile); fflush(logfile); }
         snprintf(lines[next_line], sizeof lines[0], "%.*s", len, line);
         next_line = (next_line + 1) % KEEP;
         len = 0;

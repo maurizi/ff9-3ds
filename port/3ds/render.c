@@ -698,6 +698,17 @@ static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1);
 static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (w <= 0 || h <= 0) return;
     if (ui_mode && m->textured && ui_reads_cache(m, v->u, v->v, v->u + w - 1, v->v + h - 1)) return;
+    if (ui_mode && m->textured && w == 23 && h == 13 && m->tx == 960 && m->ty == 256 && v->u == 227 && v->v == 21 &&
+        ctr_ui_nhands < CTR_MAX_HANDS) { /* the pointing hand: where the game's cursor is (touch.c) */
+        ctr_ui_hands[ctr_ui_nhands][0] = v->x - ui_ox;
+        ctr_ui_hands[ctr_ui_nhands][1] = v->y - ui_oy;
+        ctr_ui_nhands++;
+    }
+#ifdef PORT_LOGUI_AT
+    if (ui_mode && frames_drawn == PORT_LOGUI_AT)
+        port_log("ui rect %d,%d %dx%d tex %d uv %d,%d page %d,%d clut %d,%d col %02x%02x%02x\n", v->x - ui_ox, v->y - ui_oy,
+                 w, h, m->textured ? m->depth : -1, v->u, v->v, m->tx, m->ty, m->clut_x, m->clut_y, v->r, v->g, v->b);
+#endif
     unsigned tflags = 0;
     C3D_Tex *tex = NULL;
     if (m->textured) {
@@ -741,6 +752,8 @@ void psx_gpu_ot_done(void) {
  * The list's row cache (VRAM copies of the scene under changing digits, drawn back before them) restores scene
  * pixels the layer doesn't have: its copies and the sprites reading them are skipped. */
 static unsigned ui_last_frame = ~0u;
+int ctr_ui_hands[CTR_MAX_HANDS][2], ctr_ui_nhands;
+int ctr_ui_active(void) { return frames_drawn - ui_last_frame < 30; }
 static struct { int x0, y0, x1, y1; } ui_cache[8];
 static int n_ui_cache;
 
@@ -777,6 +790,7 @@ void psx_ui_list_begin(void) {
             for (int cx = cx0; cx < cx1; cx++)
                 if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
     ui_mode = 1;
+    ctr_ui_nhands = 0;
     ui_ox = d.x;
     ui_oy = d.y;
     n_ui_cache = 0;

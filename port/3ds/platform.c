@@ -57,7 +57,7 @@ static void read_input(void) {
     for (unsigned i = 0; i < sizeof keymap / sizeof keymap[0]; i++)
         if (held & keymap[i].key) b |= keymap[i].psx;
     if ((held & (KEY_L | KEY_R)) == (KEY_L | KEY_R)) b |= 0x0300;
-    pad_now = b | ctr_ui_pad_buttons();
+    pad_now = b | ctr_ui_pad_buttons(frames);
 }
 
 unsigned int plat_pad_buttons(int port) {
