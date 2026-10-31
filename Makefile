@@ -3,6 +3,7 @@
 #
 #   make / make 3ds   build/ff9.3dsx      3DS homebrew executable (devkitARM, libctru, citro3d); with any option
 #                                         below, build/ff9-test.3dsx instead
+#   make 3ds-full     build/ff9-full.3dsx the same with your discs packed inside (one file to copy; never share it)
 #   make pc           build/pc/ff9ds      32-bit Linux host build of the same game code and port layer: fast
 #                                         iteration, gdb, frame dumps, lockstep comparison with PCSX-Redux
 #   AUTOPRESS="..."   3DS: scripted presses, as the PC's --press ("CROSS@2500,UP@2900+3")
@@ -206,6 +207,17 @@ $(OUT_3DSX): $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh
 	@3dsxtool $< $@ --smdh=$(BUILD)/ff9.smdh
 
 3ds: $(OUT_3DSX)
+
+# One file with the game's data inside (build/ff9-full.3dsx: your discs packed into its romfs, read before the SD
+# card's). For your own console only: it holds Square Enix's data; never distribute it or commit it.
+$(BUILD)/discs.bin: tools/pack_discs.py
+	@echo "PACK $@"
+	@$(PYTHON) tools/pack_discs.py --img disks/us --out $@
+$(BUILD)/ff9-full.3dsx: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/discs.bin
+	@echo "3DSX $@ (with the disc pack)"
+	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin
+	@3dsxtool $< $@ --smdh=$(BUILD)/ff9.smdh --romfs=$(BUILD)/romfs
+3ds-full: $(BUILD)/ff9-full.3dsx
 
 # --- PC host build -----------------------------------------------------------------------------------------
 # 32-bit, non-PIE: psx_ram is mapped at a fixed address (port/pc/platform.c), so OT links rebuild as on the 3DS.

@@ -165,6 +165,12 @@ const char *plat_data_dir(void) {
     return "sdmc:/3ds/ff9";
 }
 
+/* the single-file build (make 3ds-full) carries the disc pack in its romfs */
+static int romfs_ok;
+const char *plat_disc_pack(void) {
+    return romfs_ok ? "romfs:/discs.bin" : NULL;
+}
+
 long ctr_frames(void) {
     return frames;
 }
@@ -180,6 +186,8 @@ int main(void) {
     if (is_new3ds) osSetSpeedupEnable(true); /* 804 MHz and the L2 cache */
     gfxInitDefault();
     ctr_console_init();
+    romfs_ok = R_SUCCEEDED(romfsInit());
+    if (romfs_ok) port_log("data: romfs:/discs.bin when there\n");
     port_log("ff9-3ds (%s 3DS)\n", is_new3ds ? "New" : "Old");
     ctr_audio_init();
     ctr_async_init();

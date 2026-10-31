@@ -203,14 +203,40 @@ static void pack_read(long at, void *buf, unsigned int bytes) {
 }
 #endif
 
+/* The platform may carry the pack itself (the 3DS's single-file build: romfs:/discs.bin); NULL: the data folder's. */
+__attribute__((weak)) const char *plat_disc_pack(void) { return NULL; }
+
+/* A pack copied to a card incompletely can read back right up to some point and then as erased flash: sample the
+ * raw records (each a whole sector, which starts with the sync pattern) across the pool and stop with a message that
+ * says so, rather than a movie that never starts. */
+static void pack_check(const char *path) {
+    long size = lseek(disc, 0, SEEK_END);
+    if (size <= (long)pack_raw) return;
+    unsigned int records = (unsigned int)((size - (long)pack_raw) / 2352);
+    static const u8 sync[12] = {0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0};
+    for (unsigned int i = 0; i < 64 && records; i++) {
+        unsigned int r = (unsigned int)((unsigned long long)records * (2 * i + 1) / 128);
+        long at = (long)pack_raw + (long)r * 2352;
+        u8 b[12];
+        pack_read(at, b, 12);
+        if (__builtin_memcmp(b, sync, 12) != 0)
+            port_fatal("%s is damaged (at byte %ld of %ld): copy it to the card again and check its checksum", path, at,
+                       size);
+    }
+    disc_at = -1;
+}
+
 static int open_disc(void) {
     if (disc >= 0) {
         return 1;
     }
     char path[512];
 #ifdef PORT_DISC_PACK
+    static int checked;
+    const char *own = plat_disc_pack();
     snprintf(path, sizeof path, "%s/discs.bin", plat_data_dir());
-    if ((disc = open(path, O_RDONLY)) >= 0) {
+    if ((own && (disc = open(own, O_RDONLY)) >= 0 && snprintf(path, sizeof path, "%s", own) >= 0) ||
+        (disc = open(path, O_RDONLY)) >= 0) {
         u8 h[32];
         pack_read(0, h, 32);
         if (__builtin_memcmp(h, "FF9D", 4) != 0 || le32(h + 4) != 1 || le32(h + 8) < (unsigned int)disc_no)
@@ -223,6 +249,7 @@ static int open_disc(void) {
         pack_sectors = le32(h + 8);
         if (!pack_sectors) port_fatal("%s: no disc %d in this pack (make ds-packed PACK_DISCS=...)", path, disc_no);
         packed = 1;
+        if (!checked++) pack_check(path);
         return 1;
     }
 #endif
