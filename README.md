@@ -1,39 +1,40 @@
-# ff9-ds
+# ff9-3ds
 
-A port of Final Fantasy IX (PS1, NTSC-U) to the Nintendo DS family. It runs in DSi mode on DSi/3DS, uses both
-screens and supports the touchscreen. It is built from the C source of the
-[ff9-decomp](../ff9-decomp) matching decompilation.
-Original DS mode is the preferred hardware target, but the current build still
-requires DSi resources; see the [measured DS memory budget and architecture work](docs/ds-mode.md).
+A native Nintendo 3DS port of Final Fantasy IX (PS1, NTSC-U), built from the C source of the
+[ff9-decomp](../ff9-decomp) matching decompilation. The game's own code runs natively on the 3DS's ARM11;
+the PICA200 GPU draws it, in stereoscopic 3D; its menus, battle commands and dialogue are on the touch screen.
 
-This repository contains no game data. Building it and running it both require your own copy of the four NTSC-U
-discs (SLUS-01251/01295/01296/01297). The build extracts what it needs from the disc images. **A built `.nds` and
-the generated `ff9ds/` data folder contain Square Enix data. Never distribute or commit them.** Final Fantasy IX
-© Square Enix; this project is not affiliated with or endorsed by Square Enix.
+This repository contains no game data. Building and running it both require your own copy of the four NTSC-U
+discs (SLUS-01251/01295/01296/01297). **A built `.3dsx` contains code only, but the data folder you put on the SD
+card holds Square Enix data: never distribute it.** Final Fantasy IX © Square Enix; this project is not affiliated
+with or endorsed by Square Enix.
 
-Status: **M2 in progress** (graphics). All 20 binaries from the decomp compile for ARM (DSi `.nds`) and for a 32-bit
-Linux host build. Both reach the title and first field. The PC software renderer produces reference frame dumps;
-the DS defaults to software rendering, with an experimental GX hardware path. The title and first room have been inspected
-in melonDS's DSi mode, including candle lighting and name confirmation with zero dropped primitives.
-The PC opening smoke path now passes the masked-Baku encounter and returns to
-the Tantalus briefing. The software renderer now draws the battle room and all
-five characters on DS after a GTE cross-product fix. Native stack-pointer
-sound panning and the missing battle UI are fixed. A fresh DS software run
-completes the encounter and reaches Baku’s briefing; the two pointer crashes
-after the quiz are fixed; fresh DS and PC runs reach Vivi in Alexandria.
-Raster optimisations raise
-the measured first-battle rate from roughly 6.8 to 8.8 FPS; it is still too slow.
-The GX allocator probe reports texture and geometry pressure in later scenes.
-Font coverage preserves small-text strokes; VBlank bitmap swapping removes the measured naming-grid shimmer.
-The candle prompt also passes consecutive-frame stability checks; the new display path’s battle performance is under validation.
-Blending, offscreen effects and performance need work.
-Sound is not implemented yet.
-Routines the port doesn't provide yet are stubs that stop with their
-name (`build/<target>/stubs.txt`). `docs/porting-notes.md` lists the PS1 behaviours the C relies on.
+## What it does
 
-[Direct scenario testing](docs/scenario-testing.md) launches fields and bosses
-across discs without a playthrough. Disc-3 Ark has booted directly on host and
-DS; encounter coverage and battle effect support remain in progress.
+| | |
+|---|---|
+| Rendering | The PICA200 draws every scene, with the PS1's four blend modes exactly; sub-pixel vertex precision and perspective-correct textures where the GTE projected the geometry |
+| Stereoscopic 3D | Every projected vertex gets the parallax of its real depth; 2D scene layers (field backgrounds) get the depth of their place in the game's depth sorting. The 3D slider sets the strength |
+| Dual screen | The top screen shows the scene. The bottom screen shows, at the PS1's own pixel size, the battle commands and party status, dialogue windows, menus and the save screen |
+| Touch | Tap an entry to move the game's cursor there and select it; swipe left to go back; swipe up or down to scroll a list. Every button works too |
+| Saves | Two memory cards as standard `.mcr` images on the SD card: saves move to and from PS1 emulators (and real cards, via dumps) |
+| Discs | All four discs are on the SD card; disc changes happen at the game's own "change disc" screen |
+| Movies | Decoded on the second CPU core, ahead of display |
+| Sound | The PS1 SPU, exactly (24 voices, Gaussian interpolation, reverb), mixed on the second CPU core |
+| Models | Old 3DS and New 3DS (the New 3DS's faster CPU is used when present) |
+
+## Controls
+
+| 3DS | PS1 | |
+|---|---|---|
+| A | ✕ | confirm |
+| B | ○ | cancel; hold to walk |
+| X | △ | menu |
+| Y | □ | |
+| L / R | L1 / R1 | |
+| ZL / ZR, or L+R | L2 / R2 | L+R together: flee |
+| Start / Select | Start / Select | |
+| Circle pad / D-pad | D-pad | |
 
 ## Building
 
@@ -43,36 +44,38 @@ Requires Docker, Python 3, and raw 2352-byte images of the four discs at `disks/
 ```
 git submodule update --init          # decomp/ (ff9-decomp)
 make extract                         # the decomp's extract + split, on your discs
-tools/docker.sh make -j16            # -> build/ff9ds.nds
-tools/docker.sh make -j16 pc         # -> build/pc/ff9ds (host build; --help for its options)
-tools/docker.sh make test-gx         # host texture/cache/compositing checks with ASan and UBSan; no disc data needed
+tools/docker.sh make -j16            # -> build/ff9.3dsx
+tools/docker.sh make -j16 pc         # -> build/pc/ff9ds (32-bit Linux host build, for development)
 ```
 
-`tools/docker.sh` runs the BlocksDS container (`skylyrac/blocksds:slim-v1.24.0` plus Python). The build never
-writes game data outside `build/`.
+`tools/docker.sh` runs the devkitARM container (libctru, citro3d) with Python and a 32-bit host gcc.
 
-To run it, `build/ff9ds.nds` reads an `ff9ds/` folder at the root of the SD card or flashcart (`raw/FF9 CDn.img`,
-`fxmods.bin`, `ovls.bin`, `patches/`, `fmv/`, `fv.bin`). Alternatively, `tools/docker.sh make ds-packed` builds
-`build/ff9ds_packed.nds` (about 2 GB). That ROM carries the folder in its own NitroFS, so it needs nothing beside it.
-The four discs are packed into one `discs.bin` (`tools/pack_discs.py`): sectors shared between discs are stored once,
-and game data is kept without its CD framing. This is a 2848 MB → 1651 MB reduction, which keeps the ROM under the
-2 GiB that emulators and 32-bit file offsets allow.
+## Installing
 
-For BIOS-dependent low-RAM reads, install a captured `psx_low_ram.bin` beside the
-runtime data. The [capture and validation instructions](docs/scenario-testing.md)
-use your own BIOS and original game; missing assets retain the older zero-filled
-fallback, which differs from PSX behavior.
+On the SD card:
 
-The DS defaults to software rendering to preserve textures and framebuffer effects. It is still CPU-bound.
-Use `tools/docker.sh make ds SOFTDISPLAY=0` for the experimental GX path, which has known missing textures,
-geometry drops and lighting artifacts. Changing renderer or scripted-input options rebuilds the DS port
-objects automatically. `GXEXPERIMENTAL=1` enables renderer experiments that currently regress DS image quality; it is off by default. See `docs/porting-notes.md` for emulator and reference-frame recipes.
+```
+/3ds/ff9.3dsx                         (from build/)
+/3ds/ff9/raw/FF9 CD1.img … FF9 CD4.img (your disc images)
+/3ds/ff9/cards/                       (created on the first save; card1.mcr, card2.mcr)
+/3ds/dspfirm.cdc                      (the 3DS's DSP firmware, dumped with DSP1: needed for sound)
+```
+
+Start it from the Homebrew Launcher. To use existing saves, copy a PS1 memory card image (`.mcr`/`.mcd`, 128 KB)
+to `/3ds/ff9/cards/card1.mcr`.
+
+## Development
 
 | doc | contents |
 |---|---|
-| [docs/design.md](docs/design.md) | architecture: how decomp C becomes an ARM binary, the PS1 compatibility layer, the asset pipeline, memory and VRAM budgets |
-| [docs/dual-screen.md](docs/dual-screen.md) | screen layout, touch and button mapping for every game mode |
-| [docs/roadmap.md](docs/roadmap.md) | milestones, exit criteria and risks |
-| [docs/decomp-requests.md](docs/decomp-requests.md) | what the port needs identified or written on the decomp side, by priority |
-| [docs/decisions.md](docs/decisions.md) | open decisions and the default each one has until decided |
+| [docs/design.md](docs/design.md) | the 3DS architecture: renderer, stereo, screens, sound, threads |
 | [docs/porting-notes.md](docs/porting-notes.md) | PS1 behaviours the decomp's C relies on, and how the port handles each |
+| [docs/scenario-testing.md](docs/scenario-testing.md) | launching fields, battles and the world map directly |
+| [docs/decomp-requests.md](docs/decomp-requests.md) | what the port needs identified on the decomp side |
+
+Testing in the Azahar emulator: `tools/azahar.sh` boots a build on a private X display and captures screenshots
+and the game's log (`sdmc:/3ds/ff9/log.txt`); `make 3ds SCENARIO=sdmc:/3ds/ff9/scenarios/X.cfg PROFILE=1` boots
+into a fixture with per-category timers; `DUMP_AT=N` writes the GPU's VRAM mirror and textures to the SD card;
+`AUTOPRESS=`/`AUTOTOUCH=` script buttons and taps.
+
+Licence: port code GPL (as ff9-ds); tools CC0 like the decomp's.
