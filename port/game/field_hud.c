@@ -87,6 +87,16 @@ static void cards_step(void) {
 static int n_choices, choice_first; /* the question's choices shown this frame */
 static RECT r_choice[8];
 
+/* the main menu opened as the field's triangle opens it (fld_main.c), directly; 0 if the field allows none now */
+static int field_open_menu(void) {
+    GameData *g = g_gameState->gameData;
+    if (g_gameState->mode != 1 || (g->flags & (GD_PAUSED | GD_MENU_DISABLED | GD_MENU_OPEN))) return 0;
+    g->flags |= GD_MENU_OPEN;
+    menu_open(MENU_MAIN, 0);
+    evt_onMenuOpen();
+    return 1;
+}
+
 static int inside(const RECT *r, int x, int y) { return x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h; }
 
 /* A tap at (x, y) of the bottom screen (its UI starts oy rows down): the PS1 presses it stands for, into seq (at most
@@ -120,11 +130,10 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         }
         return -1;
     }
-    if (menu_shown && inside(&r_menu, x, y) && max > 0) { seq[0] = 0x1000; return 1; } /* triangle */
+    if (menu_shown && inside(&r_menu, x, y)) { field_open_menu(); return -1; }
     if (menu_shown && cards_rect && inside(cards_rect, x, y) && max > 0) {
-        cards_pending = 90;
-        seq[0] = 0x1000; /* (the menu, then the card screen: cards_step) */
-        return 1;
+        if (field_open_menu()) cards_pending = 90; /* (the menu, then the card screen: cards_step) */
+        return -1;
     }
     if (ate_shown && inside(&r_ate, x, y) && max > 0) { seq[0] = 0x0001; return 1; } /* select */
     if (inside(&r_log, x, y)) { log_on = !log_on; log_scroll = 0; return -1; }
