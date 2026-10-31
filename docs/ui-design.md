@@ -24,7 +24,7 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
   bubbles stay here. **[done]**
 - **Bottom, when no window is open**:
   - **Area map** from the walkmesh (top-down), Zidane's position and facing **[done]**; the exits (gateways from the
-    event scripts) **[todo: decomp request R30]**; save moogles and shops once visited **[todo]**.
+    event scripts) **[done: regions whose player-inside function changes field, in green]**; save moogles and shops once visited **[todo]**.
   - **Header line**: location name, gil, play time. **[done]**
   - **Compact party strip**: four rows of portrait, HP and MP, status icons. **[done]** (portraits read from the
     menu's file by the port)
@@ -33,8 +33,8 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
     with unread letters, enabled at a moogle **[todo]**; **Chocograph / hints** when relevant **[todo]**.
   - Nothing here is needed while walking. The party and MENU show only while the game allows the menu (the opening
     and cutscene stretches may hold a placeholder party); CARDS once the card game has been met. **[done]**
-  - The area connected to where the player stands is bright, other parts of the walkmesh (off this screen) dimmed.
-    **[done]**
+  - The map is the walkmesh area connected to where the player stands (other parts are other screens), scaled to
+    fill its box. **[done]**
 
 ## Dialogue
 - The text stays on top in FF9's speaker-anchored bubbles, at the screen plane. **[done]**

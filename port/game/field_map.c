@@ -2,15 +2,17 @@
  * (each walkable triangle filled, its outer edges outlined), and the player as an arrow pointing where he faces. The
  * field's x runs right and its z away from the camera, so the map's up is the camera's forward: the map looks the
  * way the room does. Floors that move (lifts, bridges) move on the map too: it is rebuilt each frame. A walkmesh may
- * hold areas the camera doesn't show (Dali's field: the yard and, apart, the path beyond it): the area connected to
- * the player's triangle is drawn bright, the rest dimmed. */
+ * hold areas the camera doesn't show (Dali's field: the yard and, apart, the path beyond it): the map is the area
+ * connected to the player's triangle, scaled to fill the box. The exits are marked: region objects (kind 3) whose tag-2
+ * function (run while the player is inside) holds GOTO_FIELD (2B) or GOTO_WORLD (B6) with a literal destination, their
+ * polygon (op 29: +0x14 count, +0x18 points) drawn in green (decomp-requests R30). */
 #include "psyq_port.h"
 #include "ovl_0a.h"
 
 #define MAP_FILL 0x5888A8   /* walkable floor (BGR as the GPU takes it): sand */
-#define MAP_FILL_AWAY 0x3A4A58 /* walkable floor not connected to where the player stands (another screen's) */
 #define MAP_EDGE 0xC8E0F0   /* its outline */
 #define MAP_PLAYER 0x30E8F8 /* the player */
+#define MAP_EXIT 0x48D860   /* an exit (a region whose "player inside" function changes field or goes to the world) */
 
 static int bound_tri(const BgiTriangle *t) {
     return (t->flags & BGI_FLAG_ACTIVE) && !((t->flags >> 8) & BGI_MASK_NO_PLAYER);
@@ -52,6 +54,24 @@ static int player_triangle(EvtObject *pl) {
     return -1;
 }
 
+/* whether the script entry's tag-2 function goes to another field or the world map (a literal 2B / B6 in it) */
+static int region_is_exit(int entry) {
+    u8 *h = g_evtScripts + *(u16 *)(g_evtScripts + entry * 8);
+    int size = *(u16 *)(g_evtScripts + entry * 8 + 2), n = *(u16 *)h >> 8;
+    u16 *p = (u16 *)(h + 2);
+    for (int i = 0; i < n; i++) {
+        if (p[i * 2] != 2) continue;
+        /* the function runs to the next function's start, or the entry's end */
+        int start = p[i * 2 + 1] + 2, end = size;
+        for (int j = 0; j < n; j++)
+            if (p[j * 2 + 1] + 2 > start && p[j * 2 + 1] + 2 < end) end = p[j * 2 + 1] + 2;
+        for (int k = start; k + 3 < end; k++)
+            if ((h[k] == 0x2B || h[k] == 0xB6) && h[k + 1] == 0x00) return 1;
+        return 0;
+    }
+    return 0;
+}
+
 static inline u32 xy(int x, int y) { return (u32)(x & 0xFFFF) | (u32)y << 16; }
 
 /* The map in the box (bx, by, bw, bh): packets from pkt linked into ot[0] (drawn above the box), returns the next
@@ -59,10 +79,14 @@ static inline u32 xy(int x, int y) { return (u32)(x & 0xFFFF) | (u32)y << 16; }
 u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, int bh) {
     if (!g_fieldBgi.loaded || !g_fieldBgi.header || !g_fieldBgi.triangles) return pkt;
     const int n = g_fieldBgi.header->triangleCount;
+    if (n > MAX_TRIS) return pkt;
+    GameData *g = g_gameState->gameData;
+    EvtObject *pl = g->ctx.field ? (EvtObject *)g->npcModels[g->ctx.field->playerObj].actor : NULL;
+    mark_connected(n, player_triangle(pl));
     int x0 = 0x7FFFFFFF, z0 = 0x7FFFFFFF, x1 = -0x7FFFFFFF, z1 = -0x7FFFFFFF;
     for (int i = 0; i < n; i++) {
         const BgiTriangle *t = &g_fieldBgi.triangles[i];
-        if (!bound_tri(t)) continue;
+        if (!bound_tri(t) || !near_player[i]) continue;
         for (int k = 0; k < 3; k++) {
             int x, z;
             world_xz(t, k, &x, &z);
@@ -72,10 +96,7 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
             if (z > z1) z1 = z;
         }
     }
-    if (x1 <= x0 || z1 <= z0 || n > MAX_TRIS) return pkt;
-    GameData *g = g_gameState->gameData;
-    EvtObject *pl = g->ctx.field ? (EvtObject *)g->npcModels[g->ctx.field->playerObj].actor : NULL;
-    mark_connected(n, player_triangle(pl));
+    if (x1 <= x0 || z1 <= z0) return pkt;
     /* scale (16.16) to fit with a margin, centred */
     const int m = 8;
     int sx = ((bw - 2 * m) << 16) / (x1 - x0), sz = ((bh - 2 * m) << 16) / (z1 - z0), s = sx < sz ? sx : sz;
@@ -85,7 +106,7 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     u32 *p = (u32 *)pkt;
     for (int i = 0; i < n; i++) {
         const BgiTriangle *t = &g_fieldBgi.triangles[i];
-        if (!bound_tri(t)) continue;
+        if (!bound_tri(t) || !near_player[i]) continue; /* (only the player's area: the others are other screens) */
         if ((u8 *)(p + 5 + 3 * 4) > pkt_end) break;
         int x[3], y[3];
         for (int k = 0; k < 3; k++) {
@@ -107,12 +128,39 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
             p += 4;
         }
         p[0] = 4u << 24;
-        p[1] = 0x20000000u | (near_player[i] ? MAP_FILL : MAP_FILL_AWAY);
+        p[1] = 0x20000000u | MAP_FILL;
         p[2] = xy(x[0], y[0]);
         p[3] = xy(x[1], y[1]);
         p[4] = xy(x[2], y[2]);
         addPrim(ot, p); /* (after its edges in the list: added later, drawn first) */
         p += 5;
+    }
+    /* the exits */
+    for (EvtListNode *nd = evt_getObjectList(); nd; nd = nd->next) {
+        EvtObject *o = nd->obj;
+        if (!o || o->kind != 3) continue;
+        Unk80039C38Quad *q = (Unk80039C38Quad *)o;
+        int cnt = q->unk14;
+        if (cnt < 3 || cnt > 8 || !region_is_exit(o->scriptIdx)) continue;
+        if ((u8 *)(p + 5 * 6 + 4 * 8) > pkt_end) break;
+        for (int k = 0; k < cnt; k++) { /* its outline */
+            const Unk80039C38Pt *a = &q->unk18[k], *b = &q->unk18[(k + 1) % cnt];
+            p[0] = 3u << 24;
+            p[1] = 0x40000000u | MAP_EXIT;
+            p[2] = xy(MX(a->unk0), MY(a->unk2));
+            p[3] = xy(MX(b->unk0), MY(b->unk2));
+            addPrim(ot - 1, p);
+            p += 4;
+        }
+        for (int k = 1; k + 1 < cnt; k++) { /* filled (convex: a fan) */
+            p[0] = 4u << 24;
+            p[1] = 0x20000000u | MAP_EXIT;
+            p[2] = xy(MX(q->unk18[0].unk0), MY(q->unk18[0].unk2));
+            p[3] = xy(MX(q->unk18[k].unk0), MY(q->unk18[k].unk2));
+            p[4] = xy(MX(q->unk18[k + 1].unk0), MY(q->unk18[k + 1].unk2));
+            addPrim(ot - 1, p);
+            p += 5;
+        }
     }
     /* the player: an arrow from where he stands, the way he faces (rotY: 0 toward the camera, 1024 a quarter turn) */
     if (pl && (u8 *)(p + 5) <= pkt_end) {
