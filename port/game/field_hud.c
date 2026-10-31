@@ -96,9 +96,9 @@ static int shown_battle;
 unsigned port_hud_drive(void) {
     return shown_battle ? port_battle_drive() : 0;
 }
-__attribute__((weak)) int port_world_tap(void) { return 0; }
+__attribute__((weak)) int port_world_tap(int x, int y) { (void)x; (void)y; return 0; }
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
-    if (g_gameState && g_gameState->mode == 3 && !port_menu_state()) return port_world_tap() ? -1 : 0; /* (zoom) */
+    if (g_gameState && g_gameState->mode == 3 && !port_menu_state()) return port_world_tap(x, y - oy) ? -1 : 0; /* (zoom, names) */
     if (!shown) return 0;
     y -= oy;
     if (shown_battle) return port_battle_tap(x, y, seq, max);
@@ -392,9 +392,9 @@ void port_bottom_hud(void) {
     if (g_gameState && g_gameState->gameData) cards_step();
     if (g_gameState && g_gameState->gameData && g_gameState->gameData->font) top_hud();
     if (!g_gameState || !g_gameState->gameData || port_menu_state()) return;
-    int battle = g_gameState->mode == 2;
+    int battle = g_gameState->mode == 2, world = g_gameState->mode == 3;
     if (!battle) port_battle_hud_on = 0;
-    if (g_gameState->mode != 1 && !battle) return;
+    if (g_gameState->mode != 1 && !battle && !world) return;
     if (!g_gameState->gameData->font) return; /* (the common images aren't loaded yet) */
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
@@ -414,6 +414,7 @@ void port_bottom_hud(void) {
     g_primPtr = (u8 *)(p + 4);
     int drew = 1;
     if (battle) drew = port_battle_hud_draw(); /* (battle_ui.c: over the battle's own UI list) */
+    else if (world) drew = 0; /* (the world map's own: world_navi.c) */
     else draw();
     unsigned used = (unsigned)(g_primPtr - (u8 *)hud_mem);
     g_ot = saved_ot;
@@ -422,12 +423,12 @@ void port_bottom_hud(void) {
     if (!drew) return;
 
     Gp0State saved_gp0 = gp0_state; /* (the field's drawing environment is the field's again after) */
-    if (battle) psx_ui_list_begin_keep();
+    if (battle || world) psx_ui_list_begin_keep();
     else psx_ui_list_begin();
     port_draw_ot_buffer(&hud_ot[OTN - 1], hud_mem, sizeof hud_mem);
     psx_ui_list_end();
     gp0_state = saved_gp0;
-    shown = 1;
+    shown = !world;
     shown_battle = battle;
 }
 
