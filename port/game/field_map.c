@@ -184,12 +184,16 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         for (int k = 0; k < 3; k++)
             if ((u16)t->vertices[k] >= g_fieldBgi.header->vertexCount) return pkt;
     }
-    GameData *g = g_gameState->gameData;
+    /* the player: the object the pad moves (the event system's playerUid; the field's playerObj model slot can be
+     * another character's, as in the opening, where it was the Masked Baku's) */
     EvtObject *pl = NULL;
-    if (ram_ok(g->ctx.field, sizeof(FieldMap)) && ram_ok(g->npcModels, sizeof(*g->npcModels) * 16) &&
-        g->ctx.field->playerObj >= 0 && g->ctx.field->playerObj < 16) {
-        void *a = g->npcModels[g->ctx.field->playerObj].actor;
-        if (ram_ok(a, sizeof(EvtObject))) pl = (EvtObject *)a;
+    if (ram_ok(g_evtState, sizeof *g_evtState)) {
+        int guard = 0;
+        for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next)
+            if (ram_ok(nd->obj, sizeof(EvtObject)) && nd->obj->kind == 4 && nd->obj->uid == g_evtState->playerUid) {
+                pl = nd->obj;
+                break;
+            }
     }
     collect_exits();
     mark_connected(n, player_triangle(pl));

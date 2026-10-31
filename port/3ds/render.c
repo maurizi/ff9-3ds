@@ -1011,7 +1011,7 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
  * projected give (entry, SZ) pairs; a least-squares line through a frame's pairs gives the depth of the entries
  * where 2D primitives hang (a field's background layers, sprites), and with it their stereo parallax. Full-screen
  * ones (fades, letterboxes) stay at the screen plane. */
-extern int psx_ot_entry;
+extern int psx_ot_entry, psx_ot_side;
 static float fit_n, fit_s, fit_z, fit_ss, fit_sz; /* this frame's sums */
 static float fit_a, fit_b;                        /* the last good line: SZ = a entry + b */
 static unsigned fit_age = ~0u;                    /* presents since it was fitted */
@@ -1033,7 +1033,7 @@ static void fit_frame(void) {
 }
 
 static const Vtx *ot_depth(const Vtx *v, unsigned n, Vtx *out, int w, int h) {
-    if (psx_ot_entry < 0) return v;
+    if (psx_ot_entry < 0 || psx_ot_side) return v; /* (the UI's table: the screen plane) */
     float s = (float)psx_ot_entry, z = 0;
     for (unsigned i = 0; i < n; i++) z += v[i].z;
     if (z > 0) { /* projected: a sample */
@@ -1052,6 +1052,7 @@ static int ui_ox, ui_oy; /* the displayed buffer's origin, which the UI list dra
 static int ui_list_layer;  /* the layer the UI list draws into */
 static int ui_layer_for(int x, int y, int clear);
 static int ui_packet(void);
+static int flat_packet(void);
 static const u8 *zoom_lo, *zoom_hi; /* port_bottom_zoom's */
 static float zoom_cx, zoom_cy;
 static int zoom_factor;
@@ -1119,7 +1120,11 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     } else {
         gpu_draws(bx0, by0, bx1, by1);
         cur_target = 0;
-        v = ot_depth(v, n, moved, bx1 - bx0, by1 - by0);
+        /* (the field's windows, and anything under a drawing area smaller than a frame (a window's clip, a draw off
+         * screen), stay at the screen plane: else text shifts per eye inside a box or clip that doesn't, and each eye
+         * cuts it in a different place) */
+        if (gp0_state.area_x1 - gp0_state.area_x0 >= 255 && gp0_state.area_y1 - gp0_state.area_y0 >= 200 && !flat_packet())
+            v = ot_depth(v, n, moved, bx1 - bx0, by1 - by0);
     }
     cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0);
     ctr_render_stats[1]++;
@@ -1466,11 +1471,24 @@ void port_bottom_zoom(const void *lo, const void *hi, int cx, int cy, int factor
     zoom_cy = (float)cy;
     zoom_factor = factor;
 }
+/* the windows' packets that stay on the top screen: drawn at the screen plane in stereo (box and text together) */
+static struct { const u8 *lo, *hi; unsigned frame; } flat[8];
+static int nflat;
 void port_ui_packets(const void *lo, const void *hi) {
     /* In a field or on the world map, windows are speech bubbles and prompts anchored to the scene: they stay on the
-     * top screen with the speaker (docs/ui-design.md). Menus go to the bottom whatever the mode. */
+     * top screen with the speaker (docs/ui-design.md), at the screen plane. Menus go to the bottom whatever the mode. */
     int mode = port_game_mode();
-    if ((mode == 1 || mode == 3) && !menu_state) return;
+    if ((mode == 1 || mode == 3) && !menu_state) {
+        for (int i = 0; i < nflat; i++) /* (the buffer was reused, or two presents went by: a past frame's) */
+            if (((const u8 *)lo < flat[i].hi && (const u8 *)hi > flat[i].lo) || frames_drawn - flat[i].frame > 2)
+                flat[i] = flat[--nflat], i--;
+        if (nflat == 8) nflat--;
+        flat[nflat].lo = lo;
+        flat[nflat].hi = hi;
+        flat[nflat].frame = frames_drawn;
+        nflat++;
+        return;
+    }
     port_bottom_packets(lo, hi);
 }
 /* packets [lo, hi) of the frame's buffer are drawn on the bottom screen (the world map's navigation map too) */
@@ -1484,6 +1502,12 @@ void port_bottom_packets(const void *lo, const void *hi) {
     nranges++;
 }
 extern const u32 *psx_gpu_packet;
+static int flat_packet(void) {
+    const u8 *p = (const u8 *)psx_gpu_packet;
+    for (int i = 0; i < nflat; i++)
+        if (p >= flat[i].lo && p < flat[i].hi) return 1;
+    return 0;
+}
 static int ui_packet(void) {
     const u8 *p = (const u8 *)psx_gpu_packet;
     for (int i = 0; i < nranges; i++)

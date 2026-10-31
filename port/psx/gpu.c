@@ -633,6 +633,10 @@ __attribute__((weak)) void psx_gpu_ot_begin(const u32 *ot) { (void)ot; }
 /* the entry of the ordering table being walked that the current packet hangs from, counted from where the walk
  * started (a renderer can infer a 2D primitive's depth from it: port/3ds/render.c) */
 int psx_ot_entry = -1;
+/* 1 while a walk that started in the scene's ordering table (psx_main_ot) is in another table's entries: the game's UI
+ * ordering table (message windows, menus) linked from it. The 3DS keeps those at the screen plane: a window's text
+ * and its clip rectangle must not shift apart between the eyes. */
+int psx_ot_side;
 
 static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
     unsigned int profile_start = port_profile_begin();
@@ -640,6 +644,8 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     psx_ot_slot = ~0u; /* (set as the walk enters the main OT's entries; another OT's packets have none) */
     const u32 *head = p;
     psx_ot_entry = 0;
+    psx_ot_side = 0;
+    const int from_main = psx_main_ot && (unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n;
     /* Explicit bounds disambiguate stack links whose low 24 bits alias arena RAM. */
     u32 head_window = (u32)p & 0xFF000000;
     unsigned int guard = 0;
@@ -656,6 +662,7 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
             int d = (int)(head - p);
             if (d < 0) d = -d;
             if (d < 0x10000) psx_ot_entry = d;
+            psx_ot_side = from_main && (unsigned int)((unsigned int *)p - psx_main_ot) >= psx_main_ot_n;
         }
         u32 addr = *p & 0xFFFFFF;
         if (((P_TAG *)p)->len)
@@ -683,6 +690,7 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     }
     psx_gpu_ot_done();
     psx_ot_entry = -1;
+    psx_ot_side = 0;
     port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
 }
 void DrawOTag(u32 *p) { draw_ot(p, NULL, 0); }
