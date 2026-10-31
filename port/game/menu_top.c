@@ -7,6 +7,8 @@
  *                   in the Item screen
  *   Equip           while the candidates for a slot are listed: all of them at once, each with what it changes for
  *                   the member (the PS1 shows one candidate's changes at a time)
+ *                   and, when it teaches abilities, each one the member can learn with their AP towards it (the
+ *                   PS1 shows taught abilities only in Equip, one member at a time, and never in shops)
  *   Ability         which of the member's equipment teaches the highlighted ability (the PS1 shows it only in Equip)
  *
  * The menus' state is read from their overlays' statics (by name: in the port each overlay's data is linked on its own,
@@ -20,7 +22,7 @@ void ctr_hud_draw_top(int slot, int x, int y, int w, int h, int dw, int dh);
 const u8 *port_portrait(int index);
 const u8 *port_portrait_face(int index);
 s32 chr_getAp(s32, s32);
-s32 chr_getApNeeded(s32, s32);
+u8 chr_getApNeeded(s32, s32);
 void ui_drawItemIcon(s32, s32, s32, s32, s32);
 
 extern unsigned char psx_ram[];
@@ -31,6 +33,58 @@ static int ram_ok(const void *p, unsigned size) { /* (PS1 RAM and the overlays' 
 /* the overlays' statics (their layouts: the decomp session's offsets) */
 extern u8 s_menuItem[], s_menuItemHelp[], s_menuEquip[], s_menuEquipItemHelp[], s_menuAbility[], s_menuSave[];
 extern u8 s_shop[], s_shopBuy[], s_shopSell[], s_shopSynth[], s_shopItemHelp[];
+/* The ability names are the Ability screen's (ovl_33, file 0/0x33 read to 0x801EDF00): its action table (0x10-byte
+ * entries, the name offset at +0xE) at 0x801F34EC, action names at 0x801F40EC, support names at 0x801F6540. Shops run
+ * in the same overlay slot, so the port reads those sectors of the file once (bytes 0x5000-0x9000) and keeps them. */
+void psx_cd_read_data(unsigned int lba, void *buf, unsigned int n);
+#define ABIL_FROM 0x5000
+static u8 abil[0x4000];
+static int abil_state; /* 0 not read, 1 read, -1 unreadable */
+
+static u8 *ability_name(int id) {
+    if (!abil_state) {
+        FileEntry *f = file_find(0, 0x33);
+        abil_state = -1;
+        if (f && (unsigned)(f->unkC - f->sector) * 2048 >= ABIL_FROM + sizeof abil) {
+            psx_cd_read_data((unsigned)(g_gameState->imgSector + f->sector) + ABIL_FROM / 2048, abil, sizeof abil / 2048);
+            abil_state = 1;
+        }
+    }
+    if (abil_state < 0) return NULL;
+    if (id >= ABILITY_SUPPORT_FIRST) return abil + 0x8640 - ABIL_FROM + g_supportAbilities[id - ABILITY_SUPPORT_FIRST].unk2;
+    unsigned ofs = *(u16 *)(abil + 0x55EC - ABIL_FROM + id * 0x10 + 0xE);
+    return ofs < 0x8640 - 0x61EC ? abil + 0x61EC - ABIL_FROM + ofs : NULL;
+}
+
+/* the abilities item id teaches that member c can learn: name and AP gathered / needed (grey once mastered), from x
+ * on one row up to x_end; how many shown */
+static int teaches(int x, int y, int x_end, Character *c, int id) {
+    int ch = c->info.b.id, shown = 0;
+    u8 buf[16];
+    for (int k = 0; k < 3; k++) {
+        int a = g_itemTable[id].abilities[k];
+        if (!a) continue;
+        int need = chr_getApNeeded(ch, a), have = chr_getAp(ch, a);
+        if (need <= 0 || have < 0) continue;
+        u8 *name = ability_name(a);
+        if (!name) break;
+        int w = text_measure(name).w, done = have >= need;
+        if (x + w + (done ? 0 : 34) > x_end) break;
+        text_drawBlock(x, y, 2, name, done ? 2 : 0);
+        x += w + 4;
+        if (!done) {
+            text_formatNumber(have, buf, -1, 1);
+            int n = strlen((char *)buf);
+            buf[n] = '/';
+            text_formatNumber(need, buf + n + 1, -1, 1);
+            ui_drawSmallDigits(x, y + 4, 2, buf, 1);
+            x += text_measureDigits(buf);
+        }
+        x += 12;
+        shown++;
+    }
+    return shown;
+}
 
 static void face(int slot, int portrait, int x, int y, int size) {
     const u8 *e = port_portrait(portrait), *f = port_portrait_face(portrait);
@@ -116,15 +170,16 @@ static int item_view(int id) {
         if (!ram_ok(c, sizeof *c)) continue;
         int ok = (it->equipMask & (0x800 >> chr_getDefaultSet(c))) != 0, y = 46 + i * 46;
         face(i, chr_portrait(c), 22, y, 40);
-        text_drawBlock(70, y + 2, 2, c->name, ok ? 0 : 2);
+        text_drawBlock(70, y, 2, c->name, ok ? 0 : 2);
         if (!ok) {
-            ui_drawLabel(70, y + 22, 2, (s32)"CAN T EQUIP", 2);
+            ui_drawLabel(70, y + 18, 2, (s32)"CAN T EQUIP", 2);
             continue;
         }
         int same = 0;
         for (int s = 0; s < 5; s++) same |= c->equip[s] == id;
-        if (same) ui_drawLabel(70, y + 22, 2, (s32)"EQUIPPED", 1);
-        else if (!changes(70, y + 22, c, slot, id, 4)) ui_drawLabel(70, y + 22, 2, (s32)"NO CHANGE", 2);
+        if (same) ui_drawLabel(70, y + 18, 2, (s32)"EQUIPPED", 1);
+        else if (!changes(70, y + 18, c, slot, id, 4)) ui_drawLabel(70, y + 18, 2, (s32)"NO CHANGE", 2);
+        teaches(70, y + 29, 380, c, id);
     }
     win_drawBox(&box, 5, 2);
     return 1;

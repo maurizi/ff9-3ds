@@ -54,8 +54,7 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
     **[done: large rows, DEFEND / CHANGE; ability / item / throw lists as large rows drawn by the game's own row code
     with the entry's description and BACK (port/game/battle_ui.c)]**
   - **Right: four party cards**: name, HP, MP, ATB bar and Trance bar, status icons; tapping a ready character's
-    card switches to them (PS1 △/✕). **[partial: portrait, name, HP, MP, ATB, Trance, a ready card's tap; status
-    icons todo]**
+    card switches to them (PS1 △/✕). **[done: portrait, name, HP, MP, ATB, Trance, status icons, a ready card's tap]**
 - **Targeting**: the command area becomes an **enemy/ally panel laid out like the formation**, a large name button
   per enemy (HP once Libra was used); tap selects, tap again confirms; a **single / all** toggle for R; the top
   cursor follows; physical controls drive the same state. **[done: ENEMY / PARTY buttons, ALL / ONE, BACK; a tap
@@ -76,7 +75,8 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 - **Bottom**: item list, a quantity stepper (large +/-, L/R ×10), Buy/Sell tabs. **[partial: the PS1 shop 1:1]**
 - **Top**: the "who can equip ↑/↓" party panel large, the stat change for the highlighted character, the abilities
   the item teaches; synthesis adds ingredients and how many you own. **[partial: the item, its description, who can
-  wear it with before → after; ingredients and abilities taught todo]**
+  wear it with before → after, and the abilities it teaches each member with their AP towards them (all shops and the
+  Item screen). Ingredients stay on the bottom: the PS1's synthesis window already lists them and marks the missing]**
 
 ## Save screens (moogle)
 - **Bottom**: large slot buttons. **[partial: the PS1 save screen 1:1]**
