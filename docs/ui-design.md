@@ -33,4 +33,5 @@ Bravely Default, Chrono Trigger DS, Shin Megami Tensei IV, Fire Emblem Awakening
 - Done: battle target hand on the top screen; the game's target window (ENEMY / PLAYER) is the bottom screen's
   touchable target panel (port/game/battle_ui.c).
 - Done: world map: the full navigation map always on the bottom screen, no minimap on top (port/game/world_navi.c).
-- Next: menus with their top-screen detail views, Tetra Master, shops; the field's area map (walkmesh, exits).
+- Done: Tetra Master: the board on the bottom screen; the top magnifies (2x) where the game's cursor points.
+- Next: menus with their top-screen detail views, shops; the field's area map (walkmesh, exits).

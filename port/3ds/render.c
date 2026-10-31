@@ -128,6 +128,8 @@ static UiLayer layers[2];
 static C3D_Tex freeze_tex[2];
 static C3D_RenderTarget *freeze_rt[2];
 static int freeze_w, freeze_h, frozen;
+#define MAG_W 200 /* the card game's magnified area (to 400x240 on the top screen) */
+#define MAG_H 120
 static int menu_state; /* port_menu_state(), read at each present */
 __attribute__((weak)) int port_menu_state(void) { return 0; }
 static C3D_RenderTarget *bottom_rt;
@@ -1528,8 +1530,26 @@ void ctr_present(long frame) {
             freeze_w = w;
             freeze_h = h;
         } else if (!menu_state || menu_state == 3) frozen = 0;
+        /* the card game: the board is on the bottom screen; the top magnifies (2x) where the game's cursor is, so
+         * the card it points at (its art, arrows and stats) is large and readable */
+        static float mag_x = -1, mag_y;
+        int mag_rx = 0, mag_ry = 0;
+        if (menu_state == 3) {
+            float tx = w / 2.0f, ty = h / 2.0f;
+            if (scene_nhands > 0) tx = scene_hands[0][0] + 32.0f, ty = scene_hands[0][1] + 8.0f;
+            if (mag_x < 0) mag_x = tx, mag_y = ty;
+            mag_x += (tx - mag_x) * 0.3f;
+            mag_y += (ty - mag_y) * 0.3f;
+            mag_rx = clampi((int)mag_x - MAG_W / 2, 0, w - MAG_W);
+            mag_ry = clampi((int)mag_y - MAG_H / 2, 0, h - MAG_H);
+        } else mag_x = -1;
         for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) {
-            if (frozen) draw_to_screen(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h,
+            if (menu_state == 3) {
+                C3D_RenderTargetClear(top_rt[eye], C3D_CLEAR_ALL, 0x000000FF, 0);
+                C3D_FrameDrawOn(top_rt[eye]);
+                screen_quad_scaled(top_rt[eye], &mirror_tex[0], K_BLIT, NO_BLEND, 0xFFFFFFFF, d.x + mag_rx, d.y + mag_ry, MAG_W,
+                                   MAG_H, 0, 0, 400, 240);
+            } else if (frozen) draw_to_screen(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h,
                                        (400 - freeze_w) / 2 + edge, (240 - freeze_h) / 2);
             else draw_to_screen(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, ox + edge, oy);
         }
