@@ -51,6 +51,13 @@ void ctr_profile_frame(void) {
              (ctr_depth_stats[0] + ctr_depth_stats[1]) / frames, ctr_audio_dropped, ctr_audio_underruns, ctr_vblank_waits,
              ctr_vblank_skips);
     ctr_vblank_waits = ctr_vblank_skips = 0;
+    extern unsigned int ctr_render_stats[8];
+    static unsigned last[8];
+    port_log("[gpu] per frame: prims %u batches %u blits %u readbacks %u blocks %u syncs %u slots %u\n",
+             (ctr_render_stats[1] - last[1]) / frames, (ctr_render_stats[0] - last[0]) / frames,
+             (ctr_render_stats[2] - last[2]) / frames, ctr_render_stats[3] - last[3], (ctr_render_stats[4] - last[4]) / frames,
+             ctr_render_stats[6] - last[6], ctr_render_stats[5]);
+    for (int i = 0; i < 8; i++) last[i] = ctr_render_stats[i];
     ctr_depth_stats[0] = ctr_depth_stats[1] = 0;
     memset(acc, 0, sizeof acc);
     memset(detail, 0, sizeof detail);

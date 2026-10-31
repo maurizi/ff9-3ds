@@ -109,6 +109,11 @@ static u8 shadow_ok[CH][CW]; /* the shadow holds the cell's current pixels */
 static u8 mirror_ok[CH][CW]; /* the mirror (both eyes) holds them */
 static u32 cell_gen[CH][CW]; /* write counter: texture blocks made from the cell are stale when it moves */
 static u32 gen_counter = 1;
+/* Cells some texture block was made from (texels or CLUT), and a counter bumped by any write to one: a texture whose
+ * epoch is current needs no check of its blocks' cells. Draws into the framebuffers, which aren't sources, don't
+ * bump it; uploads (rare per frame) do. */
+static u8 cell_is_source[CH][CW];
+static u32 tex_epoch = 1;
 
 static void readback_cells(int cx0, int cy0, int cx1, int cy1);
 static void blit_cells(int cx0, int cy0, int cx1, int cy1);
@@ -137,6 +142,7 @@ ok:
         for (int cx = cx0; cx < cx1; cx++) {
             shadow_ok[cy][cx] = 0;
             cell_gen[cy][cx] = gen_counter;
+            if (cell_is_source[cy][cx]) tex_epoch++;
         }
 }
 
@@ -159,6 +165,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
     int partial = (x % CELL) || (y % CELL) || ((x + w) % CELL && x + w < VW) || ((y + h) % CELL && y + h < VH);
     if (partial && !filling) cpu_reads(x, y, x + w, y + h);
     gen_counter++;
+    tex_epoch++;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
             if (filling) {
@@ -206,13 +213,15 @@ static void submit(void);
 
 /* everything recorded so far executed and finished (the CPU may then read the mirror, or rewrite a texture) */
 static void gpu_sync(void) {
+    unsigned pt = port_profile_begin();
     submit();
     if (in_frame) {
-        C3D_FrameEnd(0);
+        C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
         in_frame = 0;
     }
     frame_begin();
     ctr_render_stats[6]++;
+    port_profile_detail_end(PORT_PROFILE_MOVIE_VLC, pt); /* (reported as "vlc": GPU syncs) */
 }
 
 /* ---- batches ------------------------------------------------------------------------------------------------ */
@@ -533,7 +542,9 @@ typedef struct {
     u32 serial;  /* frame_serial when last drawn with */
     C3D_Tex tex;
     u32 stamp[64]; /* per 32x32 block: gen_counter when converted (0 = not yet) */
+    u32 epoch;     /* tex_epoch when all its converted blocks were last known current */
     u8 flags[64];  /* per block: 1 = has opaque texels, 2 = has semi-transparent ones */
+    u32 hash[64];  /* per block: its source texels' and CLUT's hash when converted */
 } TexSlot;
 
 #define MAX_SLOTS 96
@@ -541,12 +552,33 @@ static TexSlot slots[MAX_SLOTS];
 static int nslots;
 static u32 rgba_lut[65536];
 
+/* (key, twin) -> slot + 1, open addressing; a slot's entry is removed when it is reused */
+#define SLOT_HASH 512
+static u16 slot_hash[SLOT_HASH];
+static inline unsigned hash_of(u32 key, u32 twin) { return ((key ^ twin * 0x9E3779B1u) * 0x85EBCA6Bu) >> 23; }
+static void hash_remove(int i) {
+    unsigned h = hash_of(slots[i].key, slots[i].twin);
+    while (slot_hash[h] && slot_hash[h] != i + 1) h = (h + 1) & (SLOT_HASH - 1);
+    if (!slot_hash[h]) return;
+    slot_hash[h] = 0;
+    /* (re-insert the run after it, which may have probed past it) */
+    for (h = (h + 1) & (SLOT_HASH - 1); slot_hash[h]; h = (h + 1) & (SLOT_HASH - 1)) {
+        int j = slot_hash[h] - 1;
+        slot_hash[h] = 0;
+        unsigned k = hash_of(slots[j].key, slots[j].twin);
+        while (slot_hash[k]) k = (k + 1) & (SLOT_HASH - 1);
+        slot_hash[k] = (u16)(j + 1);
+    }
+}
 static TexSlot *slot_for(u32 key, u32 twin) {
     static int last = -1;
     if (last >= 0 && slots[last].key == key && slots[last].twin == twin) return &slots[last];
+    for (unsigned h = hash_of(key, twin); slot_hash[h]; h = (h + 1) & (SLOT_HASH - 1)) {
+        int i = slot_hash[h] - 1;
+        if (slots[i].key == key && slots[i].twin == twin) return &slots[last = i];
+    }
     int victim = -1;
     for (int i = 0; i < nslots; i++) {
-        if (slots[i].key == key && slots[i].twin == twin) return &slots[last = i];
         if (slots[i].serial != frame_serial && (victim < 0 || slots[i].serial < slots[victim].serial)) victim = i;
     }
     if (nslots < MAX_SLOTS && C3D_TexInit(&slots[nslots].tex, 256, 256, GPU_RGBA8)) {
@@ -558,9 +590,14 @@ static TexSlot *slot_for(u32 key, u32 twin) {
         gpu_sync(); /* every slot is in this frame's batches */
         victim = 0;
     }
+    if (slots[victim].key) hash_remove(victim);
     TexSlot *s = &slots[last = victim];
     s->key = key;
     s->twin = twin;
+    s->epoch = 0;
+    unsigned h = hash_of(key, twin);
+    while (slot_hash[h]) h = (h + 1) & (SLOT_HASH - 1);
+    slot_hash[h] = (u16)(victim + 1);
     memset(s->stamp, 0, sizeof s->stamp);
     return s;
 }
@@ -570,6 +607,21 @@ static inline int cells_newer(int x0, int y0, int x1, int y1, u32 stamp) {
         for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++)
             if (cell_gen[cy & (CH - 1)][cx & (CW - 1)] > stamp) return 1;
     return 0;
+}
+
+static void mark_source(int x0, int y0, int x1, int y1) {
+    for (int cy = y0 / CELL; cy <= (y1 - 1) / CELL; cy++)
+        for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++) cell_is_source[cy & (CH - 1)][cx & (CW - 1)] = 1;
+}
+
+/* a hash of w x h halfwords of the shadow at (x, y) (a rectangle within one VRAM row band; x even or not) */
+static u32 shadow_hash(int x, int y, int w, int h, u32 seed) {
+    u32 hsh = seed;
+    for (int j = 0; j < h; j++) {
+        const u16 *row = psx_vram + ((y + j) & 511) * VW;
+        for (int i = 0; i < w; i++) hsh = (hsh ^ row[(x + i) & 1023]) * 0x01000193u;
+    }
+    return hsh;
 }
 
 /* Make block (bx, by) of the page's texture current. */
@@ -582,12 +634,23 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
                    ofy = (s->twin >> 15 & 31) * 8;
     if (s->twin) sx0 = m->tx, sw = 256 >> shift, sy0 = m->ty;
     int ncl = m->depth == 0 ? 16 : m->depth == 1 ? 256 : 0;
-    if (s->stamp[b] && !cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]) &&
-        (!ncl || !cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b])))
+    if (s->stamp[b] && (s->epoch == tex_epoch || (!cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]) &&
+        (!ncl || !cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b])))))
         return;
-    if (s->serial == frame_serial) gpu_sync(); /* drawn with earlier in this frame: those draws keep the old texels */
+    unsigned pt = port_profile_begin();
     cpu_reads(sx0, sy0, sx0 + sw, sy0 + 32);
     if (ncl) cpu_reads(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
+    /* a write near its sources (the 32x32 cells are coarse: the world map scrolls 16-wide strips of water and cycles
+     * single CLUT rows every frame) may have left them as they were: then the block stays */
+    u32 hsh = shadow_hash(sx0, sy0, sw, 32, 0x811C9DC5u);
+    if (ncl) hsh = shadow_hash(m->clut_x, m->clut_y, ncl, 1, hsh);
+    if (s->stamp[b] && s->hash[b] == hsh) {
+        s->stamp[b] = gen_counter;
+        port_profile_detail_end(PORT_PROFILE_MOVIE_MDEC, pt);
+        return;
+    }
+    if (s->serial == frame_serial) gpu_sync(); /* drawn with earlier in this frame: those draws keep the old texels */
+    s->hash[b] = hsh;
     u32 clut[256];
     if (ncl) {
         const u16 *c = psx_vram + (m->clut_y & 511) * VW;
@@ -611,6 +674,9 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     }
     s->flags[b] = flags;
     s->stamp[b] = gen_counter;
+    mark_source(sx0, sy0, sx0 + sw, sy0 + 32);
+    if (ncl) mark_source(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
+    port_profile_detail_end(PORT_PROFILE_MOVIE_MDEC, pt); /* (reported as "mdec": block conversions) */
     /* (the block's four rows of tiles: 32 rows of the texture, contiguous) */
     GSPGPU_FlushDataCache(dst + by * 32 * 256, 32 * 256 * 4);
     ctr_render_stats[4]++;
@@ -634,6 +700,21 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
             f |= s->flags[by * 8 + bx];
         }
     s->serial = frame_serial;
+    /* (the blocks just checked are current; others are checked when used, as their stamp is 0 or old) */
+    if (s->epoch != tex_epoch) {
+        int all = 1;
+        for (int b = 0; b < 64 && all; b++)
+            if (s->stamp[b] && b != -1) {
+                int bx = b & 7, by = b >> 3, shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
+                int sx0 = m->tx + ((bx * 32) >> shift), sw = 32 >> shift, sy0 = m->ty + by * 32;
+                int ncl = m->depth == 0 ? 16 : m->depth == 1 ? 256 : 0;
+                if (s->twin) sx0 = m->tx, sw = 256 >> shift, sy0 = m->ty;
+                if (cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]) ||
+                    (ncl && cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b])))
+                    all = 0;
+            }
+        if (all) s->epoch = tex_epoch;
+    }
     *flags = f;
     return &s->tex;
 }
@@ -778,9 +859,13 @@ static C3D_Tex *prim_texture(const Gp0Mode *m, const Gp0Vtx *v, int n, unsigned 
 
 static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     unsigned tflags = 0;
+    unsigned pt = port_profile_begin();
     C3D_Tex *tex = prim_texture(m, v, n, &tflags);
+    port_profile_detail_end(PORT_PROFILE_TEXTURE, pt);
+    pt = port_profile_begin();
     Vtx t[6];
     for (int i = 0; i < n; i++) make_vtx(&t[i], m, &v[i]);
+    port_profile_detail_end(PORT_PROFILE_PALETTE, pt);
     if (n == 4) t[4] = t[3], t[3] = t[1], t[5] = t[2]; /* (0,1,2) (1,3,2) */
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
     for (int i = 0; i < n; i++) {
@@ -789,7 +874,9 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     }
     /* the PS1 skips polygons wider than 1023 or taller than 511 */
     if (x1 - x0 > 1023 || y1 - y0 > 511) return;
+    pt = port_profile_begin();
     emit(m, t, n == 4 ? 6 : 3, x0, y0, x1 + 1, y1 + 1, tex, tflags);
+    port_profile_detail_end(PORT_PROFILE_UPLOAD, pt);
 }
 
 static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1);
@@ -1098,7 +1185,7 @@ void ctr_present(long frame) {
         }
     }
     present_bottom(&d, w, h);
-    C3D_FrameEnd(0);
+    C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
     in_frame = 0;
     frames_drawn++;
     extern unsigned int psx_depth_frame;
@@ -1234,7 +1321,7 @@ void ctr_shutdown(void) {
     void ctr_spu_exit(void);
     ctr_spu_exit();
     ctr_audio_exit();
-    if (in_frame) C3D_FrameEnd(0);
+    if (in_frame) C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
     C3D_Fini();
     gfxExit();
 }
