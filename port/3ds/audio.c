@@ -11,7 +11,7 @@
 #include "platform.h"
 #include "psx_runtime.h"
 
-#define NBUF 6
+#define NBUF 12 /* (~280 ms queued: rides over the game's short stalls, as loading into a battle) */
 #define BUF_FRAMES 1024
 
 static ndspWaveBuf wbuf[NBUF];
