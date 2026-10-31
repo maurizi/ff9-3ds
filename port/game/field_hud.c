@@ -6,7 +6,8 @@
  *   header:  the location, play time, gil         (GameData.locationName; as the main menu shows them)
  *   MAP:     the walkmesh from above, the player  (port/game/field_map.c)
  *   PARTY:   portrait, name, HP and MP, status    (GameData.party; portraits: the menu's file, read by the port)
- *   [MENU] [CARDS n]                               MENU: a touch shortcut for triangle (port_hud_tap)
+ *   [MENU] [CARDS n] [ATE] [LOG]                    MENU: a touch shortcut for triangle (port_hud_tap); LOG: the
+ *                                                  dialogue log in place of the map and party (tap: scroll)
  * The party and MENU only while the game allows the menu (not in the opening and other cutscene stretches, where the
  * party may be a placeholder); CARDS once the card game has been met.
  * While a dialogue asks a question (its choices on the top screen with the speaker), the map and party give way to
@@ -37,9 +38,11 @@ static u32 *const hud_ot = hud_mem;
 static RECT r_head = {4, 6, 312, 24};
 static RECT r_map = {4, 40, 172, 128};
 static RECT r_party = {180, 40, 136, 128};
-static RECT r_menu = {4, 178, 100, 38};
-static RECT r_cards = {110, 178, 100, 38};
-static RECT r_ate = {216, 178, 100, 38};
+static RECT r_menu = {4, 178, 74, 38};
+static RECT r_cards = {82, 178, 74, 38};
+static RECT r_ate = {160, 178, 74, 38};
+static RECT r_log = {238, 178, 78, 38};
+static RECT r_logbox = {4, 40, 312, 128};
 
 static int shown;
 
@@ -57,6 +60,7 @@ int port_hud_shown(void) {
 }
 
 static int menu_shown; /* the MENU button is there (the game allows the menu) */
+static int log_head, log_count, log_scroll, log_on; /* the dialogue log (port_dialogue_log) */
 static RECT *cards_rect; /* where CARDS is this frame (NULL: not shown) */
 static int ate_shown;
 static int cards_pending; /* frames left to wait for the main menu to open onto the card screen */
@@ -112,6 +116,12 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         return 1;
     }
     if (ate_shown && inside(&r_ate, x, y) && max > 0) { seq[0] = 0x0001; return 1; } /* select */
+    if (inside(&r_log, x, y)) { log_on = !log_on; log_scroll = 0; return -1; }
+    if (log_on && inside(&r_logbox, x, y)) { /* (the upper half: older, the lower: newer) */
+        if (y < r_logbox.y + r_logbox.h / 2) { if (log_scroll < log_count - 1) log_scroll++; }
+        else if (log_scroll > 0) log_scroll--;
+        return -1;
+    }
     return 0;
 }
 
@@ -174,6 +184,72 @@ static void draw_party(void) {
     win_drawBox(&r_party, 3, 2);
 }
 
+/* Text the message system shows, as text_drawBlock draws it: printable codes and newlines kept, with the escapes that
+ * change what is drawn (names, colours, argument values); layout, timing, choice and page codes dropped. To the first
+ * TEXT_END or stop byte (stop: TEXT_NEWLINE for one line, TEXT_END for all), at most max - 1 bytes; returns where
+ * it stopped in src. */
+/* the argument bytes after the message system's escape F9 c (msg.c's text stepping) */
+static int esc_args(u8 c) {
+    switch (c) {
+    case 0x06: case 0x07: case 0x48: return 2;
+    case 0x00: case 0x01: case 0x02: case 0x0E: case 0x0F: case 0x40: case 0x41: case 0x43: case 0x44: case 0x49:
+    case 0x4A: case 0x4B: case 0x4C: case 0x4D: case 0x4E: case 0x70: return 1;
+    default: return c >= 0x68 && c <= 0x6F ? 1 : 0;
+    }
+}
+
+static const u8 *msg_plain(const u8 *t, u8 *o, int max, u8 stop) {
+    u8 *start = o;
+    while (*t != TEXT_END && *t != stop && o < start + max - 5) {
+        if (*t == TEXT_ESC) {
+            u8 c = t[1];
+            int n = 2 + esc_args(c);
+            /* drawn: names, colours, icons, button icons, argument values; the rest is timing, layout and choices */
+            int keep = (c >= 0x10 && c <= 0x3F) || (c >= 0x60 && c <= 0x6F);
+            while (n--) { if (keep) *o++ = *t; t++; }
+        } else if (*t >= 0xFA && *t <= 0xFD) { /* (a two-byte character) */
+            *o++ = *t++;
+            *o++ = *t++;
+        } else if (*t == 0xFE) { /* (a page break: a new line here) */
+            *o++ = TEXT_NEWLINE;
+            t++;
+        } else *o++ = *t++;
+    }
+    *o = TEXT_END;
+    return t;
+}
+
+/* ---- the dialogue log: every line shown (msg_open, voice_hook.c), newest last ---- */
+#define LOG_LINES 24
+static u8 log_text[LOG_LINES][320];
+void port_dialogue_log(const u8 *text) {
+    if (!text) return;
+    u8 *o = log_text[log_head];
+    msg_plain(text, o, sizeof log_text[0], TEXT_END);
+    if (o[0] == TEXT_END) return;
+    if (log_count && !__builtin_memcmp(o, log_text[(log_head + LOG_LINES - 1) % LOG_LINES], sizeof log_text[0])) return;
+    log_head = (log_head + 1) % LOG_LINES;
+    if (log_count < LOG_LINES) log_count++;
+    log_scroll = 0;
+}
+
+/* the log in the middle area, newest at the bottom (log_scroll lines back) */
+static void draw_log(void) {
+    static const u8 label[] = "LOG";
+    RECT box = {4, 40, 312, 128};
+    ui_drawLabel(box.x + 8, box.y - 3, 2, (s32)label, 0);
+    int y = box.y + box.h - 6;
+    for (int i = log_scroll; i < log_count; i++) {
+        u8 *t = log_text[(log_head + LOG_LINES - 1 - i) % LOG_LINES];
+        TextSize sz = text_measure(t);
+        int h = sz.h > 0 ? sz.h : 14;
+        if (y - h < box.y + 4) break;
+        y -= h + 4;
+        text_drawBlock(box.x + 8, y, 2, t, i ? 2 : 0);
+    }
+    win_drawBox(&box, 3, 2);
+}
+
 /* the open question's choices (its window's current page, from g_msgChoiceLine on), as buttons in the middle area */
 static int draw_choices(void) {
     n_choices = 0;
@@ -192,16 +268,7 @@ static int draw_choices(void) {
     int h = n > 4 ? 22 : 30, gap = n > 4 ? 3 : 6, y0 = 40 + (128 - (n * h + (n - 1) * gap)) / 2;
     static u8 lines[8][96];
     for (int i = 0; i < n; i++) {
-        u8 *o = lines[i];
-        while (*t != TEXT_END && *t != TEXT_NEWLINE && o < lines[i] + 92) {
-            if (*t == TEXT_ESC) { /* names, colours and argument values kept; layout and choice codes dropped */
-                int k = t[1] == 0x43 || t[1] == 0x44 || t[1] == 0x49 || t[1] == 0x4A || (t[1] >= 0x4B && t[1] <= 0x4E) ||
-                                (t[1] >= 0x68 && t[1] <= 0x6F) ? 3 : 2;
-                int keep = (t[1] >= TEXT_CHAR_NAME && t[1] < TEXT_COLOR + 0x10) || (t[1] >= 0x68 && t[1] <= 0x6F);
-                while (k--) { if (keep) *o++ = *t; t++; }
-            } else *o++ = *t++;
-        }
-        *o = TEXT_END;
+        t = (u8 *)msg_plain(t, lines[i], sizeof lines[i], TEXT_NEWLINE);
         if (*t == TEXT_NEWLINE) t++;
         RECT *r = &r_choice[i];
         r->x = 24; r->w = 272; r->h = h; r->y = y0 + i * (h + gap);
@@ -256,7 +323,8 @@ static void draw(void) {
     ui_drawSmallDigits(r_head.x + 259, r_head.y + 9, 2, buf, 0);
     win_drawBox(&r_head, 3, 2);
 
-    if (!draw_choices()) {
+    if (!draw_choices() && log_on) draw_log();
+    else if (!n_choices) {
         ui_drawLabel(r_map.x + 8, r_map.y - 3, 2, (s32)map, 0);
         g_primPtr = port_field_map_draw(&g_ot[2], g_primPtr, (u8 *)(hud_mem + OTN + BUF_WORDS) - 64, r_map.x + 3,
                                         r_map.y + 3, r_map.w - 6, r_map.h - 6);
@@ -273,6 +341,10 @@ static void draw(void) {
     if (cards_known() && menu_shown) {
         text_formatNumber(card_count(), buf, -1, 1);
         button(cards_rect = &r_cards, cards, buf);
+    }
+    {
+        static const u8 logl[] = "LOG", mapl[] = "MAP";
+        button(&r_log, log_on ? mapl : logl, NULL);
     }
     ate_shown = ate_available();
     if (ate_shown) { /* (pulsing, as the PS1's prompt) */

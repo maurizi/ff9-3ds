@@ -4,7 +4,7 @@
  * is the field's id in a field (its text block is the field's), 10000 + the battle's id in a battle, 20000 on the
  * world map, 30000 + the mode otherwise. Its window closes by several paths (the player's confirm, the script, a
  * close-all); the port watches the window each frame instead (port_voice_poll) and stops the voice when it shuts or
- * shows another line. Without a pack (and on the PC) nothing happens. */
+ * shows another line. Without a pack (and on the PC) nothing happens. Each line also goes to the dialogue log. */
 #define M2CTX
 #include "ff9.h"
 
@@ -36,6 +36,8 @@ void msg_open(s32 msg, s32 id, WinLayout *l, s32 flags) {
     voiced = id;
     voiced_msg = msg;
     ctr_voice_line(bank, (unsigned)msg);
+    void port_dialogue_log(const u8 *text);
+    port_dialogue_log(msg_drawText_msg(msg)); /* (the bottom screen's dialogue log: field_hud.c) */
 }
 
 /* each frame: the voiced line's window closed, or shows another line → its voice stops */

@@ -38,7 +38,8 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 
 ## Dialogue
 - The text stays on top in FF9's speaker-anchored bubbles, at the screen plane. **[done]**
-- The bottom can show a scrollable **dialogue backlog** (new). **[todo]**
+- The bottom can show a scrollable **dialogue backlog** (new). **[done in fields: LOG swaps it in for the map and
+  party; taps on its upper or lower half scroll]**
 - **Choice prompts**: the choices as large touch buttons on the bottom while the question stays on top; cursor and
   A still work (an input aid, not a mirror). **[done in fields: the opening's candle question, tapped]**
 
