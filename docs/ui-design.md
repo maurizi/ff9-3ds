@@ -29,7 +29,7 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
   - **Compact party strip**: four rows of portrait, HP and MP, status icons. **[done]** (portraits read from the
     menu's file by the port)
   - **Large edge buttons** (≥ 40×32): **Menu** (also △) **[done]**; **ATE**, pulsing when an Active Time Event is
-    available (Select stays Select) **[todo: R30]**; **Cards** with the collection count **[partial: the count; tapping it to open the card screen todo]**; **Mognet**
+    available (Select stays Select) **[done: the script's flag (R30); not yet seen with a real ATE]**; **Cards** with the collection count, opening the card screen **[done]**; **Mognet**
     with unread letters, enabled at a moogle **[todo]**; **Chocograph / hints** when relevant **[todo]**.
   - Nothing here is needed while walking. The party and MENU show only while the game allows the menu (the opening
     and cutscene stretches may hold a placeholder party); CARDS once the card game has been met. **[done]**

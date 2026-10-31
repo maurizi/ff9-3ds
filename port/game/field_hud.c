@@ -39,6 +39,7 @@ static RECT r_map = {4, 40, 172, 128};
 static RECT r_party = {180, 40, 136, 128};
 static RECT r_menu = {4, 178, 100, 38};
 static RECT r_cards = {110, 178, 100, 38};
+static RECT r_ate = {216, 178, 100, 38};
 
 static int shown;
 
@@ -48,6 +49,26 @@ int port_hud_shown(void) {
 }
 
 static int menu_shown; /* the MENU button is there (the game allows the menu) */
+static RECT *cards_rect; /* where CARDS is this frame (NULL: not shown) */
+static int ate_shown;
+static int cards_pending; /* frames left to wait for the main menu to open onto the card screen */
+
+/* an Active Time Event can be watched now (the field script's byte b[0xEE]: decomp-requests R30) */
+static int ate_available(void) {
+    return *PSX_RAM(volatile u8 *, 0x8007AFDE) == 1;
+}
+
+/* CARDS: the main menu, then its card screen (once the menu runs: the cursor on Card, the slide-in over, the screen
+ * opened as the menu would; decomp-requests R30, ff9-decomp r32) */
+static void cards_step(void) {
+    if (!cards_pending) return;
+    cards_pending--;
+    if (g_menuScreen.active != 1 || g_menuScreen.screen != 0) return;
+    *PSX_RAM(u8 *, 0x800CB188) = 5; /* (s_menuMain.cursor: row 5 is Card) */
+    g_menuScreen.slideIn = 0;
+    menuScreen_open(6);
+    cards_pending = 0;
+}
 static int n_choices, choice_first; /* the question's choices shown this frame */
 static RECT r_choice[8];
 
@@ -72,6 +93,12 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         return 0;
     }
     if (menu_shown && inside(&r_menu, x, y) && max > 0) { seq[0] = 0x1000; return 1; } /* triangle */
+    if (menu_shown && cards_rect && inside(cards_rect, x, y) && max > 0) {
+        cards_pending = 90;
+        seq[0] = 0x1000; /* (the menu, then the card screen: cards_step) */
+        return 1;
+    }
+    if (ate_shown && inside(&r_ate, x, y) && max > 0) { seq[0] = 0x0001; return 1; } /* select */
     return 0;
 }
 
@@ -229,9 +256,19 @@ static void draw(void) {
 
     menu_shown = menu_allowed();
     if (menu_shown) button(&r_menu, menu, NULL);
-    if (cards_known()) {
+    cards_rect = NULL;
+    if (cards_known() && menu_shown) {
         text_formatNumber(card_count(), buf, -1, 1);
-        button(menu_shown ? &r_cards : &r_menu, cards, buf);
+        button(cards_rect = &r_cards, cards, buf);
+    }
+    ate_shown = ate_available();
+    if (ate_shown) { /* (pulsing, as the PS1's prompt) */
+        static const u8 ate[] = "ATE";
+        static int t;
+        t++;
+        int w = ui_measureLabel((u8 *)ate);
+        ui_drawLabel(r_ate.x + (r_ate.w - w) / 2, r_ate.y + 15, 2, (s32)ate, (t / 22) & 1 ? 2 : 0);
+        win_drawBox(&r_ate, 3, 2);
     }
 }
 
@@ -242,6 +279,7 @@ void psx_ui_list_begin_keep(void);
 extern int port_battle_hud_on;
 void port_bottom_hud(void) {
     shown = shown_battle = 0;
+    if (g_gameState && g_gameState->gameData) cards_step();
     if (!g_gameState || !g_gameState->gameData || port_menu_state()) return;
     int battle = g_gameState->mode == 2;
     if (!battle) port_battle_hud_on = 0;
