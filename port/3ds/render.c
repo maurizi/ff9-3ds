@@ -1086,7 +1086,8 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     if (ui_mode && psx_ui_list_battle && port_battle_hud_on) {
         int slot = 0x17 - psx_ot_entry;
         if (slot == 7 || slot == 8 || slot == 14 || slot == 15 || slot == 16 || (slot >= 18 && slot <= 20)) return;
-        if (port_battle_hud_targets && (slot == 4 || slot == 5)) return; /* (the target window: the port's targets) */
+        /* (the target window and its HP readout at 9-10: the port's targets) */
+        if (port_battle_hud_targets && (slot == 4 || slot == 5 || slot == 9 || slot == 10)) return;
     }
     /* the battle list's entry 17 (btlui_drawTargetCursors): the hands pointing into the scene, drawn in it */
     if (ui_mode == 2) { /* the top screen's UI list (ctr_top_ui): straight onto the top screen, at the screen plane */

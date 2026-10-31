@@ -46,6 +46,8 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
   A still work (an input aid, not a mirror). **[done in fields: the opening's candle question, tapped]**
 
 ## Battle
+(Touch acts directly, never by simulated presses: a tap is applied at the game's next input step for that menu,
+with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
 - **Top**: the battle scene with no command or status windows **[done]**; damage and heal numbers **[done]**; the
   ability-name banner **[done]**; the PS1 target hand in the scene **[done]**; a "ready" marker on the character
   whose turn it is **[done: the game's own]**; optionally a thin row of ATB pips along the top edge in Active mode
@@ -59,9 +61,8 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
     card switches to them (PS1 △/✕). **[done: portrait, name, HP, MP, ATB, Trance, status icons, a ready card's tap]**
 - **Targeting**: the command area becomes an **enemy/ally panel laid out like the formation**, a large name button
   per enemy (HP once Libra was used); tap selects, tap again confirms; a **single / all** toggle for R; the top
-  cursor follows; physical controls drive the same state. **[done: ENEMY / PARTY buttons, ALL / ONE, BACK; a tap
-  steers the game's cursor (a press a frame, watching what it targets), a second confirms; lists of targets (the
-  game's list-kind targeting) still the game's window]**
+  cursor follows; physical controls drive the same state. **[done: ENEMY / PARTY buttons (party with HP), ALL / ONE,
+  BACK, for both kinds of targeting; a tap targets that unit and confirms at once]**
 - Wait mode: opening a sub-list pauses ATB exactly as on PS1; no timing changes. **[done: game logic unchanged]**
 
 ## Main menu

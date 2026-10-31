@@ -12,11 +12,14 @@
  * drawn with the game's own text, label, digit and window code over the battle's UI list (field_hud.c's packet
  * buffer and its no-clear UI list), the PS1's command window and party panel left out (port_battle_hud_on: render.c
  * skips their OT entries). While an ability or item list or the target window is open, the game's own windows show
- * (with "Target Window: Always" forced for the battle, so targets are a list there too). A tap on a row moves the
- * game's cursor there and confirms; on a ready member's card, triangle (the PS1's switch to the next ready member).
- * While targeting (the game's target window), the targets: a large button per enemy (left) and party member
- * (right), marked when targeted, ALL / ONE (R1) and BACK. A tap on a unit steers the game's cursor to it (a press per
- * frame, watching what the game targets: port_battle_drive), a tap on the targeted one confirms.
+ * (with "Target Window: Always" forced for the battle, so targets are a list there too). While targeting (the game's
+ * target window), the targets: a large button per enemy (left) and party member (right), marked when targeted,
+ * ALL / ONE and BACK.
+ * Touch acts directly, never by simulated presses: a tap is queued, and at the game's next input step for that menu
+ * (its btlui_cmdInput / btlui_listInput / btlui_targetInput, wrapped: config/renames.txt) the port puts the game's
+ * cursor on the tapped entry (or slides the command window out for DEFEND / CHANGE, or targets the tapped unit) and
+ * runs the game's own confirm or cancel, as the button would have. A tap on a ready member's card passes the turn on
+ * (the game's btlui_passTurn, the PS1's triangle).
  * Game logic and ATB timing are the game's: nothing here changes what a button does. */
 #include "psyq_port.h"
 #include "ovl_0b.h"
@@ -228,13 +231,15 @@ static int draw_list(void) {
 static RECT r_tgt[12], r_all = {6, 196, 100, 26}, r_tback = {242, 196, 74, 26};
 static BtlUnit *tgt_unit[12];
 static int n_tgt, tgt_shown;
-static BtlUnit *tgt_goal; /* the unit a tap asked for */
-static int tgt_steps;
+/* the tap waiting for the game's next input step */
+enum { TAP_NONE, TAP_CMD, TAP_SIDE, TAP_PASS, TAP_LIST, TAP_LIST_BACK, TAP_TARGET, TAP_TARGET_ALL, TAP_TARGET_BACK };
+static int tap_kind, tap_arg;
+static BtlUnit *tap_unit;
 
 static int draw_targets(void) {
     static const u8 enemy[] = "ENEMY", party[] = "PARTY", all[] = "ALL", one[] = "ONE", back[] = "BACK";
     tgt_shown = 0;
-    if (!g_btlTarget.windowOpen || g_btlTarget.listKind) return 0;
+    if (!g_btlTarget.windowOpen) return 0;
     int ne = 0, np = 0;
     n_tgt = 0;
     ui_drawLabel(8, 37, 2, (s32)enemy, 0);
@@ -248,6 +253,11 @@ static int draw_targets(void) {
         tgt_unit[n_tgt++] = u;
         int ko = u->hp == 0;
         text_drawBlock(r->x + 12, r->y + 7, 2, (u8 *)o0b_btl_getUnitName(u), ko ? 2 : is_party && u->max->maxHp / 6 >= u->hp ? 4 : 0);
+        if (is_party) { /* (its HP: whom to heal, as the game's target window showed) */
+            u8 hp[8];
+            text_formatNumber(u->hp, hp, 4, 1);
+            ui_drawSmallDigits(r->x + r->w - 36, r->y + 10, 2, hp, ko ? 2 : 0);
+        }
         if (u->flags >> 29 & 1) bar(&g_ot[2], r->x + 3, r->y + 6, 3, r->h - 12, 0x40E0F8);
         win_drawBox(r, 4, 2);
     }
@@ -264,16 +274,7 @@ static int draw_targets(void) {
     return 1;
 }
 
-/* each idle frame (port/3ds/touch.c): the next press toward the unit a tap asked for, 0 when there or none */
-unsigned port_battle_drive(void) {
-    if (!tgt_goal || !tgt_shown || g_btlUi->menuState != BTLUI_MENU_TARGET) { tgt_goal = NULL; return 0; }
-    if (tgt_goal->flags >> 29 & 1 && !g_btlTarget.targetAll) { tgt_goal = NULL; return 0; } /* (there: a tap confirms) */
-    if (++tgt_steps > 24) { tgt_goal = NULL; return 0; }
-    if (g_btlTarget.targetAll) return 0x0800; /* (R1: back to one target) */
-    int want_party = tgt_goal->flags & 1;
-    if (want_party != g_btlTarget.side && g_btlTarget.canSwitchSide) return want_party ? PAD_RIGHT_ : PAD_LEFT_;
-    return PAD_DOWN_;
-}
+unsigned port_battle_drive(void) { return 0; } /* (port/3ds/touch.c's steering: nothing to steer now) */
 
 /* field_hud.c's frame: whether the battle screen is the port's this frame (then it draws, into g_ot / g_primPtr) */
 int port_battle_hud_draw(void) {
@@ -300,59 +301,120 @@ int port_battle_hud_draw(void) {
     return 1;
 }
 
-/* a tap on the battle screen: the presses it stands for (field_hud.c's port_hud_tap) */
+/* a tap on the battle screen (field_hud.c's port_hud_tap): queued for the game's next input step; -1 handled */
 int port_battle_tap(int x, int y, unsigned *seq, int max) {
-    if (!port_battle_hud_on || max < 10) return 0;
+    (void)seq;
+    (void)max;
+    if (!port_battle_hud_on) return 0;
+    tap_kind = TAP_NONE;
     if (tgt_shown) {
-        for (int i = 0; i < n_tgt; i++) {
-            if (!inside(&r_tgt[i], x, y)) continue;
-            BtlUnit *u = tgt_unit[i];
-            if (u->flags >> 29 & 1 && !g_btlTarget.targetAll) { seq[0] = PAD_CROSS_; return 1; } /* (targeted: confirm) */
-            tgt_goal = u;
-            tgt_steps = 0;
-            return -1; /* (handled: port_battle_drive steers there) */
-        }
-        if (g_btlTarget.canToggleAll && inside(&r_all, x, y)) { seq[0] = 0x0800; return 1; } /* R1 */
-        if (inside(&r_tback, x, y)) { seq[0] = 0x2000; return 1; } /* circle */
-        return 0;
+        for (int i = 0; i < n_tgt; i++)
+            if (inside(&r_tgt[i], x, y)) { tap_kind = TAP_TARGET; tap_unit = tgt_unit[i]; return -1; }
+        if (g_btlTarget.canToggleAll && inside(&r_all, x, y)) tap_kind = TAP_TARGET_ALL;
+        else if (inside(&r_tback, x, y)) tap_kind = TAP_TARGET_BACK;
+        return -1;
     }
     if (list_shown) {
-        Window *w = g_btlUi->windows[2];
-        int cur = w ? w->list.top + w->list.cursor : 0;
-        for (int i = 0; i < list_n; i++) {
-            if (!inside(&r_list[i], x, y)) continue;
-            int n = 0, d = list_first + i - cur;
-            while (d && n < max - 1) seq[n++] = d > 0 ? PAD_DOWN_ : PAD_UP_, d += d > 0 ? -1 : 1;
-            seq[n++] = PAD_CROSS_;
-            return n;
-        }
-        if (inside(&r_back, x, y)) { seq[0] = 0x2000; return 1; } /* circle */
-        return 0;
+        for (int i = 0; i < list_n; i++)
+            if (inside(&r_list[i], x, y)) { tap_kind = TAP_LIST; tap_arg = list_first + i; return -1; }
+        if (inside(&r_back, x, y)) tap_kind = TAP_LIST_BACK;
+        return -1;
     }
     if (cmd_shown) {
-        for (int i = 0; i < 4; i++) {
-            if (!g_btlCmdMenu.cmdIds[i] || !inside(&r_cmd[i], x, y)) continue;
-            int n = 0, c = g_btlCmdMenu.cursor;
-            /* the cursor skips empty rows: count the rows it stops at on the way */
-            for (int j = c + 1; j <= i; j++) if (g_btlCmdMenu.cmdIds[j]) seq[n++] = PAD_DOWN_;
-            for (int j = c - 1; j >= i; j--) if (g_btlCmdMenu.cmdIds[j]) seq[n++] = PAD_UP_;
-            seq[n++] = PAD_CROSS_;
-            return n;
-        }
-        if (inside(&r_defend, x, y) || inside(&r_change, x, y)) {
-            u32 side = inside(&r_defend, x, y) ? PAD_RIGHT_ : PAD_LEFT_; /* (held: the command slides out, then cross) */
-            seq[0] = side | HOLD(8);
-            seq[1] = side | PAD_CROSS_;
-            return 2;
-        }
+        for (int i = 0; i < 4; i++)
+            if (g_btlCmdMenu.cmdIds[i] && inside(&r_cmd[i], x, y)) { tap_kind = TAP_CMD; tap_arg = i; return -1; }
+        if (inside(&r_defend, x, y)) { tap_kind = TAP_SIDE; tap_arg = 1; return -1; } /* (Defend: slid right) */
+        if (inside(&r_change, x, y)) { tap_kind = TAP_SIDE; tap_arg = 2; return -1; } /* (Change: slid left) */
     }
     for (int i = 0; i < 4; i++) {
         BtlUnit *u = card_unit[i];
         RECT r = {r_cards.x, (s16)(r_cards.y + 4 + i * 43), r_cards.w, 40};
         if (u && inside(&r, x, y) && u->inMenuQueue && !u->cmdIssued && g_btlUi->cmdUnit != u && cmd_shown) {
-            seq[0] = PAD_TRIANGLE_;
-            return 1;
+            tap_kind = TAP_PASS;
+            return -1;
         }
     }
-    return 0;
+    return -1;
+}
+
+/* the game's input steps, wrapped: a queued tap acts in the game's place this step */
+void o0b_btlui_cmdInput_game(void);
+void o0b_btlui_listInput_game(void);
+void o0b_btlui_targetInput_game(void);
+void o0b_btlui_confirmCmd(void);
+void o0b_btlui_passTurn(void);
+void o0b_btlui_listConfirm(void);
+void o0b_btlui_closeList(void);
+void o0b_btlui_saveCursor(void *, s32, s32, s32);
+void o0b_btlui_confirmTarget(void);
+void o0b_btlui_cancelTarget(void);
+void o0b_btlui_toggleTargetAll(void);
+void o0b_btlui_clearTargeted(void);
+
+void o0b_btlui_cmdInput(void) {
+    int k = tap_kind;
+    if (k == TAP_CMD && g_btlCmdMenu.sideCmd.side == 0) {
+        tap_kind = TAP_NONE;
+        g_btlCmdMenu.cursor = (u8)tap_arg;
+        o0b_btlui_confirmCmd();
+        return;
+    }
+    if (k == TAP_SIDE) { /* (as if held out to that side: slid, ready) */
+        tap_kind = TAP_NONE;
+        g_btlSideCmd.side = (u8)tap_arg;
+        g_btlSideCmd.slide = 0;
+        g_btlSideCmd.slideFrame = 5;
+        g_btlSideCmd.ready = 1;
+        o0b_btlui_confirmCmd();
+        return;
+    }
+    if (k == TAP_PASS) {
+        tap_kind = TAP_NONE;
+        o0b_btlui_passTurn();
+        return;
+    }
+    if (k == TAP_LIST || k == TAP_LIST_BACK || k >= TAP_TARGET) tap_kind = TAP_NONE; /* (stale: another menu's) */
+    o0b_btlui_cmdInput_game();
+}
+
+void o0b_btlui_listInput(void) {
+    Window *w = g_btlUi->windows[2];
+    int k = tap_kind;
+    if ((k == TAP_LIST || k == TAP_LIST_BACK) && w && w->list.scroll == 0) {
+        tap_kind = TAP_NONE;
+        if (k == TAP_LIST_BACK) { /* (as circle) */
+            snd_playSe(SE_CANCEL);
+            o0b_btlui_saveCursor(&g_btluiList.unit->menu->cursor, 1, w->list.top, w->list.cursor);
+            if (g_btluiList.doubleCast == 0) o0b_btlui_closeList();
+            else g_btluiList.doubleCast--;
+            return;
+        }
+        if (tap_arg < w->list.top) w->list.top = (s16)tap_arg; /* (the list's view moves so the entry is in it) */
+        w->list.cursor = (s16)(tap_arg - w->list.top);
+        o0b_btlui_listConfirm();
+        return;
+    }
+    if (k != TAP_NONE && k != TAP_LIST && k != TAP_LIST_BACK) tap_kind = TAP_NONE;
+    o0b_btlui_listInput_game();
+}
+
+void o0b_btlui_targetInput(void) {
+    int k = tap_kind;
+    if (k >= TAP_TARGET) {
+        tap_kind = TAP_NONE;
+        if (k == TAP_TARGET_BACK) { snd_playSe(SE_CANCEL); o0b_btlui_cancelTarget(); return; }
+        if (k == TAP_TARGET_ALL) { o0b_btlui_toggleTargetAll(); return; }
+        BtlUnit *u = tap_unit;
+        int side = u->flags & BTL_UNIT_PARTY;
+        if (!g_btlTarget.targetAll) { /* (one target: that one, if the command can aim there) */
+            if (side != g_btlTarget.side && !g_btlTarget.canSwitchSide) { snd_playSe(SE_BUZZER); return; }
+            o0b_btlui_clearTargeted();
+            g_btlTarget.side = (u8)side;
+            u->flags |= BTL_UNIT_TARGETED;
+        } else if (side != g_btlTarget.side) { snd_playSe(SE_BUZZER); return; } /* (all of one side: tap that side) */
+        o0b_btlui_confirmTarget();
+        return;
+    }
+    if (k != TAP_NONE) tap_kind = TAP_NONE;
+    o0b_btlui_targetInput_game();
 }
