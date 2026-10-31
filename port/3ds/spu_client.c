@@ -118,6 +118,7 @@ static void start(void) {
     LightEvent_Init(&kick_event, RESET_ONESHOT);
     s32 prio = 0x30;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    APT_SetAppCpuTimeLimit(80); /* (core 1 gives an application's threads only the share set: see async.c) */
     /* above the MDEC worker (async.c) on the same core: sound must not wait for a movie frame */
     int core = ctr_is_new3ds() ? 2 : 1;
     thread = threadCreate(audio_main, NULL, 32 * 1024, prio - 2, core, false);
@@ -148,7 +149,22 @@ static void put(u32 type, u32 arg, u32 b) {
     if (backlog > ctr_spu_backlog_max) ctr_spu_backlog_max = backlog;
     if (backlog >= SPU7_RING) {
         kick();
-        while (head - shared.tail >= SPU7_RING) svcSleepThread(100000); /* (full: the audio core catches up) */
+        /* (full: the audio core catches up; if it makes no progress at all for a second, it isn't being scheduled:
+         * the SPU runs on the game's thread from then on) */
+        u32 tail0 = shared.tail;
+        u64 t0 = osGetTime();
+        while (head - shared.tail >= SPU7_RING) {
+            svcSleepThread(100000);
+            if (shared.tail == tail0 && osGetTime() - t0 > 1000) {
+                port_log("spu: the audio thread isn't running; the SPU runs on the game's thread\n");
+                quit = 1;
+                thread = NULL; /* (left behind: it never ran) */
+                inline_mode = 1;
+                spuw_set_rendering(1);
+                service();
+                break;
+            }
+        }
     }
     Spu7Cmd *c = &shared.cmd[head % SPU7_RING];
     c->a = type << 24 | (arg & 0xFFFFFF);

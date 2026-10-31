@@ -303,14 +303,19 @@ static int draw_choices(void) {
 
 /* what the PS1 shows only through its menu is shown only when the menu can be opened: in the opening and other
  * cutscene stretches (GD_MENU_DISABLED) the party may be a placeholder, and there is no menu to offer */
-static int menu_allowed(void) {
-    /* once the player has had control in this field (the opening's party is a placeholder until then; a dialogue
-     * takes control away for a moment, which mustn't hide anything) */
-    static int field = -1, had_control;
+/* whether the player has had control in this field: before that it is a cutscene or a movie (the opening's
+ * "Opening-For FMV" field; its party a placeholder), and the bottom screen stays dark. A dialogue takes control away
+ * for a moment, which mustn't hide anything. */
+static int had_control(void) {
+    static int field = -1, had;
     GameData *g = g_gameState->gameData;
-    if (g->fieldId != field) field = g->fieldId, had_control = 0;
-    if (ram_ok(g_evtState, sizeof *g_evtState) && g_evtState->controlEnabled) had_control = 1;
-    return had_control && !(g->flags & GD_MENU_DISABLED);
+    if (g->fieldId != field) field = g->fieldId, had = 0;
+    if (ram_ok(g_evtState, sizeof *g_evtState) && g_evtState->controlEnabled) had = 1;
+    return had;
+}
+
+static int menu_allowed(void) {
+    return had_control() && !(g_gameState->gameData->flags & GD_MENU_DISABLED);
 }
 
 static int card_count(void) {
@@ -401,6 +406,7 @@ void port_bottom_hud(void) {
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
     if (d.rgb24 || d.w < 256) return; /* (a movie) */
+    if (!battle && !world && !had_control()) return; /* (a cutscene or movie field: nothing to show yet) */
 
     ClearOTagR(hud_ot, OTN);
     u32 *saved_ot = g_ot;
