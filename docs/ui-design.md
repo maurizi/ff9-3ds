@@ -67,16 +67,20 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 - **Bottom**: the PS1 menu with touch zones. **[partial: 1:1, taps steer its hand cursor]**
 - **Top**, per sub-menu: Equip: a rotating 3D model in the selected gear, before→after stats; Abilities: AP progress
   for every ability the gear teaches; Status: full stat sheet and a large portrait; Items: description and who can
-  use it. Game logic pauses; never a dimmed field. **[todo: the frozen field for now]**
+  use it. Game logic pauses; never a dimmed field. **[partial (port/game/menu_top.c): Items: the highlighted item's
+  description and, for equipment, who can wear it with its stat before → after; Equip: all stats before → after the
+  candidate (chr_calcEquipStats); Abilities: AP and what teaches it. The 3D model todo (native model renderer);
+  Status: the bottom has the sheet already, the top keeps the paused scene]**
 
 ## Shops and synthesis
 - **Bottom**: item list, a quantity stepper (large +/-, L/R ×10), Buy/Sell tabs. **[partial: the PS1 shop 1:1]**
 - **Top**: the "who can equip ↑/↓" party panel large, the stat change for the highlighted character, the abilities
-  the item teaches; synthesis adds ingredients and how many you own. **[todo]**
+  the item teaches; synthesis adds ingredients and how many you own. **[partial: the item, its description, who can
+  wear it with before → after; ingredients and abilities taught todo]**
 
 ## Save screens (moogle)
 - **Bottom**: large slot buttons. **[partial: the PS1 save screen 1:1]**
-- **Top**: the selected slot's details (party, location, time, gil). **[todo]**
+- **Top**: the selected slot's details (party, location, time, gil). **[done]**
 - Overwriting needs a separate confirmation, never one tap. **[done: the game's own confirm]**
 
 ## World map

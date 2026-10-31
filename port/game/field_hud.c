@@ -547,11 +547,12 @@ __attribute__((unused)) static void party_overview(void) {
 /* What the top screen shows while a menu is up: the main menu keeps the paused scene (the bottom has the party); a
  * sub-screen shows what the bottom can't, about what is highlighted there (decomp-requests R31: pending; the member
  * sheet and the overview below are ready for it). */
+int port_menu_top_draw(void);
 static int top_draw(void) {
-    if (port_menu_state() != 2 || !g_menuScreen.active) return 0;
+    if (port_menu_state() != 2 && !(g_menu.open && g_menu.type)) return 0;
     (void)member_sheet;
     (void)party_overview;
-    return 0;
+    return port_menu_top_draw(); /* (menu_top.c) */
 }
 
 static void top_hud(void) {
