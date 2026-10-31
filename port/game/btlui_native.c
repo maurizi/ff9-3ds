@@ -21,7 +21,7 @@
 /* battle only: in ovl_0b's dead MIPS code range (no resident memory) */
 #define NUI_CODE PORT_RAM_CODE(0b) __attribute__((optimize("Os")))
 #define NUI_HOT PORT_RAM_CODE(0b) /* (the per-pixel loops) */
-#if defined(__arm__)
+#if defined(PORT_NDS)
 /* Thumb: half the size in slot 0 (which ovl_0b sizes, out of the heap); no 64-bit arithmetic here */
 #pragma GCC target("thumb")
 #endif

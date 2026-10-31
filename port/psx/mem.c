@@ -65,7 +65,7 @@ unsigned char *psx_spu_ram_tail;
 #else
 #define SHADOW_TAIL 0
 #endif
-#ifdef __arm__
+#ifdef PORT_NDS
 #include <malloc.h>
 #include <unistd.h>
 extern char *fake_heap_end; /* where libnds's sbrk stops (set at start-up) */
@@ -79,7 +79,7 @@ void psx_mem_init(void) {
     static int done;
     if (done) return;
     done = 1;
-#ifdef __arm__
+#ifdef PORT_NDS
     unsigned int before = heap_free();
 #endif
 #ifdef PORT_HW_SOUND
@@ -116,7 +116,7 @@ void psx_mem_init(void) {
     port_log("vram %p..%p spu %p\n", (void *)psx_vram, (void *)(psx_vram + 1024 * 512), (void *)psx_spu_ram);
 #endif
     if (!psx_vram || !psx_spu_ram) /* (nothing can draw or play without them: a clear stop, not a crash later) */
-#ifdef __arm__
+#ifdef PORT_NDS
         port_fatal("no room for the VRAM/SPU shadows (%u KB free)", heap_free() >> 10);
 #else
         port_fatal("no room for the VRAM/SPU shadows");
@@ -124,7 +124,7 @@ void psx_mem_init(void) {
     if (psx_vram) {
         memset(psx_vram, 0, 1024 * 512 * 2);
     }
-#ifdef __arm__
+#ifdef PORT_NDS
     port_log("heap: %u KB free, %u KB after the shadows (end %p)\n", before >> 10, heap_free() >> 10,
              (void *)fake_heap_end);
 #endif

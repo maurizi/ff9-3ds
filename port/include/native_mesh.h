@@ -12,7 +12,7 @@ int gxh_bg_unit(const unsigned int *head, int count, const unsigned char *sprite
                 const unsigned int *ot); /* (ot: the OT the entries are of) */
 int gxh_bg_units_on(void); /* whether field_bg.c lifts layers as units */
 
-#ifdef __arm__
+#ifdef PORT_NDS
 #define PORT_OVERLAY_CODE(id) __attribute__((section(".psxovl_" #id ".port"), noinline))
 /* the hottest code of a mode, in ITCM while its overlay is resident (gen_link.py's ITCM overlay, port/ds/ovl_pack.c):
  * ARM, called from main RAM through long calls */

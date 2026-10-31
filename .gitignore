@@ -7,6 +7,10 @@
 *.o
 *.a
 *.nds
+*.3dsx
+*.cia
+*.smdh
+*.shbin
 *.elf
 
 # Disc images and extracted binary blobs, wherever they land

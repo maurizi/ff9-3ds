@@ -288,7 +288,7 @@ void port_scenario_bootstrap(void) {
         if(scenario.world_explicit) prepare_return_world(d); else prepare_return_field(d);
         prepare_battle_resources(d);d->battleId=(u16)scenario.battle;
     }
-#ifndef __arm__
+#ifndef PORT_NDS
     { /* FF9_SCENARIO_EXPORT=DIR (host): the party and story as bootstrapped, for the original PS1 to take the same
        * state (tools/psx_field_fixture.py, tools/psx_battle_fixture.py) */
         const char *dir=getenv("FF9_SCENARIO_EXPORT");

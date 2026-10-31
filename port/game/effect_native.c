@@ -14,7 +14,7 @@
 
 #define SLOT 0x801E7700u
 
-#ifdef __arm__
+#ifdef PORT_NDS
 typedef struct {
     u32 vram, text_lo, text_hi, hash; /* code range [text_lo, text_hi), FNV-1a of its bytes */
     u32 index;                        /* in fxmods.bin */
@@ -77,7 +77,7 @@ static void identify(int k) {
     current_funcs[k] = NULL;
     for (const PsxFxmod *m = psx_fxmods; m->vram; ++m)
         if (m->vram == v && matches(m)) {
-#ifdef __arm__
+#ifdef PORT_NDS
             const FxHead *h = port_fx_pack_load(m->index, k);
             if (h) { relocate(h->relocs); current_funcs[k] = h->funcs; current_nfuncs[k] = h->nfuncs; }
 #else

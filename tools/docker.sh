@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Run a command inside the ff9-ds build container, e.g. `tools/docker.sh make`.
+# Run a command inside the ff9-3ds build container, e.g. `tools/docker.sh make`.
 # The image is (re)built automatically when the Dockerfile changes.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE=ff9-ds-build
+IMAGE=ff9-3ds-build
 HASH=$(sha1sum "$ROOT/tools/docker/Dockerfile" | cut -c1-12)
 
 if ! docker image inspect "$IMAGE:$HASH" >/dev/null 2>&1; then

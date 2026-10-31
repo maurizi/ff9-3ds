@@ -19,7 +19,7 @@ void o0b_btl_projectMesh(BtlUnit9C *arg0, u8 arg1);
  * which of two polygons at the same OT entry the PS1 draws first. Not effect models (modules index their split
  * vertices in list order) nor the Zombie's (model 14: effect 0x17F numbers its polygons, docs R26). */
 #define STRIP_ORDERED 0x8000 /* BtlUnit9C8.flags: done (the game reads bit 0 only; a reloaded file starts clear) */
-#ifdef __arm__
+#ifdef PORT_NDS
 #define STRIP_COLD __attribute__((target("thumb")))
 #else
 #define STRIP_COLD

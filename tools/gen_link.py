@@ -386,10 +386,8 @@ def main():
         # Native battle effect modules (port/game/effect_native.c): load address, code range, an FNV-1a hash of
         # the code bytes that identifies the image once it has landed, the relocations, and the module's functions
         # as (PS1 address, native address) pairs. Code bytes are never relocated, so the hash stays valid.
-        # On the DS (ARM) the modules' code isn't linked in: each module is linked on its own at psx_fx_area and
-        # loaded from SD when its image lands (tools/pack_fxmods.py, effect_native.c); the table gives its index in
-        # the pack instead, and the relocations and functions travel in the module's header (fxhead_<module>.s).
-        overlay = directive == ".4byte"
+        # Both the 3DS and the PC link every module's code in (the DS loaded each from an SD pack instead).
+        overlay = False
         fx = [b for b in sorted(bins) if b.startswith("fx_")]
         out += ["", '    .section .rodata.psx_fxmods,"a"', "    .balign 4", "    .global psx_fxmods", "psx_fxmods:"]
         for index, b in enumerate(fx):
