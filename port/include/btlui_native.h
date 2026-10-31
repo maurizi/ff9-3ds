@@ -13,6 +13,7 @@ typedef struct {
     void (*palette)(int index, uint16_t rgb15);
     void *store;                    /* the two lists' records */
     unsigned int store_size;
+    void *tables;                   /* nui_tables_size bytes: its palette, dirty areas... */
     uint8_t *pixels;                /* the canvas (rows pitch bytes apart; written by halfwords) */
     int pitch;
     uint16_t *scratch;              /* scratch_rows rows of w RGB15 pixels: a band drawn before it's converted */
@@ -23,6 +24,7 @@ typedef struct {
 } NuiCanvas;
 
 void nui_init(const NuiCanvas *canvas);
+extern const unsigned int nui_tables_size;
 /* draw the list at head (a battle VBlank list, btlui_submitOt); 0: not drawn (no canvas) */
 int nui_list(const uint32_t *head);
 /* the shown buffer changed: a frame with no list since the last change shows no UI */
@@ -34,6 +36,6 @@ void nui_invalidate(void);
 /* the top canvas's row where the scene (scaled to 4/5) starts */
 void nui_set_top(int y);
 
-extern unsigned int nui_stats_drawn, nui_stats_pixels, nui_stats_unknown;
+extern unsigned int nui_stats_drawn, nui_stats_pixels, nui_stats_unknown, nui_stats_max;
 
 #endif

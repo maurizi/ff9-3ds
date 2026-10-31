@@ -56,13 +56,13 @@ static int redraw_all[2] = {1, 1};
 static int top_y;                       /* the top canvas: where the scene's first row is */
 static unsigned int src_writes, src_seen;
 static int lists_since_frame;
-unsigned int nui_stats_drawn, nui_stats_pixels, nui_stats_unknown;
+unsigned int nui_stats_drawn, nui_stats_pixels, nui_stats_unknown, nui_stats_max;
 
 /* ---- palette ---------------------------------------------------------------------------------------------- */
 
 #define HASH 512
 #define RECTS 24
-/* the larger tables, at the start of the platform's store (no resident memory) */
+/* the larger tables, in memory the platform lends (no resident memory) */
 typedef struct {
     u16 keys[HASH];                     /* RGB15 colours (0: empty: black is index 0) */
     u8 vals[HASH];
@@ -75,6 +75,7 @@ typedef struct {
     u32 lut[256];                       /* a sprite's CLUT, raw low and modulated high */
 } Tables;
 static Tables *T;
+const unsigned int nui_tables_size = sizeof(Tables);
 static u16 list_no;
 static int free_count, palette_full; /* palette_full: compacted during this list */
 static u16 memo_c = 0xFFFF;
@@ -327,7 +328,54 @@ NUI_CODE static void triangle(const NuiPrim *p, const V *a, const V *b, const V 
     }
 }
 
+/* A quad that is a rectangle (v0 top left, v1 top right, v2 bottom left, v3 bottom right) shaded left to right only:
+ * both triangles' arithmetic comes down to the same ramp along each row (the slope's quotient divides by the height
+ * exactly, the vertical slopes are 0, and the top-left rule gives the shared diagonal's pixels to one of them). */
+NUI_HOT static int rect_ramp(const NuiPrim *p, int x0, int y0, int x1, int y1) {
+    const int lx = p->x[0], rx = p->x[1], ty = p->y[0], by = p->y[2];
+    if (p->n != 4 || p->x[2] != lx || p->x[3] != rx || p->y[1] != ty || p->y[3] != by || rx <= lx || by <= ty ||
+        rx - lx >= 1024 || by - ty >= 512)
+        return 0;
+    const int gouraud = p->flags & F_GOURAUD;
+    if (gouraud && (p->r[0] != p->r[2] || p->g[0] != p->g[2] || p->b[0] != p->b[2] || p->r[1] != p->r[3] ||
+                    p->g[1] != p->g[3] || p->b[1] != p->b[3]))
+        return 0;
+    if (x0 < lx) x0 = lx;
+    if (y0 < ty) y0 = ty;
+    if (x1 > rx - 1) x1 = rx - 1;
+    if (y1 > by - 1) y1 = by - 1;
+    if (x1 < x0 || y1 < y0) return 1;
+    const int w = rx - lx, dither = p->flags & F_DITHER, semi = p->flags & F_SEMI;
+    int drdx = 0, dgdx = 0, dbdx = 0;
+    if (gouraud) {
+        drdx = (int)((unsigned)((p->r[1] - p->r[0]) * 4096 / w) * 16u);
+        dgdx = (int)((unsigned)((p->g[1] - p->g[0]) * 4096 / w) * 16u);
+        dbdx = (int)((unsigned)((p->b[1] - p->b[0]) * 4096 / w) * 16u);
+    }
+    const int skip = x0 - lx;
+    const int r0 = (int)(((unsigned)p->r[0] << 16) + 0x8000u + (unsigned)drdx * (unsigned)skip);
+    const int g0 = (int)(((unsigned)p->g[0] << 16) + 0x8000u + (unsigned)dgdx * (unsigned)skip);
+    const int b0 = (int)(((unsigned)p->b[0] << 16) + 0x8000u + (unsigned)dbdx * (unsigned)skip);
+    for (int y = y0; y <= y1; ++y) {
+        u16 *d = &AT(p, x0, y);
+        int r = r0, g = g0, b = b0;
+        for (int x = x0; x <= x1; ++x, ++d) {
+            int cr = r >> 16, cg = g >> 16, cb = b >> 16;
+            cr = cr < 0 ? 0 : cr > 255 ? 255 : cr;
+            cg = cg < 0 ? 0 : cg > 255 ? 255 : cg;
+            cb = cb < 0 ? 0 : cb > 255 ? 255 : cb;
+            u16 c = dither ? dither_colour(cr, cg, cb, x + (p->phase & 3), y + (p->phase >> 2))
+                           : (u16)((cr >> 3) | (cg >> 3) << 5 | (cb >> 3) << 10);
+            *d = semi ? blend(*d, c, p->abr) : c;
+            r = (int)((unsigned)r + (unsigned)drdx); g = (int)((unsigned)g + (unsigned)dgdx);
+            b = (int)((unsigned)b + (unsigned)dbdx);
+        }
+    }
+    return 1;
+}
+
 NUI_CODE static void draw_poly(const NuiPrim *p, int x0, int y0, int x1, int y1) {
+    if (rect_ramp(p, x0, y0, x1, y1)) return;
     V v[4];
     for (int i = 0; i < p->n; ++i) v[i] = (V){p->x[i], p->y[i], p->r[i], p->g[i], p->b[i]};
     /* (flat ones: the first vertex's colour) */
@@ -628,10 +676,9 @@ NUI_CODE static void finish(void) {
 
 NUI_CODE void nui_init(const NuiCanvas *canvas) {
     cv = *canvas;
-    /* the tables, then the two lists */
-    T = (Tables *)cv.store;
-    max_prims = cv.store_size > sizeof *T ? (int)((cv.store_size - sizeof *T) / 2 / sizeof(NuiPrim)) : 0;
-    lists[0] = (NuiPrim *)(T + 1);
+    T = (Tables *)cv.tables;
+    max_prims = (int)(cv.store_size / 2 / sizeof(NuiPrim));
+    lists[0] = (NuiPrim *)cv.store;
     lists[1] = lists[0] + max_prims;
     counts[0] = counts[1] = 0;
     palette_reset();
@@ -645,6 +692,7 @@ NUI_CODE int nui_list(const uint32_t *head) {
     st.ax1 = 1023; st.ay1 = 511;
     counts[1] = 0;
     walk(head);
+    if ((unsigned int)counts[1] > nui_stats_max) nui_stats_max = (unsigned int)counts[1];
     finish();
     lists_since_frame++;
     return 1;

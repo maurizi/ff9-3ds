@@ -5370,9 +5370,12 @@ void gxh_enable(int on) {
             ui_flush();
             ui_count[0] = ui_count[1] = 0;
             /* (the target cursors on the top screen's 2D layer, which is free) */
+            /* (its band: 16 rows of the scaler's block, which the bottom screen no longer needs; its tables after) */
+            _Static_assert(BLOCK * 256 * 2 >= 16 * 256 * 2 + 6 * 1024, "the native UI's band and tables");
             const NuiCanvas c = {256, 192, 0, nui_palette, ui_list[0], 2 * UI_MAX * sizeof(UiPrim),
-                                 (u8 *)BG_BMP_RAM_SUB(0), 256, scaled_block(), 16, (u8 *)BG_BMP_RAM(0), 256,
-                                 nui_top_palette};
+                                 scaled_block() + 16 * 256, (u8 *)BG_BMP_RAM_SUB(0), 256, scaled_block(), 16,
+                                 (u8 *)BG_BMP_RAM(0), 256, nui_top_palette};
+            if (nui_tables_size > 6 * 1024) port_fatal("native UI tables: %u bytes", nui_tables_size);
             nui_init(&c);
             nui_on = 1;
             bgShow(layer_bg);

@@ -19,7 +19,7 @@ static uint16_t top_palette[256];
 static void set_top_palette(int i, uint16_t c) { top_palette[i] = c; }
 static uint16_t palette[256];
 static uint16_t scratch[16 * 320];
-static uint64_t store[48 * 1024 / 8];
+static uint64_t store[2 * 192 * 84 / 8], tables[8 * 1024 / 8];
 static unsigned long lists, mismatched_lists, mismatched_pixels;
 
 static void set_palette(int i, uint16_t c) { palette[i] = c; }
@@ -27,7 +27,7 @@ static void set_palette(int i, uint16_t c) { palette[i] = c; }
 void btlui_check_mode(const char *m) {
     mode = !strcmp(m, "check") ? 1 : !strcmp(m, "ds") ? 2 : 0;
     if (!mode) { fprintf(stderr, "--native-ui check|ds\n"); exit(1); }
-    NuiCanvas c = {mode == 1 ? 320 : 256, mode == 1 ? 240 : 192, mode == 1, set_palette, store, sizeof store,
+    NuiCanvas c = {mode == 1 ? 320 : 256, mode == 1 ? 240 : 192, mode == 1, set_palette, store, sizeof store, tables,
                    &canvas[0][0], 320, scratch, 16, mode == 2 ? &top[0][0] : NULL, 256, set_top_palette};
     nui_set_top((192 - 224 * 4 / 5) / 2);
     nui_init(&c);
@@ -111,8 +111,9 @@ void btlui_check_dump(const char *dir, long frame) {
 
 void btlui_check_report(void) {
     if (mode == 1)
-        fprintf(stderr, "native ui: %lu lists, %lu differ (%lu pixels); %u records drawn, %u pixels, %u unknown\n",
-                lists, mismatched_lists, mismatched_pixels, nui_stats_drawn, nui_stats_pixels, nui_stats_unknown);
+        fprintf(stderr, "native ui: %lu lists, %lu differ (%lu pixels); %u records drawn, %u pixels, %u unknown, "
+                "%u most in a list\n", lists, mismatched_lists, mismatched_pixels, nui_stats_drawn, nui_stats_pixels,
+                nui_stats_unknown, nui_stats_max);
 }
 
 /* (gpu.c's weak one does nothing) */
