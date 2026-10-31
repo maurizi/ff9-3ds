@@ -164,7 +164,14 @@ unsigned int ctr_ui_pad_buttons(long frame) {
         timer--;
         return timer >= SETTLE ? held : 0;
     }
-    if (!goal) return 0;
+    if (!goal) { /* (the bottom screen may be steering the game's cursor toward something tapped) */
+        unsigned port_hud_drive(void);
+        unsigned b = port_hud_drive();
+        if (!b) return 0;
+        held = b;
+        timer = PRESS + SETTLE - 1;
+        return held;
+    }
     held = step();
     if (ctr_ui_nhands) port_log("touch: hand %d,%d -> %04x\n", ctr_ui_hands[0][0], ctr_ui_hands[0][1], held);
     if (!held) return 0;

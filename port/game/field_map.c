@@ -15,6 +15,15 @@
 #define MAP_PLAYER 0x30E8F8 /* the player */
 #define MAP_EXIT 0x48D860   /* an exit (a region whose "player inside" function changes field or goes to the world) */
 
+/* whether p points into PS1 RAM (where all the game's data is): the bottom screen reads game state the PS1 never
+ * showed this early, and a field that is still starting up can hold stale or garbage pointers (a real 3DS doesn't zero
+ * its memory as an emulator does) */
+extern unsigned char psx_ram[];
+static int ram_ok(const void *p, unsigned size) {
+    const unsigned char *b = (const unsigned char *)p;
+    return b >= psx_ram + 0x10000 && b + size <= psx_ram + 0x200000;
+}
+
 static int bound_tri(const BgiTriangle *t) {
     return (t->flags & BGI_FLAG_ACTIVE) && !((t->flags >> 8) & BGI_MASK_NO_PLAYER);
 }
@@ -37,9 +46,11 @@ static int region_is_exit(int entry);
 
 static void collect_exits(void) {
     n_exits = 0;
-    for (EvtListNode *nd = evt_getObjectList(); nd && n_exits < 16; nd = nd->next) {
+    if (!ram_ok(g_evtScripts, 8)) return;
+    int guard = 0;
+    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && n_exits < 16 && guard++ < 64; nd = nd->next) {
         EvtObject *o = nd->obj;
-        if (!o || o->kind != 3) continue;
+        if (!ram_ok(o, sizeof(Unk80039C38Quad)) || o->kind != 3) continue;
         Unk80039C38Quad *q = (Unk80039C38Quad *)o;
         if (q->unk14 < 3 || q->unk14 > 8 || !region_is_exit(o->scriptIdx)) continue;
         exits[n_exits].n = q->unk14;
@@ -98,6 +109,7 @@ static void mark_connected(int n, int start) {
 
 /* the player's walkmesh triangle, -1 if unknown */
 static int player_triangle(EvtObject *pl) {
+    if (!ram_ok(g_fieldBgi.actors, g_fieldBgi.actorCount * sizeof(BgiActor))) return -1;
     for (int i = 0; pl && i < g_fieldBgi.actorCount; i++)
         if ((EvtObject *)g_fieldBgi.actors[i].actor == pl) return g_fieldBgi.actors[i].triangle;
     return -1;
@@ -105,7 +117,9 @@ static int player_triangle(EvtObject *pl) {
 
 /* whether the script entry's tag-2 function goes to another field or the world map (a literal 2B / B6 in it) */
 static int region_is_exit(int entry) {
+    if (!ram_ok(g_evtScripts + entry * 8, 8)) return 0;
     u8 *h = g_evtScripts + *(u16 *)(g_evtScripts + entry * 8);
+    if (!ram_ok(h, *(u16 *)(g_evtScripts + entry * 8 + 2))) return 0;
     int size = *(u16 *)(g_evtScripts + entry * 8 + 2), n = *(u16 *)h >> 8;
     u16 *p = (u16 *)(h + 2);
     for (int i = 0; i < n; i++) {
@@ -144,11 +158,25 @@ static inline u32 xy(int x, int y) { return (u32)(x & 0xFFFF) | (u32)y << 16; }
 /* The map in the box (bx, by, bw, bh): packets from pkt linked into ot[0] (drawn above the box), returns the next
  * free byte; pkt_end: where the buffer ends. Nothing without a walkmesh. */
 u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, int bh) {
-    if (!g_fieldBgi.loaded || !g_fieldBgi.header || !g_fieldBgi.triangles) return pkt;
+    if (!g_fieldBgi.loaded || !ram_ok(g_fieldBgi.header, sizeof(BgiHeader))) return pkt;
     const int n = g_fieldBgi.header->triangleCount;
-    if (n > MAX_TRIS) return pkt;
+    if (n <= 0 || n > MAX_TRIS || !ram_ok(g_fieldBgi.triangles, n * sizeof(BgiTriangle)) ||
+        !ram_ok(g_fieldBgi.vertices, g_fieldBgi.header->vertexCount * sizeof(BgiVertex)) ||
+        !ram_ok(g_fieldBgi.floors, g_fieldBgi.header->floorCount * sizeof(BgiFloor)))
+        return pkt;
+    for (int i = 0; i < n; i++) { /* (indices in range: else a field still loading) */
+        const BgiTriangle *t = &g_fieldBgi.triangles[i];
+        if ((u16)t->floor >= g_fieldBgi.header->floorCount) return pkt;
+        for (int k = 0; k < 3; k++)
+            if ((u16)t->vertices[k] >= g_fieldBgi.header->vertexCount) return pkt;
+    }
     GameData *g = g_gameState->gameData;
-    EvtObject *pl = g->ctx.field ? (EvtObject *)g->npcModels[g->ctx.field->playerObj].actor : NULL;
+    EvtObject *pl = NULL;
+    if (ram_ok(g->ctx.field, sizeof(FieldMap)) && ram_ok(g->npcModels, sizeof(*g->npcModels) * 16) &&
+        g->ctx.field->playerObj >= 0 && g->ctx.field->playerObj < 16) {
+        void *a = g->npcModels[g->ctx.field->playerObj].actor;
+        if (ram_ok(a, sizeof(EvtObject))) pl = (EvtObject *)a;
+    }
     collect_exits();
     mark_connected(n, player_triangle(pl));
     int x0 = 0x7FFFFFFF, z0 = 0x7FFFFFFF, x1 = -0x7FFFFFFF, z1 = -0x7FFFFFFF;

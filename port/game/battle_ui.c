@@ -14,6 +14,9 @@
  * skips their OT entries). While an ability or item list or the target window is open, the game's own windows show
  * (with "Target Window: Always" forced for the battle, so targets are a list there too). A tap on a row moves the
  * game's cursor there and confirms; on a ready member's card, triangle (the PS1's switch to the next ready member).
+ * While targeting (the game's target window), the targets: a large button per enemy (left) and party member
+ * (right), marked when targeted, ALL / ONE (R1) and BACK. A tap on a unit steers the game's cursor to it (a press per
+ * frame, watching what the game targets: port_battle_drive), a tap on the targeted one confirms.
  * Game logic and ATB timing are the game's: nothing here changes what a button does. */
 #include "psyq_port.h"
 #include "ovl_0b.h"
@@ -25,9 +28,11 @@
 #define PAD_LEFT_ 0x80u
 #define PAD_TRIANGLE_ 0x1000u
 #define PAD_CROSS_ 0x4000u
+#define TARGET_PANEL 0 /* (the port's own targets: not finished; the game's target window meanwhile) */
 #define HOLD(n) ((u32)(n) << 24) /* (a press held n more frames: port/3ds/touch.c) */
 
 int port_battle_hud_on; /* the bottom screen is the port's this frame (render.c leaves the PS1 windows out) */
+int port_battle_hud_targets; /* ... its targets too (render.c leaves the target window out) */
 
 void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h);
 void ctr_hud_draw(int slot, int x, int y, int w, int h);
@@ -55,9 +60,15 @@ static int cmd_shown;
 
 static int inside(const RECT *r, int x, int y) { return x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h; }
 
+extern unsigned char psx_ram[];
+static int ram_ok(const void *p, unsigned size) { /* (as field_hud.c's) */
+    const unsigned char *b = (const unsigned char *)p;
+    return b >= psx_ram + 0x10000 && b + size <= psx_ram + 0x200000;
+}
+
 static BtlUnit *party_unit(int i) {
-    int n = 0;
-    for (BtlUnit *u = g_gameState->gameData->ctx.battle->unitList; u; u = u->next)
+    int n = 0, guard = 0;
+    for (BtlUnit *u = g_gameState->gameData->ctx.battle->unitList; ram_ok(u, sizeof *u) && guard++ < 32; u = u->next)
         if (u->flags & 1) {
             if (n == i) return u;
             n++;
@@ -83,7 +94,7 @@ static void draw_cards(void) {
     int y = r_cards.y + 4;
     for (int i = 0; i < 4; i++, y += 43) {
         BtlUnit *u = card_unit[i] = party_unit(i);
-        if (!u || !u->menu) continue;
+        if (!u || !ram_ok(u->menu, 16) || !ram_ok(u->menu->chr, sizeof(Character)) || !ram_ok(u->max, 8)) continue;
         Character *c = u->menu->chr;
         int x = r_cards.x + 4;
         const u8 *e = port_portrait(g_portraitByKind[c->info.b.kind]);
@@ -140,6 +151,7 @@ static RECT r_list[5], r_desc = {6, 174, 232, 46}, r_back = {242, 174, 74, 46};
 static int list_shown, list_first, list_n;
 s32 o0b_btlui_getListHelpText(void);
 s32 o0b_btlui_getAbilityState(s32);
+void *o0b_btl_getUnitName(BtlUnit *);
 
 static int draw_list(void) {
     static const u8 back[] = "BACK", hp[] = "HP", mp[] = "MP";
@@ -201,18 +213,74 @@ static int draw_list(void) {
     return 1;
 }
 
+static RECT r_tgt[12], r_all = {6, 196, 100, 26}, r_tback = {242, 196, 74, 26};
+static BtlUnit *tgt_unit[12];
+static int n_tgt, tgt_shown;
+static BtlUnit *tgt_goal; /* the unit a tap asked for */
+static int tgt_steps;
+
+static int draw_targets(void) {
+    static const u8 enemy[] = "ENEMY", party[] = "PARTY", all[] = "ALL", one[] = "ONE", back[] = "BACK";
+    tgt_shown = 0;
+    if (!g_btlTarget.windowOpen || g_btlTarget.listKind) return 0;
+    int ne = 0, np = 0;
+    n_tgt = 0;
+    ui_drawLabel(8, 37, 2, (s32)enemy, 0);
+    ui_drawLabel(214, 37, 2, (s32)party, 0);
+    for (BtlUnit *u = g_gameState->gameData->ctx.battle->unitList; u && n_tgt < 12; u = u->next) {
+        if (!(u->flags >> 28 & 1)) continue;
+        int is_party = u->flags & 1;
+        RECT *r = &r_tgt[n_tgt];
+        if (is_party) { if (np == 5) continue; r->x = 212; r->y = 42 + np * 30; r->w = 104; r->h = 26; np++; }
+        else { if (ne == 5) continue; r->x = 6; r->y = 42 + ne * 30; r->w = 200; r->h = 26; ne++; }
+        tgt_unit[n_tgt++] = u;
+        int ko = u->hp == 0;
+        text_drawBlock(r->x + 12, r->y + 7, 2, (u8 *)o0b_btl_getUnitName(u), ko ? 2 : is_party && u->max->maxHp / 6 >= u->hp ? 4 : 0);
+        if (u->flags >> 29 & 1) bar(&g_ot[2], r->x + 3, r->y + 6, 3, r->h - 12, 0x40E0F8);
+        win_drawBox(r, 4, 2);
+    }
+    if (g_btlTarget.canToggleAll) {
+        const u8 *l = g_btlTarget.targetAll ? one : all;
+        int w = ui_measureLabel((u8 *)l);
+        ui_drawLabel(r_all.x + (r_all.w - w) / 2, r_all.y + 9, 2, (s32)l, 0);
+        win_drawBox(&r_all, 4, 2);
+    }
+    int w = ui_measureLabel((u8 *)back);
+    ui_drawLabel(r_tback.x + (r_tback.w - w) / 2, r_tback.y + 9, 2, (s32)back, 0);
+    win_drawBox(&r_tback, 4, 2);
+    tgt_shown = 1;
+    return 1;
+}
+
+/* each idle frame (port/3ds/touch.c): the next press toward the unit a tap asked for, 0 when there or none */
+unsigned port_battle_drive(void) {
+    if (!tgt_goal || !tgt_shown || g_btlUi->menuState != BTLUI_MENU_TARGET) { tgt_goal = NULL; return 0; }
+    if (tgt_goal->flags >> 29 & 1 && !g_btlTarget.targetAll) { tgt_goal = NULL; return 0; } /* (there: a tap confirms) */
+    if (++tgt_steps > 24) { tgt_goal = NULL; return 0; }
+    if (g_btlTarget.targetAll) return 0x0800; /* (R1: back to one target) */
+    int want_party = tgt_goal->flags & 1;
+    if (want_party != g_btlTarget.side && g_btlTarget.canSwitchSide) return want_party ? PAD_RIGHT_ : PAD_LEFT_;
+    return PAD_DOWN_;
+}
+
 /* field_hud.c's frame: whether the battle screen is the port's this frame (then it draws, into g_ot / g_primPtr) */
 int port_battle_hud_draw(void) {
     port_battle_hud_on = 0;
-    if (!g_gameState->gameData->ctx.battle || !g_btlUi || !g_btlUi->partyCount) return 0;
+    if (!ram_ok(g_gameState->gameData->ctx.battle, 16) || !ram_ok(g_btlUi, sizeof *g_btlUi) || !g_btlUi->partyCount) return 0;
     int st = g_btlUi->menuState;
-    cmd_shown = list_shown = 0;
+    cmd_shown = list_shown = tgt_shown = 0;
+    port_battle_hud_targets = 0;
     if (st == BTLUI_MENU_LIST) {
         if (!draw_list()) return 0;
         port_battle_hud_on = 1;
         return 1;
     }
-    if (st == BTLUI_MENU_TARGET) return 0;
+    port_battle_hud_targets = 0;
+    if (st == BTLUI_MENU_TARGET) {
+        if (!TARGET_PANEL || !draw_targets()) return 0;
+        port_battle_hud_on = port_battle_hud_targets = 1;
+        return 1;
+    }
     if (st == BTLUI_MENU_CLOSING && g_btlUi->windows[2] && g_btlUi->windows[2]->state) return 0; /* (a list opening) */
     draw_commands();
     draw_cards();
@@ -223,6 +291,19 @@ int port_battle_hud_draw(void) {
 /* a tap on the battle screen: the presses it stands for (field_hud.c's port_hud_tap) */
 int port_battle_tap(int x, int y, unsigned *seq, int max) {
     if (!port_battle_hud_on || max < 10) return 0;
+    if (tgt_shown) {
+        for (int i = 0; i < n_tgt; i++) {
+            if (!inside(&r_tgt[i], x, y)) continue;
+            BtlUnit *u = tgt_unit[i];
+            if (u->flags >> 29 & 1 && !g_btlTarget.targetAll) { seq[0] = PAD_CROSS_; return 1; } /* (targeted: confirm) */
+            tgt_goal = u;
+            tgt_steps = 0;
+            return 0;
+        }
+        if (g_btlTarget.canToggleAll && inside(&r_all, x, y)) { seq[0] = 0x0800; return 1; } /* R1 */
+        if (inside(&r_tback, x, y)) { seq[0] = 0x2000; return 1; } /* circle */
+        return 0;
+    }
     if (list_shown) {
         Window *w = g_btlUi->windows[2];
         int cur = w ? w->list.top + w->list.cursor : 0;

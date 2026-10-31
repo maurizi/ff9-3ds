@@ -43,6 +43,14 @@ static RECT r_ate = {216, 178, 100, 38};
 
 static int shown;
 
+/* game pointers the bottom screen follows, checked to point into PS1 RAM (a field starting up may hold garbage: a real
+ * 3DS doesn't zero memory as an emulator does) */
+extern unsigned char psx_ram[];
+static int ram_ok(const void *p, unsigned size) {
+    const unsigned char *b = (const unsigned char *)p;
+    return b >= psx_ram + 0x10000 && b + size <= psx_ram + 0x200000;
+}
+
 /* whether the field screen is up (and so its buttons are there to touch) */
 int port_hud_shown(void) {
     return shown;
@@ -77,7 +85,12 @@ static int inside(const RECT *r, int x, int y) { return x >= r->x && x < r->x + 
 /* A tap at (x, y) of the bottom screen (its UI starts oy rows down): the PS1 presses it stands for, into seq (at most
  * max), how many; 0: none here. */
 int port_battle_tap(int x, int y, unsigned *seq, int max);
+unsigned port_battle_drive(void);
 static int shown_battle;
+/* each idle frame of the touch driver: a press the bottom screen steers with (battle targets), 0 none */
+unsigned port_hud_drive(void) {
+    return shown_battle ? port_battle_drive() : 0;
+}
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (!shown) return 0;
     y -= oy;
@@ -142,7 +155,7 @@ static void draw_party(void) {
     int y = r_party.y + 1;
     for (int i = 0; i < 4; i++, y += 31) {
         Character *c = g->party[i];
-        if (!c) continue;
+        if (!ram_ok(c, sizeof *c)) continue;
         portrait(i, g_portraitByKind[g->characters[c->info.b.id].info.b.kind], r_party.x + 3, y);
         text_drawBlock(r_party.x + 39, y + 1, 2, c->name, 0);
         ui_drawStatusIcons(r_party.x + 98, y + 2, 2, c->status, 0);
@@ -234,7 +247,7 @@ static void draw(void) {
     u8 buf[16];
 
     /* the header: where, and since when and with what */
-    if (g->locationName != NULL && *g->locationName != 0xFF) text_drawBlock(r_head.x + 8, r_head.y + 6, 2, g->locationName, 0);
+    if (ram_ok(g->locationName, 1) && *g->locationName != 0xFF) text_drawBlock(r_head.x + 8, r_head.y + 6, 2, g->locationName, 0);
     ui_drawSprite(r_head.x + 190, r_head.y + 8, 2, 0xB1, 0);
     ui_drawSmallDigits(r_head.x + 203, r_head.y + 9, 2, buf, text_formatTime(game_getPlayTime(), buf, 1));
     ui_drawSprite(r_head.x + 246, r_head.y + 8, 2, 0xB2, 0);

@@ -1056,12 +1056,13 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     if (bx0 >= bx1 || by0 >= by1) return;
     Vtx moved[6];
     int layer = -1, ox = 0, oy = 0;
-    extern int psx_ui_list_battle, port_battle_hud_on;
+    extern int psx_ui_list_battle, port_battle_hud_on, port_battle_hud_targets;
     /* the battle screen's own command rows and party cards replace the PS1's command window and party panel (OT
      * entries 14-16 and 18-20, and the panel header at 7-8 (shared with the lists, not open then): battle_ui.c) */
     if (ui_mode && psx_ui_list_battle && port_battle_hud_on) {
         int slot = 0x17 - psx_ot_entry;
         if (slot == 7 || slot == 8 || slot == 14 || slot == 15 || slot == 16 || (slot >= 18 && slot <= 20)) return;
+        if (port_battle_hud_targets && (slot == 4 || slot == 5)) return; /* (the target window: the port's targets) */
     }
     /* the battle list's entry 17 (btlui_drawTargetCursors): the hands pointing into the scene, drawn in it */
     if (ui_mode && !(psx_ui_list_battle && 0x17 - psx_ot_entry == 17)) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
