@@ -121,6 +121,7 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         if (!n) n = port_equip_tap(x, y - oy, seq);
         if (!n) n = port_ability_tap(x, y - oy, seq);
         if (!n) { int port_config_tap(int, int, unsigned *); n = port_config_tap(x, y - oy, seq); }
+        if (!n) { int port_status_tap(int, int, unsigned *); n = port_status_tap(x, y - oy, seq); }
         if (!n) n = port_list_tap(x, y - oy, seq);
         if (n) return n;
     }
