@@ -72,6 +72,7 @@ to `/3ds/ff9/cards/card1.mcr`.
 | [docs/design.md](docs/design.md) | the 3DS architecture: renderer, stereo, screens, sound, threads |
 | [docs/porting-notes.md](docs/porting-notes.md) | PS1 behaviours the decomp's C relies on, and how the port handles each |
 | [docs/scenario-testing.md](docs/scenario-testing.md) | launching fields, battles and the world map directly |
+| [docs/ui-design.md](docs/ui-design.md) | the dual-screen UI design, per mode |
 | [docs/voice-packs.md](docs/voice-packs.md) | the voice pack format, and finding a line's id |
 | [docs/decomp-requests.md](docs/decomp-requests.md) | what the port needs identified on the decomp side |
 

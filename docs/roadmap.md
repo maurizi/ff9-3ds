@@ -21,7 +21,8 @@ Status 2026-10-31 (Azahar; no hardware measurements yet).
    terrain blocks through a native path (port/game/world_native.c's hook): faces emitted from the vertex pass's
    arrays without packets, batched by texture; then the vertex transform itself in the vertex shader.
 2. Hardware validation on Old and New 3DS: frame times, NDSP, SD read speed, sleep/HOME behaviour.
-3. Field bottom screen when no window is open: location, party HP, Menu / Cards buttons.
+3. **Dual-screen UI redesign** (`docs/ui-design.md`): field bottom screen (area map, party, Menu/ATE/Cards),
+   battle commands and party cards, menus with top-screen detail views, Tetra Master board, world map.
 4. Native model renderers (battle and field models through the hooks the DS port found), with a depth buffer:
    prerequisites for cel-shading and replacement models.
 5. Extras: cel-shading (New 3DS), high-resolution models, StreetPass (Tetra Master card exchange). Voice acting
