@@ -1054,7 +1054,9 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     if (bx0 >= bx1 || by0 >= by1) return;
     Vtx moved[6];
     int layer = -1, ox = 0, oy = 0;
-    if (ui_mode) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
+    extern int psx_ui_list_battle;
+    /* the battle list's entry 17 (btlui_drawTargetCursors): the hands pointing into the scene, drawn in it */
+    if (ui_mode && !(psx_ui_list_battle && 0x17 - psx_ot_entry == 17)) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
     else if (menu_state == 2 || ui_packet()) { /* (a menu: the whole frame) */
         int x, y, w, h;
         psx_gpu_draw_area(&x, &y, &w, &h);

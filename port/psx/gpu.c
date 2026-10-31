@@ -734,6 +734,7 @@ __attribute__((weak)) int psx_vblank_list_native(u32 *list) { (void)list; return
 /* The renderer may draw the inserted list (the battle UI) somewhere of its own: the 3DS's bottom screen
  * (port/3ds/render.c). Between the two calls every primitive belongs to it. */
 __attribute__((weak)) void psx_ui_list_begin(void) {}
+int psx_ui_list_battle; /* the list being drawn is the battle UI's (its OT has 0x18 entries, head g_ot[0x17]) */
 __attribute__((weak)) void psx_ui_list_end(void) {}
 
 void ContinueDraw(u32 *insaddr, s32 contaddr) {
@@ -741,9 +742,11 @@ void ContinueDraw(u32 *insaddr, s32 contaddr) {
      * uses this at VBlank for battle commands, status bars and text. */
     if (!contaddr && psx_skip_vblank_list()) return;
     if (insaddr && !(!contaddr && psx_vblank_list_native(insaddr))) {
+        psx_ui_list_battle = 1;
         psx_ui_list_begin();
         DrawOTag(insaddr);
         psx_ui_list_end();
+        psx_ui_list_battle = 0;
     }
     if (contaddr && ((u32)contaddr & 0xFFFFFF) != OT_END)
         DrawOTag(link_ptr((u32)contaddr & 0xFFFFFF));
