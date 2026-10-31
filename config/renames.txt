@@ -19,3 +19,5 @@ src/main/window win_drawAll win_drawAll_game
 src/ovl_3e/ovl_3e o3e_discChange_init o3e_discChange_init_game
 # Dialogue lines: each one shown is named for the voice pack (port/game/voice_hook.c).
 src/main/msg msg_open msg_open_game
+# The world map's navigation: its full map always drawn, for the bottom screen (port/game/world_navi.c).
+src/ovl_0c/tu_800BA528 o0c_wm_naviDraw o0c_wm_naviDraw_game

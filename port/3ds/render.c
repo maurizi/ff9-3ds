@@ -1252,11 +1252,16 @@ static int ui_layer_for(int x, int y, int clear) {
 static struct { const u8 *lo, *hi; int hit, age; } ranges[8];
 static int nranges;
 int port_game_mode(void);
+void port_bottom_packets(const void *lo, const void *hi);
 void port_ui_packets(const void *lo, const void *hi) {
     /* In a field or on the world map, windows are speech bubbles and prompts anchored to the scene: they stay on the
      * top screen with the speaker (docs/ui-design.md). Menus go to the bottom whatever the mode. */
     int mode = port_game_mode();
     if ((mode == 1 || mode == 3) && !menu_state) return;
+    port_bottom_packets(lo, hi);
+}
+/* packets [lo, hi) of the frame's buffer are drawn on the bottom screen (the world map's navigation map too) */
+void port_bottom_packets(const void *lo, const void *hi) {
     for (int i = 0; i < nranges; i++) /* (the buffer was reused: a range there is a past frame's) */
         if ((const u8 *)lo < ranges[i].hi && (const u8 *)hi > ranges[i].lo) ranges[i] = ranges[--nranges], i--;
     if (nranges == 8) nranges--;
