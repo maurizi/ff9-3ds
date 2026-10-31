@@ -57,8 +57,9 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
     icons todo]**
 - **Targeting**: the command area becomes an **enemy/ally panel laid out like the formation**, a large name button
   per enemy (HP once Libra was used); tap selects, tap again confirms; a **single / all** toggle for R; the top
-  cursor follows; physical controls drive the same state. **[partial: the game's ENEMY/PLAYER target window, one
-  tap selects and confirms]**
+  cursor follows; physical controls drive the same state. **[done: ENEMY / PARTY buttons, ALL / ONE, BACK; a tap
+  steers the game's cursor (a press a frame, watching what it targets), a second confirms; lists of targets (the
+  game's list-kind targeting) still the game's window]**
 - Wait mode: opening a sub-list pauses ATB exactly as on PS1; no timing changes. **[done: game logic unchanged]**
 
 ## Main menu

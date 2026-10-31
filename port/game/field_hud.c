@@ -83,7 +83,7 @@ static RECT r_choice[8];
 static int inside(const RECT *r, int x, int y) { return x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h; }
 
 /* A tap at (x, y) of the bottom screen (its UI starts oy rows down): the PS1 presses it stands for, into seq (at most
- * max), how many; 0: none here. */
+ * max), how many; 0: none here (the touch driver's own handling then); -1: taken, nothing to press now. */
 int port_battle_tap(int x, int y, unsigned *seq, int max);
 unsigned port_battle_drive(void);
 static int shown_battle;

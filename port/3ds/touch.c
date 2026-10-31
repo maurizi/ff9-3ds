@@ -143,8 +143,8 @@ unsigned int ctr_ui_pad_buttons(long frame) {
         /* a tap: on release, where it was; on the field screen's buttons (port/game/field_hud.c), their button */
         int port_hud_tap(int x, int y, int oy, unsigned *seq, int max);
         int n = swiped ? 0 : port_hud_tap(last_x, last_y, ctr_ui_oy, seq, 16);
-        if (n) nseq = n, iseq = 0;
-        else if (!swiped) tap(last_x, last_y);
+        if (n > 0) nseq = n, iseq = 0;
+        else if (!n && !swiped) tap(last_x, last_y);
     }
     if (iseq < nseq && timer == 0) { /* (a sequence the bottom screen asked for: one press at a time; bits 24-31: frames
                                        * it is held longer) */

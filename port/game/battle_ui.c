@@ -28,7 +28,7 @@
 #define PAD_LEFT_ 0x80u
 #define PAD_TRIANGLE_ 0x1000u
 #define PAD_CROSS_ 0x4000u
-#define TARGET_PANEL 0 /* (the port's own targets: not finished; the game's target window meanwhile) */
+#define TARGET_PANEL 1
 #define HOLD(n) ((u32)(n) << 24) /* (a press held n more frames: port/3ds/touch.c) */
 
 int port_battle_hud_on; /* the bottom screen is the port's this frame (render.c leaves the PS1 windows out) */
@@ -298,7 +298,7 @@ int port_battle_tap(int x, int y, unsigned *seq, int max) {
             if (u->flags >> 29 & 1 && !g_btlTarget.targetAll) { seq[0] = PAD_CROSS_; return 1; } /* (targeted: confirm) */
             tgt_goal = u;
             tgt_steps = 0;
-            return 0;
+            return -1; /* (handled: port_battle_drive steers there) */
         }
         if (g_btlTarget.canToggleAll && inside(&r_all, x, y)) { seq[0] = 0x0800; return 1; } /* R1 */
         if (inside(&r_tback, x, y)) { seq[0] = 0x2000; return 1; } /* circle */
