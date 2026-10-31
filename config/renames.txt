@@ -33,3 +33,5 @@ src/ovl_0a/menu_main o0a_menuMain_inputOrder o0a_menuMain_inputOrder_game
 src/ovl_0c/menu_main o0c_menuMain_inputCommand o0c_menuMain_inputCommand_game
 src/ovl_0c/menu_main o0c_menuMain_inputMember o0c_menuMain_inputMember_game
 src/ovl_0c/menu_main o0c_menuMain_inputOrder o0c_menuMain_inputOrder_game
+# The menus' lists by touch, directly (port/game/list_touch.c): where each list is drawn.
+src/main/window win_drawListBox win_drawListBox_game

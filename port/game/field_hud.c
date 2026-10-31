@@ -114,6 +114,11 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     { int n = port_name_tap(x, y - oy, seq, max); if (n) return n; } /* (name entry: port/game/name_touch.c) */
     { int port_menu_tap(int, int); if (port_menu_tap(x, y - oy)) return -1; } /* (main menu: menu_touch.c) */
     { int port_tm_tap(int, int); if (port_tm_tap(x, y - oy)) return -1; } /* (the card game: tm_ui.c) */
+    if (port_menu_state() == 2 && max > 0) { /* (a menu's list: list_touch.c) */
+        int port_list_tap(int, int, unsigned *);
+        int n = port_list_tap(x, y - oy, seq);
+        if (n) return n;
+    }
     if (g_gameState && g_gameState->mode == 3 && !port_menu_state()) return port_world_tap(x, y - oy) ? -1 : 0; /* (zoom, names) */
     if (!shown) return 0;
     y -= oy;
