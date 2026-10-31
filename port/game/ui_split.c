@@ -16,10 +16,11 @@ void win_drawAll(void) {
 }
 
 /* Whether a menu is up (menu_doOpen .. menu_finish): 0 no, 1 opening (the scene fades out), 2 showing (the scene is
- * hidden and the frame is all menu). The 3DS shows a menu on its bottom screen and freezes the scene on the top. */
+ * hidden and the frame is all menu), 3 the card game (mode 9: all of it UI, on both screens). The 3DS shows a menu on its bottom screen and freezes the scene on the top. */
 int port_menu_state(void) {
     GameData *g = g_gameState ? g_gameState->gameData : NULL;
     if (!g) return 0;
+    if (g_gameState->mode == 9) return 3; /* (the card game: all UI, on both screens) */
     if (!(g->flags & GD_MENU_OPEN)) return 0;
     return (g->flags & GD_HIDE_ALL) == GD_HIDE_ALL ? 2 : 1; /* (events hide parts of the scene by these flags too) */
 }

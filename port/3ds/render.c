@@ -1019,7 +1019,9 @@ void psx_gpu_ot_done(void);
  * pixels the layer doesn't have: its copies and the sprites reading them are skipped. */
 int ctr_ui_hands[CTR_MAX_HANDS][2], ctr_ui_nhands;
 static int shown_layer = -1; /* the layer of the displayed buffer, when it has UI */
-int ctr_ui_active(void) { return shown_layer >= 0; }
+/* the card game's hands: drawn in the scene itself (menu_state 3), relative to their drawing area, last frame's */
+static int scene_hands[CTR_MAX_HANDS][2], scene_nhands, scene_nhands_next;
+int ctr_ui_active(void) { return shown_layer >= 0 || (menu_state == 3 && scene_nhands > 0); }
 static struct { int x0, y0, x1, y1; } ui_cache[8];
 static int n_ui_cache;
 
@@ -1092,6 +1094,16 @@ void psx_gpu_ot_begin(const u32 *ot) {
 static void note_hand(int x, int y) {
     int k = ui_mode ? ui_list_layer : -1;
     int ox = ui_ox, oy = ui_oy;
+    if (k < 0 && menu_state == 3) {
+        int dx, dy, w, h;
+        psx_gpu_draw_area(&dx, &dy, &w, &h);
+        if (scene_nhands_next < CTR_MAX_HANDS) {
+            scene_hands[scene_nhands_next][0] = x - dx;
+            scene_hands[scene_nhands_next][1] = y - dy;
+            scene_nhands_next++;
+        }
+        return;
+    }
     if (k < 0) {
         if (menu_state != 2 && !ui_packet()) return;
         int w, h;
@@ -1234,6 +1246,7 @@ static void panel_draw(void) {
 int ctr_ui_oy;
 static int bottom_layer(const PsxDisplayInfo *d) {
     int k = layers[0].x == d->x && layers[0].y == d->y ? 0 : layers[1].x == d->x && layers[1].y == d->y ? 1 : -1;
+    if (menu_state == 3) return -1;
     if (k >= 0 && frames_drawn - layers[k].drawn > 2) k = -1; /* (nothing drawn into it lately) */
     return k;
 }
@@ -1243,6 +1256,16 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
     C3D_RenderTargetClear(bottom_rt, C3D_CLEAR_ALL, 0x000000FF, 0);
     C3D_FrameDrawOn(bottom_rt);
     if (d->rgb24) return;
+    if (menu_state == 3) { /* the card game: the frame itself, to touch */
+        screen_quad(bottom_rt, &mirror_tex[0], K_SCENE, NO_BLEND, 0xFF808080, d->x, d->y, w, h, 0, ctr_ui_oy);
+        if (scene_nhands_next) { /* (a frame that drew its hands: the latest) */
+            scene_nhands = scene_nhands_next;
+            memcpy(ctr_ui_hands, scene_hands, sizeof ctr_ui_hands);
+            scene_nhands_next = 0;
+        }
+        ctr_ui_nhands = scene_nhands;
+        return;
+    }
     screen_quad(bottom_rt, &mirror_tex[0], K_SCENE, NO_BLEND, 0xFF383838, d->x, d->y, w, h, 0, ctr_ui_oy);
     if (k < 0) { ctr_ui_nhands = 0; panel_draw(); return; }
     screen_quad(bottom_rt, &layers[k].tex, K_COMPOSITE, 5, 0xFFFFFFFF, 0, 0, w, h, 0, ctr_ui_oy);
@@ -1317,7 +1340,7 @@ void ctr_present(long frame) {
         /* in stereo, both edges are masked by the largest parallax, in both eyes: what a layer's shift uncovers at
          * the frame's edge isn't seen (a floating window) */
         int edge = stereo_on ? (int)(STEREO_MAX_PX * slider + 0.99f) : 0;
-        if (menu_state && !frozen) { /* a menu was asked for: keep the scene as it is now for the top screen */
+        if ((menu_state == 1 || menu_state == 2) && !frozen) { /* a menu was asked for: keep the scene for the top */
             for (int eye = 0; eye < 2; eye++) {
                 C3D_FrameDrawOn(freeze_rt[eye]);
                 set_proj_ortho(UI_W, UI_H, 0.0f);
@@ -1337,7 +1360,7 @@ void ctr_present(long frame) {
             frozen = 1;
             freeze_w = w;
             freeze_h = h;
-        } else if (!menu_state) frozen = 0;
+        } else if (!menu_state || menu_state == 3) frozen = 0;
         for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) {
             if (frozen) draw_to_screen(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h,
                                        (400 - freeze_w) / 2 + edge, (240 - freeze_h) / 2);

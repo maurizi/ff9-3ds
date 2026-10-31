@@ -125,6 +125,16 @@ static unsigned step(void) {
     }
     int hx = ctr_ui_hands[best][0], hy = ctr_ui_hands[best][1] + ROW_AT;
     if (++steps > MAX_STEPS) { goal = 0; return 0; }
+    extern int port_game_mode(void);
+    if (port_game_mode() == 9) { /* the card game: small cells in a grid, the hand's tip on the one it points at */
+        int tx = hx + HAND_W + 6;
+        if (gy > hy + 7) return PAD_DOWN;
+        if (gy < hy - 7) return PAD_UP;
+        if (gx > tx + 9) return PAD_RIGHT;
+        if (gx < tx - 9) return PAD_LEFT;
+        goal = 0;
+        return PAD_CROSS;
+    }
     if (gy > hy + 7) return PAD_DOWN;
     if (gy < hy - 7) return PAD_UP;
     if (gx < hx - 4) return PAD_LEFT;              /* left of the hand: the column before */
