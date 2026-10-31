@@ -54,11 +54,11 @@ static void collect_exits(void) {
     int guard = 0;
     for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && n_exits < 16 && guard++ < 64; nd = nd->next) {
         EvtObject *o = nd->obj;
-        if (!ram_ok(o, sizeof(Unk80039C38Quad)) || o->kind != 3) continue;
-        Unk80039C38Quad *q = (Unk80039C38Quad *)o;
-        if (q->unk14 < 3 || q->unk14 > 8 || !region_is_exit(o->scriptIdx)) continue;
-        exits[n_exits].n = q->unk14;
-        for (int k = 0; k < q->unk14; k++) exits[n_exits].x[k] = q->unk18[k].unk0, exits[n_exits].z[k] = q->unk18[k].unk2;
+        if (!ram_ok(o, sizeof(EvtRegion)) || o->kind != 3) continue;
+        EvtRegion *q = (EvtRegion *)o;
+        if (q->count < 3 || q->count > 8 || !region_is_exit(o->scriptIdx)) continue;
+        exits[n_exits].n = q->count;
+        for (int k = 0; k < q->count; k++) exits[n_exits].x[k] = q->pts[k].x, exits[n_exits].z[k] = q->pts[k].z;
         n_exits++;
     }
 }
@@ -164,15 +164,126 @@ static int region_is_exit(int entry) {
     return 0;
 }
 
-/* the menu type an object's script opens with a literal MENU (75 00 type arg): 2 a shop, 4 the save screen; 0 none */
-static int entry_menu(int entry) {
-    if (entry < 0 || !ram_ok(g_evtScripts + entry * 8, 8)) return 0;
+/* ---- who opens a shop or the save screen (decomp R32, ff9-decomp docs/r32/3ds-requests-3.md) ----
+ * An object's trigger functions (an actor's tags 3 talk and 8, a region's 3, 8 and 2) are walked an instruction at a
+ * time (the argument layouts: build/gen/evt_ops.h, from the decomp's op table); a literal MENU (75 00 type arg) of type
+ * 2 (shop) or 4 (save) marks the object running it, and a call (10/12/14 flags level uid tag, literal) is followed into
+ * the called object's function, a MENU found there marking the called object (a counter region calls its
+ * shopkeeper). */
+#include "../../build/gen/evt_ops.h" /* (tools/gen_evt_ops.py) */
+static u8 menu_of[256]; /* per object uid: 2 shop, 4 save, 0 none */
+
+/* past an expression (to its 0x7F) */
+static int skip_expr(const u8 *c, int i, int end) {
+    while (i < end) {
+        int b = c[i++];
+        if (b == 0x7F) return i;
+        if (b == 0x7D || b == 0x78) i += 2;
+        else if (b == 0x7E) i += 4;
+        else if (b == 0x79 || b == 0x7A || b == 0x29 || b == 0x5F) i += 1;
+        else if (b >= 0x80) i += b & 0x20 ? 2 : 1;
+    }
+    return -1;
+}
+
+/* the instruction after the one at i, -1 if it can't be decoded */
+static int next_ins(const u8 *c, int i, int end) {
+    int op = c[i++];
+    if (op >= 1 && op <= 3) return i + 2;
+    if (op == 4 || op == 0x30 || op == 0x31 || op == 0x6C || op == 0x6D) return i;
+    if (op == 5) return skip_expr(c, i, end);
+    if (op == 6) return i + 3 + 4 * c[i];
+    if (op == 0x0B) return i + 5 + 2 * c[i];
+    if (op == 0x0D) return i + 6 + 2 * (c[i] | c[i + 1] << 8);
+    if (op >= 7 && op <= 9) return i + 2;
+    if (op == 0x4E) { /* (a debug string, then a variable reference and a byte) */
+        while (i < end && c[i]) i++;
+        i++;
+        if (i >= end) return -1;
+        return i + 1 + (c[i] & 0x20 ? 2 : 1) + 1;
+    }
+    const char *spec;
+    if (op == 0xFF) {
+        if (i >= end) return -1;
+        spec = evt_op2_args[c[i++]];
+    } else spec = evt_op_args[op];
+    if (!spec) return -1;
+    if (!*spec) return i;
+    int f = c[i++];
+    for (; *spec && i >= 0 && i < end; spec++) {
+        int w = *spec == 'b' ? 1 : *spec == 'w' ? 2 : *spec == 't' ? 3 : 0;
+        if (*spec == 'r') { i++; continue; }
+        if (*spec == 'N') { /* a count, then that many pairs of s16 */
+            int n = f & 1 ? -1 : c[i];
+            if (f & 1) i = skip_expr(c, i, end); else i++;
+            f >>= 1;
+            for (int k = 0; k < n && i >= 0 && i < end; k++)
+                for (int h = 0; h < 2; h++, f >>= 1) i = f & 1 ? skip_expr(c, i, end) : i + 2;
+            continue;
+        }
+        i = f & 1 ? skip_expr(c, i, end) : i + w;
+        f >>= 1;
+    }
+    return i;
+}
+
+/* the code of entry's function tag: [*start, *end) from g_evtScripts; 0 if none */
+static int function_of(int entry, int tag, const u8 **code, int *start, int *end) {
+    if (entry < 0 || entry > 0xFF || !ram_ok(g_evtScripts + entry * 8, 8)) return 0;
     u8 *h = g_evtScripts + *(u16 *)(g_evtScripts + entry * 8);
     int size = *(u16 *)(g_evtScripts + entry * 8 + 2), n = *(u16 *)h >> 8;
-    if (!ram_ok(h, size)) return 0;
-    for (int k = 2 + n * 4; k + 3 < size; k++)
-        if (h[k] == 0x75 && h[k + 1] == 0x00 && (h[k + 2] == 2 || h[k + 2] == 4)) return h[k + 2];
+    if (!ram_ok(h, size) || 2 + n * 4 > size) return 0;
+    u16 *p = (u16 *)(h + 2);
+    for (int i = 0; i < n; i++) {
+        if (p[i * 2] != tag) continue;
+        int s = p[i * 2 + 1] + 2, e = size;
+        for (int j = 0; j < n; j++)
+            if (p[j * 2 + 1] + 2 > s && p[j * 2 + 1] + 2 < e) e = p[j * 2 + 1] + 2;
+        *code = h;
+        *start = s;
+        *end = e;
+        return 1;
+    }
     return 0;
+}
+
+static int entry_of_uid(int uid) {
+    int guard = 0;
+    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next)
+        if (ram_ok(nd->obj, sizeof(EvtObject)) && nd->obj->uid == uid) return nd->obj->scriptIdx;
+    return -1;
+}
+
+static void scan_function(int entry, int tag, int uid, int depth) {
+    const u8 *c;
+    int i, end;
+    if (!function_of(entry, tag, &c, &i, &end)) return;
+    for (int guard = 0; i >= 0 && i < end && guard < 4096; guard++) {
+        int op = c[i];
+        if (op == 0x75 && i + 3 < end && c[i + 1] == 0 && (c[i + 2] == 2 || c[i + 2] == 4)) menu_of[uid] = c[i + 2];
+        if ((op == 0x10 || op == 0x12 || op == 0x14) && i + 4 < end && c[i + 1] == 0 && depth < 2) {
+            int to = c[i + 3] == 0xFF ? uid : c[i + 3];
+            if (to < 0xFA || to == uid) scan_function(entry_of_uid(to), c[i + 4], to, depth + 1);
+        }
+        i = next_ins(c, i, end);
+    }
+}
+
+static void collect_menus(void) {
+    static int field = -1, age;
+    int now = g_gameState->gameData->fieldId;
+    if (now == field && ++age < 30) return;
+    field = now;
+    age = 0;
+    __builtin_memset(menu_of, 0, sizeof menu_of);
+    int guard = 0;
+    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next) {
+        EvtObject *o = nd->obj;
+        if (!ram_ok(o, sizeof *o) || (o->kind != 3 && o->kind != 4)) continue;
+        scan_function(o->scriptIdx, 3, o->uid, 0);
+        scan_function(o->scriptIdx, 8, o->uid, 0);
+        if (o->kind == 3) scan_function(o->scriptIdx, 2, o->uid, 0);
+    }
 }
 
 /* edges shared by two drawn triangles (by world position: a walkmesh's floors don't share vertex indices) are inside
@@ -287,14 +398,17 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         p += 5;
     }
     /* shopkeepers and save moogles: a diamond where each stands */
+    collect_menus();
     int guard = 0;
     for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next) {
         EvtObject *o = nd->obj;
         if (o == pl || !ram_ok(o, sizeof *o) || o->kind != 4 || (u8 *)(p + 10) > pkt_end) continue;
         /* (in this area: shopkeepers stand behind their counters, off the walkmesh, so with a margin) */
         int mx = (x1 - x0) / 4, mz = (z1 - z0) / 4;
+        if (mx < 512) mx = 512;
+        if (mz < 512) mz = 512;
         if (o->pos.vx < x0 - mx || o->pos.vx > x1 + mx || o->pos.vz < z0 - mz || o->pos.vz > z1 + mz) continue;
-        int kind = entry_menu(o->scriptIdx);
+        int kind = menu_of[o->uid];
         if (!kind) continue;
         int qx = MX(o->pos.vx), qy = MY(o->pos.vz);
         if (qx < bx + 5) qx = bx + 5;

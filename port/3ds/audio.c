@@ -17,7 +17,7 @@
 static ndspWaveBuf wbuf[NBUF];
 static s16 *pcm;
 static int ok, cur, fill;
-unsigned int ctr_audio_dropped, ctr_audio_underruns;
+unsigned int ctr_audio_dropped, ctr_audio_underruns, ctr_audio_frames, ctr_audio_peak; /* (the heartbeat's) */
 
 void ctr_audio_init(void) {
     if (R_FAILED(ndspInit())) {
@@ -53,6 +53,11 @@ void ctr_audio_exit(void) {
 }
 
 void plat_audio_samples(const short *samples, unsigned frames) {
+    ctr_audio_frames += frames;
+    for (unsigned i = 0; i < frames * 2; i += 16) { /* (a sample in 8: the level the heartbeat reports) */
+        unsigned v = (unsigned)(samples[i] < 0 ? -samples[i] : samples[i]);
+        if (v > ctr_audio_peak) ctr_audio_peak = v;
+    }
     if (!ok) return;
     while (frames) {
         ndspWaveBuf *b = &wbuf[cur];

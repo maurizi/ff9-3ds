@@ -210,6 +210,12 @@ $(OUT_3DSX): $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh
 
 # One file with the game's data inside (build/ff9-full.3dsx: your discs packed into its romfs, read before the SD
 # card's). For your own console only: it holds Square Enix's data; never distribute it or commit it.
+# the field event scripts' argument layouts (port/game/field_map.c walks the scripts' functions)
+$(GEN)/evt_ops.h: tools/gen_evt_ops.py $(DECOMP)/tools/evtscript/optab.json
+	@mkdir -p $(dir $@)
+	@$(PYTHON) tools/gen_evt_ops.py $(DECOMP)/tools/evtscript/optab.json $@
+$(foreach t,3ds pc,$(BUILD)/$(t)/port/game/field_map.o): $(GEN)/evt_ops.h
+
 $(BUILD)/discs.bin: tools/pack_discs.py
 	@echo "PACK $@"
 	@$(PYTHON) tools/pack_discs.py --img disks/us --out $@

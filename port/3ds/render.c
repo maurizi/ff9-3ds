@@ -1013,7 +1013,9 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
  * ones (fades, letterboxes) stay at the screen plane. */
 extern int psx_ot_entry, psx_ot_side;
 static float fit_n, fit_s, fit_z, fit_ss, fit_sz; /* this frame's sums */
+static float fit_lo = 1e9f, fit_hi = -1e9f;       /* this frame's range of sampled entries */
 static float fit_a, fit_b;                        /* the last good line: SZ = a entry + b */
+static float fit_min, fit_max;                    /* ... and the entries it was fitted over */
 static unsigned fit_age = ~0u;                    /* presents since it was fitted */
 
 static float zc_smooth = 1500.0f; /* the convergence depth: the scene's mean depth, smoothed */
@@ -1025,11 +1027,15 @@ static void fit_frame(void) {
         if (den > 1e-3f) {
             fit_a = (fit_n * fit_sz - fit_s * fit_z) / den;
             fit_b = (fit_z - fit_a * fit_s) / fit_n;
+            fit_min = fit_lo;
+            fit_max = fit_hi;
             fit_age = 0;
         }
     }
     if (fit_age != ~0u) fit_age++;
     fit_n = fit_s = fit_z = fit_ss = fit_sz = 0;
+    fit_lo = 1e9f;
+    fit_hi = -1e9f;
 }
 
 static const Vtx *ot_depth(const Vtx *v, unsigned n, Vtx *out, int w, int h) {
@@ -1039,9 +1045,15 @@ static const Vtx *ot_depth(const Vtx *v, unsigned n, Vtx *out, int w, int h) {
     if (z > 0) { /* projected: a sample */
         z /= n;
         fit_n += 1; fit_s += s; fit_z += z; fit_ss += s * s; fit_sz += s * z;
+        if (s < fit_lo) fit_lo = s;
+        if (s > fit_hi) fit_hi = s;
         return v;
     }
     if (fit_age > 30 || (w >= 300 && h >= 200)) return v;
+    /* (the line holds over the entries it was fitted on; past them, as at their nearest end: a scene of one model, as
+     * the opening's dark room, would otherwise extrapolate a glow around it far off its depth) */
+    if (s < fit_min) s = fit_min;
+    if (s > fit_max) s = fit_max;
     float d = fit_a * s + fit_b;
     if (d < 64) return v;
     for (unsigned i = 0; i < n; i++) out[i] = v[i], out[i].z = d;
@@ -1865,8 +1877,10 @@ void ctr_present(long frame) {
                 C3D_FrameDrawOn(top_rt[eye]);
                 screen_quad_scaled(top_rt[eye], &mirror_tex[0], K_BLIT, NO_BLEND, 0xFFFFFFFF, d.x + mag_rx, d.y + mag_ry, MAG_W,
                                    MAG_H, 0, 0, 400, 240);
-            } else if (frozen) draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h, freeze_w,
-                                    freeze_h, edge);
+            } else if (frozen) { /* a menu is up: the paused scene, dimmed to half (its panels are drawn over it after) */
+                draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h, freeze_w, freeze_h, edge);
+                screen_fill(top_rt[eye], 0, 0, 400, 240, 0xFF000000, 0); /* (black, ABGR) */
+            }
             else draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, w, h, edge);
         }
     }

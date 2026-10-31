@@ -147,7 +147,7 @@ static int portraits_state; /* 0 not read, 1 read, -1 unreadable */
 const u8 *port_portrait(int index) {
     if (portraits_state == 0) {
         FileEntry *f = file_find(1, 30);
-        unsigned n = f ? (unsigned)(f->unkC - f->sector) : 0;
+        unsigned n = f ? (unsigned)(f->link - f->sector) : 0;
         portraits_state = -1;
         if (n && n * 2048 <= sizeof portraits) {
             psx_cd_read_data((unsigned)(g_gameState->imgSector + f->sector), portraits, n);

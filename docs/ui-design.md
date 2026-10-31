@@ -68,10 +68,12 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 - **Bottom**: the PS1 menu with touch zones. **[partial: 1:1, taps steer its hand cursor]**
 - **Top**, per sub-menu: Equip: a rotating 3D model in the selected gear, before→after stats; Abilities: AP progress
   for every ability the gear teaches; Status: full stat sheet and a large portrait; Items: description and who can
-  use it. Game logic pauses; never a dimmed field. **[partial (port/game/menu_top.c), only what the bottom doesn't show:
+  use it. Game logic pauses; the top shows the paused scene dimmed to half, so opening the menu (on the bottom) visibly
+  changes the top too (play-test 2026-10-31: with the top untouched, nothing there said the game was in a menu). **[partial (port/game/menu_top.c), only what the bottom doesn't show:
   Items: for equipment, every member, whether they can wear it and what it changes for them; Equip: all of a slot's
   candidates at once with their changes and the abilities each teaches with the member's AP (seen: weapon list); Abilities: which equipment teaches it. The 3D model
-  todo (native model renderer); otherwise the top keeps the paused scene]**
+  todo (native model renderer); otherwise the top keeps the paused scene, dimmed; on a screen with views, an entry without one shows the empty
+  panel]**
 
 ## Shops and synthesis
 - **Bottom**: item list, a quantity stepper (large +/-, L/R ×10), Buy/Sell tabs. **[partial: the PS1 shop 1:1]**

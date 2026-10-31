@@ -45,13 +45,13 @@ static u8 *ability_name(int id) {
     if (!abil_state) {
         FileEntry *f = file_find(0, 0x33);
         abil_state = -1;
-        if (f && (unsigned)(f->unkC - f->sector) * 2048 >= ABIL_FROM + sizeof abil) {
+        if (f && (unsigned)(f->link - f->sector) * 2048 >= ABIL_FROM + sizeof abil) {
             psx_cd_read_data((unsigned)(g_gameState->imgSector + f->sector) + ABIL_FROM / 2048, abil, sizeof abil / 2048);
             abil_state = 1;
         }
     }
     if (abil_state < 0) return NULL;
-    if (id >= ABILITY_SUPPORT_FIRST) return abil + 0x8640 - ABIL_FROM + g_supportAbilities[id - ABILITY_SUPPORT_FIRST].unk2;
+    if (id >= ABILITY_SUPPORT_FIRST) return abil + 0x8640 - ABIL_FROM + g_supportAbilities[id - ABILITY_SUPPORT_FIRST].name;
     unsigned ofs = *(u16 *)(abil + 0x55EC - ABIL_FROM + id * 0x10 + 0xE);
     return ofs < 0x8640 - 0x61EC ? abil + 0x61EC - ABIL_FROM + ofs : NULL;
 }
