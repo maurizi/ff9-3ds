@@ -3,7 +3,8 @@
  * field's x runs right and its z away from the camera, so the map's up is the camera's forward: the map looks the
  * way the room does. Floors that move (lifts, bridges) move on the map too: it is rebuilt each frame. A walkmesh may
  * hold areas the camera doesn't show (Dali's field: the yard and, apart, the path beyond it): the map is the area
- * connected to the player's triangle, scaled to fill the box. The exits are marked: region objects (kind 3) whose tag-2
+ * connected to the player's triangle, up to the exits (past an exit is reached only by leaving), scaled to fill the
+ * box. The exits are marked: region objects (kind 3) whose tag-2
  * function (run while the player is inside) holds GOTO_FIELD (2B) or GOTO_WORLD (B6) with a literal destination, their
  * polygon (op 29: +0x14 count, +0x18 points) drawn in green (decomp-requests R30). */
 #include "psyq_port.h"
@@ -29,6 +30,52 @@ static void world_xz(const BgiTriangle *t, int k, int *x, int *z) {
 #define MAX_TRIS 1024
 static u8 near_player[MAX_TRIS]; /* triangles connected to the player's (walkable neighbours) */
 
+/* the field's exits (their polygons), collected before the map is built */
+static struct { int n; s16 x[8], z[8]; } exits[16];
+static int n_exits;
+static int region_is_exit(int entry);
+
+static void collect_exits(void) {
+    n_exits = 0;
+    for (EvtListNode *nd = evt_getObjectList(); nd && n_exits < 16; nd = nd->next) {
+        EvtObject *o = nd->obj;
+        if (!o || o->kind != 3) continue;
+        Unk80039C38Quad *q = (Unk80039C38Quad *)o;
+        if (q->unk14 < 3 || q->unk14 > 8 || !region_is_exit(o->scriptIdx)) continue;
+        exits[n_exits].n = q->unk14;
+        for (int k = 0; k < q->unk14; k++) exits[n_exits].x[k] = q->unk18[k].unk0, exits[n_exits].z[k] = q->unk18[k].unk2;
+        n_exits++;
+    }
+}
+
+/* whether (x, z) is in an exit (convex polygons, either winding, edges included: as evt_isInRegion) */
+static int in_exit(int x, int z) {
+    for (int e = 0; e < n_exits; e++) {
+        int pos = 0, neg = 0, n = exits[e].n;
+        for (int i = 0; i < n; i++) {
+            int j = (i + 1) % n;
+            long c = (long)(exits[e].z[j] - exits[e].z[i]) * (x - exits[e].x[i]) - (long)(exits[e].x[j] - exits[e].x[i]) * (z - exits[e].z[i]);
+            pos |= c > 0;
+            neg |= c < 0;
+        }
+        if (!(pos && neg)) return 1;
+    }
+    return 0;
+}
+
+static void world_xz(const BgiTriangle *t, int k, int *x, int *z);
+/* a triangle whose centre is in an exit: the walk ends there (what lies past it is reached by leaving) */
+static int tri_in_exit(const BgiTriangle *t) {
+    int cx = 0, cz = 0;
+    for (int k = 0; k < 3; k++) {
+        int x, z;
+        world_xz(t, k, &x, &z);
+        cx += x;
+        cz += z;
+    }
+    return in_exit(cx / 3, cz / 3);
+}
+
 static void mark_connected(int n, int start) {
     static s16 stack[MAX_TRIS];
     __builtin_memset(near_player, 0, sizeof near_player);
@@ -40,7 +87,9 @@ static void mark_connected(int n, int start) {
         const BgiTriangle *t = &g_fieldBgi.triangles[stack[--sp]];
         for (int k = 0; k < 3; k++) {
             int nb = t->neighbors[k];
-            if (nb < 0 || nb >= n || near_player[nb] || !bound_tri(&g_fieldBgi.triangles[nb])) continue;
+            if (nb < 0 || nb >= n || near_player[nb] || !bound_tri(&g_fieldBgi.triangles[nb]) ||
+                tri_in_exit(&g_fieldBgi.triangles[nb]))
+                continue;
             near_player[nb] = 1;
             stack[sp++] = (s16)nb;
         }
@@ -100,6 +149,7 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     if (n > MAX_TRIS) return pkt;
     GameData *g = g_gameState->gameData;
     EvtObject *pl = g->ctx.field ? (EvtObject *)g->npcModels[g->ctx.field->playerObj].actor : NULL;
+    collect_exits();
     mark_connected(n, player_triangle(pl));
     int x0 = 0x7FFFFFFF, z0 = 0x7FFFFFFF, x1 = -0x7FFFFFFF, z1 = -0x7FFFFFFF;
     for (int i = 0; i < n; i++) {
@@ -115,6 +165,24 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         }
     }
     if (x1 <= x0 || z1 <= z0) return pkt;
+    /* the exits that touch the area fit in too */
+    {
+        int ax0 = x0, az0 = z0, ax1 = x1, az1 = z1;
+        for (int e = 0; e < n_exits; e++) {
+            int ex0 = 0x7FFFFFFF, ez0 = 0x7FFFFFFF, ex1 = -0x7FFFFFFF, ez1 = -0x7FFFFFFF;
+            for (int k = 0; k < exits[e].n; k++) {
+                if (exits[e].x[k] < ex0) ex0 = exits[e].x[k];
+                if (exits[e].x[k] > ex1) ex1 = exits[e].x[k];
+                if (exits[e].z[k] < ez0) ez0 = exits[e].z[k];
+                if (exits[e].z[k] > ez1) ez1 = exits[e].z[k];
+            }
+            if (ex1 < ax0 || ex0 > ax1 || ez1 < az0 || ez0 > az1) continue; /* (another area's) */
+            if (ex0 < x0) x0 = ex0;
+            if (ex1 > x1) x1 = ex1;
+            if (ez0 < z0) z0 = ez0;
+            if (ez1 > z1) z1 = ez1;
+        }
+    }
     /* scale (16.16) to fit with a margin, centred */
     const int m = 8;
     int sx = ((bw - 2 * m) << 16) / (x1 - x0), sz = ((bh - 2 * m) << 16) / (z1 - z0), s = sx < sz ? sx : sz;
@@ -163,28 +231,24 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         p += 5;
     }
     /* the exits */
-    for (EvtListNode *nd = evt_getObjectList(); nd; nd = nd->next) {
-        EvtObject *o = nd->obj;
-        if (!o || o->kind != 3) continue;
-        Unk80039C38Quad *q = (Unk80039C38Quad *)o;
-        int cnt = q->unk14;
-        if (cnt < 3 || cnt > 8 || !region_is_exit(o->scriptIdx)) continue;
+    for (int e = 0; e < n_exits; e++) {
+        int cnt = exits[e].n;
         if ((u8 *)(p + 5 * 6 + 4 * 8) > pkt_end) break;
         for (int k = 0; k < cnt; k++) { /* its outline */
-            const Unk80039C38Pt *a = &q->unk18[k], *b = &q->unk18[(k + 1) % cnt];
+            int j = (k + 1) % cnt;
             p[0] = 3u << 24;
             p[1] = 0x40000000u | MAP_EXIT;
-            p[2] = xy(MX(a->unk0), MY(a->unk2));
-            p[3] = xy(MX(b->unk0), MY(b->unk2));
+            p[2] = xy(MX(exits[e].x[k]), MY(exits[e].z[k]));
+            p[3] = xy(MX(exits[e].x[j]), MY(exits[e].z[j]));
             addPrim(ot - 1, p);
             p += 4;
         }
         for (int k = 1; k + 1 < cnt; k++) { /* filled (convex: a fan) */
             p[0] = 4u << 24;
             p[1] = 0x20000000u | MAP_EXIT;
-            p[2] = xy(MX(q->unk18[0].unk0), MY(q->unk18[0].unk2));
-            p[3] = xy(MX(q->unk18[k].unk0), MY(q->unk18[k].unk2));
-            p[4] = xy(MX(q->unk18[k + 1].unk0), MY(q->unk18[k + 1].unk2));
+            p[2] = xy(MX(exits[e].x[0]), MY(exits[e].z[0]));
+            p[3] = xy(MX(exits[e].x[k]), MY(exits[e].z[k]));
+            p[4] = xy(MX(exits[e].x[k + 1]), MY(exits[e].z[k + 1]));
             addPrim(ot - 1, p);
             p += 5;
         }
