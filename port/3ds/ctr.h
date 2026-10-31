@@ -43,6 +43,11 @@ int ctr_panel_shown(void);       /* render.c: the panel is on the bottom screen 
 void ctr_async_init(void);
 void ctr_async_exit(void);
 
+/* voice.c: a voice pack's recording of a dialogue line, while its window is up */
+void ctr_voice_line(unsigned bank, unsigned message);
+void ctr_voice_stop(void);
+void ctr_voice_exit(void);
+
 /* profile.c */
 void ctr_profile_frame(void);
 

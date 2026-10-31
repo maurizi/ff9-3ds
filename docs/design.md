@@ -117,7 +117,8 @@ register writes, sample advances and SPU RAM transfers (`port/3ds/spu_client.c`,
 the game reads back comes back after each advance, at most one AKAO tick late. NDSP plays its mix. Movies: the MDEC
 decodes each frame on a worker on the same core as soon as its run-length data is complete (`port/game/movie.c`).
 Frames are paced by citro3d's VBlank counter. Voice acting (optional) streams Opus
-files from the SD card, keyed by dialogue text id.
+files from the SD card, one per dialogue line (text bank, message number), on its own DSP channel with the music
+ducked (`docs/voice-packs.md`).
 
 ## 6. Input and UX
 - Buttons: A = ✕ (confirm), B = ○ (cancel), X = △ (menu), Y = □, L/R = L1/R1, ZL/ZR (or L+R) = L2/R2, Start,

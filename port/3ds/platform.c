@@ -91,6 +91,8 @@ void plat_wait_frame(void) {
         exit(0);
     }
     read_input();
+    void port_voice_poll(void);
+    port_voice_poll();
     ctr_present(frames);
 #ifdef PORT_DUMP_EVERY
     if (frames % PORT_DUMP_EVERY == 0) { void ctr_render_dump_display(long); ctr_render_dump_display(frames); }

@@ -22,6 +22,6 @@ Status 2026-10-31 (Azahar; no hardware measurements yet).
 3. Field bottom screen when no window is open: location, party HP, Menu / Cards buttons.
 4. Native model renderers (battle and field models through the hooks the DS port found), with a depth buffer:
    prerequisites for cel-shading and replacement models.
-5. Extras: cel-shading (New 3DS), voice acting (Opus files per dialogue id from the SD card), high-resolution
-   models, StreetPass (Tetra Master card exchange).
+5. Extras: cel-shading (New 3DS), high-resolution models, StreetPass (Tetra Master card exchange). Voice acting
+   is in (`docs/voice-packs.md`); a tool listing every line's text by id would help pack makers.
 6. CIA build with a banner; settings screen (stereo strength, filtering, widescreen).

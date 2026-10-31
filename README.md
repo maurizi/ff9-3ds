@@ -21,6 +21,7 @@ with or endorsed by Square Enix.
 | Discs | All four discs are on the SD card; disc changes happen at the game's own "change disc" screen |
 | Movies | Decoded on the second CPU core, ahead of display |
 | Sound | The PS1 SPU, exactly (24 voices, Gaussian interpolation, reverb), mixed on the second CPU core |
+| Voices | Optional voice packs: a recording per dialogue line, from the SD card ([docs/voice-packs.md](docs/voice-packs.md)) |
 | Models | Old 3DS and New 3DS (the New 3DS's faster CPU is used when present) |
 
 ## Controls
@@ -71,6 +72,7 @@ to `/3ds/ff9/cards/card1.mcr`.
 | [docs/design.md](docs/design.md) | the 3DS architecture: renderer, stereo, screens, sound, threads |
 | [docs/porting-notes.md](docs/porting-notes.md) | PS1 behaviours the decomp's C relies on, and how the port handles each |
 | [docs/scenario-testing.md](docs/scenario-testing.md) | launching fields, battles and the world map directly |
+| [docs/voice-packs.md](docs/voice-packs.md) | the voice pack format, and finding a line's id |
 | [docs/decomp-requests.md](docs/decomp-requests.md) | what the port needs identified on the decomp side |
 
 Testing in the Azahar emulator: `tools/azahar.sh` boots a build on a private X display and captures screenshots

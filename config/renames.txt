@@ -17,3 +17,5 @@ src/ovl_0a/tu_800B61A4 o0a_fldbg_draw o0a_fldbg_draw_game
 src/main/window win_drawAll win_drawAll_game
 # The disc-change screen: the disc it asks for is put in the drive at once (port/game/disc_change.c).
 src/ovl_3e/ovl_3e o3e_discChange_init o3e_discChange_init_game
+# Dialogue lines: each one shown is named for the voice pack (port/game/voice_hook.c).
+src/main/msg msg_open msg_open_game

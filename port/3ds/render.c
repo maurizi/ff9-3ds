@@ -1551,6 +1551,7 @@ void ctr_shutdown(void) {
     ctr_async_exit();
     void ctr_spu_exit(void);
     ctr_spu_exit();
+    ctr_voice_exit();
     ctr_audio_exit();
     if (in_frame) C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
     C3D_Fini();
