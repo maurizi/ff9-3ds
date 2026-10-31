@@ -49,6 +49,8 @@ weak_src  = $(filter src_equiv/% docs/wip/%,$(1))
 header_of = $(if $(filter main,$(1)),ff9.h,$(if $(filter fx_%,$(1)),btlfx_mod.h,$(1).h))
 
 PORT_HDRS := $(wildcard port/include/*.h)
+# (port/game/ compiles against the decomp's headers: a decomp update that changes a layout rebuilds them)
+DECOMP_HDRS := $(wildcard $(DECOMP)/include/*.h)
 # window_tween.c reimplemented func_80063118 before the decomp matched it; only its PSX comparison test uses it now.
 PSX_SRCS  := $(filter-out port/game/window_tween.c,$(wildcard port/psx/*.c port/game/*.c))
 
@@ -130,7 +132,7 @@ $$($(1)_DIR)/gen/%.o: $(GEN)/%.s
 	@mkdir -p $$(dir $$@)
 	@$(2) $(4) -c $$< -o $$@
 
-$$($(1)_DIR)/port/%.o: port/%.c $(PORT_HDRS)
+$$($(1)_DIR)/port/%.o: port/%.c $(PORT_HDRS) $(DECOMP_HDRS)
 	@mkdir -p $$(dir $$@)
 	@echo "CC   [$(1)] port/$$*"
 	@$(2) $(4) $(PORT_CFLAGS) $$(PORT_EXTRA_$(1)) $$(PORT_ARCH_$(1)_$$*) $$(if $$(filter game/%,$$*),$(GAME_CFLAGS)) -c $$< -o $$@
