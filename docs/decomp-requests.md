@@ -340,6 +340,13 @@ map's) encounter table and its battle background selection live (field data or e
 format, so `tools/scenario_catalog.py` can list (field, encounter, background) and the sweep can start each
 encounter from a field that really uses it.
 
+### R30. A field's exits, and whether an Active Time Event is available (2026-10-31)
+The 3DS port's bottom screen in a field (port/game/field_hud.c, field_map.c) draws the walkmesh from above with the
+player on it. Asked, to complete it: (1) where a field's exits live (the event script's region objects that change
+field: their trigger polygon or line on the walkmesh, and the field each leads to), so the map can mark them; (2)
+what makes the PS1 show the "Active Time Event" prompt (the flag or script variable that says an ATE can be viewed
+with Select now), so the bottom screen can offer it as a button.
+
 ---
 
 ## Open findings from the port (queued while the decomp session was offline)
