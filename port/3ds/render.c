@@ -1110,7 +1110,9 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         return;
     }
     if (ui_mode && !(psx_ui_list_battle && 0x17 - psx_ot_entry == 17)) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
-    else if (menu_state == 2 || ui_packet()) { /* (a menu: the whole frame) */
+    /* (a 15-bit texture is a frame copied from VRAM, as the field-to-battle swirl draws: the scene, never a window,
+     * whose art is CLUT-based, even when the game builds it in its window packets) */
+    else if ((menu_state == 2 || ui_packet()) && !(m && m->textured && m->depth == 2)) { /* (a menu: the whole frame) */
         int x, y, w, h;
         psx_gpu_draw_area(&x, &y, &w, &h);
         layer = ui_layer_for(x, y, 0);

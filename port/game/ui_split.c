@@ -21,7 +21,8 @@ int port_menu_state(void) {
     GameData *g = g_gameState ? g_gameState->gameData : NULL;
     if (!g) return 0;
     if (g_gameState->mode == 9) return 3; /* (the card game: all UI, on both screens) */
-    if (!(g->flags & GD_MENU_OPEN)) return 0;
+    /* (the field's battle transition sets these flags too, with the menu system idle: not a menu) */
+    if (!(g->flags & GD_MENU_OPEN) || g_menu.state == 0) return 0;
     return (g->flags & GD_HIDE_ALL) == GD_HIDE_ALL ? 2 : 1; /* (events hide parts of the scene by these flags too) */
 }
 
