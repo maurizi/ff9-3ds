@@ -883,6 +883,12 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         y0 = imin(y0, ty0); y1 = imax(y1, ty1);
     }
     if (!nout) return;
+#ifdef PORT_LOGUI_AT
+    if (ui_mode && frames_drawn == PORT_LOGUI_AT)
+        port_log("ui poly n%d tex%d semi%d abr%d gour%d %d,%d %d,%d %d,%d rgb %02x%02x%02x %02x%02x%02x\n", n, m->textured,
+                 m->semi, m->abr, m->gouraud, v[0].x - ui_ox, v[0].y - ui_oy, v[1].x - ui_ox, v[1].y - ui_oy,
+                 v[2].x - ui_ox, v[2].y - ui_oy, v[0].r, v[0].g, v[0].b, v[1].r, v[1].g, v[1].b);
+#endif
 #ifdef PORT_PROBE_AT
     { /* PROBE_AT=frame: from that frame on, the first semi-transparent untextured polygons covering (160, 4) */
         extern long ctr_frames(void);
@@ -1277,6 +1283,23 @@ void ctr_render_dump_display(long frame) {
     const u16 *m = mirror_tex[0].data;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) crop[y * 320 + x] = m[tiled((d.x + x) & 1023, (d.y + y) & 511, VW)];
+    /* with the displayed buffer's UI layer composited as the PS1 frame has it (premultiplied: layer + scene (1 - a)) */
+    int k = layers[0].x == d.x && layers[0].y == d.y ? 0 : layers[1].x == d.x && layers[1].y == d.y ? 1 : -1;
+    if (k >= 0 && frames_drawn - layers[k].drawn <= 2) {
+        const u32 *l = layers[k].tex.data;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                u32 c = l[tiled(x, y, UI_W)];
+                unsigned a = c & 0xFF, lr = c >> 24, lg = (c >> 16) & 0xFF, lb = (c >> 8) & 0xFF;
+                u16 p = crop[y * 320 + x];
+                unsigned sr = (p >> 11) << 3, sg = ((p >> 5) & 63) << 2, sb = (p & 31) << 3;
+                unsigned r = lr + sr * (255 - a) / 255, g = lg + sg * (255 - a) / 255, b = lb + sb * (255 - a) / 255;
+                if (r > 255) r = 255;
+                if (g > 255) g = 255;
+                if (b > 255) b = 255;
+                crop[y * 320 + x] = (u16)((r >> 3) << 11 | (g >> 2) << 5 | b >> 3);
+            }
+    }
     char name[32];
     snprintf(name, sizeof name, "f%06ld", frame);
     static u16 *src;

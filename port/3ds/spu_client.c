@@ -106,8 +106,15 @@ static void audio_main(void *unused) {
     }
 }
 
+static int inline_mode; /* SPUSYNC=1: no thread (the SPU in step with the game, as on the host: deterministic runs) */
 static void start(void) {
-    if (thread) return;
+    if (thread || inline_mode) return;
+#ifdef PORT_SPU_SYNC
+    inline_mode = 1;
+    spuw_set_rendering(1);
+    port_log("spu: in line (SPUSYNC)\n");
+    return;
+#endif
     LightEvent_Init(&kick_event, RESET_ONESHOT);
     s32 prio = 0x30;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
