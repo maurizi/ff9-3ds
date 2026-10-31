@@ -112,6 +112,7 @@ __attribute__((weak)) int port_world_tap(int x, int y) { (void)x; (void)y; retur
 int port_name_tap(int x, int y, unsigned *seq, int max);
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     { int n = port_name_tap(x, y - oy, seq, max); if (n) return n; } /* (name entry: port/game/name_touch.c) */
+    { int port_menu_tap(int, int); if (port_menu_tap(x, y - oy)) return -1; } /* (main menu: menu_touch.c) */
     if (g_gameState && g_gameState->mode == 3 && !port_menu_state()) return port_world_tap(x, y - oy) ? -1 : 0; /* (zoom, names) */
     if (!shown) return 0;
     y -= oy;

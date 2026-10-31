@@ -26,3 +26,10 @@ src/ovl_0b/btlui o0b_btlui_listInput o0b_btlui_listInput_game
 src/ovl_0b/btlui o0b_btlui_targetInput o0b_btlui_targetInput_game
 # Select help while a menu is up: its text on the top screen (port/game/menu_top.c).
 src/main/help help_update help_update_game
+# The main menu by touch, directly (port/game/menu_touch.c): its input step, in the field's and the world map's copies.
+src/ovl_0a/menu_main o0a_menuMain_inputCommand o0a_menuMain_inputCommand_game
+src/ovl_0a/menu_main o0a_menuMain_inputMember o0a_menuMain_inputMember_game
+src/ovl_0a/menu_main o0a_menuMain_inputOrder o0a_menuMain_inputOrder_game
+src/ovl_0c/menu_main o0c_menuMain_inputCommand o0c_menuMain_inputCommand_game
+src/ovl_0c/menu_main o0c_menuMain_inputMember o0c_menuMain_inputMember_game
+src/ovl_0c/menu_main o0c_menuMain_inputOrder o0c_menuMain_inputOrder_game
