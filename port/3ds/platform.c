@@ -95,9 +95,10 @@ void plat_wait_frame(void) {
         extern unsigned ctr_async_jobs, ctr_async_done, psx_cd_sectors_read, psx_cd_last_lba, psx_cd_read_starts;
         int port_game_mode(void);
         int port_field_id(void);
-        port_log("beat %ld: mode %d field %d, worker jobs %u/%u, presents %u, cd %u reads %u sectors (last %u)\n", frames,
-                 port_game_mode(), port_field_id(), ctr_async_done, ctr_async_jobs, ctr_frames_presented(),
-                 psx_cd_read_starts, psx_cd_sectors_read, psx_cd_last_lba);
+        extern unsigned int psx_cd_debug[];
+        port_log("beat %ld: mode %d field %d, worker jobs %u/%u, presents %u, cd %u reads %u sectors (last %u) state %03x q %u\n",
+                 frames, port_game_mode(), port_field_id(), ctr_async_done, ctr_async_jobs, ctr_frames_presented(),
+                 psx_cd_read_starts, psx_cd_sectors_read, psx_cd_last_lba, psx_cd_debug[4], psx_cd_debug[5]);
     }
     void port_voice_poll(void);
     port_voice_poll();

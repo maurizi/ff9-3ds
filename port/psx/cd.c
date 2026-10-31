@@ -680,6 +680,8 @@ static void pump(int max_sectors) {
     psx_cd_debug[4] = pumping | reading << 4 | (ready_cb != NULL) << 8 | (sync_cb != NULL) << 12;
     psx_cd_debug[5] = (unsigned)(q_tail - q_head);
     if (pumping) {
+        static int told; /* (a sector's callback that waits a frame: the stream can't go on until it returns) */
+        if (!told++) port_log("cd: pump re-entered (a sector's callback waits a frame) at LBA %u\n", sector_lba);
         return;
     }
     pumping = 1;
