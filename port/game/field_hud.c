@@ -7,6 +7,8 @@
  *   MAP:     the walkmesh from above, the player  (port/game/field_map.c)
  *   PARTY:   portrait, name, HP and MP, status    (GameData.party; portraits: the menu's file, read by the port)
  *   [MENU] [CARDS n]                               MENU: a touch shortcut for triangle (port_hud_tap)
+ * The party and MENU only while the game allows the menu (not in the opening and other cutscene stretches, where the
+ * party may be a placeholder); CARDS once the card game has been met.
  * While a dialogue asks a question (its choices on the top screen with the speaker), the map and party give way to
  * the choices as large buttons: a tap moves the game's choice cursor there and confirms (an input aid: the cursor
  * and the buttons still work).
@@ -45,6 +47,7 @@ int port_hud_shown(void) {
     return shown;
 }
 
+static int menu_shown; /* the MENU button is there (the game allows the menu) */
 static int n_choices, choice_first; /* the question's choices shown this frame */
 static RECT r_choice[8];
 
@@ -65,7 +68,7 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         }
         return 0;
     }
-    if (inside(&r_menu, x, y) && max > 0) { seq[0] = 0x1000; return 1; } /* triangle */
+    if (menu_shown && inside(&r_menu, x, y) && max > 0) { seq[0] = 0x1000; return 1; } /* triangle */
     return 0;
 }
 
@@ -142,10 +145,11 @@ static int draw_choices(void) {
     for (int i = 0; i < n; i++) {
         u8 *o = lines[i];
         while (*t != TEXT_END && *t != TEXT_NEWLINE && o < lines[i] + 92) {
-            if (*t == TEXT_ESC) { /* (an escape and its argument bytes, whole) */
+            if (*t == TEXT_ESC) { /* names, colours and argument values kept; layout and choice codes dropped */
                 int k = t[1] == 0x43 || t[1] == 0x44 || t[1] == 0x49 || t[1] == 0x4A || (t[1] >= 0x4B && t[1] <= 0x4E) ||
                                 (t[1] >= 0x68 && t[1] <= 0x6F) ? 3 : 2;
-                while (k--) *o++ = *t++;
+                int keep = (t[1] >= TEXT_CHAR_NAME && t[1] < TEXT_COLOR + 0x10) || (t[1] >= 0x68 && t[1] <= 0x6F);
+                while (k--) { if (keep) *o++ = *t; t++; }
             } else *o++ = *t++;
         }
         *o = TEXT_END;
@@ -161,10 +165,21 @@ static int draw_choices(void) {
     return 1;
 }
 
+/* what the PS1 shows only through its menu is shown only when the menu can be opened: in the opening and other
+ * cutscene stretches (GD_MENU_DISABLED) the party may be a placeholder, and there is no menu to offer */
+static int menu_allowed(void) {
+    return !(g_gameState->gameData->flags & GD_MENU_DISABLED);
+}
+
 static int card_count(void) {
     int n = 0;
     for (int i = 0; i < 105; i++) n += g_cards.cards[i].id != 0xFF;
     return n;
+}
+
+/* the card game has been met: a card owned or a match played */
+static int cards_known(void) {
+    return card_count() > 0 || g_cards.wins || g_cards.losses || g_cards.draws;
 }
 
 static void button(RECT *r, const u8 *label, const u8 *count) {
@@ -197,13 +212,18 @@ static void draw(void) {
         g_primPtr = port_field_map_draw(&g_ot[2], g_primPtr, (u8 *)(hud_mem + OTN + BUF_WORDS) - 64, r_map.x + 3,
                                         r_map.y + 3, r_map.w - 6, r_map.h - 6);
         win_drawBox(&r_map, 3, 2);
-        ui_drawLabel(r_party.x + 8, r_party.y - 3, 2, (s32)party, 0);
-        draw_party();
+        if (menu_allowed()) {
+            ui_drawLabel(r_party.x + 8, r_party.y - 3, 2, (s32)party, 0);
+            draw_party();
+        }
     }
 
-    button(&r_menu, menu, NULL);
-    text_formatNumber(card_count(), buf, -1, 1);
-    button(&r_cards, cards, buf);
+    menu_shown = menu_allowed();
+    if (menu_shown) button(&r_menu, menu, NULL);
+    if (cards_known()) {
+        text_formatNumber(card_count(), buf, -1, 1);
+        button(menu_shown ? &r_cards : &r_menu, cards, buf);
+    }
 }
 
 /* each frame (the 3DS's VBlank wait): the field screen, when a field is up with no menu */
