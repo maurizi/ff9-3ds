@@ -138,7 +138,11 @@ unsigned int ctr_ui_pad_buttons(long frame) {
         }
     } else if (down) {
         down = 0;
-        if (!swiped) tap(last_x, last_y); /* a tap: on release, where it was */
+        /* a tap: on release, where it was; on the field screen's buttons (port/game/field_hud.c), their button */
+        int port_hud_button_at(int x, int y, int oy);
+        unsigned b = swiped ? 0 : (unsigned)port_hud_button_at(last_x, last_y, ctr_ui_oy);
+        if (b) queued = b, nqueued = 1;
+        else if (!swiped) tap(last_x, last_y);
     }
     if (nqueued && timer == 0) {
         nqueued--;

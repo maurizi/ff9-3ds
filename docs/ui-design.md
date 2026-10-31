@@ -28,5 +28,6 @@ Bravely Default, Chrono Trigger DS, Shin Megami Tensei IV, Fire Emblem Awakening
 
 ## Status
 - Done: field and world-map windows stay on the top screen; the virtual pad and the copy of the scene are gone.
-- Next: the field bottom screen (needs the location name, party, and the walkmesh/exits from the decomp), then
-  battle, then menus with their top-screen detail views.
+- Done: the field bottom screen, drawn by the game's own window/text code (port/game/field_hud.c): location,
+  party HP/MP, time and gil, a MENU button (tap = triangle).
+- Next: battle, then menus with their top-screen detail views; the field's area map (walkmesh, exits) later.
