@@ -77,6 +77,13 @@ void plat_audio_samples(const short *samples, unsigned frames) {
             if (!queued) ctr_audio_underruns++;
             DSP_FlushDataCache(b->data_vaddr, BUF_FRAMES * 4);
             ndspChnWaveBufAdd(0, b);
+            /* dynamic rate control: the game makes 44100 samples per 60 of its frames, the 3DS paces it to its own
+             * refresh (59.83 Hz) and may run a little slow besides; play a fraction of a percent slower or faster to
+             * keep the queue about half full instead of running dry (a stutter) or full (dropped samples) */
+            float r = 1.0f + 0.01f * (float)(queued + 1 - NBUF / 2) / (float)(NBUF / 2);
+            if (r < 0.985f) r = 0.985f;
+            if (r > 1.005f) r = 1.005f;
+            ndspChnSetRate(0, 44100.0f * r);
             cur = (cur + 1) % NBUF;
             fill = 0;
         }
