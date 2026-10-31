@@ -6,7 +6,8 @@
  * connected to the player's triangle, up to the exits (past an exit is reached only by leaving), scaled to fill the
  * box. The exits are marked: region objects (kind 3) whose tag-2
  * function (run while the player is inside) holds GOTO_FIELD (2B) or GOTO_WORLD (B6) with a literal destination, their
- * polygon (op 29: +0x14 count, +0x18 points) drawn in green (decomp-requests R30). */
+ * polygon (op 29: +0x14 count, +0x18 points) drawn in green (decomp-requests R30). Shops and save moogles are marked
+ * where they stand: the field's characters whose script opens a shop (MENU 75 with type 2) or the save screen (type 4). */
 #include "psyq_port.h"
 #include "ovl_0a.h"
 
@@ -14,6 +15,8 @@
 #define MAP_EDGE 0xC8E0F0   /* its outline */
 #define MAP_PLAYER 0x30E8F8 /* the player */
 #define MAP_EXIT 0x48D860   /* an exit (a region whose "player inside" function changes field or goes to the world) */
+#define MAP_SHOP 0x20C0F8   /* a shopkeeper (amber) */
+#define MAP_SAVE 0xE070F0   /* a save moogle (pink) */
 
 /* whether p points into PS1 RAM (where all the game's data is): the bottom screen reads game state the PS1 never
  * showed this early, and a field that is still starting up can hold stale or garbage pointers (a real 3DS doesn't zero
@@ -40,7 +43,7 @@ static void world_xz(const BgiTriangle *t, int k, int *x, int *z) {
 static u8 near_player[MAX_TRIS]; /* triangles connected to the player's (walkable neighbours) */
 
 /* the field's exits (their polygons), collected before the map is built */
-static struct { int n; s16 x[8], z[8]; } exits[16];
+static struct { int n, here; s16 x[8], z[8]; } exits[16]; /* here: at the drawn area's edge */
 static int n_exits;
 static int region_is_exit(int entry);
 
@@ -135,6 +138,17 @@ static int region_is_exit(int entry) {
     return 0;
 }
 
+/* the menu type an object's script opens with a literal MENU (75 00 type arg): 2 a shop, 4 the save screen; 0 none */
+static int entry_menu(int entry) {
+    if (entry < 0 || !ram_ok(g_evtScripts + entry * 8, 8)) return 0;
+    u8 *h = g_evtScripts + *(u16 *)(g_evtScripts + entry * 8);
+    int size = *(u16 *)(g_evtScripts + entry * 8 + 2), n = *(u16 *)h >> 8;
+    if (!ram_ok(h, size)) return 0;
+    for (int k = 2 + n * 4; k + 3 < size; k++)
+        if (h[k] == 0x75 && h[k + 1] == 0x00 && (h[k + 2] == 2 || h[k + 2] == 4)) return h[k + 2];
+    return 0;
+}
+
 /* edges shared by two drawn triangles (by world position: a walkmesh's floors don't share vertex indices) are inside
  * the area; the rest are its outline */
 #define EDGE_HASH 4096
@@ -193,9 +207,11 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         }
     }
     if (x1 <= x0 || z1 <= z0) return pkt;
-    /* the exits that touch the area fit in too */
+    /* the exits at the area's edge (within an eighth of its size: a region can stop short of the walkmesh) fit in too;
+     * the others belong to other areas and aren't drawn */
     {
-        int ax0 = x0, az0 = z0, ax1 = x1, az1 = z1;
+        int mx = (x1 - x0) / 8, mz = (z1 - z0) / 8;
+        int ax0 = x0 - mx, az0 = z0 - mz, ax1 = x1 + mx, az1 = z1 + mz;
         for (int e = 0; e < n_exits; e++) {
             int ex0 = 0x7FFFFFFF, ez0 = 0x7FFFFFFF, ex1 = -0x7FFFFFFF, ez1 = -0x7FFFFFFF;
             for (int k = 0; k < exits[e].n; k++) {
@@ -204,7 +220,8 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
                 if (exits[e].z[k] < ez0) ez0 = exits[e].z[k];
                 if (exits[e].z[k] > ez1) ez1 = exits[e].z[k];
             }
-            if (ex1 < ax0 || ex0 > ax1 || ez1 < az0 || ez0 > az1) continue; /* (another area's) */
+            exits[e].here = !(ex1 < ax0 || ex0 > ax1 || ez1 < az0 || ez0 > az1);
+            if (!exits[e].here) continue; /* (another area's) */
             if (ex0 < x0) x0 = ex0;
             if (ex1 > x1) x1 = ex1;
             if (ez0 < z0) z0 = ez0;
@@ -261,6 +278,7 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     /* the exits */
     for (int e = 0; e < n_exits; e++) {
         int cnt = exits[e].n;
+        if (!exits[e].here) continue;
         if ((u8 *)(p + 5 * 6 + 4 * 8) > pkt_end) break;
         for (int k = 0; k < cnt; k++) { /* its outline */
             int j = (k + 1) % cnt;
@@ -277,6 +295,31 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
             p[2] = xy(MX(exits[e].x[0]), MY(exits[e].z[0]));
             p[3] = xy(MX(exits[e].x[k]), MY(exits[e].z[k]));
             p[4] = xy(MX(exits[e].x[k + 1]), MY(exits[e].z[k + 1]));
+            addPrim(ot - 1, p);
+            p += 5;
+        }
+    }
+    /* shopkeepers and save moogles: a diamond where each stands */
+    int guard = 0;
+    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next) {
+        EvtObject *o = nd->obj;
+        if (o == pl || !ram_ok(o, sizeof *o) || o->kind != 4 || (u8 *)(p + 10) > pkt_end) continue;
+        /* (in this area: shopkeepers stand behind their counters, off the walkmesh, so with a margin) */
+        int mx = (x1 - x0) / 4, mz = (z1 - z0) / 4;
+        if (o->pos.vx < x0 - mx || o->pos.vx > x1 + mx || o->pos.vz < z0 - mz || o->pos.vz > z1 + mz) continue;
+        int kind = entry_menu(o->scriptIdx);
+        if (!kind) continue;
+        int qx = MX(o->pos.vx), qy = MY(o->pos.vz);
+        if (qx < bx + 5) qx = bx + 5;
+        if (qx > bx + bw - 5) qx = bx + bw - 5;
+        if (qy < by + 5) qy = by + 5;
+        if (qy > by + bh - 5) qy = by + bh - 5;
+        for (int half = 0; half < 2; half++) {
+            p[0] = 4u << 24;
+            p[1] = 0x20000000u | (kind == 2 ? MAP_SHOP : MAP_SAVE);
+            p[2] = xy(qx - 4, qy);
+            p[3] = xy(qx + 4, qy);
+            p[4] = xy(qx, half ? qy + 4 : qy - 4);
             addPrim(ot - 1, p);
             p += 5;
         }
