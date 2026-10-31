@@ -1790,3 +1790,8 @@ run.
   0-5% of their polygon vertices (~1,300 a model, many bones and seams: the tool's same-bone, seamless collapses find
   little); not pursued. The bottom screen's translucent window gradients pre-blended with the clear value and drawn
   opaque: 0.1-0.45 ms slower (the opaque path's clipped redraws after each swap). Arenas next.
+- **Baseline: no battle UI drawn at all (2026-10-30, the user's test; ContinueDraw's VBlank list skipped in battles,
+  the game still building it):** d1_b0228 23.63 -> 16.72, d1_b0186 23.28 -> 18.85, d2_b0098 24.75 -> 20.21 ms per
+  VBlank. The UI's real cost is 4.4-6.9 ms a VBlank (more than its profile share: its flushes interleave with the
+  scene's), so a native bottom-screen UI that costs well under that is the battle lever (the user's choice, the same
+  day, to draw it natively now).
