@@ -116,8 +116,10 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     { int port_tm_tap(int, int); if (port_tm_tap(x, y - oy)) return -1; } /* (the card game: tm_ui.c) */
     if (port_menu_state() == 2 && max > 0) { /* (a menu's list: list_touch.c) */
         int port_list_tap(int, int, unsigned *), port_equip_tap(int, int, unsigned *), port_save_tap(int, int, unsigned *);
+        int port_ability_tap(int, int, unsigned *);
         int n = port_save_tap(x, y - oy, seq);
         if (!n) n = port_equip_tap(x, y - oy, seq);
+        if (!n) n = port_ability_tap(x, y - oy, seq);
         if (!n) n = port_list_tap(x, y - oy, seq);
         if (n) return n;
     }
