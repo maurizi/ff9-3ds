@@ -151,10 +151,24 @@ const u8 *port_portrait(int index) {
     return portraits + index * PORTRAIT_BYTES;
 }
 
+/* the portrait's face, 32x32: its rows 7-38 (the 32x46 portrait is the entry's 32x32 block and, under it, its 32x14
+ * strip; the face sits in the middle), as 8-bit pixels; NULL if unread */
+const u8 *port_portrait_face(int index) {
+    static u8 face[32 * 32];
+    const u8 *e = port_portrait(index);
+    if (!e) return NULL;
+    for (int y = 0; y < 32; y++) {
+        int sy = y + 7;
+        __builtin_memcpy(face + y * 32, sy < 32 ? e + 0x100 + sy * 32 : e + 0x500 + (sy - 32) * 32, 32);
+    }
+    return face;
+}
+
 static void portrait(int slot, int index, int x, int y) {
     const u8 *e = port_portrait(index);
     if (!e) return;
-    ctr_hud_image(slot, 0x100u | (u32)index, (const u16 *)e, e + 0x100, 32, 32);
+    const u8 *f = port_portrait_face(index);
+    ctr_hud_image(slot, 0x100u | (u32)index, (const u16 *)e, f, 32, 32);
     ctr_hud_draw(slot, x, y, 32, 32);
 }
 
@@ -441,7 +455,8 @@ static u32 top_mem[OTN + TOP_WORDS];
 static void big_portrait(int slot, Character *c, int x, int y, int size) {
     const u8 *e = port_portrait(g_portraitByKind[c->info.b.kind]);
     if (!e) return;
-    ctr_hud_image(slot, 0x300u | (u32)g_portraitByKind[c->info.b.kind], (const u16 *)e, e + 0x100, 32, 32);
+    ctr_hud_image(slot, 0x300u | (u32)g_portraitByKind[c->info.b.kind], (const u16 *)e,
+                  port_portrait_face(g_portraitByKind[c->info.b.kind]), 32, 32);
     ctr_hud_draw_top(slot, x, y, 32, 32, size, size);
 }
 

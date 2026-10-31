@@ -3,7 +3,7 @@
  *
  *   left:  the active member's commands as large rows (g_btlCmdMenu: ids, enabled, cursor; names from the
  *          command table), and DEFEND / CHANGE (the PS1's left / right slides)
- *   right: a card per party member: portrait, name, HP, MP, the ATB bar and the Trance bar
+ *   right: a card per party member: portrait, name, status icons, HP, MP, the ATB bar and the Trance bar
  *
  * and while an ability, item or throw list is open, the list in its place: six large rows drawn by the game's own row
  * functions (names, MP costs, item icons and counts, greyed entries: g_btluiListRowFns, each pointed at its row), the
@@ -37,6 +37,7 @@ int port_battle_hud_targets; /* ... its targets too (render.c leaves the target 
 void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h);
 void ctr_hud_draw(int slot, int x, int y, int w, int h);
 const u8 *port_portrait(int index); /* field_hud.c: the menu's portrait entry (0x6C0 bytes), NULL if unread */
+const u8 *port_portrait_face(int index); /* field_hud.c: its face, 32x32 8-bit pixels */
 
 void port_battle_ui_frame(void) {
     static int forced, had;
@@ -99,11 +100,22 @@ static void draw_cards(void) {
         int x = r_cards.x + 4;
         const u8 *e = port_portrait(g_portraitByKind[c->info.b.kind]);
         if (e) {
-            ctr_hud_image(4 + i, 0x200u | (u32)g_portraitByKind[c->info.b.kind], (const u16 *)e, e + 0x100, 32, 32);
+            ctr_hud_image(4 + i, 0x200u | (u32)g_portraitByKind[c->info.b.kind], (const u16 *)e,
+                          port_portrait_face(g_portraitByKind[c->info.b.kind]), 32, 32);
             ctr_hud_draw(4 + i, x, y + 1, 32, 32);
         }
         int dead = u->hp == 0;
         text_drawBlock(x + 38, y, 2, c->name, dead ? 2 : 0);
+        { /* its statuses: the game's icons (the battle status list's table), up to four after the name */
+            u32 st = u->status | u->autoStatus;
+            int ix = x + 100, n = 0;
+            for (int k = 0; k < 16 && n < 4; k++)
+                if (st & g_btluiStatusIcons[k].status) {
+                    ui_drawSprite(ix, y + 1, 2, g_btluiStatusIcons[k].icon, 0);
+                    ix += 12;
+                    n++;
+                }
+        }
         int low = dead ? 2 : (u->max->maxHp / 6 >= u->hp) ? 2 : 0;
         ui_drawLabel(x + 38, y + 14, 2, (s32)hp, 0);
         text_formatNumber(u->menu->gauges[0].shown, a, 4, 1);
