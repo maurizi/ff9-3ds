@@ -17,6 +17,8 @@ int gxh_bg_units_on(void); /* whether field_bg.c lifts layers as units */
 /* the hottest code of a mode, in ITCM while its overlay is resident (gen_link.py's ITCM overlay, port/ds/ovl_pack.c):
  * ARM, called from main RAM through long calls */
 #define PORT_ITCM_CODE(id) __attribute__((section(".itcmovl_" #id ".port"), long_call, target("arm"), noinline))
+/* ... in Thumb (half the room; only for code without 64-bit products, which Thumb makes calls) */
+#define PORT_ITCM_THUMB(id) __attribute__((section(".itcmovl_" #id ".port"), long_call, target("thumb"), noinline))
 /* code only that overlay's mode runs, kept in the dead part of its MIPS code range in psx_ram (ovl0b_layout.h
  * OVL0B_RAMCODE_AT): read from ovls.bin where its disc sectors land (port/ds/ovl_pack.c); no resident memory */
 #define PORT_RAM_CODE(id) __attribute__((section(".ramovl_" #id ".port"), noinline))
@@ -24,6 +26,7 @@ int gxh_bg_units_on(void); /* whether field_bg.c lifts layers as units */
 #define PORT_RAM_CODE(id)
 #define PORT_OVERLAY_CODE(id)
 #define PORT_ITCM_CODE(id)
+#define PORT_ITCM_THUMB(id)
 #endif
 
 typedef struct {

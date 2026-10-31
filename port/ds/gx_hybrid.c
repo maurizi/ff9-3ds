@@ -965,40 +965,19 @@ PORT_ITCM_CODE(0c) static void terrain_verts(const NativeWorldBlock *n, TVert *o
     }
 }
 
-PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) int port_native_world_block(const NativeWorldBlock *n) {
-    if (!active || !place->world) return 0;
-    Buffer *b = buffer_at(n->draw_x, n->draw_y);
-    if (!b || !b->slots) return 0;
-    struct Terrain *t = terrain_ring[psx_ot_generation % 3];
-    if (t->gen != psx_ot_generation) {
-        terrain_reset(t);
-        t->gen = psx_ot_generation;
-        t->buffer = (int)(b - buffers);
-        t->fog_mode = 0;
-    }
-    const u8 *blk = n->block;
-    int nv = blk[0], nf = *(const u16 *)(blk + 2);
-    nv = (nv + 2) / 3 * 3; /* (the vertex pass does whole groups of three) */
-    if (!nf || t->nblocks == TB_MAX || t->nverts + nv > TV_MAX || t->nfaces == TF_MAX) return 0;
-    int backdrop = n->variant == WORLD_BACKDROP;
-    int fog = n->variant != WORLD_FACES_NEAR && !backdrop, shift = n->variant == WORLD_FACES_FAR ? 1 : 2;
-    u32 fog_offset = n->fog_params[1] & 0xFFFF;
-    if (fog) { t->fog_mode = n->variant == WORLD_FACES_FAR ? 2 : 1; t->fog_colour = n->fog_params[0]; t->fog_offset = fog_offset; }
-    u32 bf = n->fog_params[0] & 0xFFFFFF, bf_max = 1;
-    if (backdrop) { /* (its fog is added by translucent polygons: a vertex's fog colour is bf x d) */
-        t->backdrop_fog = bf;
-        u32 r = bf & 0xFF, g = bf >> 8 & 0xFF, bl = bf >> 16 & 0xFF;
-        bf_max = r > g ? (r > bl ? r : bl) : (g > bl ? g : bl);
-        if (!bf_max) bf_max = 1;
-    }
-    /* the vertices: depth on the scene's scale, colour lit / (1 - d) */
-    int vbase = t->nverts;
-    terrain_verts(n, &t->verts[vbase], nv, backdrop, fog, fog_offset, shift, bf_max);
-    /* the faces wf_face would draw */
-    int ti = t->nblocks;
-    TBlock *tb = &t->blocks[ti];
-    tb->faces = *(const u32 *const *)(blk + 8); tb->vbase = (u16)vbase; tb->variant = (u8)n->variant;
-    if (n->alt) { tb->alt[0] = n->alt[0]; tb->alt[1] = n->alt[1]; tb->alt[2] = n->alt[2]; }
+/* port_native_world_block's faces: those wf_face would draw (culling, OT range, half-resolution and alternate
+ * pages), recorded with their texture uses; in the world map's ITCM image */
+typedef struct {
+    const NativeWorldBlock *n;
+    struct Terrain *t;
+    TBlock *tb;
+    int ti, vbase, nf, backdrop, fog;
+} WFaces;
+PORT_ITCM_THUMB(0c) static void world_faces(const WFaces *wf) {
+    const NativeWorldBlock *n = wf->n;
+    struct Terrain *t = wf->t;
+    TBlock *tb = wf->tb;
+    const int ti = wf->ti, vbase = wf->vbase, nf = wf->nf, backdrop = wf->backdrop, fog = wf->fog;
     int cull = n->variant == WORLD_FACES_NEAR, grid = n->variant == WORLD_FACES_FAR;
     int limit = n->variant == WORLD_FACES_NEAR ? 0xF6A : 0xFFE, need_lit = n->variant != WORLD_FACES_NEAR;
     int drawn = 0;
@@ -1087,6 +1066,44 @@ PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) int port_native_world_block
     }
     if (cu >= 0) tuse_bounds(&t->uses[cu], lu0, lv0, lu1, lv1);
     t->nfaces += drawn;
+}
+
+PORT_OVERLAY_CODE(0c) __attribute__((target("arm"))) int port_native_world_block(const NativeWorldBlock *n) {
+    if (!active || !place->world) return 0;
+    Buffer *b = buffer_at(n->draw_x, n->draw_y);
+    if (!b || !b->slots) return 0;
+    struct Terrain *t = terrain_ring[psx_ot_generation % 3];
+    if (t->gen != psx_ot_generation) {
+        terrain_reset(t);
+        t->gen = psx_ot_generation;
+        t->buffer = (int)(b - buffers);
+        t->fog_mode = 0;
+    }
+    const u8 *blk = n->block;
+    int nv = blk[0], nf = *(const u16 *)(blk + 2);
+    nv = (nv + 2) / 3 * 3; /* (the vertex pass does whole groups of three) */
+    if (!nf || t->nblocks == TB_MAX || t->nverts + nv > TV_MAX || t->nfaces == TF_MAX) return 0;
+    int backdrop = n->variant == WORLD_BACKDROP;
+    int fog = n->variant != WORLD_FACES_NEAR && !backdrop, shift = n->variant == WORLD_FACES_FAR ? 1 : 2;
+    u32 fog_offset = n->fog_params[1] & 0xFFFF;
+    if (fog) { t->fog_mode = n->variant == WORLD_FACES_FAR ? 2 : 1; t->fog_colour = n->fog_params[0]; t->fog_offset = fog_offset; }
+    u32 bf = n->fog_params[0] & 0xFFFFFF, bf_max = 1;
+    if (backdrop) { /* (its fog is added by translucent polygons: a vertex's fog colour is bf x d) */
+        t->backdrop_fog = bf;
+        u32 r = bf & 0xFF, g = bf >> 8 & 0xFF, bl = bf >> 16 & 0xFF;
+        bf_max = r > g ? (r > bl ? r : bl) : (g > bl ? g : bl);
+        if (!bf_max) bf_max = 1;
+    }
+    /* the vertices: depth on the scene's scale, colour lit / (1 - d) */
+    int vbase = t->nverts;
+    terrain_verts(n, &t->verts[vbase], nv, backdrop, fog, fog_offset, shift, bf_max);
+    /* the faces wf_face would draw */
+    int ti = t->nblocks;
+    TBlock *tb = &t->blocks[ti];
+    tb->faces = *(const u32 *const *)(blk + 8); tb->vbase = (u16)vbase; tb->variant = (u8)n->variant;
+    if (n->alt) { tb->alt[0] = n->alt[0]; tb->alt[1] = n->alt[1]; tb->alt[2] = n->alt[2]; }
+    const WFaces wf = {n, t, tb, ti, vbase, nf, backdrop, fog};
+    world_faces(&wf);
     t->nverts += nv;
     t->nblocks++;
     gxh_stats_terrain = t->nfaces;

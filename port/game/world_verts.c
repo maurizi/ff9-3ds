@@ -92,8 +92,11 @@ static inline void wv_mat(const u32 *c, const s32 *t, s32 x, s32 y, s32 z, s32 *
     o[1] = (s32)((((long long)t[1] << 12) + (long long)((s32)c[1] >> 16) * x + (long long)(s16)c[2] * y + (long long)((s32)c[2] >> 16) * z) >> 12);
     o[2] = (s32)((((long long)t[2] << 12) + (long long)(s16)c[3] * x + (long long)((s32)c[3] >> 16) * y + (long long)(s16)c[4] * z) >> 12);
 }
-/* NCT's colour for one normal (sf 1, lm 1), pushed with the code byte */
-static inline u32 wv_nct(const WvCtx *cx, const SVECTOR *nv, u32 code) {
+/* NCT's colour for one normal (sf 1, lm 1), pushed with the code byte (once per normal a call: out of ITCM) */
+#if defined(__arm__)
+__attribute__((target("arm")))
+#endif
+PORT_OVERLAY_CODE(0c) static u32 wv_nct(const WvCtx *cx, const SVECTOR *nv, u32 code) {
     static const s32 zero[3] = {0, 0, 0};
     s32 m[3];
     wv_mat(cx->llm, zero, nv->vx, nv->vy, nv->vz, m); /* LLM x V */
@@ -196,44 +199,16 @@ static inline void wv_group(WvCtx *cx, const u32 *v, s32 flags, u32 *rgbc, u32 *
 }
 #endif
 
-#if defined(__arm__)
-__attribute__((target("arm"))) /* (its 64-bit products: Thumb makes each a call) */
-#endif
-PORT_ITCM_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
-    s32 n = *(u32 *)o & 0xFF;
-    u32 *v = *(u32 **)(o + 4);
-    u32 *fog = g_worldVtxFogColors;
-    u32 *lit = g_worldVtxLitColors;
-    u32 *sxy = (u32 *)SCRATCHPAD;
-    u32 *zs32 = (u32 *)g_worldVtxDepth;
-    u16 *zs16 = g_worldVtxDepth;
+/* The groups through the emulated GTE (in DS mode only the last: the registers end as the game leaves them), out of
+ * ITCM (once a block) */
+PORT_OVERLAY_CODE(0c) static void wv_gte_groups(u32 *v, s32 n, s32 flags, u32 *lit, u32 *fog, u32 *sxy, u32 *zs32,
+                                                u16 *zs16) {
     u32 w[6]; /* three vertices as raw words: w[2i] = x | y << 16, w[2i + 1] = z | pad << 16 */
     u32 sz[3];
     u32 rgb[3];
     u32 f, m, rfc;
     s32 i, y;
 
-#ifdef PORT_GTE_APPROX
-    if (n > 3) { /* all groups but the last as arithmetic (wv_group) */
-        const u32 *c = psx_gte.c;
-        WvCtx cx;
-        for (int k = 0; k < 5; ++k) { cx.rot[k] = c[k]; cx.llm[k] = c[8 + k]; cx.lcm[k] = c[16 + k]; }
-        for (int k = 0; k < 3; ++k) { cx.tr[k] = (s32)c[5 + k]; cx.bk[k] = (s32)c[13 + k]; cx.fc[k] = (s32)c[21 + k]; }
-        cx.ofx = (s32)c[24]; cx.ofy = (s32)c[25]; cx.h = (u16)c[26];
-        for (int k = 0; k < 3; ++k) cx.fcc[k] = wv_clamp32(cx.fc[k], -40000, 40000);
-        for (int e = 0; e < 2; ++e) wv_ir(cx.fcc, ((const u32 *)g_worldFogParams)[2 * e], cx.fog_ir[e]);
-        cx.unr = psx_gte_unr();
-        for (int k = 0; k < 8; ++k) cx.nct_have[k] = 0;
-        u32 rgbc = psx_gte.d[6];
-        while (n > 3) {
-            wv_group(&cx, v, flags, &rgbc, lit, fog, sxy, zs32, zs16);
-            v += 6; n -= 3; lit += 3; sxy += 3;
-            if (flags & WV_FOG) fog += 3;
-            if (flags & WV_SZ16) zs16 += 3; else zs32 += 3;
-        }
-        gte_ldrgbc(rgbc);
-    }
-#endif
     do {
         for (i = 0; i < 6; i++) {
             w[i] = v[i];
@@ -307,6 +282,42 @@ PORT_ITCM_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
             zs32 += 3;
         }
     } while (n > 0);
+}
+
+#if defined(__arm__)
+__attribute__((target("arm"))) /* (its 64-bit products: Thumb makes each a call) */
+#endif
+PORT_ITCM_CODE(0c) static void wv_transform(u8 *o, s32 flags) {
+    s32 n = *(u32 *)o & 0xFF;
+    u32 *v = *(u32 **)(o + 4);
+    u32 *fog = g_worldVtxFogColors;
+    u32 *lit = g_worldVtxLitColors;
+    u32 *sxy = (u32 *)SCRATCHPAD;
+    u32 *zs32 = (u32 *)g_worldVtxDepth;
+    u16 *zs16 = g_worldVtxDepth;
+
+#ifdef PORT_GTE_APPROX
+    if (n > 3) { /* all groups but the last as arithmetic (wv_group) */
+        const u32 *c = psx_gte.c;
+        WvCtx cx;
+        for (int k = 0; k < 5; ++k) { cx.rot[k] = c[k]; cx.llm[k] = c[8 + k]; cx.lcm[k] = c[16 + k]; }
+        for (int k = 0; k < 3; ++k) { cx.tr[k] = (s32)c[5 + k]; cx.bk[k] = (s32)c[13 + k]; cx.fc[k] = (s32)c[21 + k]; }
+        cx.ofx = (s32)c[24]; cx.ofy = (s32)c[25]; cx.h = (u16)c[26];
+        for (int k = 0; k < 3; ++k) cx.fcc[k] = wv_clamp32(cx.fc[k], -40000, 40000);
+        for (int e = 0; e < 2; ++e) wv_ir(cx.fcc, ((const u32 *)g_worldFogParams)[2 * e], cx.fog_ir[e]);
+        cx.unr = psx_gte_unr();
+        for (int k = 0; k < 8; ++k) cx.nct_have[k] = 0;
+        u32 rgbc = psx_gte.d[6];
+        while (n > 3) {
+            wv_group(&cx, v, flags, &rgbc, lit, fog, sxy, zs32, zs16);
+            v += 6; n -= 3; lit += 3; sxy += 3;
+            if (flags & WV_FOG) fog += 3;
+            if (flags & WV_SZ16) zs16 += 3; else zs32 += 3;
+        }
+        gte_ldrgbc(rgbc);
+    }
+#endif
+    wv_gte_groups(v, n, flags, lit, fog, sxy, zs32, zs16);
 }
 
 PORT_OVERLAY_CODE(0c) void o0c_wm_blockVertsFog(void *o) { wv_transform(o, WV_FOG | WV_CURVE_MUL); }
