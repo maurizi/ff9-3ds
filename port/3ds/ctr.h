@@ -28,6 +28,17 @@ unsigned int ctr_ui_pad_buttons(long frame);
 extern int ctr_ui_hands[CTR_MAX_HANDS][2], ctr_ui_nhands;
 int ctr_ui_active(void); /* the bottom screen shows a UI layer */
 
+/* touch.c: the field panel (the bottom screen in a field or on the world map while no window is up): face buttons
+ * drawn with the game's own icons (texture page 960,256), and a drag pad on the left half */
+typedef struct { short x, y, w, h; unsigned short pad; unsigned char icon_u, icon_v; } CtrPanelButton;
+extern const CtrPanelButton ctr_panel_buttons[];
+extern const int ctr_panel_nbuttons;
+#define CTR_PANEL_PAD_W 150 /* the drag pad: x < this */
+extern unsigned ctr_panel_held;  /* the panel's buttons the stylus holds (bits by index), for their highlight */
+extern int ctr_panel_pad_dir;    /* the drag pad's direction (PS1 d-pad bits), 0 = none */
+extern int ctr_panel_pad_x, ctr_panel_pad_y; /* where the drag began */
+int ctr_panel_shown(void);       /* render.c: the panel is on the bottom screen */
+
 /* async.c: the worker on the other core (plat_async) */
 void ctr_async_init(void);
 void ctr_async_exit(void);

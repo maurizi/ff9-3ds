@@ -23,3 +23,8 @@ int port_menu_state(void) {
     if (!(g->flags & GD_MENU_OPEN)) return 0;
     return (g->flags & GD_HIDE_ALL) == GD_HIDE_ALL ? 2 : 1; /* (events hide parts of the scene by these flags too) */
 }
+
+/* the game's mode (g_gameState->mode: 1 field, 2 battle, 3 world map, ...) */
+int port_game_mode(void) {
+    return g_gameState ? g_gameState->mode : 0;
+}

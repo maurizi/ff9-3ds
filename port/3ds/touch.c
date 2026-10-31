@@ -5,7 +5,8 @@
  * column), and presses cross. The game's own cursor logic (wrapping, skipped entries, sub-menus) is never
  * bypassed: touch is a faster way of pressing the buttons the player could press. A tap with no hand on screen
  * does nothing. A swipe instead of a tap: left is back (circle), up or down steps the cursor once per 24 pixels
- * (scrolling a list). AUTOTOUCH="X,Y@FRAME ..." scripts taps for tests. */
+ * (scrolling a list). AUTOTOUCH="X,Y@FRAME ..." scripts taps for tests (X,Y@FRAME+N holds, X,Y>X2,Y2@FRAME+N
+ * drags). */
 #include <3ds.h>
 #include <stdlib.h>
 
@@ -20,6 +21,51 @@ enum { PAD_UP = 0x0010, PAD_RIGHT = 0x0020, PAD_DOWN = 0x0040, PAD_LEFT = 0x0080
 #define PRESS 2   /* frames a press is held */
 #define SETTLE 5  /* frames released after it, so the game moves the cursor and redraws the hand */
 #define MAX_STEPS 32
+
+/* ---- the field panel ---- */
+const CtrPanelButton ctr_panel_buttons[] = {
+    {230, 18, 60, 60, 0x1000, 68, 0}, /* triangle: the menu */
+    {180, 76, 60, 60, 0x8000, 56, 0}, /* square */
+    {268, 90, 52, 52, 0x2000, 44, 0}, /* circle: hold to walk */
+    {218, 140, 76, 76, 0x4000, 32, 0}, /* cross: talk, check */
+};
+const int ctr_panel_nbuttons = sizeof ctr_panel_buttons / sizeof ctr_panel_buttons[0];
+unsigned ctr_panel_held;
+int ctr_panel_pad_dir, ctr_panel_pad_x, ctr_panel_pad_y;
+
+static int panel_button_at(int x, int y) {
+    for (int i = 0; i < ctr_panel_nbuttons; i++) {
+        const CtrPanelButton *b = &ctr_panel_buttons[i];
+        if (x >= b->x - 6 && x < b->x + b->w + 6 && y >= b->y - 6 && y < b->y + b->h + 6) return i;
+    }
+    return -1;
+}
+
+/* the panel's buttons for this frame: the stylus on a button holds it; dragging on the pad's half is the d-pad */
+static unsigned panel(int touching, int x, int y, int went_down) {
+    static int on_pad;
+    ctr_panel_held = 0;
+    ctr_panel_pad_dir = 0;
+    if (!touching) { on_pad = 0; return 0; }
+    if (went_down) {
+        on_pad = x < CTR_PANEL_PAD_W;
+        ctr_panel_pad_x = x;
+        ctr_panel_pad_y = y;
+    }
+    if (on_pad) {
+        int dx = x - ctr_panel_pad_x, dy = y - ctr_panel_pad_y, d = 0;
+        if (dx * dx + dy * dy > 12 * 12) { /* (8 directions: 22.5-degree sectors, by slopes) */
+            if (abs(dx) * 5 > abs(dy) * 2) d |= dx > 0 ? PAD_RIGHT : PAD_LEFT;
+            if (abs(dy) * 5 > abs(dx) * 2) d |= dy > 0 ? PAD_DOWN : PAD_UP;
+        }
+        ctr_panel_pad_dir = d;
+        return (unsigned)d;
+    }
+    int i = panel_button_at(x, y);
+    if (i < 0) return 0;
+    ctr_panel_held = 1u << i;
+    return ctr_panel_buttons[i].pad;
+}
 
 static int goal, gx, gy, steps, timer;
 static unsigned held;
@@ -40,7 +86,7 @@ static void tap(int x, int y) {
 }
 
 #ifdef PORT_AUTOTOUCH
-static struct { int x, y; long frame; } script[32];
+static struct { int x, y, x2, y2; long frame, hold; } script[32];
 static int nscript, script_parsed;
 static void parse_script(void) {
     const char *p = PORT_AUTOTOUCH;
@@ -49,10 +95,17 @@ static void parse_script(void) {
         char *e;
         int x = (int)strtol(p, &e, 10);
         if (*e != ',') break;
-        int y = (int)strtol(e + 1, &e, 10);
+        int y = (int)strtol(e + 1, &e, 10), x2 = x, y2 = y;
+        if (*e == '>') { /* X,Y>X2,Y2: a drag, X,Y to X2,Y2 over the hold */
+            x2 = (int)strtol(e + 1, &e, 10);
+            if (*e != ',') break;
+            y2 = (int)strtol(e + 1, &e, 10);
+        }
         if (*e != '@') break;
-        long f = strtol(e + 1, &e, 10);
-        script[nscript].x = x; script[nscript].y = y; script[nscript].frame = f;
+        long f = strtol(e + 1, &e, 10), hold = 0;
+        if (*e == '+') hold = strtol(e + 1, &e, 10);
+        script[nscript].x = x; script[nscript].y = y; script[nscript].frame = f; script[nscript].hold = hold;
+        script[nscript].x2 = x2; script[nscript].y2 = y2;
         nscript++;
         while (*e == ' ' || *e == ',') e++;
         p = e;
@@ -81,17 +134,33 @@ static unsigned step(void) {
 }
 
 unsigned int ctr_ui_pad_buttons(long frame) {
+    u32 kd = hidKeysDown(), kh = hidKeysHeld();
+    touchPosition t = {0, 0};
+    if (kh & KEY_TOUCH) hidTouchRead(&t);
 #ifdef PORT_AUTOTOUCH
+    /* scripted: X,Y@FRAME taps (the cursor driver's tap), X,Y@FRAME+N holds the stylus there for N frames */
     if (!script_parsed) parse_script();
-    for (int i = 0; i < nscript; i++)
-        if (script[i].frame == frame) tap(script[i].x, script[i].y);
+    for (int i = 0; i < nscript; i++) {
+        if (!script[i].hold && script[i].frame == frame) tap(script[i].x, script[i].y);
+        if (script[i].hold && frame >= script[i].frame && frame < script[i].frame + script[i].hold) {
+            if (frame == script[i].frame) kd |= KEY_TOUCH;
+            kh |= KEY_TOUCH;
+            long k = frame - script[i].frame, n = script[i].hold > 1 ? script[i].hold - 1 : 1;
+            if (k > n / 4) k = n; /* (a drag reaches its end within its first quarter, then holds there) */
+            t.px = (u16)(script[i].x + (script[i].x2 - script[i].x) * k / n);
+            t.py = (u16)(script[i].y + (script[i].y2 - script[i].y) * k / n);
+        }
+    }
 #else
     (void)frame;
 #endif
-    u32 kd = hidKeysDown(), kh = hidKeysHeld();
+    if (ctr_panel_shown() && !ctr_ui_active()) { /* the field panel: no cursor to drive */
+        down = 0;
+        return panel(!!(kh & KEY_TOUCH), t.px, t.py, !!(kd & KEY_TOUCH));
+    }
+    ctr_panel_held = 0;
+    ctr_panel_pad_dir = 0;
     if (kh & KEY_TOUCH) {
-        touchPosition t;
-        hidTouchRead(&t);
         if (kd & KEY_TOUCH) down = 1, dx0 = t.px, dy0 = t.py, swiped = 0, vsteps = 0;
         last_x = t.px;
         last_y = t.py;

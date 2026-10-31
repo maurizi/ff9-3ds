@@ -193,6 +193,10 @@ void plat_wait_frame(void) {
     }
     if (frames == vram_at) {
         dump_area("vram", 0, 0, 1024, 512, 0);
+        char path[256]; /* and the raw halfwords (decoding texture pages and CLUTs offline) */
+        snprintf(path, sizeof path, "%s/vram_%06ld.bin", dump_dir, frames);
+        FILE *f = fopen(path, "wb");
+        if (f) { fwrite(psx_vram, 2, 1024 * 512, f); fclose(f); }
     }
     if (status_every && frames % status_every == 0) {
         unsigned char *gs = g_gameState;
