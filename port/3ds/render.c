@@ -92,6 +92,7 @@ static unsigned frame_serial = 1; /* bumped at each C3D frame: what was recorded
 static int stereo_on;            /* eye 1 drawn as well */
 static float stereo_k;           /* parallax constant of eye 1 (eye 0 gets -k) */
 static float stereo_inv_zc = 1.0f / 1500.0f;
+#define STEREO_MAX_PX 8.0f
 static unsigned display_shown_gen = ~0u, frames_drawn;
 unsigned int ctr_render_stats[8];
 unsigned int ctr_depth_stats[2]; /* vertices with / without GTE depth */ /* batches, primitives, blits, readbacks, texture blocks, slots, syncs */
@@ -663,6 +664,48 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
 }
 
 /* the vertices of one primitive (6 for a quad, 3 for a triangle) in each pass its kind needs */
+/* ---- depth for 2D primitives from their ordering-table entry ----------------------------------------------
+ * The game sorts its scene into ordering-table entries by depth, so an entry stands for a depth. Primitives the GTE
+ * projected give (entry, SZ) pairs; a least-squares line through a frame's pairs gives the depth of the entries
+ * where 2D primitives hang (a field's background layers, sprites), and with it their stereo parallax. Full-screen
+ * ones (fades, letterboxes) stay at the screen plane. */
+extern int psx_ot_entry;
+static float fit_n, fit_s, fit_z, fit_ss, fit_sz; /* this frame's sums */
+static float fit_a, fit_b;                        /* the last good line: SZ = a entry + b */
+static unsigned fit_age = ~0u;                    /* presents since it was fitted */
+
+static float zc_smooth = 1500.0f; /* the convergence depth: the scene's mean depth, smoothed */
+static void fit_frame(void) {
+    if (fit_n >= 16) {
+        zc_smooth += (fit_z / fit_n - zc_smooth) * 0.1f;
+        stereo_inv_zc = 1.0f / zc_smooth;
+        float den = fit_n * fit_ss - fit_s * fit_s;
+        if (den > 1e-3f) {
+            fit_a = (fit_n * fit_sz - fit_s * fit_z) / den;
+            fit_b = (fit_z - fit_a * fit_s) / fit_n;
+            fit_age = 0;
+        }
+    }
+    if (fit_age != ~0u) fit_age++;
+    fit_n = fit_s = fit_z = fit_ss = fit_sz = 0;
+}
+
+static const Vtx *ot_depth(const Vtx *v, unsigned n, Vtx *out, int w, int h) {
+    if (psx_ot_entry < 0) return v;
+    float s = (float)psx_ot_entry, z = 0;
+    for (unsigned i = 0; i < n; i++) z += v[i].z;
+    if (z > 0) { /* projected: a sample */
+        z /= n;
+        fit_n += 1; fit_s += s; fit_z += z; fit_ss += s * s; fit_sz += s * z;
+        return v;
+    }
+    if (fit_age > 30 || (w >= 300 && h >= 200)) return v;
+    float d = fit_a * s + fit_b;
+    if (d < 64) return v;
+    for (unsigned i = 0; i < n; i++) out[i] = v[i], out[i].z = d;
+    return out;
+}
+
 static int ui_ox, ui_oy; /* the displayed buffer's origin, which the UI list draws at */
 static int ui_list_layer;  /* the layer the UI list draws into */
 static int ui_layer_for(int x, int y, int clear);
@@ -697,6 +740,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     } else {
         gpu_draws(bx0, by0, bx1, by1);
         cur_target = 0;
+        v = ot_depth(v, n, moved, bx1 - bx0, by1 - by0);
     }
     ctr_render_stats[1]++;
     int passes[2], np = 0, abr = m->semi ? m->abr : NO_BLEND;
@@ -978,7 +1022,7 @@ void ctr_present(long frame) {
     (void)frame;
     float slider = osGet3DSliderState();
     int want_stereo = slider > 0.01f;
-    stereo_k = slider * 10.0f / stereo_inv_zc; /* up to 10 pixels of parallax at infinity */
+    stereo_k = slider * STEREO_MAX_PX / stereo_inv_zc; /* up to STEREO_MAX_PX of parallax at infinity */
     if (want_stereo && !stereo_on) {
         /* eye 1 missed what was drawn in mono: start it from eye 0's mirror */
         submit();
@@ -1016,8 +1060,11 @@ void ctr_present(long frame) {
                     if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
         submit();
         frame_begin();
+        /* in stereo, both edges are masked by the largest parallax, in both eyes: what a layer's shift uncovers at
+         * the frame's edge isn't seen (a floating window) */
+        int edge = stereo_on ? (int)(STEREO_MAX_PX * slider + 0.99f) : 0;
         for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++)
-            draw_to_screen(top_rt[eye], &mirror_tex[eye], d.x, d.y, w, h, ox, oy);
+            draw_to_screen(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, ox + edge, oy);
     }
     present_bottom(&d, w, h);
     C3D_FrameEnd(0);
@@ -1025,6 +1072,7 @@ void ctr_present(long frame) {
     frames_drawn++;
     extern unsigned int psx_depth_frame;
     psx_depth_frame++;
+    fit_frame();
     port_profile_end(PORT_PROFILE_GPU, profile_start);
 }
 

@@ -626,10 +626,16 @@ __attribute__((weak)) int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int
 __attribute__((weak)) void psx_gpu_ot_done(void) {}
 
 __attribute__((weak)) void psx_gpu_ot_begin(const u32 *ot) { (void)ot; }
+/* the entry of the ordering table being walked that the current packet hangs from, counted from where the walk
+ * started (a renderer can infer a 2D primitive's depth from it: port/3ds/render.c) */
+int psx_ot_entry = -1;
 
 static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
     unsigned int profile_start = port_profile_begin();
     psx_gpu_ot_begin(p);
+    psx_ot_slot = ~0u; /* (set as the walk enters the main OT's entries; another OT's packets have none) */
+    const u32 *head = p;
+    psx_ot_entry = 0;
     /* Explicit bounds disambiguate stack links whose low 24 bits alias arena RAM. */
     u32 head_window = (u32)p & 0xFF000000;
     unsigned int guard = 0;
@@ -642,6 +648,11 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
         if (ram_window && (unsigned char *)p > psx_ram && (unsigned char *)p < psx_ram + PSX_RAM_SIZE)
             while ((unsigned char *)p > psx_ram && *p == (((u32)(p - 1)) & 0xFFFFFF)) --p;
         if ((unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n) psx_ot_slot = (unsigned int)((unsigned int *)p - psx_main_ot);
+        if (!((P_TAG *)p)->len) { /* an ordering table's entry (within 64K entries of the head): how far into it the walk is */
+            int d = (int)(head - p);
+            if (d < 0) d = -d;
+            if (d < 0x10000) psx_ot_entry = d;
+        }
         u32 addr = *p & 0xFFFFFF;
         if (((P_TAG *)p)->len)
             draw_packet(p);
@@ -667,6 +678,7 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
         drawsync_owed = 1;
     }
     psx_gpu_ot_done();
+    psx_ot_entry = -1;
     port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
 }
 void DrawOTag(u32 *p) { draw_ot(p, NULL, 0); }
