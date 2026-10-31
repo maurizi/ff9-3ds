@@ -39,7 +39,7 @@ def main():
     for f in dump.glob("f*.ppm"):
         f.unlink()
     exe = out / "ff9.3dsx"
-    shutil.copy(ROOT / "build/ff9.3dsx", exe)
+    shutil.copy(ROOT / "build/ff9-test.3dsx", exe)
     subprocess.run([str(ROOT / "tools/azahar.sh"), "-t", str(a.frames // 60 + 12), "-o", str(out / "azahar"), str(exe)],
                    cwd=ROOT, check=False, capture_output=True)
     rows = []

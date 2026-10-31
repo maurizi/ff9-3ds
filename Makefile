@@ -1,7 +1,8 @@
 # ff9-3ds: FF9 (PS1, NTSC-U) on the Nintendo 3DS, built from the ff9-decomp C source in decomp/.
 # Build targets run in the container: tools/docker.sh make [3ds|pc]
 #
-#   make / make 3ds   build/ff9.3dsx      3DS homebrew executable (devkitARM, libctru, citro3d)
+#   make / make 3ds   build/ff9.3dsx      3DS homebrew executable (devkitARM, libctru, citro3d); with any option
+#                                         below, build/ff9-test.3dsx instead
 #   make pc           build/pc/ff9ds      32-bit Linux host build of the same game code and port layer: fast
 #                                         iteration, gdb, frame dumps, lockstep comparison with PCSX-Redux
 #   AUTOPRESS="..."   3DS: scripted presses, as the PC's --press ("CROSS@2500,UP@2900+3")
@@ -196,11 +197,15 @@ $(BUILD)/3ds/icon.png: tools/make_icon.py
 	@$(PYTHON) tools/make_icon.py $@
 $(BUILD)/ff9.smdh: $(BUILD)/3ds/icon.png
 	@smdhtool --create "$(APP_TITLE)" "$(APP_DESC)" "$(APP_AUTHOR)" $< $@
-$(BUILD)/ff9.3dsx: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh
+# A build with any test option (scripted input, a scenario, dumps, timers...) is build/ff9-test.3dsx, never
+# build/ff9.3dsx: that one is always the game as a player gets it.
+TEST_OPTS := $(strip $(AUTOPRESS)$(AUTOTOUCH)$(SCENARIO)$(PROFILE)$(SOFT)$(DUMP_AT)$(DUMP_EVERY)$(LOGUI_AT)$(PROBE_AT)$(SPUSYNC)$(VOICELOG))
+OUT_3DSX := $(if $(TEST_OPTS),$(BUILD)/ff9-test.3dsx,$(BUILD)/ff9.3dsx)
+$(OUT_3DSX): $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh
 	@echo "3DSX $@"
 	@3dsxtool $< $@ --smdh=$(BUILD)/ff9.smdh
 
-3ds: $(BUILD)/ff9.3dsx
+3ds: $(OUT_3DSX)
 
 # --- PC host build -----------------------------------------------------------------------------------------
 # 32-bit, non-PIE: psx_ram is mapped at a fixed address (port/pc/platform.c), so OT links rebuild as on the 3DS.

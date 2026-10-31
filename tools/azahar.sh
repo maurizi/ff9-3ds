@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run a 3DS build in Azahar on a private X display and capture what it shows.
-#   tools/azahar.sh [-t SECONDS] [-s "T1 T2 ..."] [-o OUTDIR] [build/ff9.3dsx]
+#   tools/azahar.sh [-t SECONDS] [-s "T1 T2 ..."] [-o OUTDIR] [build/ff9-test.3dsx]
+# (default: the test build, which make writes when any test option is set, else build/ff9.3dsx)
 # Screenshots of the emulator window at each time in -s go to OUTDIR/shot_<T>.png; the game's log
 # (svcOutputDebugString lines) to OUTDIR/game.log. The display (:47, private to this project) is started if needed and left running.
 set -euo pipefail
@@ -8,7 +9,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SECS=30; SHOTS=""; OUT="$ROOT/build/azahar"; DISP=${AZAHAR_DISPLAY:-:47}
 while getopts "t:s:o:" o; do case $o in t) SECS=$OPTARG;; s) SHOTS=$OPTARG;; o) OUT=$OPTARG;; *) exit 1;; esac; done
 shift $((OPTIND - 1))
-APP="$(readlink -f "${1:-$ROOT/build/ff9.3dsx}")"
+DEF="$ROOT/build/ff9.3dsx"
+[ "$ROOT/build/ff9-test.3dsx" -nt "$DEF" ] && DEF="$ROOT/build/ff9-test.3dsx"
+APP="$(readlink -f "${1:-$DEF}")"
 mkdir -p "$OUT"; rm -f "$OUT"/shot_*.png
 LOG=~/.var/app/org.azahar_emu.Azahar/data/azahar-emu/log/azahar_log.txt
 if ! xdpyinfo -display "$DISP" >/dev/null 2>&1; then
