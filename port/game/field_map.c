@@ -72,6 +72,24 @@ static int region_is_exit(int entry) {
     return 0;
 }
 
+/* edges shared by two drawn triangles (by world position: a walkmesh's floors don't share vertex indices) are inside
+ * the area; the rest are its outline */
+#define EDGE_HASH 4096
+static struct { s16 x0, z0, x1, z1; u8 count; } edges[EDGE_HASH];
+static unsigned edge_slot(int x0, int z0, int x1, int z1) {
+    if (x1 < x0 || (x1 == x0 && z1 < z0)) { int t = x0; x0 = x1; x1 = t; t = z0; z0 = z1; z1 = t; }
+    unsigned h = ((unsigned)x0 * 73856093u ^ (unsigned)z0 * 19349663u ^ (unsigned)x1 * 83492791u ^ (unsigned)z1 * 2654435761u) &
+                 (EDGE_HASH - 1);
+    for (int probe = 0; probe < EDGE_HASH; probe++, h = (h + 1) & (EDGE_HASH - 1)) {
+        if (!edges[h].count) {
+            edges[h].x0 = (s16)x0; edges[h].z0 = (s16)z0; edges[h].x1 = (s16)x1; edges[h].z1 = (s16)z1;
+            return h;
+        }
+        if (edges[h].x0 == x0 && edges[h].z0 == z0 && edges[h].x1 == x1 && edges[h].z1 == z1) return h;
+    }
+    return 0;
+}
+
 static inline u32 xy(int x, int y) { return (u32)(x & 0xFFFF) | (u32)y << 16; }
 
 /* The map in the box (bx, by, bw, bh): packets from pkt linked into ot[0] (drawn above the box), returns the next
@@ -101,6 +119,17 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     const int m = 8;
     int sx = ((bw - 2 * m) << 16) / (x1 - x0), sz = ((bh - 2 * m) << 16) / (z1 - z0), s = sx < sz ? sx : sz;
     const int ox = bx + bw / 2, oy = by + bh / 2, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    __builtin_memset(edges, 0, sizeof edges);
+    for (int i = 0; i < n; i++) {
+        const BgiTriangle *t = &g_fieldBgi.triangles[i];
+        if (!bound_tri(t) || !near_player[i]) continue;
+        int wx[3], wz[3];
+        for (int k = 0; k < 3; k++) world_xz(t, k, &wx[k], &wz[k]);
+        for (int k = 0; k < 3; k++) {
+            unsigned e = edge_slot(wx[k], wz[k], wx[(k + 1) % 3], wz[(k + 1) % 3]);
+            if (edges[e].count < 255) edges[e].count++;
+        }
+    }
 #define MX(wx) (ox + (int)(((long long)((wx) - cx) * s) >> 16))
 #define MY(wz) (oy - (int)(((long long)((wz) - cz) * s) >> 16))
     u32 *p = (u32 *)pkt;
@@ -108,17 +137,15 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         const BgiTriangle *t = &g_fieldBgi.triangles[i];
         if (!bound_tri(t) || !near_player[i]) continue; /* (only the player's area: the others are other screens) */
         if ((u8 *)(p + 5 + 3 * 4) > pkt_end) break;
-        int x[3], y[3];
+        int x[3], y[3], wxs[3], wzs[3];
         for (int k = 0; k < 3; k++) {
-            int wx, wz;
-            world_xz(t, k, &wx, &wz);
-            x[k] = MX(wx);
-            y[k] = MY(wz);
+            world_xz(t, k, &wxs[k], &wzs[k]);
+            x[k] = MX(wxs[k]);
+            y[k] = MY(wzs[k]);
         }
-        /* the outer edges (no walkable neighbour) */
+        /* the outline: edges no other drawn triangle shares */
         for (int k = 0; k < 3; k++) {
-            int nb = t->neighbors[k];
-            if (nb >= 0 && nb < n && bound_tri(&g_fieldBgi.triangles[nb])) continue;
+            if (edges[edge_slot(wxs[k], wzs[k], wxs[(k + 1) % 3], wzs[(k + 1) % 3])].count > 1) continue;
             int a = k, b = (k + 1) % 3;
             p[0] = 3u << 24;
             p[1] = 0x40000000u | MAP_EDGE;
