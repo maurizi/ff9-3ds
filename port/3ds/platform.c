@@ -140,7 +140,7 @@ int main(void) {
     if (is_new3ds) osSetSpeedupEnable(true); /* 804 MHz and the L2 cache */
     gfxInitDefault();
     ctr_console_init();
-    printf("ff9-3ds (%s 3DS)\n", is_new3ds ? "New" : "Old");
+    port_log("ff9-3ds (%s 3DS)\n", is_new3ds ? "New" : "Old");
     ctr_audio_init();
     ctr_async_init();
 #ifdef PORT_AUTOPRESS

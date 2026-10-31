@@ -38,6 +38,8 @@ unsigned int psx_gpu_packets, psx_gpu_words;
  * the active backend (software reference, or the DS 3D hardware). */
 #include "gp0.h"
 
+int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int h);
+
 static inline u32 *link_ptr(u32 addr24) {
     return (u32 *)(((u32)psx_ram & 0xFF000000) | addr24);
 }
@@ -587,6 +589,8 @@ static void draw_packet(u32 *p) {
         } else if (cmd >= 0x80 && cmd < 0xA0 && n == 4) { /* VRAM to VRAM copy */
             int width=((w[i+3]-1)&0x3ff)+1;
             int height=(((w[i+3]>>16)-1)&0x1ff)+1;
+            if (psx_ui_copy(w[i + 1] & 0x3FF, (w[i + 1] >> 16) & 0x1FF, w[i + 2] & 0x3FF, (w[i + 2] >> 16) & 0x1FF,
+                            width, height)) { i += n; continue; }
             if (psx_trace_gpu) {
                 port_log("gpu: copy %d,%d -> %d,%d %dx%d\n", (int)(w[i + 1] & 0x3FF), (int)((w[i + 1] >> 16) & 0x1FF),
                          (int)(w[i + 2] & 0x3FF), (int)((w[i + 2] >> 16) & 0x1FF), width, height);
@@ -607,6 +611,12 @@ void DrawPrim(void *p) {
  * ordering tables' high byte. */
 const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi;
 __attribute__((weak)) void port_ot_marker(unsigned int *m) { (void)m; }
+
+/* A VRAM copy inside a packet: 1 if the renderer takes it (the battle UI's row cache, which it doesn't need). */
+__attribute__((weak)) int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int h) {
+    (void)sx; (void)sy; (void)dx; (void)dy; (void)w; (void)h;
+    return 0;
+}
 
 /* A hardware renderer submits what an ordering table recorded (port/3ds/render.c). */
 __attribute__((weak)) void psx_gpu_ot_done(void) {}
@@ -698,11 +708,20 @@ __attribute__((weak)) int psx_skip_vblank_list(void) { return 0; }
 /* ... or draw it itself (the battle UI's native renderer: port/game/btlui_native.c); 1: drawn */
 __attribute__((weak)) int psx_vblank_list_native(u32 *list) { (void)list; return 0; }
 
+/* The renderer may draw the inserted list (the battle UI) somewhere of its own: the 3DS's bottom screen
+ * (port/3ds/render.c). Between the two calls every primitive belongs to it. */
+__attribute__((weak)) void psx_ui_list_begin(void) {}
+__attribute__((weak)) void psx_ui_list_end(void) {}
+
 void ContinueDraw(u32 *insaddr, s32 contaddr) {
     /* Even when BreakDraw returns zero, the inserted list must execute. FF9
      * uses this at VBlank for battle commands, status bars and text. */
     if (!contaddr && psx_skip_vblank_list()) return;
-    if (insaddr && !(!contaddr && psx_vblank_list_native(insaddr))) DrawOTag(insaddr);
+    if (insaddr && !(!contaddr && psx_vblank_list_native(insaddr))) {
+        psx_ui_list_begin();
+        DrawOTag(insaddr);
+        psx_ui_list_end();
+    }
     if (contaddr && ((u32)contaddr & 0xFFFFFF) != OT_END)
         DrawOTag(link_ptr((u32)contaddr & 0xFFFFFF));
 }

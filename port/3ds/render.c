@@ -71,6 +71,11 @@ static int u_proj, u_stereo, u_texscale;
 static C3D_Tex mirror_tex[2];
 static C3D_RenderTarget *mirror_rt[2];
 static C3D_RenderTarget *top_rt[2];
+/* the bottom screen's UI layer: PS1 screen coordinates at 1:1 (the bottom screen is the PS1's 320 wide) */
+#define UI_W 512
+#define UI_H 256
+static C3D_Tex ui_tex;
+static C3D_RenderTarget *ui_rt, *bottom_rt;
 
 static int in_frame;
 static unsigned frame_serial = 1; /* bumped at each C3D frame: what was recorded since */
@@ -199,7 +204,7 @@ enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT };
 #define NO_BLEND 4
 
 typedef struct {
-    u8 kind, abr, eyes, pad;
+    u8 kind, abr, eyes, target; /* target: 0 the VRAM mirror, 1 the bottom screen's UI layer */
     u16 sc[4]; /* scissor: x0, y0, x1, y1 (exclusive) */
     C3D_Tex *tex;
     u32 first, count;
@@ -218,10 +223,12 @@ static Vtx *alloc_vtx(unsigned n) {
 }
 
 /* the batch the next n vertices (just allocated at first) belong to */
+static int ui_mode; /* drawing the inserted list (the battle UI): to the UI layer */
 static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n) {
     if (nbatches) {
         Batch *b = &batches[nbatches - 1];
         if (b->kind == kind && b->abr == abr && b->eyes == eyes && b->tex == tex && b->first + b->count == first &&
+            b->target == ui_mode &&
             !memcmp(b->sc, sc, sizeof b->sc)) {
             b->count += n;
             return;
@@ -229,7 +236,7 @@ static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex
     }
     if (nbatches == MAX_BATCHES) submit();
     Batch *b = &batches[nbatches++];
-    b->kind = kind; b->abr = abr; b->eyes = eyes; b->tex = tex;
+    b->kind = kind; b->abr = abr; b->eyes = eyes; b->tex = tex; b->target = (u8)ui_mode;
     memcpy(b->sc, sc, sizeof b->sc);
     b->first = first; b->count = n;
 }
@@ -329,17 +336,31 @@ static void submit(void) {
     frame_begin();
     /* the GPU reads main memory, not the CPU's data cache */
     GSPGPU_FlushDataCache(vb + vb_submitted, (vb_used - vb_submitted) * sizeof(Vtx));
-    for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) {
-        C3D_FrameDrawOn(mirror_rt[eye]);
-        set_proj_ortho(VW, VH, 0.0f);
-        float k = eye ? stereo_k : -stereo_k;
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, k, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
+    int any_ui = 0;
+    for (unsigned i = 0; i < nbatches && !any_ui; i++) any_ui = batches[i].target;
+    /* passes: each eye's mirror, then the UI layer (no stereo: the bottom screen is flat) */
+    for (int pass = 0; pass < 3; pass++) {
+        int eye = pass == 1, target = pass == 2;
+        if (pass == 1 && !stereo_on) continue;
+        if (target && !any_ui) continue;
+        int height = target ? UI_H : VH;
+        if (target) {
+            C3D_FrameDrawOn(ui_rt);
+            set_proj_ortho(UI_W, UI_H, 0.0f);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
+        } else {
+            C3D_FrameDrawOn(mirror_rt[eye]);
+            set_proj_ortho(VW, VH, 0.0f);
+            float k = eye ? stereo_k : -stereo_k;
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, k, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
+        }
         int kind = -1, abr = -1;
         C3D_Tex *tex = (C3D_Tex *)-1;
         u16 sc[4] = {0xFFFF, 0, 0, 0};
         for (unsigned i = 0; i < nbatches; i++) {
             Batch *b = &batches[i];
-            if (!(b->eyes & (1 << eye))) continue;
+            if (b->target != target) continue;
+            if (!target && !(b->eyes & (1 << eye))) continue;
             if (b->kind != kind) set_tev(kind = b->kind);
             if (b->abr != abr) set_blend(abr = b->abr);
             if (b->tex != tex) {
@@ -350,7 +371,7 @@ static void submit(void) {
             if (memcmp(sc, b->sc, sizeof sc)) {
                 memcpy(sc, b->sc, sizeof sc);
                 /* (in window coordinates, which run bottom-up) */
-                C3D_SetScissor(GPU_SCISSOR_NORMAL, sc[0], VH - sc[3], sc[2], VH - sc[1]);
+                C3D_SetScissor(GPU_SCISSOR_NORMAL, sc[0], height - sc[3], sc[2], height - sc[1]);
             }
             C3D_DrawArrays(GPU_TRIANGLES, b->first, b->count);
         }
@@ -609,6 +630,7 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
 }
 
 /* the vertices of one primitive (6 for a quad, 3 for a triangle) in each pass its kind needs */
+static int ui_ox, ui_oy; /* the displayed buffer's origin, which the UI list draws at */
 static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, int bx1, int by1, C3D_Tex *tex,
                  unsigned tflags) {
     u16 sc[4];
@@ -618,7 +640,16 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     if (bx1 > sc[2]) bx1 = sc[2];
     if (by1 > sc[3]) by1 = sc[3];
     if (bx0 >= bx1 || by0 >= by1) return;
-    gpu_draws(bx0, by0, bx1, by1);
+    Vtx moved[6];
+    if (ui_mode) { /* into the UI layer, relative to the displayed buffer; the mirror isn't touched */
+        for (unsigned i = 0; i < n; i++) moved[i] = v[i], moved[i].x -= ui_ox, moved[i].y -= ui_oy;
+        v = moved;
+        sc[0] = (u16)clampi(sc[0] - ui_ox, 0, UI_W); sc[2] = (u16)clampi(sc[2] - ui_ox, 0, UI_W);
+        sc[1] = (u16)clampi(sc[1] - ui_oy, 0, UI_H); sc[3] = (u16)clampi(sc[3] - ui_oy, 0, UI_H);
+        if (sc[0] >= sc[2] || sc[1] >= sc[3]) return;
+    } else {
+        gpu_draws(bx0, by0, bx1, by1);
+    }
     ctr_render_stats[1]++;
     int passes[2], np = 0, abr = m->semi ? m->abr : NO_BLEND;
     if (!m->textured) passes[np++] = K_UNTEX;
@@ -663,8 +694,10 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     emit(m, t, n == 4 ? 6 : 3, x0, y0, x1 + 1, y1 + 1, tex, tflags);
 }
 
+static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1);
 static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (w <= 0 || h <= 0) return;
+    if (ui_mode && m->textured && ui_reads_cache(m, v->u, v->v, v->u + w - 1, v->v + h - 1)) return;
     unsigned tflags = 0;
     C3D_Tex *tex = NULL;
     if (m->textured) {
@@ -703,13 +736,72 @@ void psx_gpu_ot_done(void) {
     submit();
 }
 
+/* ---- the UI layer (the battle UI's inserted list, gpu.c ContinueDraw) ----------------------------------------
+ * Drawn over a dimmed copy of the displayed scene, so its translucent windows look as they do over the PS1's scene.
+ * The list's row cache (VRAM copies of the scene under changing digits, drawn back before them) restores scene
+ * pixels the layer doesn't have: its copies and the sprites reading them are skipped. */
+static unsigned ui_last_frame = ~0u;
+static struct { int x0, y0, x1, y1; } ui_cache[8];
+static int n_ui_cache;
+
+static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1) {
+    int shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
+    int x0 = m->tx + (u0 >> shift), x1 = m->tx + (u1 >> shift) + 1, y0 = m->ty + v0, y1 = m->ty + v1 + 1;
+    for (int i = 0; i < n_ui_cache; i++)
+        if (x0 < ui_cache[i].x1 && x1 > ui_cache[i].x0 && y0 < ui_cache[i].y1 && y1 > ui_cache[i].y0) return 1;
+    return 0;
+}
+
+int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int h) {
+    (void)sx; (void)sy;
+    if (!ui_mode) return 0;
+    if (n_ui_cache < 8) {
+        ui_cache[n_ui_cache].x0 = dx; ui_cache[n_ui_cache].y0 = dy;
+        ui_cache[n_ui_cache].x1 = dx + w; ui_cache[n_ui_cache].y1 = dy + h;
+        n_ui_cache++;
+    }
+    return 1;
+}
+
+void psx_ui_list_begin(void) {
+    submit();
+    PsxDisplayInfo d;
+    psx_gpu_display_info(&d);
+    int w = d.w ? d.w : 320, h = d.h ? d.h : 240;
+    if (w > UI_W) w = UI_W;
+    if (h > UI_H) h = UI_H;
+    /* the scene must be current in the mirror before it is copied */
+    int cx0, cy0, cx1, cy1;
+    if (cell_range(d.x, d.y, d.x + w, d.y + h, &cx0, &cy0, &cx1, &cy1))
+        for (int cy = cy0; cy < cy1; cy++)
+            for (int cx = cx0; cx < cx1; cx++)
+                if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
+    ui_mode = 1;
+    ui_ox = d.x;
+    ui_oy = d.y;
+    n_ui_cache = 0;
+    static const u16 ui_scissor[4] = {0, 0, UI_W, UI_H};
+    Vtx *v = alloc_vtx(12);
+    quad(v, 0, 0, UI_W, UI_H, 0, 0, 0, 0, 0xFF000000);
+    add_batch(K_UNTEX, NO_BLEND, 1, ui_scissor, NULL, v - vb, 6);
+    quad(v + 6, 0, 0, w, h, d.x, d.y, d.x + w, d.y + h, 0xFF383838); /* (x 0.44: modulation is x2) */
+    add_batch(K_TEX, NO_BLEND, 1, ui_scissor, &mirror_tex[0], v + 6 - vb, 6);
+}
+
+void psx_ui_list_end(void) {
+    submit();
+    ui_mode = 0;
+    ui_last_frame = frames_drawn;
+}
+
 /* ---- presenting ------------------------------------------------------------------------------------------ */
 
 static void draw_to_screen(C3D_RenderTarget *rt, C3D_Tex *src, int sx, int sy, int w, int h, int ox, int oy) {
     C3D_RenderTargetClear(rt, C3D_CLEAR_ALL, 0x000000FF, 0);
     C3D_FrameDrawOn(rt);
+    if (!src) return;
     C3D_Mtx p;
-    Mtx_OrthoTilt(&p, 0.0f, 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
+    Mtx_OrthoTilt(&p, 0.0f, rt == bottom_rt ? 320.0f : 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &p);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
     set_tev(K_BLIT);
@@ -785,6 +877,9 @@ void ctr_present(long frame) {
         for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++)
             draw_to_screen(top_rt[eye], &mirror_tex[eye], d.x, d.y, w, h, ox, oy);
     }
+    /* the bottom screen: the UI layer while the game draws one (within the last half second) */
+    if (frames_drawn - ui_last_frame < 30) draw_to_screen(bottom_rt, &ui_tex, 0, 0, 320, 240, 0, 0);
+    else draw_to_screen(bottom_rt, NULL, 0, 0, 0, 0, 0, 0);
     C3D_FrameEnd(0);
     in_frame = 0;
     frames_drawn++;
@@ -892,12 +987,17 @@ void ctr_video_init(void) {
         top_rt[eye] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, -1);
         C3D_RenderTargetSetOutput(top_rt[eye], GFX_TOP, eye ? GFX_RIGHT : GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
     }
+    if (!C3D_TexInitVRAM(&ui_tex, UI_W, UI_H, GPU_RGB565)) port_fatal("no VRAM for the UI layer");
+    C3D_TexSetFilter(&ui_tex, GPU_NEAREST, GPU_NEAREST);
+    ui_rt = C3D_RenderTargetCreateFromTex(&ui_tex, GPU_TEXFACE_2D, 0, -1);
+    bottom_rt = C3D_RenderTargetCreate(240, 320, GPU_RB_RGBA8, -1);
+    C3D_RenderTargetSetOutput(bottom_rt, GFX_BOTTOM, GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
     if (!vb || !staging) port_fatal("no linear memory for the renderer");
     /* the mirror starts as the shadow does: black, and current */
     memset(shadow_ok, 1, sizeof shadow_ok);
     memset(mirror_ok, 0, sizeof mirror_ok);
     gp0_backend = &pica_backend;
-    printf("renderer: PICA200, %u KB linear free\n", (unsigned)(linearSpaceFree() >> 10));
+    port_log("renderer: PICA200, %u KB linear free\n", (unsigned)(linearSpaceFree() >> 10));
 }
 
 void ctr_shutdown(void) {
