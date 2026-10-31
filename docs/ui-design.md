@@ -75,8 +75,8 @@ with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
   use it. Game logic pauses; the top shows the paused scene dimmed to half, so opening the menu (on the bottom) visibly
   changes the top too (play-test 2026-10-31: with the top untouched, nothing there said the game was in a menu). **[partial (port/game/menu_top.c), only what the bottom doesn't show:
   Items: for equipment, every member, whether they can wear it and what it changes for them; Equip: all of a slot's
-  candidates at once with their changes and the abilities each teaches with the member's AP (seen: weapon list); Abilities: which equipment teaches it. The 3D model
-  todo (native model renderer); otherwise the top keeps the paused scene, dimmed; on a screen with views, an entry without one shows the empty
+  candidates at once with their changes and the abilities each teaches with the member's AP (seen: weapon list); Abilities: which equipment teaches it. The 3D model: the member's
+  battle model turning in its idle with the weapon held, while the slots are shown (port/game/model_view.c, R35); otherwise the top keeps the paused scene, dimmed; on a screen with views, an entry without one shows the empty
   panel]**
 
 - **Select help**: the text on the top screen, large, along its foot; the moogle stays by the cursor on the bottom

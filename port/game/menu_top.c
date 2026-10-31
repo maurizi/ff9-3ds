@@ -275,7 +275,13 @@ int port_menu_top_draw(void) {
             return item_view(g->items.slots[slot].id) || empty_panel();
         }
         case 2: return ability_view(s_menuAbility) || (s_menuAbility[1] == 2 && empty_panel());
-        case 3: return equip_view(s_menuEquip);
+        case 3: { /* the slot's candidates, or the member's model turning in what they wear (model_view.c) */
+            if (equip_view(s_menuEquip)) return 1;
+            void port_model_view(Character *c, float cx, float cy, float height);
+            int member = s_menuEquip[3];
+            if (member < 4 && ram_ok(g->party[member], sizeof(Character))) port_model_view(g->party[member], 200, 226, 160);
+            return 0;
+        }
         default: return 0;
         }
     case 2: { /* a shop */

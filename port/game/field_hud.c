@@ -117,7 +117,9 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (port_menu_state() == 2 && max > 0) { /* (a menu's list: list_touch.c) */
         int port_list_tap(int, int, unsigned *), port_equip_tap(int, int, unsigned *), port_save_tap(int, int, unsigned *);
         int port_ability_tap(int, int, unsigned *);
-        int n = port_save_tap(x, y - oy, seq);
+        int port_shop_tap(int, int, unsigned *);
+        int n = port_shop_tap(x, y - oy, seq);
+        if (!n) n = port_save_tap(x, y - oy, seq);
         if (!n) n = port_equip_tap(x, y - oy, seq);
         if (!n) n = port_ability_tap(x, y - oy, seq);
         if (!n) { int port_config_tap(int, int, unsigned *); n = port_config_tap(x, y - oy, seq); }

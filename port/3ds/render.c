@@ -1736,6 +1736,87 @@ void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int
     hud_img[slot].key = key;
 }
 
+/* ---- native models on the top screen (port/game/model_view.c: the Equip view's turning character) ----
+ * A model's textures as 256x256 RGBA8 (from its TIMs, CLUT applied, texel 0 clear), and its triangles already posed
+ * and projected (screen x, y in the top screen's 400x240, depth z, texel u, v) with a per-eye parallax: sorted back
+ * to front and drawn over the top screen's scene, under its panels. */
+#define MODEL_TEXS 3
+#define MODEL_TRIS 4096
+static C3D_Tex model_tex[MODEL_TEXS];
+static int model_tex_ok[MODEL_TEXS];
+static struct { float x[3], y[3], z, u[3], v[3], par[3]; u8 tex; } model_tri[MODEL_TRIS];
+static int n_model_tris;
+static u16 model_order[MODEL_TRIS];
+
+void ctr_model_texture(int slot, const u32 *rgba) { /* rgba: 256x256, rows from the top, 0xRRGGBBAA */
+    if (slot < 0 || slot >= MODEL_TEXS) return;
+    if (!model_tex_ok[slot]) {
+        if (!C3D_TexInit(&model_tex[slot], 256, 256, GPU_RGBA8)) return;
+        C3D_TexSetFilter(&model_tex[slot], GPU_LINEAR, GPU_NEAREST);
+        model_tex_ok[slot] = 1;
+    }
+    if (in_frame) gpu_sync();
+    u32 *dst = model_tex[slot].data;
+    for (int y = 0; y < 256; y++)
+        for (int x = 0; x < 256; x++) dst[tiled(x, y, 256)] = rgba[y * 256 + x];
+    mark_dirty(dst, 256 * 256 * 4);
+}
+
+void ctr_model_begin(void) { n_model_tris = 0; }
+
+/* one triangle: x, y, z (depth: larger farther), u, v per corner, its parallax per corner (pixels, + to the right
+ * eye), texture slot */
+void ctr_model_tri(int tex, const float *x, const float *y, const float *z, const float *u, const float *v,
+                   const float *par) {
+    if (n_model_tris == MODEL_TRIS || tex < 0 || tex >= MODEL_TEXS || !model_tex_ok[tex]) return;
+    typeof(model_tri[0]) *t = &model_tri[n_model_tris++];
+    for (int k = 0; k < 3; k++) t->x[k] = x[k], t->y[k] = y[k], t->u[k] = u[k], t->v[k] = v[k], t->par[k] = par[k];
+    t->z = z[0] + z[1] + z[2];
+    t->tex = (u8)tex;
+}
+
+static int model_far_first(const void *a, const void *b) {
+    float za = model_tri[*(const u16 *)a].z, zb = model_tri[*(const u16 *)b].z;
+    return za < zb ? 1 : za > zb ? -1 : 0;
+}
+
+static void draw_models(int eye) {
+    if (!n_model_tris) return;
+    C3D_Mtx p;
+    Mtx_OrthoTilt(&p, 0.0f, 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &p);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
+    set_tev(K_TEX);
+    set_blend(NO_BLEND, 0);
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    if (eye == 0 || !stereo_on) {
+        for (int i = 0; i < n_model_tris; i++) model_order[i] = (u16)i;
+        qsort(model_order, (size_t)n_model_tris, sizeof *model_order, model_far_first);
+    }
+    float side = stereo_on ? (eye ? 0.5f : -0.5f) * osGet3DSliderState() : 0.0f;
+    int tex = -1;
+    Vtx *run = NULL;
+    unsigned nv = 0;
+    for (int i = 0; i <= n_model_tris; i++) {
+        int t = i < n_model_tris ? model_tri[model_order[i]].tex : -2;
+        if (t != tex && run && nv) C3D_DrawArrays(GPU_TRIANGLES, run - vb, (int)nv), run = NULL, nv = 0;
+        if (t < 0) break;
+        if (t != tex) {
+            tex = t;
+            C3D_TexBind(0, &model_tex[t]);
+            set_texscale(&model_tex[t]);
+        }
+        typeof(model_tri[0]) *m = &model_tri[model_order[i]];
+        Vtx *v = alloc_vtx(3);
+        if (!run) run = v;
+        for (int k = 0; k < 3; k++) {
+            Vtx c = {m->x[k] + side * m->par[k], m->y[k], 0, m->u[k], m->v[k], 0xFF808080};
+            v[k] = c;
+        }
+        nv += 3;
+    }
+}
+
 /* draw image slot at (x, y) of the bottom screen's UI (its 320x224 coordinates) this frame, w x h of it */
 void ctr_hud_draw(int slot, int x, int y, int w, int h) {
     if (slot < 0 || slot >= HUD_IMAGES || !hud_img[slot].ok || n_hud_draw == 16) return;
@@ -1897,6 +1978,12 @@ void ctr_present(long frame) {
             else draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, w, h, edge);
         }
     }
+    for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) { /* (models over the scene, under the panels) */
+        if (!n_model_tris) break;
+        C3D_FrameDrawOn(top_rt[eye]);
+        draw_models(eye);
+    }
+    n_model_tris = 0;
     if (top_ui_head) { /* (over the top screen's scene, both eyes) */
         void port_draw_ot_buffer(unsigned int *head, const void *buffer, unsigned int size);
         submit();
