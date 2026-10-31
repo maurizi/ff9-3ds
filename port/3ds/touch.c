@@ -4,14 +4,16 @@
  * goal; the driver then presses the d-pad, one press at a time, until the hand points at the tapped row (and
  * column), and presses cross. The game's own cursor logic (wrapping, skipped entries, sub-menus) is never
  * bypassed: touch is a faster way of pressing the buttons the player could press. A tap with no hand on screen
- * does nothing. AUTOTOUCH="X,Y@FRAME ..." scripts taps for tests. */
+ * does nothing. A swipe instead of a tap: left is back (circle), up or down steps the cursor once per 24 pixels
+ * (scrolling a list). AUTOTOUCH="X,Y@FRAME ..." scripts taps for tests. */
 #include <3ds.h>
 #include <stdlib.h>
 
 #include "ctr.h"
 #include "psx_runtime.h"
 
-enum { PAD_UP = 0x0010, PAD_RIGHT = 0x0020, PAD_DOWN = 0x0040, PAD_LEFT = 0x0080, PAD_CROSS = 0x4000 };
+enum { PAD_UP = 0x0010, PAD_RIGHT = 0x0020, PAD_DOWN = 0x0040, PAD_LEFT = 0x0080, PAD_CIRCLE = 0x2000,
+       PAD_CROSS = 0x4000 };
 #define HAND_W 23
 #define HAND_H 13
 #define ROW_AT 2  /* the middle of the entry the hand points at, from the hand's top (its text is 4 pixels higher) */
@@ -21,6 +23,9 @@ enum { PAD_UP = 0x0010, PAD_RIGHT = 0x0020, PAD_DOWN = 0x0040, PAD_LEFT = 0x0080
 
 static int goal, gx, gy, steps, timer;
 static unsigned held;
+/* the stylus while it is down: where it went down, and how far a vertical swipe has stepped */
+static int down, dx0, dy0, swiped, vsteps, last_x, last_y;
+static unsigned queued, nqueued; /* presses a swipe asked for, done one at a time */
 
 extern int ctr_ui_oy; /* render.c: the UI layer's row 0 on the bottom screen */
 static void tap(int x, int y) {
@@ -83,10 +88,36 @@ unsigned int ctr_ui_pad_buttons(long frame) {
 #else
     (void)frame;
 #endif
-    if (hidKeysDown() & KEY_TOUCH) {
+    u32 kd = hidKeysDown(), kh = hidKeysHeld();
+    if (kh & KEY_TOUCH) {
         touchPosition t;
         hidTouchRead(&t);
-        tap(t.px, t.py);
+        if (kd & KEY_TOUCH) down = 1, dx0 = t.px, dy0 = t.py, swiped = 0, vsteps = 0;
+        last_x = t.px;
+        last_y = t.py;
+        int mx = t.px - dx0, my = t.py - dy0;
+        if (!swiped && mx < -48 && abs(my) < 32) { /* swipe left: back */
+            swiped = 1;
+            queued = PAD_CIRCLE, nqueued = 1;
+        } else if (!swiped || vsteps) {
+            int want = my / 24; /* swipe up/down: a step per 24 pixels */
+            if (abs(mx) < 32 && want != vsteps) {
+                swiped = 1;
+                queued = want > vsteps ? PAD_DOWN : PAD_UP;
+                nqueued += (unsigned)abs(want - vsteps);
+                vsteps = want;
+            }
+        }
+    } else if (down) {
+        down = 0;
+        if (!swiped) tap(last_x, last_y); /* a tap: on release, where it was */
+    }
+    if (nqueued && timer == 0) {
+        nqueued--;
+        held = queued;
+        timer = PRESS + SETTLE - 1;
+        goal = 0;
+        return held;
     }
     if (timer > 0) {
         timer--;
