@@ -9,6 +9,7 @@
 
 #include "ctr.h"
 #include "platform.h"
+#include "psx_runtime.h"
 
 #define NBUF 6
 #define BUF_FRAMES 1024
@@ -20,7 +21,7 @@ unsigned int ctr_audio_dropped, ctr_audio_underruns;
 
 void ctr_audio_init(void) {
     if (R_FAILED(ndspInit())) {
-        printf("audio: ndspInit failed (no dspfirm.cdc?): silent\n");
+        port_log("audio: ndspInit failed (no sdmc:/3ds/dspfirm.cdc? dump it with DSP1): silent\n");
         return;
     }
     pcm = linearAlloc(NBUF * BUF_FRAMES * 4);
@@ -40,6 +41,7 @@ void ctr_audio_init(void) {
         wbuf[i].status = NDSP_WBUF_DONE;
     }
     ok = 1;
+    port_log("audio: NDSP, 44.1 kHz stereo\n");
 }
 
 void ctr_audio_exit(void) {

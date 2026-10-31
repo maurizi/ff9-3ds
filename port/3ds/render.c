@@ -759,7 +759,12 @@ void ctr_present(long frame) {
 
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
-    if (psx_display_generation == display_shown_gen && !nbatches) return;
+    /* the displayed buffer is redrawn when something was drawn or the display moved (a static screen flips between
+     * two finished buffers) */
+    static PsxDisplayInfo last;
+    int moved = memcmp(&d, &last, sizeof d) != 0;
+    last = d;
+    if (!moved && psx_display_generation == display_shown_gen && !nbatches) return;
     display_shown_gen = psx_display_generation;
     int w = d.w ? d.w : 320, h = d.h ? d.h : 240;
     if (w > 400) w = 400;
