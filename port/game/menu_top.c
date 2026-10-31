@@ -10,6 +10,8 @@
  *                   and, when it teaches abilities, each one the member can learn with their AP towards it (the
  *                   PS1 shows taught abilities only in Equip, one member at a time, and never in shops)
  *   Ability         which of the member's equipment teaches the highlighted ability (the PS1 shows it only in Equip)
+ *   Help (Select)   the help text, large, along the top screen's foot; the bottom keeps the moogle by the cursor (the
+ *                   PS1's help bubble covered the menu it explains)
  *
  * The menus' state is read from their overlays' statics (by name: in the port each overlay's data is linked on its own,
  * not at the PS1's shared load address), at the offsets the decomp session found (ff9-decomp
@@ -301,4 +303,59 @@ int port_menu_top_draw(void) {
     }
     default: return 0;
     }
+}
+
+/* ---- Select help on the top screen ----
+ * The game's help (g_menuHelp: help_update calls help_draw while it's open) draws the moogle by the hand and a bubble
+ * with the text beside it, over the menu. While a menu is up the bubble's text goes to the top screen instead
+ * (port_help_top_draw), and only the hand and moogle stay. help_update is wrapped (config/renames.txt; its own call to
+ * help_draw is inside its object, so help_draw itself can't be): the same steps, with the port's help_draw. */
+int port_menu_state(void);
+void help_draw(void);
+void func_8003573C(void);
+
+static int help_moved(void) {
+    int st = port_menu_state();
+    return (st == 1 || st == 2) && g_menuHelp.isOpen && g_menuHelp.textShown && g_menuHelp.text &&
+           *g_menuHelp.text != TEXT_END;
+}
+
+void help_update_game(void);
+void help_toggle(void);
+
+static void help_draw_port(void) {
+    if (!help_moved()) {
+        help_draw();
+        return;
+    }
+    int otz = g_menuHelp.cursorOnTop ? 1 : g_menuHelp.otz;
+    if (g_menuHelp.follow) {
+        if (g_menuHelp.cursorOnTop) ui_drawHand(g_menuHelp.x, g_menuHelp.y, otz);
+        sprAnim_draw(g_menuHelp.x + 5, g_menuHelp.y + 2, otz, &g_menuHelp.iconAnim);
+    }
+    func_8003573C();
+}
+
+void help_update(void) { /* (help.c's, drawing with help_draw_port) */
+    if (!g_menuHelp.locked && !fade_isBusy() && (g_padRepeat & BTN_SELECT)) help_toggle();
+    if (g_menuHelp.isOpen && !fade_isBusy() && g_menuHelp.callback) {
+        g_menuHelp.callback();
+        if (g_menuHelp.text && *g_menuHelp.text != TEXT_END) help_draw_port();
+    }
+    sprAnim_update(&g_menuHelp.iconAnim);
+}
+
+/* the help text along the top screen's foot (field_hud.c's top frame, over the menu's views): 1 if drawn */
+int port_help_top_draw(void) {
+    if (!help_moved()) return 0;
+    TextSize sz = text_measure(g_menuHelp.text);
+    RECT r;
+    r.w = 368;
+    r.h = (s16)(sz.h + 18);
+    r.x = 16;
+    r.y = (s16)(232 - r.h);
+    ui_drawSprite(r.x + 8, r.y, 1, 0xB7, 0);
+    text_drawBlock(r.x + 10, r.y + 10, 1, g_menuHelp.text, TEXT_PAL_HELP);
+    win_drawHelpFrame(&r, 1, HELP_TAIL_NONE, 0);
+    return 1;
 }

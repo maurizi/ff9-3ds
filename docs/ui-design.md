@@ -76,6 +76,9 @@ with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
   todo (native model renderer); otherwise the top keeps the paused scene, dimmed; on a screen with views, an entry without one shows the empty
   panel]**
 
+- **Select help**: the text on the top screen, large, along its foot; the moogle stays by the cursor on the bottom
+  (the PS1's bubble covered the menu it explains). **[done]**
+
 ## Shops and synthesis
 - **Bottom**: item list, a quantity stepper (large +/-, L/R ×10), Buy/Sell tabs. **[partial: the PS1 shop 1:1]**
 - **Top**: the "who can equip ↑/↓" party panel large, the stat change for the highlighted character, the abilities

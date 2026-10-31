@@ -24,3 +24,5 @@ src/ovl_0c/tu_800BA528 o0c_wm_naviDraw o0c_wm_naviDraw_game
 src/ovl_0b/btlui o0b_btlui_cmdInput o0b_btlui_cmdInput_game
 src/ovl_0b/btlui o0b_btlui_listInput o0b_btlui_listInput_game
 src/ovl_0b/btlui o0b_btlui_targetInput o0b_btlui_targetInput_game
+# Select help while a menu is up: its text on the top screen (port/game/menu_top.c).
+src/main/help help_update help_update_game

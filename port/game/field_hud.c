@@ -563,7 +563,9 @@ static int top_draw(void) {
     if (port_menu_state() != 2 && !(g_menu.open && g_menu.type)) return 0;
     (void)member_sheet;
     (void)party_overview;
-    return port_menu_top_draw(); /* (menu_top.c) */
+    int port_help_top_draw(void);
+    int views = port_menu_top_draw(); /* (menu_top.c) */
+    return port_help_top_draw() | views; /* (drawn after: in front) */
 }
 
 static void top_hud(void) {
