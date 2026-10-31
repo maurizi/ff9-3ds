@@ -1056,7 +1056,13 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     if (bx0 >= bx1 || by0 >= by1) return;
     Vtx moved[6];
     int layer = -1, ox = 0, oy = 0;
-    extern int psx_ui_list_battle;
+    extern int psx_ui_list_battle, port_battle_hud_on;
+    /* the battle screen's own command rows and party cards replace the PS1's command window and party panel (OT
+     * entries 14-16 and 18-20, and the panel header at 7-8 (shared with the lists, not open then): battle_ui.c) */
+    if (ui_mode && psx_ui_list_battle && port_battle_hud_on) {
+        int slot = 0x17 - psx_ot_entry;
+        if (slot == 7 || slot == 8 || slot == 14 || slot == 15 || slot == 16 || (slot >= 18 && slot <= 20)) return;
+    }
     /* the battle list's entry 17 (btlui_drawTargetCursors): the hands pointing into the scene, drawn in it */
     if (ui_mode && !(psx_ui_list_battle && 0x17 - psx_ot_entry == 17)) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
     else if (menu_state == 2 || ui_packet()) { /* (a menu: the whole frame) */
@@ -1355,6 +1361,17 @@ void psx_ui_list_begin(void) {
     ui_oy = d.y;
     n_ui_cache = 0;
     ui_list_layer = ui_layer_for(d.x, d.y, 1);
+}
+
+/* the same, drawing over what the layer has this frame (the battle screen's own drawing after the battle list) */
+void psx_ui_list_begin_keep(void) {
+    submit();
+    PsxDisplayInfo d;
+    psx_gpu_display_info(&d);
+    ui_mode = 1;
+    ui_ox = d.x;
+    ui_oy = d.y;
+    ui_list_layer = ui_layer_for(d.x, d.y, 0);
 }
 
 void psx_ui_list_end(void) {

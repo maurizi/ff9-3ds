@@ -734,6 +734,8 @@ __attribute__((weak)) int psx_vblank_list_native(u32 *list) { (void)list; return
 /* The renderer may draw the inserted list (the battle UI) somewhere of its own: the 3DS's bottom screen
  * (port/3ds/render.c). Between the two calls every primitive belongs to it. */
 __attribute__((weak)) void psx_ui_list_begin(void) {}
+__attribute__((weak)) void psx_ui_list_begin_keep(void) {}
+__attribute__((weak)) int port_battle_hud_on;
 int psx_ui_list_battle; /* the list being drawn is the battle UI's (its OT has 0x18 entries, head g_ot[0x17]) */
 __attribute__((weak)) void psx_ui_list_end(void) {}
 

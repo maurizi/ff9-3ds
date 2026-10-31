@@ -46,9 +46,11 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 - **Bottom**:
   - **Left ~45%: command list**, large rows (Attack, Steal/Skill, Defend, Item, Change/Run); sub-lists (abilities,
     items) replace it in place with MP cost and count, and a description line at the bottom (the PS1 help text).
-    **[todo: the PS1 windows at 1:1 for now]**
+    **[partial: large rows and DEFEND / CHANGE buttons, touchable (port/game/battle_ui.c); sub-lists are still the
+    PS1's list window at 1:1, the help text the PS1's window]**
   - **Right: four party cards**: name, HP, MP, ATB bar and Trance bar, status icons; tapping a ready character's
-    card switches to them (PS1 △/✕). **[todo]**
+    card switches to them (PS1 △/✕). **[partial: portrait, name, HP, MP, ATB, Trance, a ready card's tap; status
+    icons todo]**
 - **Targeting**: the command area becomes an **enemy/ally panel laid out like the formation**, a large name button
   per enemy (HP once Libra was used); tap selects, tap again confirms; a **single / all** toggle for R; the top
   cursor follows; physical controls drive the same state. **[partial: the game's ENEMY/PLAYER target window, one

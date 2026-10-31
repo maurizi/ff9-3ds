@@ -146,9 +146,10 @@ unsigned int ctr_ui_pad_buttons(long frame) {
         if (n) nseq = n, iseq = 0;
         else if (!swiped) tap(last_x, last_y);
     }
-    if (iseq < nseq && timer == 0) { /* (a sequence the bottom screen asked for: one press at a time) */
-        held = seq[iseq++];
-        timer = PRESS + SETTLE - 1;
+    if (iseq < nseq && timer == 0) { /* (a sequence the bottom screen asked for: one press at a time; bits 24-31: frames
+                                       * it is held longer) */
+        held = seq[iseq] & 0xFFFFFF;
+        timer = PRESS + (int)(seq[iseq++] >> 24) + SETTLE - 1;
         goal = 0;
         return held;
     }

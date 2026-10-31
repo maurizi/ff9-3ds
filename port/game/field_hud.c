@@ -55,9 +55,12 @@ static int inside(const RECT *r, int x, int y) { return x >= r->x && x < r->x + 
 
 /* A tap at (x, y) of the bottom screen (its UI starts oy rows down): the PS1 presses it stands for, into seq (at most
  * max), how many; 0: none here. */
+int port_battle_tap(int x, int y, unsigned *seq, int max);
+static int shown_battle;
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (!shown) return 0;
     y -= oy;
+    if (shown_battle) return port_battle_tap(x, y, seq, max);
     if (n_choices) {
         for (int i = 0; i < n_choices; i++) {
             if (!inside(&r_choice[i], x, y)) continue;
@@ -83,7 +86,8 @@ void psx_cd_read_data(unsigned int lba, void *buf, unsigned int n);
 static u8 portraits[48 * 1024];
 static int portraits_state; /* 0 not read, 1 read, -1 unreadable */
 
-static void portrait(int slot, int index, int x, int y) {
+/* the menu's portrait entry index (its CLUT, then the 32x32 face), NULL if the file can't be read */
+const u8 *port_portrait(int index) {
     if (portraits_state == 0) {
         FileEntry *f = file_find(1, 30);
         unsigned n = f ? (unsigned)(f->unkC - f->sector) : 0;
@@ -93,8 +97,13 @@ static void portrait(int slot, int index, int x, int y) {
             portraits_state = 1;
         }
     }
-    if (portraits_state < 0 || (unsigned)(index + 1) * PORTRAIT_BYTES > sizeof portraits) return;
-    const u8 *e = portraits + index * PORTRAIT_BYTES;
+    if (portraits_state < 0 || index < 0 || (unsigned)(index + 1) * PORTRAIT_BYTES > sizeof portraits) return NULL;
+    return portraits + index * PORTRAIT_BYTES;
+}
+
+static void portrait(int slot, int index, int x, int y) {
+    const u8 *e = port_portrait(index);
+    if (!e) return;
     ctr_hud_image(slot, 0x100u | (u32)index, (const u16 *)e, e + 0x100, 32, 32);
     ctr_hud_draw(slot, x, y, 32, 32);
 }
@@ -226,10 +235,17 @@ static void draw(void) {
     }
 }
 
-/* each frame (the 3DS's VBlank wait): the field screen, when a field is up with no menu */
+/* each frame (the 3DS's VBlank wait): the field screen, when a field is up with no menu; in a battle, the battle
+ * screen's own part (port/game/battle_ui.c) */
+int port_battle_hud_draw(void);
+void psx_ui_list_begin_keep(void);
+extern int port_battle_hud_on;
 void port_bottom_hud(void) {
-    shown = 0;
-    if (!g_gameState || !g_gameState->gameData || g_gameState->mode != 1 || port_menu_state()) return;
+    shown = shown_battle = 0;
+    if (!g_gameState || !g_gameState->gameData || port_menu_state()) return;
+    int battle = g_gameState->mode == 2;
+    if (!battle) port_battle_hud_on = 0;
+    if (g_gameState->mode != 1 && !battle) return;
     if (!g_gameState->gameData->font) return; /* (the common images aren't loaded yet) */
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
@@ -247,16 +263,21 @@ void port_bottom_hud(void) {
     addPrim(&hud_ot[OTN - 1], p);
     g_ot = hud_ot;
     g_primPtr = (u8 *)(p + 4);
-    draw();
+    int drew = 1;
+    if (battle) drew = port_battle_hud_draw(); /* (battle_ui.c: over the battle's own UI list) */
+    else draw();
     unsigned used = (unsigned)(g_primPtr - (u8 *)hud_mem);
     g_ot = saved_ot;
     g_primPtr = saved_prim;
     if (used > sizeof hud_mem) port_fatal("field HUD: packet buffer overrun");
+    if (!drew) return;
 
     Gp0State saved_gp0 = gp0_state; /* (the field's drawing environment is the field's again after) */
-    psx_ui_list_begin();
+    if (battle) psx_ui_list_begin_keep();
+    else psx_ui_list_begin();
     port_draw_ot_buffer(&hud_ot[OTN - 1], hud_mem, sizeof hud_mem);
     psx_ui_list_end();
     gp0_state = saved_gp0;
     shown = 1;
+    shown_battle = battle;
 }
