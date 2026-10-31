@@ -10,6 +10,7 @@
 #   PROFILE=1         3DS: frame-time and per-category timers on the bottom screen
 #   DUMP_AT=N         3DS: at frame N write the VRAM mirror, shadow and textures to sdmc:/3ds/ff9/dump/
 #   SOFT=1            3DS: the software renderer, copied to the top screen by the CPU (reference)
+#   VOICELOG=1        3DS: log each dialogue line shown (its voice-pack id) and each recording played
 
 DECOMP   := decomp
 VERSION  := us
