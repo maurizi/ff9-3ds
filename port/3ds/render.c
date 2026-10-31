@@ -1645,6 +1645,24 @@ static void draw_to_screen(C3D_RenderTarget *rt, C3D_Tex *src, int sx, int sy, i
     if (src) screen_quad(rt, src, K_BLIT, NO_BLEND, 0xFFFFFFFF, sx, sy, w, h, ox, oy);
 }
 
+/* The top screen shows the frame as large as it fits whole: scaled to the screen's 240 lines (a 320x224 field or
+ * battle becomes 343x240), the same in both directions, centred; filtered, as the scale isn't whole. */
+static float top_scale(int w, int h) {
+    float s = 240.0f / (float)h;
+    if (w * s > 400.0f) s = 400.0f / (float)w;
+    return s < 1.0f ? 1.0f : s;
+}
+static void draw_to_top(C3D_RenderTarget *rt, C3D_Tex *src, int sx, int sy, int w, int h, int fw, int fh, int edge) {
+    float s = top_scale(fw, fh);
+    int dw = (int)(fw * s + 0.5f), dh = (int)(fh * s + 0.5f), e = (int)(edge * s + 0.5f);
+    C3D_RenderTargetClear(rt, C3D_CLEAR_ALL, 0x000000FF, 0);
+    C3D_FrameDrawOn(rt);
+    if (s > 1.0f) C3D_TexSetFilter(src, GPU_LINEAR, GPU_LINEAR);
+    screen_quad_scaled(rt, src, K_BLIT, NO_BLEND, 0xFFFFFFFF, sx, sy, w, h, (400 - dw) / 2 + e, (240 - dh) / 2, dw - 2 * e,
+                       dh);
+    if (s > 1.0f) C3D_TexSetFilter(src, GPU_NEAREST, GPU_NEAREST);
+}
+
 /* an untextured rectangle on a screen's render target (already drawn on) */
 static void screen_fill(C3D_RenderTarget *rt, int x, int y, int w, int h, u32 rgba, int abr) {
     C3D_Mtx p;
@@ -1758,7 +1776,8 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
         }
     }
     C3D_Tex *t = staging_tex(px, tw, th, GPU_RGB8);
-    for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) draw_to_screen(top_rt[eye], t, 0, 0, w, h, ox, oy);
+    for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) draw_to_top(top_rt[eye], t, 0, 0, w, h, w, h, 0);
+    (void)ox; (void)oy;
 }
 
 unsigned ctr_frames_presented(void) { return frames_drawn; }
@@ -1852,9 +1871,9 @@ void ctr_present(long frame) {
                 C3D_FrameDrawOn(top_rt[eye]);
                 screen_quad_scaled(top_rt[eye], &mirror_tex[0], K_BLIT, NO_BLEND, 0xFFFFFFFF, d.x + mag_rx, d.y + mag_ry, MAG_W,
                                    MAG_H, 0, 0, 400, 240);
-            } else if (frozen) draw_to_screen(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h,
-                                       (400 - freeze_w) / 2 + edge, (240 - freeze_h) / 2);
-            else draw_to_screen(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, ox + edge, oy);
+            } else if (frozen) draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h, freeze_w,
+                                    freeze_h, edge);
+            else draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, w, h, edge);
         }
     }
     if (top_ui_head) { /* (over the top screen's scene, both eyes) */
