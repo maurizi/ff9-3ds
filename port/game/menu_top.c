@@ -295,6 +295,10 @@ int port_menu_top_draw(void) {
         port_model_view(&g->characters[id], 200, 226, 160);
         return 0;
     }
+    case 5: { /* the Chocograph screen (chocograph_touch.c) */
+        int port_chocograph_top(void);
+        return port_chocograph_top();
+    }
     case 2: { /* a shop */
         const u8 *sh = s_shop;
         const u8 *help = s_shopItemHelp;

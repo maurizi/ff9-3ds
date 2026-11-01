@@ -152,6 +152,7 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         if (!n) { int port_status_tap(int, int, unsigned *); n = port_status_tap(x, y - oy, seq); }
         if (!n) { int port_card_tap(int, int); n = port_card_tap(x, y - oy); }
         if (!n) { int port_party_tap(int, int, unsigned *); n = port_party_tap(x, y - oy, seq); }
+        if (!n) { int port_chocograph_tap(int, int, unsigned *); n = port_chocograph_tap(x, y - oy, seq); }
         if (!n) n = port_list_tap(x, y - oy, seq);
         if (n) return n;
     }
