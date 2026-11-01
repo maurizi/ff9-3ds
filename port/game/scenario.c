@@ -13,6 +13,7 @@ void o14_opening_findSceneSectors(void);
 void port_scenario_set_enemy_hp(const int *values);
 s32 chr_resetToLevel(s32,s32,u8);
 static struct {
+    int blackjack; /* blackjack=1 with field_exit=4: the ending's movie skipped and The End's code taken (blackjack_ui.c) */
     int chocograph; /* GameData.chocograph (1-24, 0 none): the one the chocobo digs for (not an event byte, decomp R37) */
     int enabled,consumed,kind,disc,field,battle,world,world_explicit,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil,tetra;
     int menu,menu_arg; /* kind=field: menu=TYPE[,ARG] opens that menu once the field is ready (4,2: the save menu) */
@@ -56,6 +57,7 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"battle")) scenario.battle=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"world")) {scenario.world=number(eq,0,65535);scenario.world_explicit=1;}
         else if(!__builtin_strcmp(s,"chocograph")) scenario.chocograph=number(eq,0,24);
+        else if(!__builtin_strcmp(s,"blackjack")) scenario.blackjack=number(eq,0,1);
         else if(!__builtin_strcmp(s,"level")) scenario.level=number(eq,1,99);
         else if(!__builtin_strcmp(s,"story")) scenario.story=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"gil")) scenario.gil=number(eq,0,9999999);
@@ -348,3 +350,5 @@ void port_scenario_bootstrap(void) {
     port_log("scenario entered without title/intro: mode %d, disc %d, id %d\n",scenario.kind,scenario.disc,
              scenario.kind==1?scenario.field:scenario.kind==2?scenario.battle:scenario.world);
 }
+
+int port_scenario_blackjack(void) { return scenario.enabled && scenario.blackjack; }

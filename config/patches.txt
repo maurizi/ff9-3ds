@@ -171,3 +171,6 @@ src/main/menu.c | st->gameData->ctx.ovl65->flags | PSX_NZ(st->gameData->ctx.ovl6
 
 # Tetra Master on the 3DS (port/game/tm_ui.c): the card game's state and the frame's touch, right after its pad read.
 src/ovl_0d/tm_game.c | tm_updatePad(&tm); | tm_updatePad(&tm); port_tm_frame(&tm); | 1
+src/ovl_15/blackjack.c | ui_drawSmallDigits(0x10C - (text_measureSmall(text) >> 1), | if (0) ui_drawSmallDigits(0x10C - (text_measureSmall(text) >> 1), | 8   # Blackjack's side panel (bankroll, wager, moves): on the bottom screen as buttons (port/game/blackjack_ui.c)
+src/ovl_15/bj_action.c | help_drawCursor(&g_menuHelp, &g_bjAction); | ; | 1   # (its hand: the bottom screen marks the move)
+src/ovl_15/bj_wager.c | help_drawCursor(&g_menuHelp, &g_bjWagerMenu); | ; | 1
