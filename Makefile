@@ -220,10 +220,10 @@ $(GEN)/evt_ops.h: tools/gen_evt_ops.py $(DECOMP)/tools/evtscript/optab.json
 $(foreach t,3ds pc,$(BUILD)/$(t)/port/game/field_map.o): $(GEN)/evt_ops.h
 
 # CIA (installed to the HOME Menu): build/ff9.cia is the program only (it reads the disc pack from the card as the 3dsx
-# does); build/ff9-full.cia also holds your discs (personal use only: never distribute it). Needs makerom and
-# bannertool in build/tools (Project_CTR makerom, Epicpkmn11 bannertool releases; not part of devkitPro).
-MAKEROM    := $(BUILD)/tools/makerom/makerom
-BANNERTOOL := $(BUILD)/tools/bannertool/linux-x86_64/bannertool
+# does); build/ff9-full.cia also holds your discs (personal use only: never distribute it). makerom and bannertool
+# are in the build container (tools/docker/Dockerfile).
+MAKEROM    ?= makerom
+BANNERTOOL ?= bannertool
 $(BUILD)/banner.png $(BUILD)/banner.wav &: tools/make_banner.py
 	@$(PYTHON) tools/make_banner.py $(BUILD)/banner.png $(BUILD)/banner.wav
 $(BUILD)/ff9.bnr: $(BUILD)/banner.png $(BUILD)/banner.wav

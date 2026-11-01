@@ -34,7 +34,7 @@ static int ram_ok(const void *p, unsigned size) { /* (PS1 RAM and the overlays' 
 }
 /* the overlays' statics (their layouts: the decomp session's offsets) */
 extern u8 s_menuItem[], s_menuItemHelp[], s_menuEquip[], s_menuEquipItemHelp[], s_menuAbility[], s_menuSave[];
-extern u8 s_menuParty[];
+extern u8 s_menuParty[], s_menuStatus[];
 extern u8 s_shop[], s_shopBuy[], s_shopSell[], s_shopSynth[], s_shopItemHelp[];
 /* The ability names are the Ability screen's (ovl_33, file 0/0x33 read to 0x801EDF00): its action table (0x10-byte
  * entries, the name offset at +0xE) at 0x801F34EC, action names at 0x801F40EC, support names at 0x801F6540. Shops run
@@ -261,11 +261,93 @@ static int empty_panel(void) {
 }
 
 /* field_hud.c's top-screen frame while a menu is up: 1 if drawn */
+/* A member at a glance, beside their model (Equip and Status, model_view.c on the left): the abilities their gear is
+ * teaching them (each equipped item's, once each), the AP gathered towards each with a bar, mastered ones dim. What
+ * the PS1 shows only on the Ability screen, one ability at a time. */
+static void ap_bar(int x, int y, int w, int have, int need) {
+    u32 *p = (u32 *)g_primPtr;
+    int f = need > 0 ? have * (w - 2) / need : 0;
+    if (f > w - 2) f = w - 2;
+    p[0] = 3u << 24; p[1] = 0x60302020u; p[2] = (u32)x | (u32)y << 16; p[3] = (u32)w | (u32)4 << 16;
+    addPrim(&g_ot[2], p);
+    p += 4;
+    if (f > 0) {
+        p[0] = 3u << 24; p[1] = 0x6030C8F0u; p[2] = (u32)(x + 1) | (u32)(y + 1) << 16; p[3] = (u32)f | (u32)2 << 16;
+        addPrim(&g_ot[2], p);
+        p += 4;
+    }
+    g_primPtr = (u8 *)p;
+}
+static void member_view(Character *c) {
+    static RECT box = {204, 8, 188, 224};
+    ui_drawLabel(box.x + 8, box.y - 3, 2, (s32) "LEARNING", 0);
+    int ch = c->info.b.id, y = box.y + 10, seen[16], nseen = 0;
+    u8 buf[16];
+    for (int sl = 0; sl < 5 && y < box.y + box.h - 24; sl++) {
+        int item = c->equip[sl];
+        if (item == 0xFF) continue;
+        for (int k = 0; k < 3 && y < box.y + box.h - 24; k++) {
+            int a = g_itemTable[item].abilities[k], dup = 0;
+            if (!a) continue;
+            for (int j = 0; j < nseen; j++) dup |= seen[j] == a;
+            if (dup || nseen == 16) continue;
+            seen[nseen++] = a;
+            int need = chr_getApNeeded(ch, a), have = chr_getAp(ch, a);
+            if (need <= 0 || have < 0) continue; /* (not one this member learns) */
+            u8 *name = ability_name(a);
+            if (!name) continue;
+            int done = have >= need;
+            text_drawBlock(box.x + 10, y, 2, name, done ? 2 : 0);
+            if (!done) {
+                text_formatNumber(have, buf, -1, 1);
+                int n = strlen((char *)buf);
+                buf[n] = '/';
+                text_formatNumber(need, buf + n + 1, -1, 1);
+                ui_drawSmallDigits(box.x + box.w - 10 - text_measureDigits(buf), y + 3, 2, buf, 1);
+                ap_bar(box.x + 10, y + 15, box.w - 20, have, need);
+            }
+            y += 24;
+        }
+    }
+    if (y == box.y + 10) ui_drawLabel(box.x + 10, y + 4, 2, (s32) "NOTHING TO LEARN", 2);
+    win_drawBox(&box, 4, 2);
+}
+
+/* Order: the party in formation, large: each member's portrait in their row (the back row set back), front and back
+ * row lanes marked (Character.battleRow: 1 the front row, 0 the back, as the menu sets the back row in) */
+static void order_view(int cur) {
+    GameData *g = g_gameState->gameData;
+    static RECT front = {200, 8, 192, 224}, back = {8, 8, 188, 224};
+    ui_drawLabel(back.x + 8, back.y - 3, 2, (s32) "BACK ROW", 0);
+    ui_drawLabel(front.x + 8, front.y - 3, 2, (s32) "FRONT ROW", 0);
+    u8 a[8];
+    for (int i = 0; i < 4; i++) {
+        Character *c = g->party[i];
+        if (!ram_ok(c, sizeof *c)) continue;
+        int backrow = c->info.b.battleRow == 0; /* (1: the front row, as the menu draws it) */
+        int x = backrow ? back.x + 16 : front.x + 16, y = 14 + i * 54;
+        if (i == cur) bar_at((backrow ? back.x : front.x) + 4, y - 2, (backrow ? back.w : front.w) - 8, 52); /* (the Order cursor) */
+        face(4 + i, chr_portrait(c), x, y, 48);
+        text_drawBlock(x + 56, y + 6, 2, c->name, 0);
+        ui_drawLabel(x + 56, y + 28, 2, (s32) "LV", 0);
+        text_formatNumber(c->level, a, 2, 1);
+        ui_drawDigits(x + 74, y + 27, 2, a, 0);
+    }
+    win_drawBox(&front, 4, 2);
+    win_drawBox(&back, 4, 2);
+}
+
 int port_menu_top_draw(void) {
     GameData *g = g_gameState->gameData;
     switch (g_menu.type) {
     case 0: /* the main menu: its screens */
         if (!g_menuScreen.active) return 0;
+        if (g_menuScreen.screen == 0) { /* (the main menu itself: in Order, the formation) */
+            extern u8 o0a_s_menuMain[], o0c_s_menuMain[];
+            const u8 *mm = g_gameState->mode == 3 ? o0c_s_menuMain : o0a_s_menuMain;
+            if (mm[1] == 2) { order_view(mm[2]); return 1; } /* (MenuMain.state MENUMAIN_ORDER; .orderCursor) */
+            return 0;
+        }
         switch (g_menuScreen.screen) {
         case 1: { /* Item */
             const u8 *st = s_menuItem;
@@ -276,12 +358,31 @@ int port_menu_top_draw(void) {
             return item_view(g->items.slots[slot].id) || empty_panel();
         }
         case 2: return ability_view(s_menuAbility) || (s_menuAbility[1] == 2 && empty_panel());
-        case 3: { /* the slot's candidates, or the member's model turning in what they wear (model_view.c) */
+        case 3: { /* the slot's candidates, or the member's model turning in what they wear (model_view.c) and what
+                   * their gear is teaching them */
             if (equip_view(s_menuEquip)) return 1;
             void port_model_view(Character *c, float cx, float cy, float height);
             int member = s_menuEquip[3];
-            if (member < 4 && ram_ok(g->party[member], sizeof(Character))) port_model_view(g->party[member], 200, 226, 160);
+            if (member < 4 && ram_ok(g->party[member], sizeof(Character))) {
+                port_model_view(g->party[member], 104, 226, 160);
+                member_view(g->party[member]);
+                return 1;
+            }
             return 0;
+        }
+        case 4: { /* Status: the member's model and what their gear is teaching them */
+            void port_model_view(Character *c, float cx, float cy, float height);
+            int member = s_menuStatus[2];
+            if (member < 4 && ram_ok(g->party[member], sizeof(Character))) {
+                port_model_view(g->party[member], 104, 226, 160);
+                member_view(g->party[member]);
+                return 1;
+            }
+            return 0;
+        }
+        case 6: { /* Card: the card under the cursor (card_touch.c) */
+            int port_card_top(void);
+            return port_card_top();
         }
         default: return 0;
         }

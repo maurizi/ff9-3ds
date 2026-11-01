@@ -156,6 +156,23 @@ static void card_face(int id, int x, int y, int w, int h) {
     p[9] = (u32)(v + 50) << 8 | (u32)(u + 41);
     addPrim(&g_ot[3], p);
 }
+/* the Card screen's card picture (ovl_36 menuCard_drawFace: 38x47, 8-bit, page (960, 256), uv (0, 0xB0), its CLUT at
+ * (0, 0x1F2)) scaled to w x h at (x, y) */
+static void menu_card_face(int x, int y, int w, int h) {
+    u32 *p = (u32 *)prim(10);
+    u32 clut = (u32)(0x1F2 << 6), tpage = 0xBF;
+    p[0] = 9u << 24;
+    p[1] = 0x2C808080u;
+    p[2] = (u32)x | (u32)y << 16;
+    p[3] = clut << 16 | (u32)0xB0 << 8 | 0;
+    p[4] = (u32)(x + w) | (u32)y << 16;
+    p[5] = tpage << 16 | (u32)0xB0 << 8 | 38;
+    p[6] = (u32)x | (u32)(y + h) << 16;
+    p[7] = (u32)(0xB0 + 47) << 8 | 0;
+    p[8] = (u32)(x + w) | (u32)(y + h) << 16;
+    p[9] = (u32)(0xB0 + 47) << 8 | 38;
+    addPrim(&g_ot[3], p);
+}
 /* a small arrow (triangle) at (cx, cy) pointing in direction d (0 up, clockwise in eighths) */
 static void arrow(int cx, int cy, int d) {
     static const s8 dir[8][2] = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
@@ -199,6 +216,23 @@ static int focus_card(TmState *s, TmCardStats *st) {
     return c->id;
 }
 
+/* a card large in the top screen's card box (picture, its arrows) and its name and "1P2A" string in the info box: the
+ * card game's focus and the Card screen's (card_touch.c) */
+void port_card_panel(int id, int arrows, int power, int type, int pdef, int mdef, int menu) {
+    static RECT info = {174, 12, 210, 176};
+    if (menu == 1) menu_card_face(30, 26, 122, 148); /* (the Card screen's picture: menu 1; menu 2: not loaded yet) */
+    else if (!menu) card_face(id, 30, 26, 122, 148); /* (about 3x) */
+    for (int d = 0; d < 8; d++)
+        if (arrows >> d & 1) {
+            static const s8 at[8][2] = {{61, -6}, {128, -6}, {128, 74}, {128, 154}, {61, 154}, {-6, 154}, {-6, 74}, {-6, -6}};
+            arrow(30 + at[d][0], 26 + at[d][1] + 6, d);
+        }
+    text_drawBlock(info.x + 10, info.y + 12, 2, (u8 *)card_getName(id), 0);
+    static const char hex[] = "0123456789ABCDEF", tp[] = "PMXA";
+    u8 str[5] = {(u8)hex[power >> 4 & 15], (u8)tp[type & 3], (u8)hex[pdef >> 4 & 15], (u8)hex[mdef >> 4 & 15], 0};
+    ui_drawLabel(info.x + 10, info.y + 38, 2, (s32)str, 0); /* (the label font: the digit font has no letters) */
+}
+
 void port_help_panel(u8 *text);
 int port_tm_top_draw(void) {
     if (!tm_live()) return 0;
@@ -206,18 +240,7 @@ int port_tm_top_draw(void) {
     static RECT card_box = {16, 12, 150, 176}, info = {174, 12, 210, 176};
     TmCardStats st;
     int id = focus_card(s, &st);
-    if (id >= 0 && id < 100) {
-        card_face(id, 30, 26, 122, 148); /* (about 3x) */
-        for (int d = 0; d < 8; d++)
-            if (st.arrows >> d & 1) {
-                static const s8 at[8][2] = {{61, -6}, {128, -6}, {128, 74}, {128, 154}, {61, 154}, {-6, 154}, {-6, 74}, {-6, -6}};
-                arrow(30 + at[d][0], 26 + at[d][1] + 6, d);
-            }
-        text_drawBlock(info.x + 10, info.y + 12, 2, (u8 *)card_getName(id), 0);
-        static const char hex[] = "0123456789ABCDEF", type[] = "PMXA";
-        u8 str[5] = {(u8)hex[st.power >> 4], (u8)type[st.type & 3], (u8)hex[st.pdef >> 4], (u8)hex[st.mdef >> 4], 0};
-        ui_drawDigits(info.x + 10, info.y + 36, 2, str, 0);
-    }
+    if (id >= 0 && id < 100) port_card_panel(id, st.arrows, st.power, st.type, st.pdef, st.mdef, 0);
     if (s->showScore) { /* the score and whose turn */
         int you = 0, foe = 0;
         for (int i = 0; i < 10; i++)

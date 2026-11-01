@@ -19,6 +19,7 @@ static struct {
     int party[4],hp[4],enemy_hp[4],trance[4],preset[4],equip[4][5];
     u8 events[0x800],events_set[0x800/8]; /* (bytes and a bit each: the heap is tight) */
     s8 items[256]; /* -1: unset (counts 0-99) */
+    u8 cards[100]; /* card.ID=N: N copies of card ID added (the game's card_add, its stats rolled) */
     char characters[256],event_blob[256];
 } scenario;
 static int number(const char *s,int low,int high) {
@@ -85,6 +86,7 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strncmp(s,"hp.",3)) scenario.hp[number(s+3,0,3)]=number(eq,0,9999);
         else if(!__builtin_strncmp(s,"event.",6)) {int e=number(s+6,0,0x7ff);scenario.events[e]=(u8)number(eq,0,255);scenario.events_set[e>>3]|=(u8)(1u<<(e&7));}
         else if(!__builtin_strncmp(s,"item.",5)) scenario.items[number(s+5,0,255)]=(s8)number(eq,0,99);
+        else if(!__builtin_strncmp(s,"card.",5)) scenario.cards[number(s+5,0,99)]=(u8)number(eq,0,99);
         else if(!__builtin_strncmp(s,"equip.",6)) {
             int slot=number(s+6,0,3),used=0,*v=scenario.equip[slot];
             if(sscanf(eq,"%d,%d,%d,%d,%d%n",v,v+1,v+2,v+3,v+4,&used)!=5 || eq[used]) port_fatal("scenario: equipment needs five IDs");
@@ -282,6 +284,7 @@ void port_scenario_bootstrap(void) {
     load_blob(scenario.event_blob,&g_evtGlobalVars,sizeof g_evtGlobalVars);
     if(scenario.story>=0) g_evtGlobalVars.h[0]=(s16)scenario.story;
     for(int i=0;i<0x800;++i) if(scenario.events_set[i>>3]&(1u<<(i&7))) g_evtGlobalVars.b[i]=scenario.events[i];
+    for(int id=0;id<100;++id) for(int k=0;k<scenario.cards[id];++k) card_add(id);
     for(int id=0;id<256;++id) if(scenario.items[id]>=0) {
         ItemSlot *slot=item_findSlot_inline(id);
         if(!slot && scenario.items[id]) {
