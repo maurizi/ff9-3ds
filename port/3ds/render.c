@@ -254,10 +254,6 @@ static void frame_begin(void) {
     C3D_FrameBegin(0); /* waits for the GPU to finish what was sent: the other half is free */
     port_profile_end(PORT_PROFILE_SCALE, profile_start); /* ("scale": the wait for the GPU) */
     gpu_busy = 0;
-    if (mirror_depth && depth_next > DEPTH_MAX / 2) { /* (runs' depth values used up: from 0 again) */
-        C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
-        depth_next = depth_submitted = 1;
-    }
     in_frame = 1;
     C3D_BindProgram(&shader);
     C3D_SetAttrInfo(&attr);
@@ -707,6 +703,15 @@ static void submit(void) {
     /* (the other eye's values were past this submit's: the next ones are past those) */
     depth_next += depth_next - depth_submitted;
     depth_submitted = depth_next;
+    if (mirror_depth && depth_next > DEPTH_MAX / 2) {
+        /* runs' depth values used up: from 1 again, the depth buffer cleared after what was drawn with them (a GX
+         * fill runs in the GPU's queue, not its command list: the list so far goes in first). Here, with nothing
+         * recorded that holds a value: the values are given as runs are recorded, before their frame begins. */
+        flush_pending();
+        C3D_FrameSplit(0);
+        C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
+        depth_next = depth_submitted = 1;
+    }
     port_profile_end(PORT_PROFILE_GPU, profile_start);
 }
 
