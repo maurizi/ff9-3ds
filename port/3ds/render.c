@@ -1786,6 +1786,8 @@ static void screen_quad_scaled(C3D_RenderTarget *rt, C3D_Tex *src, int kind, int
 /* The top screen shows the frame as large as it fits whole: scaled to the screen's 240 lines (a 320x224 field or
  * battle becomes 343x240), the same in both directions, centred; filtered, as the scale isn't whole. */
 static float top_scale(int w, int h) {
+    int port_setting_get(int k);
+    if (port_setting_get(1)) return 1.0f; /* (the "sharp" option: the PS1's pixels 1:1) */
     float s = 240.0f / (float)h;
     if (w * s > 400.0f) s = 400.0f / (float)w;
     return s < 1.0f ? 1.0f : s;
@@ -2009,6 +2011,8 @@ void ctr_present(long frame) {
     button_icons_frame(); /* (for the next frame's sprites) */
     float slider = osGet3DSliderState();
     int want_stereo = slider > 0.01f;
+    int port_setting_get(int k); /* (settings.c: 0 depth (50/100/150%), 1 sharp top screen) */
+    slider *= 0.5f + 0.5f * (float)port_setting_get(0);
     stereo_k = slider * STEREO_MAX_PX / stereo_inv_zc; /* up to STEREO_MAX_PX of parallax at infinity */
     if (want_stereo && !stereo_on) {
         /* eye 1 missed what was drawn in mono: start it from eye 0's mirror */

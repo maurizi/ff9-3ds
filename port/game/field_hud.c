@@ -62,6 +62,9 @@ int port_hud_shown(void) {
 
 static int menu_shown; /* the MENU button is there (the game allows the menu) */
 static int log_head, log_count, log_scroll, log_on; /* the dialogue log (port_dialogue_log) */
+static int opts_on; /* the options page in the log's place */
+static RECT r_optbtn = {226, 38, 84, 20};
+static int options_tap(int x, int y);
 static RECT *cards_rect; /* where CARDS is this frame (NULL: not shown) */
 static int ate_shown;
 static int cards_pending; /* frames left to wait for the main menu to open onto the card screen */
@@ -181,7 +184,9 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     }
     if (mognet && !ate_shown && inside(&r_ate, x, y)) { evt_callObjectFunc(mognet, 1, 3, 0); return -1; } /* (talk) */
     if (ate_shown && inside(&r_ate, x, y) && max > 0) { seq[0] = 0x0001; return 1; } /* select */
-    if (inside(&r_log, x, y)) { log_on = !log_on; log_scroll = 0; return -1; }
+    if (inside(&r_log, x, y)) { log_on = !log_on; log_scroll = 0; opts_on = 0; return -1; }
+    if (log_on && !opts_on && inside(&r_optbtn, x, y)) { opts_on = 1; return -1; }
+    if (log_on && opts_on) { options_tap(x, y); return -1; }
     if (log_on && inside(&r_logbox, x, y)) { /* (the upper half: older, the lower: newer) */
         if (y < r_logbox.y + r_logbox.h / 2) { if (log_scroll < log_count - 1) log_scroll++; }
         else if (log_scroll > 0) log_scroll--;
@@ -314,9 +319,51 @@ void port_dialogue_log(const u8 *text) {
 }
 
 /* the log in the middle area, newest at the bottom (log_scroll lines back) */
-static void draw_log(void) {
-    static const u8 label[] = "LOG";
+/* ---- the port's options (settings.c), a page in the log's place: OPTIONS from the log view ---- */
+__attribute__((weak)) int port_setting_get(int k) { (void)k; return 0; }
+__attribute__((weak)) void port_setting_set(int k, int v) { (void)k; (void)v; }
+static const struct { const char *name; int n; const char *choice[3]; } opts[] = {
+    {"3D DEPTH", 3, {"LOW", "NORMAL", "HIGH"}},
+    {"TOP SCREEN", 2, {"FIT", "SHARP"}},
+    {"VOICES", 2, {"OFF", "ON"}},
+};
+static void bar_mark(int x, int y, int w, int h) { /* a small bright bar (as the battle screen marks a target) */
+    u32 *p = (u32 *)g_primPtr;
+    p[0] = 3u << 24; p[1] = 0x6040E0F8u; p[2] = (u32)x | (u32)y << 16; p[3] = (u32)w | (u32)h << 16;
+    addPrim(&g_ot[2], p);
+    g_primPtr = (u8 *)(p + 4);
+}
+static RECT opt_rect(int row, int c) { RECT r = {(s16)(112 + c * 66), (s16)(64 + row * 36), 60, 28}; return r; }
+static void draw_options(void) {
+    static const u8 label[] = "OPTIONS";
     RECT box = r_logbox;
+    ui_drawLabel(box.x + 8, box.y - 3, 2, (s32)label, 0);
+    for (int i = 0; i < 3; i++) {
+        ui_drawLabel(box.x + 10, 64 + i * 36 + 11, 2, (s32)opts[i].name, 0);
+        int v = port_setting_get(i);
+        for (int c = 0; c < opts[i].n; c++) {
+            RECT r = opt_rect(i, c);
+            int w = ui_measureLabel((u8 *)opts[i].choice[c]);
+            ui_drawLabel(r.x + (r.w - w) / 2, r.y + 11, 2, (s32)opts[i].choice[c], c == v ? 0 : 2);
+            if (c == v) bar_mark(r.x + 3, r.y + 6, 3, r.h - 12); /* (the chosen one) */
+            win_drawBox(&r, 3, 2);
+        }
+    }
+    win_drawBox(&box, 3, 2);
+}
+static int options_tap(int x, int y) {
+    for (int i = 0; i < 3; i++)
+        for (int c = 0; c < opts[i].n; c++) {
+            RECT r = opt_rect(i, c);
+            if (inside(&r, x, y)) { port_setting_set(i, c); snd_playSe(SE_CURSOR); return 1; }
+        }
+    return 0;
+}
+
+static void draw_log(void) {
+    static const u8 label[] = "LOG", optl[] = "OPTIONS";
+    RECT box = r_logbox;
+    { int w = ui_measureLabel((u8 *)optl); ui_drawLabel(r_optbtn.x + (r_optbtn.w - w) / 2, r_optbtn.y + 7, 1, (s32)optl, 0); win_drawBox(&r_optbtn, 1, 2); }
     ui_drawLabel(box.x + 8, box.y - 3, 2, (s32)label, 0);
     int y = box.y + box.h - 6;
     for (int i = log_scroll; i < log_count; i++) {
@@ -426,7 +473,7 @@ static void draw(void) {
     ui_drawSmallDigits(r_head.x + 249, r_head.y + 9, 2, buf, 0);
     win_drawBox(&r_head, 3, 2);
 
-    if (!draw_choices() && log_on) draw_log();
+    if (!draw_choices() && log_on) opts_on ? draw_options() : draw_log();
     else if (!n_choices) {
         ui_drawLabel(r_map.x + 8, r_map.y - 3, 2, (s32)map, 0);
         g_primPtr = port_field_map_draw(&g_ot[2], g_primPtr, (u8 *)(hud_mem + OTN + BUF_WORDS) - 64, r_map.x + 3,

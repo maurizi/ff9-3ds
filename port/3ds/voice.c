@@ -104,7 +104,9 @@ static void voice_main(void *unused) {
 }
 
 /* whether a voice pack is on the card (looked for once) */
+int port_setting_get(int k);
 static int pack_present(void) {
+    if (!port_setting_get(2)) return 0; /* (the "voices" option off) */
     if (available < 0) {
         FILE *f = fopen("sdmc:/3ds/ff9/voice/pack.txt", "r");
         available = f != NULL;

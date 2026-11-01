@@ -38,6 +38,11 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
   - The map is the walkmesh area connected to where the player stands (other parts are other screens), scaled to
     fill its box. **[done]**
 
+## Options
+- In the field screen's log view, OPTIONS opens the port's settings in the log's place: 3D depth (low / normal /
+  high, on top of the slider), top screen (fit: scaled to the screen's height; sharp: the PS1's pixels 1:1), voices
+  (on / off). Kept in sdmc:/3ds/ff9/settings.cfg (port/3ds/settings.c). **[done]**
+
 ## Dialogue
 - The text stays on top in FF9's speaker-anchored bubbles, at the screen plane. **[done]**
 - The bottom can show a scrollable **dialogue backlog** (new). **[done in fields: LOG swaps it in for the map and
