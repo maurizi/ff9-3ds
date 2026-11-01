@@ -183,6 +183,7 @@ static const char *disc_pack;
 static void find_disc_pack(void) {
     struct stat st;
     if (R_SUCCEEDED(romfsInit()) && stat("romfs:/discs.bin", &st) == 0) {
+        port_log("data: the disc pack in the app\n");
         disc_pack = "romfs:/discs.bin";
         return;
     }

@@ -1,7 +1,7 @@
 # ff9-3ds
 
 A native Nintendo 3DS port of Final Fantasy IX (PS1, NTSC-U), built from the C source of the
-[ff9-decomp](../ff9-decomp) matching decompilation.
+[ff9-decomp](https://github.com/maurizi/ff9-decomp) matching decompilation.
 
 The game's runs natively on the 3DS's ARM11 without emulation, and features stereoscopic 3D and a full dual-screen redesign of the UI.
 
@@ -19,12 +19,26 @@ Requires Docker, Python 3, and raw 2352-byte images of the four discs at `disks/
 git submodule update --init          # decomp/ (ff9-decomp)
 make extract                         # the decomp's extract + split, on your discs
 tools/docker.sh make -j16            # -> build/ff9.3dsx
+tools/docker.sh make -j16 cia-full   # -> build/ff9-full.cia (the game and your discs in one file)
 tools/docker.sh make -j16 pc         # -> build/pc/ff9ds (32-bit Linux host build, for development)
 ```
 
 `tools/docker.sh` runs the devkitARM container (libctru, citro3d) with Python and a 32-bit host gcc.
 
 ## Installing
+
+### All in one: `ff9-full.cia`
+
+Install `build/ff9-full.cia` (about 1.7 GB) with a CIA installer such as FBI, then start Final Fantasy IX from
+the HOME Menu. Your discs are inside it, so the SD card only needs:
+
+```
+/3ds/dspfirm.cdc                      (the 3DS's DSP firmware, dumped with DSP1: needed for sound)
+```
+
+Saves go to `/3ds/ff9/cards/`. The CIA contains your copy of the game: don't share it.
+
+### Homebrew Launcher: `ff9.3dsx`
 
 On the SD card:
 
@@ -35,8 +49,10 @@ On the SD card:
 /3ds/dspfirm.cdc                      (the 3DS's DSP firmware, dumped with DSP1: needed for sound)
 ```
 
-Start it from the Homebrew Launcher. To use existing saves, copy a PS1 memory card image (`.mcr`/`.mcd`, 128 KB)
-to `/3ds/ff9/cards/card1.mcr`.
+Start it from the Homebrew Launcher.
+
+To use existing saves with either, copy a PS1 memory card image (`.mcr`/`.mcd`, 128 KB) to
+`/3ds/ff9/cards/card1.mcr`.
 
 ## Development
 
