@@ -2058,7 +2058,7 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
     ctr_ui_oy = (240 - h) / 2;
     C3D_RenderTargetClear(bottom_rt, C3D_CLEAR_ALL, 0x000000FF, 0);
     C3D_FrameDrawOn(bottom_rt);
-    if (d->rgb24) return;
+    if (d->rgb24 && k < 0) return; /* (a movie: black, unless the bottom screen drew for it: the boot card) */
     if (menu_state == 3) { /* the card game: the frame itself, to touch */
         screen_quad(bottom_rt, &mirror_tex[0], K_SCENE, NO_BLEND, 0xFF808080, d->x, d->y, w, h, 0, ctr_ui_oy);
         if (scene_nhands_next) { /* (a frame that drew its hands: the latest) */

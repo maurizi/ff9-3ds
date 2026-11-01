@@ -137,6 +137,7 @@ unsigned port_hud_drive(void) {
 __attribute__((weak)) int port_world_tap(int x, int y) { (void)x; (void)y; return 0; }
 int port_name_tap(int x, int y, unsigned *seq, int max);
 static int title_tap(int x, int y);
+static int boot_live; /* the boot card shown (port_bottom_hud) */
 static RECT r_disc[2];
 int port_disc_prompt_live(void);
 void port_disc_prompt_set(int c);
@@ -145,6 +146,7 @@ static int config_overlay_tap(int x, int y);
 int port_title_live(void);
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (g_gameState && g_gameState->mode == 0 && port_title_live()) return title_tap(x, y) ? -1 : 0; /* (title_ui.c) */
+    if (g_gameState && g_gameState->mode == 0 && boot_live && max > 0) { seq[0] = 0x0008; return 1; } /* (START) */
     if (g_gameState && config_open() && config_overlay_tap(x, y)) return -1; /* (the Config screen's 3DS OPTIONS) */
     { int n = port_name_tap(x, y - oy, seq, max); if (n) return n; } /* (name entry: port/game/name_touch.c) */
     { int port_menu_tap(int, int); if (port_menu_tap(x, y - oy)) return -1; } /* (main menu: menu_touch.c) */
@@ -387,6 +389,19 @@ static void title_button(RECT *r, const char *label, int on, int dim) {
     if (on) bar_mark(r->x + 4, r->y + 6, 3, r->h - 12); /* (where the D-pad's cursor is) */
     win_drawBox(r, 3, 2);
 }
+/* before the title (the boot screens, the attract images, the opening movie): a card, so the bottom screen is meant */
+static RECT r_boot = {40, 70, 240, 100};
+static void draw_boot(void) {
+    static const char name[] = "FINAL FANTASY IX", go[] = "PRESS START", tap[] = "OR TOUCH THE SCREEN";
+    int w = ui_measureLabel((u8 *)name);
+    ui_drawLabel(r_boot.x + (r_boot.w - w) / 2, r_boot.y + 22, 2, (s32)name, 0);
+    w = ui_measureLabel((u8 *)go);
+    ui_drawLabel(r_boot.x + (r_boot.w - w) / 2, r_boot.y + 52, 2, (s32)go, (VSync(-1) >> 5) & 1 ? 2 : 0); /* (slowly blinking) */
+    w = ui_measureLabel((u8 *)tap);
+    ui_drawLabel(r_boot.x + (r_boot.w - w) / 2, r_boot.y + 70, 2, (s32)tap, 2);
+    win_drawBox(&r_boot, 3, 2);
+}
+
 static void draw_title(void) {
     if (title_opts) {
         draw_options();
@@ -692,15 +707,17 @@ void port_bottom_hud(void) {
     if (battle || world) field_ready = 0; /* (the field is reloaded after) */
     if (g_gameState->mode == 1 && field_ready) field_frames++;
     int title = g_gameState->mode == 0 && port_title_live();
+    int boot = g_gameState->mode == 0 && !title && !port_menu_state(); /* (before the title: boot_live) */
+    boot_live = boot;
     if (!title) title_opts = 0;
-    if (g_gameState->mode != 1 && !battle && !world && !title) return;
+    if (g_gameState->mode != 1 && !battle && !world && !title && !boot) return;
     if (!g_gameState->gameData->font) return; /* (the common images aren't loaded yet) */
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
-    if (d.rgb24 || d.w < 256) return; /* (a movie) */
+    if (!boot && (d.rgb24 || d.w < 256)) return; /* (a movie) */
     /* (a cutscene or movie field: nothing to show yet, but a question the game asks there (the end of disc 1's "save your
      * game?") still gets its choices as buttons, alone) */
-    int ctl = battle || world || title || had_control();
+    int ctl = battle || world || title || boot || had_control();
     if (!ctl && !choice_open()) return;
     choices_only = !ctl;
 
@@ -720,6 +737,7 @@ void port_bottom_hud(void) {
     if (battle) drew = port_battle_hud_draw(); /* (battle_ui.c: over the battle's own UI list) */
     else if (world) drew = 0; /* (the world map's own: world_navi.c) */
     else if (title) draw_title();
+    else if (boot) draw_boot();
     else draw();
     unsigned used = (unsigned)(g_primPtr - (u8 *)hud_mem);
     g_ot = saved_ot;
