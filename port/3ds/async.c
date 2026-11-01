@@ -29,17 +29,34 @@ static void worker_main(void *unused) {
     }
 }
 
+/* Core 1 (the system core) gives an application's threads only the share it sets. Only an Old 3DS runs threads of
+ * ours there (a New 3DS has core 2): 80% then, while the game runs. The HOME Menu runs on core 1 while the game is
+ * suspended: the share goes back to it then (else HOME, or the power button's sleep, takes half a minute). */
+static aptHookCookie share_hook;
+static void share_event(APT_HookType t, void *unused) {
+    (void)unused;
+    if (t == APTHOOK_ONSUSPEND || t == APTHOOK_ONSLEEP) APT_SetAppCpuTimeLimit(5);
+    else if (t == APTHOOK_ONRESTORE || t == APTHOOK_ONWAKEUP) APT_SetAppCpuTimeLimit(80);
+}
+void ctr_core1_share(int any_model) { /* (any_model: a New 3DS's thread falling back to core 1) */
+    static int done;
+    if (done || (ctr_is_new3ds() && !any_model)) return;
+    done = 1;
+    APT_SetAppCpuTimeLimit(80);
+    aptHook(&share_hook, share_event, NULL);
+}
+
 void ctr_async_init(void) {
     LightEvent_Init(&go, RESET_ONESHOT);
     LightEvent_Init(&done, RESET_ONESHOT);
     int core = ctr_is_new3ds() ? 2 : 1;
     /* (core 1 runs an application's threads only for the share it is given: set before any thread may land there,
      * a New 3DS's fallback included) */
-    APT_SetAppCpuTimeLimit(80);
+    ctr_core1_share(0);
     s32 prio = 0x30;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
     worker = threadCreate(worker_main, NULL, 64 * 1024, prio - 1, core, false);
-    if (!worker && core == 2) core = 1, worker = threadCreate(worker_main, NULL, 64 * 1024, prio - 1, 1, false);
+    if (!worker && core == 2) ctr_core1_share(1), core = 1, worker = threadCreate(worker_main, NULL, 64 * 1024, prio - 1, 1, false);
     port_log("async: %s\n", worker ? (core == 2 ? "worker on core 2" : "worker on core 1") : "none");
 }
 

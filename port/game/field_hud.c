@@ -463,15 +463,23 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
 void port_scenario_field_entering(int field);
 void port_scenario_field_ready(int field);
 static int field_ready;
+static unsigned field_serial, field_frames; /* loads so far; frames since the last */
 void port_field_entering(int field) {
     field_ready = 0;
     port_scenario_field_entering(field);
 }
 void port_field_ready(int field) {
     field_ready = 1;
+    field_serial++;
+    field_frames = 0;
     port_scenario_field_ready(field);
 }
 int port_field_current(void) { return field_ready; }
+/* (port/game/field_map.c: its map is baked once per load) */
+unsigned port_field_serial(int *frames) {
+    *frames = (int)field_frames;
+    return field_serial;
+}
 
 static void draw(void) {
     static const u8 menu[] = "MENU", cards[] = "CARDS", party[] = "PARTY", map[] = "MAP", gil_suffix[] = "G";
@@ -539,14 +547,17 @@ int port_battle_hud_draw(void);
 void psx_ui_list_begin_keep(void);
 extern int port_battle_hud_on;
 static void top_hud(void);
+__attribute__((weak)) void ctr_flat_background(int on) { (void)on; } /* (the 3DS renderer's: stereo depth) */
 void port_bottom_hud(void) {
     shown = shown_battle = 0;
+    ctr_flat_background(g_gameState && g_gameState->mode == 1);
     if (g_gameState && g_gameState->gameData) cards_step();
     if (g_gameState && g_gameState->gameData && g_gameState->gameData->font) top_hud();
     if (!g_gameState || !g_gameState->gameData || port_menu_state()) return;
     int battle = g_gameState->mode == 2, world = g_gameState->mode == 3;
     if (!battle) port_battle_hud_on = 0;
     if (battle || world) field_ready = 0; /* (the field is reloaded after) */
+    if (g_gameState->mode == 1 && field_ready) field_frames++;
     if (g_gameState->mode != 1 && !battle && !world) return;
     if (!g_gameState->gameData->font) return; /* (the common images aren't loaded yet) */
     PsxDisplayInfo d;

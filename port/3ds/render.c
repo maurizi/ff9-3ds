@@ -66,6 +66,14 @@ static unsigned vb_used, vb_flushed;
 static u8 *staging;
 static unsigned staging_used, staging_flushed;
 
+/* Both in two halves, a frame's in one: the GPU draws a frame from its half while the CPU records the next into the
+ * other (in stereo the GPU's frame takes most of a VBlank: waiting for it before recording held the game below
+ * speed). A texture the CPU rewrites waits for the frame in flight only when that frame draws with it. */
+static Vtx *vb_half[2];
+static u8 *staging_half[2];
+static int half;
+static int gpu_busy; /* a frame sent and not waited for (frame_begin waits) */
+
 /* The GPU reads main memory, not the CPU's data cache, and only once a command list is sent (C3D_FrameEnd): what the
  * CPU wrote for it is flushed then, each buffer once (a flush is a request to the GSP service: one per vertex quad or
  * texture block cost more than the drawing). Vertices and staging grow contiguously; texture blocks are listed. */
@@ -243,16 +251,14 @@ static unsigned depth_next = 1, depth_submitted = 1; /* the next depth value; th
 static void frame_begin(void) {
     if (in_frame) return;
     unsigned profile_start = port_profile_begin();
-    C3D_FrameBegin(0); /* waits for the GPU to finish the previous frame: its vertices and staging are free */
+    C3D_FrameBegin(0); /* waits for the GPU to finish what was sent: the other half is free */
     port_profile_end(PORT_PROFILE_SCALE, profile_start); /* ("scale": the wait for the GPU) */
+    gpu_busy = 0;
     if (mirror_depth && depth_next > DEPTH_MAX / 2) { /* (runs' depth values used up: from 0 again) */
         C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
         depth_next = depth_submitted = 1;
     }
     in_frame = 1;
-    vb_used = vb_flushed = 0;
-    staging_used = staging_flushed = 0;
-    frame_serial++;
     C3D_BindProgram(&shader);
     C3D_SetAttrInfo(&attr);
     BufInfo_Init(&bufinfo);
@@ -264,6 +270,15 @@ static void frame_begin(void) {
 
 static void submit(void);
 
+/* the current half from its start, what was recorded before drawn (frame_serial: what is recorded from here) */
+static void half_restart(void) {
+    vb = vb_half[half];
+    staging = staging_half[half];
+    vb_used = vb_flushed = 0;
+    staging_used = staging_flushed = 0;
+    frame_serial++;
+}
+
 /* everything recorded so far executed and finished (the CPU may then read the mirror, or rewrite a texture) */
 static void gpu_sync(void) {
     submit();
@@ -272,7 +287,13 @@ static void gpu_sync(void) {
         in_frame = 0;
     }
     frame_begin();
+    half_restart(); /* (the GPU is idle: both halves free) */
     ctr_render_stats[6]++;
+}
+/* the same, only when the GPU may still draw with something recorded (a texture is about to be rewritten) */
+static unsigned nbatches;
+static void gpu_quiet(void) {
+    if (in_frame || gpu_busy || nbatches) gpu_sync();
 }
 
 /* ---- batches ------------------------------------------------------------------------------------------------ */
@@ -295,10 +316,8 @@ typedef struct {
 
 #define MAX_BATCHES 4096
 static Batch batches[MAX_BATCHES];
-static unsigned nbatches;
 
 static Vtx *alloc_vtx(unsigned n) {
-    if (!in_frame) frame_begin();
     if (vb_used + n > VB_MAX) gpu_sync();
     Vtx *v = vb + vb_used;
     vb_used += n;
@@ -937,6 +956,7 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
         return;
     }
     if (s->serial == frame_serial) gpu_sync(); /* drawn with earlier in this frame: those draws keep the old texels */
+    else if (gpu_busy && s->serial + 1 == frame_serial) frame_begin(); /* (the frame in flight's: it finishes first) */
     s->hash[b] = hsh;
     u32 clut[256];
     if (ncl) {
@@ -994,6 +1014,7 @@ static C3D_Tex *mirror_page(int tx, int ty) {
         if (!C3D_TexInitVRAM(&page_tex, 256, 256, GPU_RGBA5551)) return NULL;
         if (!(page_rt = C3D_RenderTargetCreateFromTex(&page_tex, GPU_TEXFACE_2D, 0, -1))) return NULL;
         C3D_TexSetFilter(&page_tex, GPU_NEAREST, GPU_NEAREST);
+        C3D_RenderTargetClear(page_rt, C3D_CLEAR_ALL, 0x000000FF, 0); /* (its alpha 1, once: the copies write colour) */
     }
     if (page_x == tx && page_y == ty && page_serial == frame_serial) return &page_tex;
     int cx0, cy0, cx1, cy1; /* (the mirror current there first: cells the CPU wrote since) */
@@ -1003,7 +1024,6 @@ static C3D_Tex *mirror_page(int tx, int ty) {
                 if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
     submit(); /* (what was drawn before this primitive, drawn first) */
     frame_begin();
-    C3D_RenderTargetClear(page_rt, C3D_CLEAR_ALL, 0x000000FF, 0);
     C3D_FrameDrawOn(page_rt);
     set_proj_ortho(256, 256, 0.0f);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
@@ -1091,11 +1111,22 @@ static float fit_a, fit_b;                        /* the last good line: SZ = a 
 static float fit_min, fit_max;                    /* ... and the entries it was fitted over */
 static unsigned fit_age = ~0u;                    /* presents since it was fitted */
 
-static float zc_smooth = 1500.0f; /* the convergence depth: the scene's mean depth, smoothed */
+/* The screen plane (convergence) is at the scene's nearest depth: everything goes into the screen, so the windows
+ * and text at the screen plane are always in front of what they cover (a model nearer than the plane they're drawn
+ * over is a clash the eyes can't resolve). A field's background layers all go at one depth, the scene's mean: a
+ * layer of its own depth comes apart from the layer under it (an overlay cut from the same picture, as a table over
+ * the floor), which shows as a ghost or a hole beside it. */
+static float zc_smooth = 1500.0f;   /* the scene's mean depth, smoothed */
+static float near_smooth = 1500.0f; /* its nearest, smoothed: the convergence depth */
+static float fit_zmin = 1e9f;       /* this frame's nearest sample */
+static int ctr_flat_bg;             /* in a field: its background layers at one depth (ctr_flat_background) */
+void ctr_flat_background(int on) { ctr_flat_bg = on; } /* (port/game/field_hud.c, each frame) */
 static void fit_frame(void) {
     if (fit_n >= 16) {
         zc_smooth += (fit_z / fit_n - zc_smooth) * 0.1f;
-        stereo_inv_zc = 1.0f / zc_smooth;
+        float nz = fit_zmin < zc_smooth / 4 ? zc_smooth / 4 : fit_zmin > zc_smooth ? zc_smooth : fit_zmin;
+        near_smooth += (nz - near_smooth) * 0.1f;
+        stereo_inv_zc = 1.0f / near_smooth;
         float den = fit_n * fit_ss - fit_s * fit_s;
         if (den > 1e-3f) {
             fit_a = (fit_n * fit_sz - fit_s * fit_z) / den;
@@ -1107,6 +1138,7 @@ static void fit_frame(void) {
     }
     if (fit_age != ~0u) fit_age++;
     fit_n = fit_s = fit_z = fit_ss = fit_sz = 0;
+    fit_zmin = 1e9f;
     fit_lo = 1e9f;
     fit_hi = -1e9f;
 }
@@ -1118,6 +1150,7 @@ static const Vtx *ot_depth(const Vtx *v, unsigned n, Vtx *out, int w, int h) {
     if (z > 0) { /* projected: a sample */
         z /= n;
         fit_n += 1; fit_s += s; fit_z += z; fit_ss += s * s; fit_sz += s * z;
+        if (z < fit_zmin) fit_zmin = z;
         if (s < fit_lo) fit_lo = s;
         if (s > fit_hi) fit_hi = s;
         return v;
@@ -1127,7 +1160,7 @@ static const Vtx *ot_depth(const Vtx *v, unsigned n, Vtx *out, int w, int h) {
      * the opening's dark room, would otherwise extrapolate a glow around it far off its depth) */
     if (s < fit_min) s = fit_min;
     if (s > fit_max) s = fit_max;
-    float d = fit_a * s + fit_b;
+    float d = ctr_flat_bg ? zc_smooth : fit_a * s + fit_b;
     if (d < 64) return v;
     for (unsigned i = 0; i < n; i++) out[i] = v[i], out[i].z = d;
     return out;
@@ -1450,7 +1483,7 @@ static void button_icons_frame(void) {
         if (def[k][6] < 6 || def[k][6] > 32 || def[k][7] < 6 || def[k][7] > 32) return; /* (not loaded yet) */
         if (!btn_made[k] || memcmp(def[k], btn_def[k], sizeof def[k])) {
             memcpy(btn_def[k], def[k], sizeof def[k]);
-            if (in_frame) gpu_sync();
+            gpu_quiet();
             make_button_icon(k, def[k][6], def[k][7]);
         }
     }
@@ -1909,7 +1942,7 @@ void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int
         C3D_TexSetFilter(&hud_img[slot].tex, GPU_NEAREST, GPU_NEAREST);
         hud_img[slot].ok = 1;
     }
-    if (in_frame) gpu_sync(); /* (it may be drawn with in this frame's list) */
+    gpu_quiet(); /* (it may be drawn with in this frame's list, or the one in flight) */
     u32 *dst = hud_img[slot].tex.data;
     memset(dst, 0, 64 * 64 * 4);
     for (int y = 0; y < h; y++)
@@ -1937,7 +1970,7 @@ void ctr_model_texture(int slot, const u32 *rgba) { /* rgba: 256x256, rows from 
         C3D_TexSetFilter(&model_tex[slot], GPU_LINEAR, GPU_NEAREST);
         model_tex_ok[slot] = 1;
     }
-    if (in_frame) gpu_sync();
+    gpu_quiet();
     u32 *dst = model_tex[slot].data;
     for (int y = 0; y < 256; y++)
         for (int x = 0; x < 256; x++) dst[tiled(x, y, 256)] = rgba[y * 256 + x];
@@ -2200,6 +2233,9 @@ void ctr_present(long frame) {
     n_hud_draw = 0;
     frame_end();
     in_frame = 0;
+    gpu_busy = 1; /* (drawn while the next frame is recorded into the other half) */
+    half ^= 1;
+    half_restart();
     frames_drawn++;
     extern unsigned int psx_depth_frame;
     psx_depth_frame++;
@@ -2346,8 +2382,13 @@ void ctr_video_init(void) {
     AttrInfo_AddLoader(&attr, 2, GPU_UNSIGNED_BYTE, 4);
     AttrInfo_AddLoader(&attr, 3, GPU_FLOAT, 1);
 
-    vb = linearAlloc(VB_MAX * sizeof(Vtx));
-    staging = linearAlloc(STAGING_SIZE);
+    for (int i = 0; i < 2; i++) {
+        vb_half[i] = linearAlloc(VB_MAX * sizeof(Vtx));
+        staging_half[i] = linearAlloc(STAGING_SIZE);
+        if (!vb_half[i] || !staging_half[i]) port_fatal("no linear memory for the renderer");
+    }
+    vb = vb_half[0];
+    staging = staging_half[0];
     for (int eye = 0; eye < 2; eye++) {
         if (!C3D_TexInitVRAM(&mirror_tex[eye], VW, VH, GPU_RGBA5551)) port_fatal("no VRAM for the PS1 VRAM mirror");
         C3D_TexSetFilter(&mirror_tex[eye], GPU_NEAREST, GPU_NEAREST);

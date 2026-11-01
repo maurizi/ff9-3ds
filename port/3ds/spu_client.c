@@ -118,11 +118,12 @@ static void start(void) {
     LightEvent_Init(&kick_event, RESET_ONESHOT);
     s32 prio = 0x30;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
-    APT_SetAppCpuTimeLimit(80); /* (core 1 gives an application's threads only the share set: see async.c) */
+    void ctr_core1_share(int any_model);
+    ctr_core1_share(0); /* (core 1 gives an application's threads only the share set: async.c) */
     /* above the MDEC worker (async.c) on the same core: sound must not wait for a movie frame */
     int core = ctr_is_new3ds() ? 2 : 1;
     thread = threadCreate(audio_main, NULL, 32 * 1024, prio - 2, core, false);
-    if (!thread && core == 2) thread = threadCreate(audio_main, NULL, 32 * 1024, prio - 2, 1, false);
+    if (!thread && core == 2) ctr_core1_share(1), thread = threadCreate(audio_main, NULL, 32 * 1024, prio - 2, 1, false);
     port_log("spu: %s\n", thread ? (core == 2 ? "on core 2" : "on core 1") : "on the game's core (no thread)");
 }
 

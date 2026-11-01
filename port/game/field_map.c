@@ -1,10 +1,12 @@
 /* The field's area map on the bottom screen (port/game/field_hud.c draws it in its box): the walkmesh seen from above
  * (each walkable triangle filled, its outer edges outlined), and the player as an arrow pointing where he faces. The
  * field's x runs right and its z away from the camera, so the map's up is the camera's forward: the map looks the
- * way the room does. Floors that move (lifts, bridges) move on the map too: it is rebuilt each frame. A walkmesh may
- * hold areas the camera doesn't show (Dali's field: the yard and, apart, the path beyond it): the map is the area
- * connected to the player's triangle, up to the exits (past an exit is reached only by leaving), scaled to fill the
- * box. The exits are marked: region objects (kind 3) whose tag-2
+ * way the room does. The map is built once per field (bake, a quarter second after the field has loaded: its scripts
+ * have made the exit regions by then) and kept: only the player and the markers move on it (a map rebuilt each frame
+ * from live state jumped about as the player's triangle or the active triangles changed). A walkmesh may hold areas
+ * the camera doesn't show (Dali's field: the yard and, apart, the path beyond it): the walkmesh is split into areas,
+ * each one connected up to the exits (past an exit is reached only by leaving), and the map is the player's area
+ * (the last one known while the player's triangle isn't), scaled to fill the box. The exits are marked: region objects (kind 3) whose tag-2
  * function (run while the player is inside) holds GOTO_FIELD (2B) or GOTO_WORLD (B6) with a literal destination, their
  * polygon (op 29: +0x14 count, +0x18 points) drawn in green (decomp-requests R30). Shops and save moogles are marked
  * where they stand: the field's characters whose script opens a shop (MENU 75 with type 2) or the save screen (type 4). */
@@ -41,7 +43,18 @@ static void world_xz(const BgiTriangle *t, int k, int *x, int *z) {
 }
 
 #define MAX_TRIS 1024
-static u8 near_player[MAX_TRIS]; /* triangles connected to the player's (walkable neighbours): 1, or 2 in an exit */
+#define MAX_AREAS 32
+static u8 near_player[MAX_TRIS]; /* (mark_connected's: connected to its start: 1, or 2 in an exit) */
+
+/* the baked map */
+static struct {
+    unsigned serial;            /* the field load it was baked for (port_field_serial) */
+    int n, areas, cur;          /* triangles, areas, the area shown */
+    s16 x[MAX_TRIS][3], z[MAX_TRIS][3];
+    u32 in[MAX_TRIS];           /* per triangle: the areas it shows in (bit a) */
+    u8 exit[MAX_TRIS];          /* shaded as an exit */
+    int x0[MAX_AREAS], z0[MAX_AREAS], x1[MAX_AREAS], z1[MAX_AREAS];
+} bk;
 
 /* the field's exits (their polygons), collected before the map is built */
 static struct { int n; s16 x[8], z[8]; } exits[16];
@@ -306,6 +319,48 @@ static unsigned edge_slot(int x0, int z0, int x1, int z1) {
 
 static inline u32 xy(int x, int y) { return (u32)(x & 0xFFFF) | (u32)y << 16; }
 
+/* the map of the field as loaded: each walkable triangle's position, its areas (flood fills from each triangle not
+ * yet in one, stopping at the exits), whether it is shaded as an exit, each area's bounds */
+static void bake(int n) {
+    collect_exits();
+    bk.n = n;
+    bk.areas = bk.cur = 0;
+    __builtin_memset(bk.in, 0, sizeof bk.in);
+    for (int i = 0; i < n; i++) {
+        const BgiTriangle *t = &g_fieldBgi.triangles[i];
+        int x, z;
+        for (int k = 0; k < 3; k++) world_xz(t, k, &x, &z), bk.x[i][k] = (s16)x, bk.z[i][k] = (s16)z;
+        bk.exit[i] = bound_tri(t) && tri_near_exit(t);
+    }
+    int best = 0, best_n = 0;
+    for (int i = 0; i < n && bk.areas < MAX_AREAS; i++) {
+        const BgiTriangle *t = &g_fieldBgi.triangles[i];
+        if (bk.in[i] || !bound_tri(t) || tri_in_exit(t)) continue;
+        mark_connected(n, i);
+        int a = bk.areas++, count = 0;
+        bk.x0[a] = bk.z0[a] = 0x7FFF;
+        bk.x1[a] = bk.z1[a] = -0x7FFF;
+        for (int j = 0; j < n; j++) {
+            if (!near_player[j]) continue;
+            bk.in[j] |= 1u << a;
+            count++;
+            for (int k = 0; k < 3; k++) {
+                if (bk.x[j][k] < bk.x0[a]) bk.x0[a] = bk.x[j][k];
+                if (bk.x[j][k] > bk.x1[a]) bk.x1[a] = bk.x[j][k];
+                if (bk.z[j][k] < bk.z0[a]) bk.z0[a] = bk.z[j][k];
+                if (bk.z[j][k] > bk.z1[a]) bk.z1[a] = bk.z[j][k];
+            }
+        }
+        if (bk.x1[a] <= bk.x0[a] || bk.z1[a] <= bk.z0[a]) { /* (degenerate: not an area) */
+            for (int j = 0; j < n; j++) bk.in[j] &= ~(1u << a);
+            bk.areas--;
+            continue;
+        }
+        if (count > best_n) best_n = count, best = a;
+    }
+    bk.cur = best; /* (until the player's triangle is known: the largest) */
+}
+
 /* The map in the box (bx, by, bw, bh): packets from pkt linked into ot[0] (drawn above the box), returns the next
  * free byte; pkt_end: where the buffer ends. Nothing without a walkmesh. */
 u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, int bh) {
@@ -332,22 +387,20 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
                 break;
             }
     }
-    collect_exits();
-    mark_connected(n, player_triangle(pl));
-    int x0 = 0x7FFFFFFF, z0 = 0x7FFFFFFF, x1 = -0x7FFFFFFF, z1 = -0x7FFFFFFF;
-    for (int i = 0; i < n; i++) {
-        const BgiTriangle *t = &g_fieldBgi.triangles[i];
-        if (!bound_tri(t) || !near_player[i]) continue;
-        for (int k = 0; k < 3; k++) {
-            int x, z;
-            world_xz(t, k, &x, &z);
-            if (x < x0) x0 = x;
-            if (x > x1) x1 = x;
-            if (z < z0) z0 = z;
-            if (z > z1) z1 = z;
-        }
+    unsigned port_field_serial(int *frames);
+    int since;
+    unsigned serial = port_field_serial(&since);
+    if (bk.serial != serial) {
+        if (since < 15) return pkt; /* (the field's scripts still making its regions) */
+        bake(n);
+        bk.serial = serial;
     }
-    if (x1 <= x0 || z1 <= z0) return pkt;
+    if (!bk.areas) return pkt;
+    int pt = player_triangle(pl);
+    if (pt >= 0 && pt < bk.n && bk.in[pt] && !(bk.in[pt] >> bk.cur & 1)) bk.cur = __builtin_ctz(bk.in[pt]);
+    const int a = bk.cur;
+    const u32 bit = 1u << a;
+    int x0 = bk.x0[a], z0 = bk.z0[a], x1 = bk.x1[a], z1 = bk.z1[a];
     /* scale (16.16): one for all areas (0.07 px per field unit: a room as large as Dali's weapon shop fills the box),
      * less to fit a larger one, centred */
     const int m = 8;
@@ -355,42 +408,34 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     if (s > MAP_SCALE) s = MAP_SCALE; /* (the same scale everywhere: smaller only for an area too big for the box) */
     const int ox = bx + bw / 2, oy = by + bh / 2, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
     __builtin_memset(edges, 0, sizeof edges);
-    for (int i = 0; i < n; i++) {
-        const BgiTriangle *t = &g_fieldBgi.triangles[i];
-        if (!bound_tri(t) || !near_player[i]) continue;
-        int wx[3], wz[3];
-        for (int k = 0; k < 3; k++) world_xz(t, k, &wx[k], &wz[k]);
+    for (int i = 0; i < bk.n; i++) {
+        if (!(bk.in[i] & bit)) continue;
         for (int k = 0; k < 3; k++) {
-            unsigned e = edge_slot(wx[k], wz[k], wx[(k + 1) % 3], wz[(k + 1) % 3]);
+            unsigned e = edge_slot(bk.x[i][k], bk.z[i][k], bk.x[i][(k + 1) % 3], bk.z[i][(k + 1) % 3]);
             if (edges[e].count < 255) edges[e].count++;
         }
     }
 #define MX(wx) (ox + (int)(((long long)((wx) - cx) * s) >> 16))
 #define MY(wz) (oy - (int)(((long long)((wz) - cz) * s) >> 16))
     u32 *p = (u32 *)pkt;
-    for (int i = 0; i < n; i++) {
-        const BgiTriangle *t = &g_fieldBgi.triangles[i];
-        if (!bound_tri(t) || !near_player[i]) continue; /* (only the player's area: the others are other screens) */
+    for (int i = 0; i < bk.n; i++) {
+        if (!(bk.in[i] & bit)) continue; /* (only the player's area: the others are other screens) */
         if ((u8 *)(p + 5 + 3 * 4) > pkt_end) break;
-        int x[3], y[3], wxs[3], wzs[3];
-        for (int k = 0; k < 3; k++) {
-            world_xz(t, k, &wxs[k], &wzs[k]);
-            x[k] = MX(wxs[k]);
-            y[k] = MY(wzs[k]);
-        }
+        int x[3], y[3];
+        for (int k = 0; k < 3; k++) x[k] = MX(bk.x[i][k]), y[k] = MY(bk.z[i][k]);
         /* the outline: edges no other drawn triangle shares */
         for (int k = 0; k < 3; k++) {
-            if (edges[edge_slot(wxs[k], wzs[k], wxs[(k + 1) % 3], wzs[(k + 1) % 3])].count > 1) continue;
-            int a = k, b = (k + 1) % 3;
+            int b = (k + 1) % 3;
+            if (edges[edge_slot(bk.x[i][k], bk.z[i][k], bk.x[i][b], bk.z[i][b])].count > 1) continue;
             p[0] = 3u << 24;
             p[1] = 0x40000000u | MAP_EDGE;
-            p[2] = xy(x[a], y[a]);
+            p[2] = xy(x[k], y[k]);
             p[3] = xy(x[b], y[b]);
             addPrim(ot, p);
             p += 4;
         }
         p[0] = 4u << 24;
-        p[1] = 0x20000000u | (near_player[i] == 2 || tri_near_exit(t) ? MAP_EXIT : MAP_FILL);
+        p[1] = 0x20000000u | (bk.exit[i] ? MAP_EXIT : MAP_FILL);
         p[2] = xy(x[0], y[0]);
         p[3] = xy(x[1], y[1]);
         p[4] = xy(x[2], y[2]);
