@@ -708,11 +708,7 @@ static void overlay(void (*fn)(void));
 static void config_overlay(void) { overlay(draw_config_overlay); }
 /* the world map's questions (the moogle's, the chocobo's menu, the airship's Go to and navigation): the choices as
  * large buttons over the bottom screen's map, as a field's (the question stays on top) */
-static void draw_world_choices(void) {
-    static RECT shade = {16, 40, 288, 152};
-    draw_choices();
-    win_drawBox(&shade, 4, 2); /* (behind the buttons: the map doesn't show through) */
-}
+static void draw_world_choices(void) { draw_choices(); }
 /* world_navi.c, as it draws the bottom screen's map into the world's own packets: the question's choices too, if one
  * is open (1: drawn) */
 int port_world_choices(void) {

@@ -2,7 +2,8 @@
  * the places found, the party and its vehicle) is always there, and the top screen keeps the world without the corner
  * minimap. wm_naviDraw is wrapped (config/renames.txt): it draws the full map's packets whatever mode the game's
  * navigation is in, and their range goes to the bottom screen (port_bottom_packets). The location title it also
- * draws stays in the scene. The game's own full-map mode (its place cursor) is shown the same way. A tap near a place
+ * draws stays in the scene. The game's own full-map mode (its place cursor) is shown the same way. While a question is
+ * open (the moogle's, the chocobo's menu, the airship's) its choices take the map's place. A tap near a place
  * found names it (field_hud.c draws the name); elsewhere it zooms in 2x about the party, and out again. */
 #include "psyq_port.h"
 #include "ovl_0c.h"
@@ -77,6 +78,23 @@ static const u8 *port_world_place_name(int *x, int *y);
 void o0c_wm_naviDraw(void) {
     if (g_worldTitleId >= 0) o0c_wm_drawTitle();
     if (!g_worldNaviActive) return;
+    { /* a question open (the moogle's, the chocobo's menu, the airship's): its choices as buttons on the bottom screen
+       * in the map's place (field_hud.c draws them), in the world's own frame as the map would be */
+        int port_world_choices(void);
+        u32 *saved_ot = g_ot;
+        u8 *saved_prim = g_primPtr;
+        g_ot = (u32 *)g_worldOt[*g_worldBufIndex];
+        g_primPtr = (u8 *)g_worldPrimPtr;
+        s32 lo2 = g_worldPrimPtr;
+        int drew = port_world_choices();
+        g_worldPrimPtr = (s32)g_primPtr;
+        g_ot = saved_ot;
+        g_primPtr = saved_prim;
+        if (drew) {
+            port_bottom_packets((const void *)lo2, (const void *)g_worldPrimPtr);
+            return;
+        }
+    }
     s8 title = g_worldTitleId;
     s32 mode = g_worldNaviMode;
     u8 visible = g_worldNaviVisible;
@@ -120,20 +138,6 @@ void o0c_wm_naviDraw(void) {
          * (its packets a range of their own: not zoomed) */
         int px, py;
         const u8 *name = port_world_place_name(&px, &py);
-        { /* a question open (the moogle's, the chocobo's menu, the airship's): its choices as buttons over the map,
-           * in the world's own frame like the name below (field_hud.c draws them) */
-            int port_world_choices(void);
-            u32 *saved_ot = g_ot;
-            u8 *saved_prim = g_primPtr;
-            g_ot = (u32 *)g_worldOt[*g_worldBufIndex];
-            g_primPtr = (u8 *)g_worldPrimPtr;
-            s32 lo2 = g_worldPrimPtr;
-            int drew = port_world_choices();
-            g_worldPrimPtr = (s32)g_primPtr;
-            g_ot = saved_ot;
-            g_primPtr = saved_prim;
-            if (drew) port_bottom_packets((const void *)lo2, (const void *)g_worldPrimPtr);
-        }
         if (name) {
             u32 *saved_ot = g_ot;
             u8 *saved_prim = g_primPtr;
