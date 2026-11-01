@@ -9,10 +9,37 @@
 void win_drawAll_game(void);
 __attribute__((weak)) void port_ui_packets(const void *lo, const void *hi) { (void)lo; (void)hi; }
 
+/* A field minigame's own panels (its how-to-play box, its score) belong on the bottom screen with the touch controls,
+ * not over the scene; its speech balloons stay with the speakers. 1: window w goes to the bottom screen. */
+void port_bottom_packets(const void *lo, const void *hi);
+static int to_bottom(const Window *w) {
+    if (g_gameState->mode != 1) return 0;
+    int field = g_gameState->gameData->fieldId;
+    if (field == 2950) return w->style != WIN_STYLE_BALLOON; /* (Chocobo Hot and Cold: the how-to-play box) */
+    return 0;
+}
+
 void win_drawAll(void) {
     u8 *lo = g_primPtr;
+    u8 down[10], any = 0;
+    for (int i = 0; i < 10; i++) { /* (the bottom screen's windows hidden from the first pass) */
+        Window *w = &g_windows[i];
+        down[i] = w->state != WIN_STATE_CLOSED && w->visible && to_bottom(w);
+        if (down[i]) w->visible = 0, any = 1;
+    }
     win_drawAll_game();
     if (g_primPtr != lo) port_ui_packets((const void *)PSX_PTR(lo), (const void *)PSX_PTR(g_primPtr));
+    if (!any) return;
+    u8 up[10];
+    for (int i = 0; i < 10; i++) { /* (a second pass with only those, its packets to the bottom screen) */
+        Window *w = &g_windows[i];
+        up[i] = w->visible;
+        w->visible = down[i];
+    }
+    u8 *lo2 = g_primPtr;
+    win_drawAll_game();
+    if (g_primPtr != lo2) port_bottom_packets((const void *)PSX_PTR(lo2), (const void *)PSX_PTR(g_primPtr));
+    for (int i = 0; i < 10; i++) g_windows[i].visible = (u8)(up[i] | down[i]);
 }
 
 /* Whether a menu is up (menu_doOpen .. menu_finish): 0 no, 1 opening (the scene fades out), 2 showing (the scene is
