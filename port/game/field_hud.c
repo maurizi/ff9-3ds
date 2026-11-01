@@ -795,6 +795,12 @@ static void big_portrait(int slot, Character *c, int x, int y, int size) {
 }
 
 void port_big_portrait(int slot, Character *c, int x, int y, int size) { big_portrait(slot, c, x, y, size); } /* (rewards_top.c) */
+void port_big_portrait_index(int slot, int index, int x, int y, int size) { /* (by portrait index: save_top.c) */
+    const u8 *e = port_portrait(index);
+    if (!e) return;
+    ctr_hud_image(slot, 0x300u | (u32)index, (const u16 *)e, port_portrait_face(index), 32, 32);
+    ctr_hud_draw_top(slot, x, y, 32, 32, size, size);
+}
 
 static void stat(int x, int y, const char *label, int value) {
     u8 a[12];

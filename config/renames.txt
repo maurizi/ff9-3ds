@@ -43,3 +43,6 @@ src/main/event evt_updateObjects evt_updateObjects_game
 src/ovl_14/title_menu o14_opening_titleUpdate o14_opening_titleUpdate_game
 # The end of a disc's save prompt: its answers as bottom-screen buttons (port/game/disc_prompt.c).
 src/ovl_0a/fld_disc o0a_fld_runDiscChange o0a_fld_runDiscChange_game
+# The save screen: no memory card slots to pick (port/game/save_touch.c).
+src/ovl_39/ovl_39 o39_menuSave_inputSlot o39_menuSave_inputSlot_game
+src/ovl_39/ovl_39 o39_menuSave_returnToSlots o39_menuSave_returnToSlots_game

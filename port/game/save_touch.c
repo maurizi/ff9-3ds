@@ -34,3 +34,27 @@ int port_save_tap(int x, int y, unsigned *press) {
     *press = 0x4000;
     return 1;
 }
+
+/* No memory card slots on a 3DS (the saves are files on the SD card, the port's slot 1): the slot screen picks slot 1
+ * at once with the game's own select; coming back to it from the file list (Circle there) leaves the save screen
+ * instead, as Circle on the slots would. menuSave_inputSlot and menuSave_returnToSlots are wrapped
+ * (config/renames.txt). */
+void o39_menuSave_inputSlot_game(void);
+void o39_menuSave_returnToSlots_game(void);
+void o39_menuSave_selectSlot(void);
+static int came_back;
+void o39_menuSave_returnToSlots(void) {
+    came_back = 1;
+    o39_menuSave_returnToSlots_game();
+}
+void o39_menuSave_inputSlot(void) {
+    if (fade_isBusy()) return;
+    if (came_back) {
+        came_back = 0;
+        g_padRepeat |= BTN_CIRCLE; /* (the game's own way out from the slots) */
+        o39_menuSave_inputSlot_game();
+        return;
+    }
+    g_menu.cardSlot = 0;
+    o39_menuSave_selectSlot();
+}
