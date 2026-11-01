@@ -70,8 +70,7 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
 - **Top**: the battle scene with no command or status windows **[done]**; damage and heal numbers **[done]**; the
   ability-name banner **[done]**; the PS1 target hand in the scene **[done]**; a "ready" marker on the character
-  whose turn it is **[done: the game's own]**; optionally a thin row of ATB pips along the top edge in Active mode
-  **[todo]**.
+  whose turn it is **[done: the game's own]**; no ATB pips (tried, removed at the play-tester's request: the cards on the bottom have the gauges).
 - **Bottom**:
   - **Left ~45%: command list**, large rows (Attack, Steal/Skill, Defend, Item, Change/Run); sub-lists (abilities,
     items) replace it in place with MP cost and count, and a description line at the bottom (the PS1 help text).
