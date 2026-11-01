@@ -107,6 +107,7 @@ static RECT r_choice[8];
  * Cross goes into g_msgPadPressed after msg_update and before the objects run (evt_updateObjects, wrapped:
  * config/renames.txt). */
 static int choice_cross;
+static int choice_open(void);
 s32 evt_updateObjects_game(void);
 s32 evt_updateObjects(void) {
     if (choice_cross) choice_cross = 0, g_msgPadPressed |= 0x20000;
@@ -172,7 +173,33 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         if (!n) n = port_list_tap(x, y - oy, seq);
         if (n) return n;
     }
-    if (g_gameState && g_gameState->mode == 3 && !port_menu_state() && !world_choices) return port_world_tap(x, y - oy) ? -1 : 0; /* (zoom, names) */
+    { /* the world map's full map (the airship's Go to): its question is on the bottom screen 1:1; a tap on one of its
+       * choice lines (14 pixels apart from the window's first line) answers it directly, as a field's buttons do */
+        extern s32 g_worldNaviMode;
+        if (g_gameState && g_gameState->mode == 3 && g_worldNaviMode == 2 && choice_open()) {
+            MsgWindow *w = NULL;
+            for (int k = 0; k < 10; k++)
+                if (g_msgWindows[k].open && g_msgWindows[k].id == g_msgChoiceWindow) w = &g_msgWindows[k];
+            if (!w || !w->window) return -1;
+            RECT *r = &w->window->cur;
+            int yy = y - oy;
+            for (int i = 0; i < g_msgChoiceCount; i++) {
+                int cy = r->y + 10 + (g_msgChoiceLine + i) * 14;
+                if (x < r->x || x >= r->x + r->w || yy < cy - 7 || yy >= cy + 7) continue;
+                g_msgChoice = i;
+                if (w->waitFrames != MSGW_WAIT_INPUT || (w->flags & MSGW_NO_INPUT)) { /* (the world's script polls Cross) */
+                    if (max > 0) { seq[0] = 0x4000; return 1; }
+                    return -1;
+                }
+                w->waitFrames = 1;
+                g_gameState->gameData->soundHook(SND_SE_PLAY, SE_CURSOR, 0x800000, SND_PAN_CENTER, SND_VOL_MAX);
+            }
+            return -1;
+        }
+    }
+    if (g_gameState && g_gameState->mode == 3 && !port_menu_state() && !world_choices) { /* (zoom, names) */
+        return port_world_tap(x, y - oy) ? -1 : 0;
+    }
     if (!shown) return 0;
     y -= oy;
     if (shown_battle) return port_battle_tap(x, y, seq, max);
@@ -751,6 +778,7 @@ static void config_overlay(void) { overlay(draw_config_overlay); }
 /* the world map's questions (the moogle's, the chocobo's menu, the airship's Go to and navigation): the choices as
  * large buttons over the bottom screen's map, as a field's (the question stays on top) */
 static void draw_world_choices(void) { draw_choices(); }
+
 /* world_navi.c, as it draws the bottom screen's map into the world's own packets: the question's choices too, if one
  * is open (1: drawn) */
 int port_world_choices(void) {
@@ -794,6 +822,7 @@ void port_bottom_hud(void) {
     if (!g_gameState || !g_gameState->gameData) return;
     if (!config_open()) cfg_opts = 0;
     else if (g_gameState->gameData->font) { config_overlay(); return; }
+
     if (port_menu_state()) return;
     int battle = g_gameState->mode == 2, world = g_gameState->mode == 3;
     if (!battle) port_battle_hud_on = 0;
