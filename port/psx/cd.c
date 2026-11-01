@@ -368,6 +368,10 @@ static void read_raw(unsigned int lba, u8 *buf) {
         if (sector_is_data) dst = buf + USER_OFFSET;
     }
 #endif
+#ifdef PORT_DISC_PACK
+    if (packed) pack_read(at, dst, bytes); /* (through the read-ahead: a sector a file read cost ~5 ms on a 3DS) */
+    else
+#endif
     if (!read_at(disc, at != disc_at ? at : -1, dst, bytes)) {
         disc_at = -1;
         port_fatal("disc %d: can't read sector %u", disc_no, lba);
