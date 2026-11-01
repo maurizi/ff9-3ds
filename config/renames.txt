@@ -41,3 +41,5 @@ src/main/window win_drawListBox win_drawListBox_game
 src/main/event evt_updateObjects evt_updateObjects_game
 # The title screen: its choices on the bottom screen, the top keeping the picture (port/game/title_ui.c).
 src/ovl_14/title_menu o14_opening_titleUpdate o14_opening_titleUpdate_game
+# The end of a disc's save prompt: its answers as bottom-screen buttons (port/game/disc_prompt.c).
+src/ovl_0a/fld_disc o0a_fld_runDiscChange o0a_fld_runDiscChange_game

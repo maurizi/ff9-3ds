@@ -54,7 +54,11 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
 - The bottom can show a scrollable **dialogue backlog** (new). **[done in fields: LOG swaps it in for the map and
   party; taps on its upper or lower half scroll]**
 - **Choice prompts**: the choices as large touch buttons on the bottom while the question stays on top; cursor and
-  A still work (an input aid, not a mirror). **[done in fields: the opening's candle question, tapped]**
+  A still work (an input aid, not a mirror). **[done in fields: the opening's candle question, tapped; also in
+  cutscenes, where the rest of the bottom screen waits for player control; the end of a disc's "save your game?"
+  (the field's own disc-change prompt, port/game/disc_prompt.c)]**
+- **Disc change**: none (every disc is in the one ROM): the disc-change screen puts the disc in and runs its own check
+  at once, no prompt. **[done: port/game/disc_change.c; verified from the end of disc 1 to disc 2's field 800]**
 
 ## Battle
 (Touch acts directly, never by simulated presses: a tap is applied at the game's next input step for that menu,

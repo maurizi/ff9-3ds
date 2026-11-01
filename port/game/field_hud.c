@@ -137,6 +137,9 @@ unsigned port_hud_drive(void) {
 __attribute__((weak)) int port_world_tap(int x, int y) { (void)x; (void)y; return 0; }
 int port_name_tap(int x, int y, unsigned *seq, int max);
 static int title_tap(int x, int y);
+static RECT r_disc[2];
+int port_disc_prompt_live(void);
+void port_disc_prompt_set(int c);
 static int config_open(void);
 static int config_overlay_tap(int x, int y);
 int port_title_live(void);
@@ -166,6 +169,11 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (!shown) return 0;
     y -= oy;
     if (shown_battle) return port_battle_tap(x, y, seq, max);
+    if (port_disc_prompt_live()) { /* (the end of a disc's save prompt: its cursor, then its own Cross) */
+        for (int i = 0; i < 2; i++)
+            if (inside(&r_disc[i], x, y) && max > 0) { port_disc_prompt_set(i); seq[0] = 0x4000; return 1; }
+        return -1;
+    }
     if (n_choices) { /* (a choice, directly: the game's choice set and its window answered, as msg_input does on cross) */
         for (int i = 0; i < n_choices; i++) {
             if (!inside(&r_choice[i], x, y)) continue;
@@ -550,10 +558,37 @@ unsigned port_field_serial(int *frames) {
     return field_serial;
 }
 
+static int choices_only; /* no player control (a cutscene) but a question open: its choices alone */
+int port_disc_prompt_live(void), port_disc_prompt_cursor(void);
+u8 *port_disc_prompt_text(int i);
+void port_disc_prompt_set(int c);
+static RECT r_disc[2] = {{24, 75, 272, 32}, {24, 113, 272, 32}};
+static void draw_disc_prompt(void) { /* (the end of a disc's "save your game?": disc_prompt.c) */
+    int cur = port_disc_prompt_cursor();
+    for (int i = 0; i < 2; i++) {
+        u8 *t = port_disc_prompt_text(1 + i);
+        if (t) text_drawBlock(r_disc[i].x + 12, r_disc[i].y + 10, 2, t, cur == i ? 0 : 2);
+        win_drawBox(&r_disc[i], 3, 2);
+    }
+}
+static int choice_open(void) {
+    if (port_disc_prompt_live()) return 1;
+    return g_msgChoiceLine >= 0 && g_msgChoiceCount > 0 && g_msgChoiceWindow >= 0 && g_msgChoiceWindow < 10 &&
+           g_msgWindows[g_msgChoiceWindow].open;
+}
+
 static void draw(void) {
     static const u8 menu[] = "MENU", cards[] = "CARDS", party[] = "PARTY", map[] = "MAP", gil_suffix[] = "G";
     GameData *g = g_gameState->gameData;
     u8 buf[16];
+    if (port_disc_prompt_live()) {
+        draw_disc_prompt();
+        return;
+    }
+    if (choices_only) {
+        draw_choices();
+        return;
+    }
 
     /* the header: where, and since when and with what */
     if ((field_ready || g_gameState->mode != 1) && ram_ok(g->locationName, 1) && *g->locationName != 0xFF)
@@ -663,7 +698,11 @@ void port_bottom_hud(void) {
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
     if (d.rgb24 || d.w < 256) return; /* (a movie) */
-    if (!battle && !world && !title && !had_control()) return; /* (a cutscene or movie field: nothing to show yet) */
+    /* (a cutscene or movie field: nothing to show yet, but a question the game asks there (the end of disc 1's "save your
+     * game?") still gets its choices as buttons, alone) */
+    int ctl = battle || world || title || had_control();
+    if (!ctl && !choice_open()) return;
+    choices_only = !ctl;
 
     ClearOTagR(hud_ot, OTN);
     u32 *saved_ot = g_ot;

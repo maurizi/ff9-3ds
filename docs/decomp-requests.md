@@ -382,8 +382,10 @@ battle for the Equip view, and how model lighting/colour is computed. Asked of t
 For scenario fixtures: a field id with the story value and global vars under which an Active Time Event is offered
 soon after entering (the ATE button's first real check), and the state just before the script's disc change at the
 end of disc 1 (op 0xAC / menu type 8). Opening menu type 8 directly from a disc-1 field leaves the field reloading in a
-loop, with the stock flow too: the script sets something around the op that a direct open lacks. Asked of the decomp
-session.
+loop, with the stock flow too: the script sets something around the op that a direct open lacks. Answered
+(ff9-decomp docs/r32/3ds-requests-6.md): ATE at Lindblum field 552 (tests/scenarios/disc1_ate.cfg); the disc change
+from field 70 with b[2..3] = 1 (tests/scenarios/disc1_disc_change.cfg). A direct open skips fld_discChangeLeave's
+file_loadDirTables / fld_refindSectors, hence the loop; the real path (op AC from a field) is fine.
 
 ---
 
