@@ -175,7 +175,7 @@ static int focus_card(TmState *s, TmCardStats *st) {
     case TM_TASK_CARD_AWAY: {
         int id = s->stockCol * 10 + s->stockRow;
         CardEntry *e = card_find(id, s->copyIdx);
-        if (!e) return -1;
+        if (!e || e == (CardEntry *)-1) return -1; /* (no copy: card_find gives -1) */
         st->id = e->id, st->arrows = e->arrows, st->power = e->power, st->type = e->type;
         st->pdef = e->physDef, st->mdef = e->magicDef;
         return id;
