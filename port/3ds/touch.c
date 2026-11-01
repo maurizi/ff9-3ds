@@ -178,3 +178,10 @@ unsigned int ctr_ui_pad_buttons(long frame) {
     timer = PRESS + SETTLE - 1;
     return held;
 }
+
+/* the stylus held now, and where (screen pixels): for buttons that act while held (battle_ui.c's RUN) */
+int ctr_touch_held(int *x, int *y) {
+    if (!down || swiped) return 0;
+    *x = last_x, *y = last_y;
+    return 1;
+}

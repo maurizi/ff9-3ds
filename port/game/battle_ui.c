@@ -42,10 +42,32 @@ void ctr_hud_draw(int slot, int x, int y, int w, int h);
 const u8 *port_portrait(int index); /* field_hud.c: the menu's portrait entry (0x6C0 bytes), NULL if unread */
 const u8 *port_portrait_face(int index); /* field_hud.c: its face, 32x32 8-bit pixels */
 
+/* PAUSE (Start: the game's pause request set directly) and RUN (hold: L1 + R1 held, as btlui_pollEscape counts it,
+ * done here after the game's frame while the stylus stays on it), above the party cards */
+static RECT r_pause = {156, 6, 76, 30}, r_run = {240, 6, 76, 30};
+static int sys_shown, running;
+int ctr_touch_held(int *x, int *y);
+extern int ctr_ui_oy;
+void o0b_btl_tryEscape(u8);
+
 void port_battle_ui_frame(void) {
     static int forced, had;
     if (!g_gameState) return;
     int battle = g_gameState->mode == 2;
+    { /* RUN held: the escape poll's own steps (escapeHeld, the hold count, btl_tryEscape) */
+        int tx, ty;
+        running = 0;
+        if (battle && sys_shown && g_btluiState.atbOn && ctr_touch_held(&tx, &ty) &&
+            tx >= r_run.x && tx < r_run.x + r_run.w && ty - ctr_ui_oy >= r_run.y && ty - ctr_ui_oy < r_run.y + r_run.h) {
+            volatile Unk80104E68 *st = &g_btluiState;
+            running = 1;
+            g_gameState->gameData->ctx.battle->escapeHeld = 1;
+            if (st->escapeFrames++ >= 0x3D) {
+                st->escapeFrames = 0;
+                o0b_btl_tryEscape(1);
+            } else o0b_btl_tryEscape(0);
+        }
+    }
     if (battle && !forced) {
         had = (g_gameState->config & TARGET_WINDOW) != 0;
         g_gameState->config |= TARGET_WINDOW;
@@ -297,6 +319,16 @@ int port_battle_hud_draw(void) {
     if (st == BTLUI_MENU_CLOSING && g_btlUi->windows[2] && g_btlUi->windows[2]->state) return 0; /* (a list opening) */
     draw_commands();
     draw_cards();
+    { /* PAUSE and RUN */
+        static const u8 pause[] = "PAUSE", run[] = "HOLD TO RUN";
+        sys_shown = g_btluiState.started != 0;
+        int w = ui_measureLabel((u8 *)pause);
+        ui_drawLabel(r_pause.x + (r_pause.w - w) / 2, r_pause.y + 11, 2, (s32)pause, 0);
+        win_drawBox(&r_pause, 4, 2);
+        w = ui_measureLabel((u8 *)run);
+        ui_drawLabel(r_run.x + (r_run.w - w) / 2, r_run.y + 11, 2, (s32)run, running ? 1 : 0);
+        win_drawBox(&r_run, 4, 2);
+    }
     port_battle_hud_on = 1;
     return 1;
 }
@@ -320,6 +352,11 @@ int port_battle_tap(int x, int y, unsigned *seq, int max) {
         if (inside(&r_back, x, y)) tap_kind = TAP_LIST_BACK;
         return -1;
     }
+    if (sys_shown && inside(&r_pause, x, y)) { /* (the game's pause request: Start's) */
+        if (g_btluiState.started && !g_btluiState.pauseReq) g_btluiState.pauseReq = 1;
+        return -1;
+    }
+    if (sys_shown && inside(&r_run, x, y)) return -1; /* (acts while held: port_battle_ui_frame) */
     if (cmd_shown) {
         for (int i = 0; i < 4; i++)
             if (g_btlCmdMenu.cmdIds[i] && inside(&r_cmd[i], x, y)) { tap_kind = TAP_CMD; tap_arg = i; return -1; }
