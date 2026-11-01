@@ -4,6 +4,7 @@
 #   make / make 3ds   build/ff9.3dsx      3DS homebrew executable (devkitARM, libctru, citro3d); with any option
 #                                         below, build/ff9-test.3dsx instead
 #   make 3ds-full     build/ff9-full.3dsx the same with your discs packed inside (one file to copy; never share it)
+#   make cia          build/ff9.cia       installable title (cia-full: with your discs; never share it)
 #   make pc           build/pc/ff9ds      32-bit Linux host build of the same game code and port layer: fast
 #                                         iteration, gdb, frame dumps, lockstep comparison with PCSX-Redux
 #   AUTOPRESS="..."   3DS: scripted presses, as the PC's --press ("CROSS@2500,UP@2900+3")
@@ -217,6 +218,29 @@ $(GEN)/evt_ops.h: tools/gen_evt_ops.py $(DECOMP)/tools/evtscript/optab.json
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/gen_evt_ops.py $(DECOMP)/tools/evtscript/optab.json $@
 $(foreach t,3ds pc,$(BUILD)/$(t)/port/game/field_map.o): $(GEN)/evt_ops.h
+
+# CIA (installed to the HOME Menu): build/ff9.cia is the program only (it reads the disc pack from the card as the 3dsx
+# does); build/ff9-full.cia also holds your discs (personal use only: never distribute it). Needs makerom and
+# bannertool in build/tools (Project_CTR makerom, Epicpkmn11 bannertool releases; not part of devkitPro).
+MAKEROM    := $(BUILD)/tools/makerom/makerom
+BANNERTOOL := $(BUILD)/tools/bannertool/linux-x86_64/bannertool
+$(BUILD)/banner.png $(BUILD)/banner.wav &: tools/make_banner.py
+	@$(PYTHON) tools/make_banner.py $(BUILD)/banner.png $(BUILD)/banner.wav
+$(BUILD)/ff9.bnr: $(BUILD)/banner.png $(BUILD)/banner.wav
+	@$(BANNERTOOL) makebanner -i $(BUILD)/banner.png -a $(BUILD)/banner.wav -o $@ >/dev/null
+$(BUILD)/ff9.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr config/ff9.rsf
+	@echo "CIA  $@"
+	@mkdir -p $(BUILD)/romfs-none
+	@$(MAKEROM) -f cia -o $@ -elf $< -rsf config/ff9.rsf -icon $(BUILD)/ff9.smdh -banner $(BUILD)/ff9.bnr -target t \
+		-DAPP_ROMFS=$(BUILD)/romfs-none
+$(BUILD)/ff9-full.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr config/ff9.rsf $(BUILD)/discs.bin
+	@echo "CIA  $@ (with the disc pack)"
+	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin
+	@$(MAKEROM) -f cia -o $@ -elf $< -rsf config/ff9.rsf -icon $(BUILD)/ff9.smdh -banner $(BUILD)/ff9.bnr -target t \
+		-DAPP_ROMFS=$(BUILD)/romfs
+cia: $(BUILD)/ff9.cia
+cia-full: $(BUILD)/ff9-full.cia
+.PHONY: cia cia-full 3ds-full
 
 $(BUILD)/discs.bin: tools/pack_discs.py
 	@echo "PACK $@"
