@@ -260,6 +260,73 @@ static int empty_panel(void) {
     return 1;
 }
 
+/* An item that isn't equipment (a potion, a Phoenix Down, a tent...): its icon and name, how many are held, its
+ * description (the screen's own help text), and the party's HP and MP with bars, what one looks at before using it.
+ * help: the description, NULL if none. */
+static void hpmp_bar(int x, int y, int w, int cur, int max, u32 bgr) {
+    u32 *p = (u32 *)g_primPtr;
+    int f = max > 0 ? cur * (w - 2) / max : 0;
+    if (f > w - 2) f = w - 2;
+    p[0] = 3u << 24; p[1] = 0x60302020u; p[2] = (u32)x | (u32)y << 16; p[3] = (u32)w | (u32)4 << 16;
+    addPrim(&g_ot[2], p);
+    p += 4;
+    if (f > 0) {
+        p[0] = 3u << 24; p[1] = 0x60000000u | bgr; p[2] = (u32)(x + 1) | (u32)(y + 1) << 16; p[3] = (u32)f | (u32)2 << 16;
+        addPrim(&g_ot[2], p);
+        p += 4;
+    }
+    g_primPtr = (u8 *)p;
+}
+static int consumable_view(int id, u8 *help) {
+    static RECT box = {8, 8, 384, 224}, party = {16, 92, 368, 132};
+    GameData *g = g_gameState->gameData;
+    u8 a[16];
+    ui_drawItemIcon(22, 20, 2, id, 1);
+    text_drawBlock(42, 20, 2, g_itemNames + g_itemTable[id].name, 0);
+    int held = 0;
+    for (int s = 0; s < 256; s++)
+        if (g->items.slots[s].id == id) held += g->items.slots[s].count;
+    ui_drawLabel(300, 22, 2, (s32) "HELD", 0);
+    text_formatNumber(held, a, 2, 1);
+    ui_drawDigits(334, 21, 2, a, 0);
+    if (help && ram_ok(help, 1)) text_drawBlock(22, 44, 2, help, 0);
+    for (int i = 0; i < 4; i++) { /* (the party: who needs it) */
+        Character *c = g->party[i];
+        if (!ram_ok(c, sizeof *c)) continue;
+        int y = party.y + 6 + i * 31;
+        face(i, chr_portrait(c), party.x + 6, y, 28);
+        text_drawBlock(party.x + 40, y + 2, 2, c->name, 0);
+        ui_drawLabel(party.x + 130, y + 4, 2, (s32) "HP", 0);
+        text_formatNumber(c->hp, a, 4, 1);
+        a[4] = '/';
+        text_formatNumber(c->maxHp, a + 5, -1, 1);
+        ui_drawSmallDigits(party.x + 148, y + 4, 2, a, c->hp <= c->maxHp / 6 ? 4 : 0);
+        hpmp_bar(party.x + 130, y + 16, 100, c->hp, c->maxHp, 0x40C040);
+        ui_drawLabel(party.x + 250, y + 4, 2, (s32) "MP", 0);
+        text_formatNumber(c->mp, a, 3, 1);
+        a[3] = '/';
+        text_formatNumber(c->maxMp, a + 4, -1, 1);
+        ui_drawSmallDigits(party.x + 268, y + 4, 2, a, 0);
+        hpmp_bar(party.x + 250, y + 16, 100, c->mp, c->maxMp, 0xE09040);
+    }
+    win_drawBox(&party, 4, 2);
+    win_drawBox(&box, 5, 2);
+    return 1;
+}
+/* any item for the top screen: equipment as item_view, the rest as consumable_view; help: its description */
+int port_item_panel(int id, u8 *help) {
+    if (id < 0 || id >= 0xFF) return empty_panel();
+    return item_view(id) || consumable_view(id, help);
+}
+/* a key item: its name and description, large */
+int port_key_item_panel(u8 *name, u8 *help) {
+    static RECT box = {8, 8, 384, 224};
+    if (name && ram_ok(name, 1)) text_drawBlock(22, 20, 2, name, 0);
+    if (help && ram_ok(help, 1)) text_drawBlock(22, 48, 2, help, 0);
+    win_drawBox(&box, 5, 2);
+    return 1;
+}
+
 /* field_hud.c's top-screen frame while a menu is up: 1 if drawn */
 /* A member at a glance, beside their model (Equip and Status, model_view.c on the left): the abilities their gear is
  * teaching them (each equipped item's, once each), the AP gathered towards each with a bar, mastered ones dim. What
@@ -349,13 +416,9 @@ int port_menu_top_draw(void) {
             return 0;
         }
         switch (g_menuScreen.screen) {
-        case 1: { /* Item */
-            const u8 *st = s_menuItem;
-            if (st[1] != 2 || st[0] == 2) return 0; /* (the list, not Key items) */
-            MenuList *L = (MenuList *)(st + 0xC);
-            int slot = (L->top + L->cursor) * 2 + L->col;
-            if (slot < 0 || slot > 255 || !g->items.slots[slot].count) return empty_panel();
-            return item_view(g->items.slots[slot].id) || empty_panel();
+        case 1: { /* Item: the item or key item under the cursor (item_top.c) */
+            int port_item_top(void);
+            return port_item_top();
         }
         case 2: return ability_view(s_menuAbility) || (s_menuAbility[1] == 2 && empty_panel());
         case 3: { /* the slot's candidates, or the member's model turning in what they wear (model_view.c) and what
@@ -424,8 +487,8 @@ int port_menu_top_draw(void) {
             int slot = (L->top + L->cursor) * 2 + L->col;
             if (slot >= 0 && slot < 256 && g->items.slots[slot].count) id = g->items.slots[slot].id;
         }
-        (void)help;
-        return item_view(id) || empty_panel();
+        if (id < 0) return empty_panel();
+        return port_item_panel(id, help + g_itemTable[id].help); /* (the shop's help text: the item's description) */
     }
     default: return 0;
     }
