@@ -137,6 +137,7 @@ unsigned port_hud_drive(void) {
 __attribute__((weak)) int port_world_tap(int x, int y) { (void)x; (void)y; return 0; }
 int port_name_tap(int x, int y, unsigned *seq, int max);
 static int title_tap(int x, int y);
+static int world_choices; /* the world map's question up as buttons (port_bottom_hud) */
 static int boot_live; /* the boot card shown (port_bottom_hud) */
 static RECT r_disc[2];
 int port_disc_prompt_live(void);
@@ -167,7 +168,7 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         if (!n) n = port_list_tap(x, y - oy, seq);
         if (n) return n;
     }
-    if (g_gameState && g_gameState->mode == 3 && !port_menu_state()) return port_world_tap(x, y - oy) ? -1 : 0; /* (zoom, names) */
+    if (g_gameState && g_gameState->mode == 3 && !port_menu_state() && !world_choices) return port_world_tap(x, y - oy) ? -1 : 0; /* (zoom, names) */
     if (!shown) return 0;
     y -= oy;
     if (shown_battle) return port_battle_tap(x, y, seq, max);
@@ -703,7 +704,26 @@ extern int port_battle_hud_on;
 static void top_hud(void);
 __attribute__((weak)) void ctr_flat_background(int on) { (void)on; } /* (the 3DS renderer's: stereo depth) */
 /* the Config screen's overlay as a list of its own over the menu's frame (as the battle's over its UI) */
-static void config_overlay(void) {
+static void overlay(void (*fn)(void));
+static void config_overlay(void) { overlay(draw_config_overlay); }
+/* the world map's questions (the moogle's, the chocobo's menu, the airship's Go to and navigation): the choices as
+ * large buttons over the bottom screen's map, as a field's (the question stays on top) */
+static void draw_world_choices(void) {
+    static RECT shade = {16, 40, 288, 152};
+    draw_choices();
+    win_drawBox(&shade, 4, 2); /* (behind the buttons: the map doesn't show through) */
+}
+/* world_navi.c, as it draws the bottom screen's map into the world's own packets: the question's choices too, if one
+ * is open (1: drawn) */
+int port_world_choices(void) {
+    world_choices = 0;
+    if (port_menu_state() || !g_gameState->gameData->font || !choice_open()) return 0;
+    draw_world_choices();
+    world_choices = n_choices > 0;
+    return world_choices;
+}
+/* a list of the port's own over the frame the game drew for the bottom screen (as the battle's over its UI) */
+static void overlay(void (*fn)(void)) {
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
     if (d.rgb24) return;
@@ -718,7 +738,7 @@ static void config_overlay(void) {
     addPrim(&hud_ot[OTN - 1], p);
     g_ot = hud_ot;
     g_primPtr = (u8 *)(p + 4);
-    draw_config_overlay();
+    fn();
     g_ot = saved_ot;
     g_primPtr = saved_prim;
     Gp0State saved_gp0 = gp0_state;
@@ -745,6 +765,7 @@ void port_bottom_hud(void) {
     int boot = g_gameState->mode == 0 && !title && !port_menu_state(); /* (before the title: boot_live) */
     boot_live = boot;
     if (!title) title_opts = 0;
+    if (world && world_choices) shown = 1; /* (the world map's question, drawn with its map: port_world_choices) */
     if (g_gameState->mode != 1 && !battle && !world && !title && !boot) return;
     if (!g_gameState->gameData->font) return; /* (the common images aren't loaded yet) */
     PsxDisplayInfo d;

@@ -120,6 +120,20 @@ void o0c_wm_naviDraw(void) {
          * (its packets a range of their own: not zoomed) */
         int px, py;
         const u8 *name = port_world_place_name(&px, &py);
+        { /* a question open (the moogle's, the chocobo's menu, the airship's): its choices as buttons over the map,
+           * in the world's own frame like the name below (field_hud.c draws them) */
+            int port_world_choices(void);
+            u32 *saved_ot = g_ot;
+            u8 *saved_prim = g_primPtr;
+            g_ot = (u32 *)g_worldOt[*g_worldBufIndex];
+            g_primPtr = (u8 *)g_worldPrimPtr;
+            s32 lo2 = g_worldPrimPtr;
+            int drew = port_world_choices();
+            g_worldPrimPtr = (s32)g_primPtr;
+            g_ot = saved_ot;
+            g_primPtr = saved_prim;
+            if (drew) port_bottom_packets((const void *)lo2, (const void *)g_worldPrimPtr);
+        }
         if (name) {
             u32 *saved_ot = g_ot;
             u8 *saved_prim = g_primPtr;
