@@ -972,7 +972,61 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
 
 /* The texture for a textured primitive whose texels span [u0,u1]x[v0,v1] (inclusive, 0..255; u1 < u0 when it
  * wraps), with its blocks current; *flags = the union of their texel kinds. */
+/* A 15-bit texture read from VRAM the GPU has drawn (the field-to-battle swirl samples the frame it draws into): the
+ * page copied on the GPU from the mirror into page_tex, once per frame and page, instead of the mirror read back to
+ * the CPU and converted (that readback every frame held the transition at ~6 s per 120 frames on a 3DS). Alpha is
+ * kept 1: the mirror's alpha is the PS1's mask bit, not transparency (a texel 0 is drawn black, not skipped). */
+static C3D_Tex page_tex;
+static C3D_RenderTarget *page_rt;
+static int page_x = -1, page_y = -1;
+static unsigned page_serial;
+static int gpu_owned(int x0, int y0, int x1, int y1) {
+    int cx0, cy0, cx1, cy1;
+    if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return 0;
+    for (int cy = cy0; cy < cy1; cy++)
+        for (int cx = cx0; cx < cx1; cx++)
+            if (!shadow_ok[cy][cx]) return 1;
+    return 0;
+}
+static void submit(void);
+static C3D_Tex *mirror_page(int tx, int ty) {
+    if (!page_rt) {
+        if (!C3D_TexInitVRAM(&page_tex, 256, 256, GPU_RGBA5551)) return NULL;
+        if (!(page_rt = C3D_RenderTargetCreateFromTex(&page_tex, GPU_TEXFACE_2D, 0, -1))) return NULL;
+        C3D_TexSetFilter(&page_tex, GPU_NEAREST, GPU_NEAREST);
+    }
+    if (page_x == tx && page_y == ty && page_serial == frame_serial) return &page_tex;
+    int cx0, cy0, cx1, cy1; /* (the mirror current there first: cells the CPU wrote since) */
+    if (cell_range(tx, ty, tx + 256, ty + 256, &cx0, &cy0, &cx1, &cy1))
+        for (int cy = cy0; cy < cy1; cy++)
+            for (int cx = cx0; cx < cx1; cx++)
+                if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
+    submit(); /* (what was drawn before this primitive, drawn first) */
+    frame_begin();
+    C3D_RenderTargetClear(page_rt, C3D_CLEAR_ALL, 0x000000FF, 0);
+    C3D_FrameDrawOn(page_rt);
+    set_proj_ortho(256, 256, 0.0f);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
+    set_tev(K_BLIT);
+    set_blend(NO_BLEND, 0);
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_RED | GPU_WRITE_GREEN | GPU_WRITE_BLUE); /* (alpha stays 1) */
+    C3D_TexBind(0, &mirror_tex[0]);
+    set_texscale(&mirror_tex[0]);
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    Vtx *v = alloc_vtx(6);
+    quad(v, 0, 0, 256, 256, tx, ty, tx + 256, ty + 256, 0xFFFFFFFF);
+    C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    page_x = tx, page_y = ty, page_serial = frame_serial;
+    return &page_tex;
+}
+
 static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
+    if (m->depth == 2 && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
+        gpu_owned(m->tx + u0, m->ty + v0, m->tx + u1 + 1, m->ty + v1 + 1)) {
+        C3D_Tex *t = mirror_page(m->tx, m->ty);
+        if (t) { *flags = 0; return t; }
+    }
     u32 key = (u32)m->depth << 30 | (u32)(m->tx >> 6) << 26 | (u32)(m->ty >> 8) << 25 |
               (m->depth < 2 ? (u32)(m->clut_x >> 4) << 9 | (u32)m->clut_y : 0) | 1u << 24;
     u32 twin = (gp0_state.twin_mask_x / 8) | (gp0_state.twin_mask_y / 8) << 5 | (gp0_state.twin_off_x / 8) << 10 |
