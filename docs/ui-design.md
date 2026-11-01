@@ -75,6 +75,9 @@ with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
   cursor follows; physical controls drive the same state. **[done: ENEMY / PARTY buttons (party with HP), ALL / ONE,
   BACK, for both kinds of targeting; a tap targets that unit and confirms at once]**
 - Wait mode: opening a sub-list pauses ATB exactly as on PS1; no timing changes. **[done: game logic unchanged]**
+- **Rewards**: the PS1's reward windows on the bottom (A advances them as before); the top shows all of it at once: a
+  card per member (portrait, level, an EXP bar to the next level, EXP and AP gained, LEVEL UP, abilities learned) and
+  the gil, items and card won, read from the rewards screen's own state as it counts. **[done: port/game/rewards_top.c]**
 
 ## Main menu
 - **Bottom**: the PS1 menu with touch zones. **[partial: 1:1; direct taps on the main menu (menu_touch.c), every list

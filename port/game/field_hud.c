@@ -737,6 +737,8 @@ static void big_portrait(int slot, Character *c, int x, int y, int size) {
     ctr_hud_draw_top(slot, x, y, 32, 32, size, size);
 }
 
+void port_big_portrait(int slot, Character *c, int x, int y, int size) { big_portrait(slot, c, x, y, size); } /* (rewards_top.c) */
+
 static void stat(int x, int y, const char *label, int value) {
     u8 a[12];
     ui_drawLabel(x, y, 2, (s32)label, 0);
@@ -820,6 +822,8 @@ static int top_draw(void) {
     if (g_gameState->mode == 2 && !port_menu_state()) return port_battle_help_top(); /* (battle_ui.c) */
     int port_tm_top_draw(void);
     if (g_gameState->mode == GS_MODE_TETRA_MASTER) return port_tm_top_draw(); /* (tm_ui.c) */
+    int port_rewards_top(void);
+    if (g_gameState->mode == 8) return port_rewards_top(); /* (the battle's rewards: rewards_top.c) */
     if (port_menu_state() != 2 && !(g_menu.open && g_menu.type)) return 0;
     (void)member_sheet;
     (void)party_overview;
