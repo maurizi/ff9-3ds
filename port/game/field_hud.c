@@ -68,6 +68,19 @@ static int cards_pending; /* frames left to wait for the main menu to open onto 
 
 /* an Active Time Event can be watched now (the field script's byte b[0xEE]: decomp-requests R30). (By symbol: a PS1
  * address isn't one in port code; an emulator reads unmapped memory as 0, a 3DS faults.) */
+/* the Moogle the player would talk to (evt_findNearestObject's talk search, as Cross: ff9-decomp R34), NULL none */
+static EvtObject *mognet;
+static EvtObject *moogle_near(void) {
+    if (!ram_ok(g_evtState, 0x20) || !g_evtState->controlEnabled) return NULL;
+    EvtObject *pl = NULL;
+    int guard = 0;
+    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next)
+        if (ram_ok(nd->obj, sizeof(EvtObject)) && nd->obj->kind == 4 && nd->obj->uid == g_evtState->playerUid) pl = nd->obj;
+    if (!pl) return NULL;
+    EvtObject *o = evt_findNearestObject(pl, 4, NULL);
+    return ram_ok(o, sizeof *o) && o->kind == 4 && (o->modelId == 220 || o->modelId == 129) ? o : NULL;
+}
+
 static int ate_available(void) {
     return g_evtGlobalVars.b[0xEE] == 1;
 }
@@ -86,6 +99,16 @@ static void cards_step(void) {
 }
 static int n_choices, choice_first; /* the question's choices shown this frame */
 static RECT r_choice[8];
+
+/* A choice the script answers itself (the Moogle's menus, ff9-decomp R34: it polls msg_getPadPressed): the tap's
+ * Cross goes into g_msgPadPressed after msg_update and before the objects run (evt_updateObjects, wrapped:
+ * config/renames.txt). */
+static int choice_cross;
+s32 evt_updateObjects_game(void);
+s32 evt_updateObjects(void) {
+    if (choice_cross) choice_cross = 0, g_msgPadPressed |= 0x20000;
+    return evt_updateObjects_game();
+}
 
 /* the main menu opened as the field's triangle opens it (fld_main.c), directly; 0 if the field allows none now */
 static int field_open_menu(void) {
@@ -138,8 +161,13 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
             MsgWindow *w = NULL;
             for (int k = 0; k < 10; k++)
                 if (g_msgWindows[k].open && g_msgWindows[k].id == g_msgChoiceWindow) w = &g_msgWindows[k];
-            if (!w || g_msgChoiceLine < 0 || w->waitFrames != MSGW_WAIT_INPUT || (w->flags & MSGW_NO_INPUT)) return -1;
+            if (!w || g_msgChoiceLine < 0) return -1;
             g_msgChoice = choice_first + i;
+            if (w->waitFrames != MSGW_WAIT_INPUT || (w->flags & MSGW_NO_INPUT)) { /* (a script polls Cross itself:
+                                                                                      evt_updateObjects, below) */
+                choice_cross = 1;
+                return -1;
+            }
             w->waitFrames = 1;
             g_gameState->gameData->soundHook(SND_SE_PLAY, SE_CURSOR, 0x800000, SND_PAN_CENTER, SND_VOL_MAX);
             return -1;
@@ -151,6 +179,7 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         if (field_open_menu()) cards_pending = 90; /* (the menu, then the card screen: cards_step) */
         return -1;
     }
+    if (mognet && !ate_shown && inside(&r_ate, x, y)) { evt_callObjectFunc(mognet, 1, 3, 0); return -1; } /* (talk) */
     if (ate_shown && inside(&r_ate, x, y) && max > 0) { seq[0] = 0x0001; return 1; } /* select */
     if (inside(&r_log, x, y)) { log_on = !log_on; log_scroll = 0; return -1; }
     if (log_on && inside(&r_logbox, x, y)) { /* (the upper half: older, the lower: newer) */
@@ -318,14 +347,26 @@ static int draw_choices(void) {
     int n = g_msgChoiceCount > 8 ? 8 : g_msgChoiceCount;
     int h = n > 4 ? 24 : 32, gap = n > 4 ? 3 : 6, y0 = 34 + (152 - (n * h + (n - 1) * gap)) / 2;
     static u8 lines[8][96];
-    for (int i = 0; i < n; i++) {
-        t = (u8 *)msg_plain(t, lines[i], sizeof lines[i], TEXT_NEWLINE);
+    /* (logical rows the game hides, g_msgChoiceEnabled bit k clear, get no button: the Moogle's Mogshop where there
+     * is none) */
+    u32 shown = g_msgChoiceEnabled ? g_msgChoiceEnabled : ~0u;
+    for (int i = 0, k = 0; i < n && *t != TEXT_END && k < 32; k++) {
+        u8 raw[160]; /* (the line to its newline, ended at F9 09: the last choice runs into the window's codes) */
+        int r_n = 0;
+        while (*t != TEXT_END && *t != TEXT_NEWLINE && r_n < 158) {
+            if (t[0] == TEXT_ESC && t[1] == 0x09) { while (*t != TEXT_END && *t != TEXT_NEWLINE) t++; break; }
+            raw[r_n++] = *t++;
+        }
+        raw[r_n] = TEXT_END;
+        msg_plain(raw, lines[i], sizeof lines[i], TEXT_NEWLINE);
         if (*t == TEXT_NEWLINE) t++;
+        if (!(shown >> k & 1)) continue;
         RECT *r = &r_choice[i];
         r->x = 24; r->w = 272; r->h = h; r->y = y0 + i * (h + gap);
         int sel = i == g_msgChoice - 0;
         text_drawBlock(r->x + 12, r->y + (h - 12) / 2, 2, lines[i], sel ? 0 : 2);
         win_drawBox(r, 3, 2);
+        i++;
     }
     n_choices = n;
     choice_first = 0;
@@ -409,6 +450,15 @@ static void draw(void) {
         button(&r_log, log_on ? mapl : logl, NULL);
     }
     ate_shown = ate_available();
+    mognet = ate_shown ? NULL : moogle_near();
+    if (mognet) { /* (at a Moogle: its menu, as talking to it; the letters carried) */
+        u8 n[4] = {0};
+        int carried = 0;
+        for (int k = 0; k < 3; k++) carried += g_evtGlobalVars.b[0x40A + 4 * k] != 0;
+        if (carried) text_formatNumber(carried, n, 1, 1);
+        static const u8 mognetl[] = "MOGNET";
+        button(&r_ate, mognetl, carried ? n : NULL);
+    }
     if (ate_shown) { /* (pulsing, as the PS1's prompt) */
         static const u8 ate[] = "ATE";
         static int t;

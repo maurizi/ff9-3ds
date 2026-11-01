@@ -35,3 +35,5 @@ src/ovl_0c/menu_main o0c_menuMain_inputMember o0c_menuMain_inputMember_game
 src/ovl_0c/menu_main o0c_menuMain_inputOrder o0c_menuMain_inputOrder_game
 # The menus' lists by touch, directly (port/game/list_touch.c): where each list is drawn.
 src/main/window win_drawListBox win_drawListBox_game
+# A tapped choice the script polls Cross for (the Moogle's menus): Cross added before the objects run (field_hud.c).
+src/main/event evt_updateObjects evt_updateObjects_game

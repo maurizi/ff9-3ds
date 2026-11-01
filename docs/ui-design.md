@@ -32,7 +32,7 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
     menu's file by the port)
   - **Large edge buttons** (≥ 40×32): **Menu** (also △) **[done]**; **ATE**, pulsing when an Active Time Event is
     available (Select stays Select) **[done: the script's flag (R30); not yet seen with a real ATE]**; **Cards** with the collection count, opening the card screen **[done]**; **Mognet**
-    with unread letters, enabled at a moogle **[todo]**; **Chocograph / hints** when relevant **[todo]**.
+    with the letters carried, at a moogle **[done: shown when the Moogle is what Cross would talk to; a tap talks to it]**; **Chocograph / hints** when relevant **[todo]**.
   - Nothing here is needed while walking. The party and MENU show only while the game allows the menu (the opening
     and cutscene stretches may hold a placeholder party); CARDS once the card game has been met. **[done]**
   - The map is the walkmesh area connected to where the player stands (other parts are other screens), scaled to
@@ -112,7 +112,9 @@ with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
 - D-pad and A still place cards. **[done]**
 
 ## Mognet
-- **Bottom**: letters and moogles, a Send button. **[todo]**  **Top**: the open letter. **[todo]**
+- Mognet is the field's dialogue (ff9-decomp R34): the Moogle's menu, Mognet's menu, the letter list and the letter
+  are message windows, so the letter reads on the top screen in the game's window and every choice is a bottom-screen
+  button acting directly (a choice the script polls gets its Cross at the frame's object update). **[done]**
 
 ## FMVs
 - **Top**: the video at the screen plane, realtime overlays with it. **[done]**
