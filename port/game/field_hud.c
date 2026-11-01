@@ -139,6 +139,7 @@ int port_name_tap(int x, int y, unsigned *seq, int max);
 static int title_tap(int x, int y);
 static int world_choices; /* the world map's question up as buttons (port_bottom_hud) */
 static int boot_live; /* the boot card shown (port_bottom_hud) */
+static int gameover_live; /* the game over card shown */
 static RECT r_disc[2];
 int port_disc_prompt_live(void);
 void port_disc_prompt_set(int c);
@@ -148,6 +149,7 @@ int port_title_live(void);
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (g_gameState && g_gameState->mode == 0 && port_title_live()) return title_tap(x, y) ? -1 : 0; /* (title_ui.c) */
     if (g_gameState && g_gameState->mode == 0 && boot_live && max > 0) { seq[0] = 0x0008; return 1; } /* (START) */
+    if (g_gameState && g_gameState->mode == 7 && gameover_live && max > 0) { seq[0] = 0x4000; return 1; } /* (Cross) */
     if (g_gameState && config_open() && config_overlay_tap(x, y)) return -1; /* (the Config screen's 3DS OPTIONS) */
     { int n = port_name_tap(x, y - oy, seq, max); if (n) return n; } /* (name entry: port/game/name_touch.c) */
     { int port_menu_tap(int, int); if (port_menu_tap(x, y - oy)) return -1; } /* (main menu: menu_touch.c) */
@@ -403,6 +405,19 @@ static void draw_boot(void) {
     w = ui_measureLabel((u8 *)tap);
     ui_drawLabel(r_boot.x + (r_boot.w - w) / 2, r_boot.y + 70, 2, (s32)tap, 2);
     win_drawBox(&r_boot, 3, 2);
+}
+
+/* game over (ovl_65 gameover_main: its picture, A goes back to the title) */
+static void draw_gameover(void) {
+    static RECT box = {40, 70, 240, 100};
+    static const char a[] = "GAME OVER", b[] = "TOUCH THE SCREEN", c[] = "TO RETURN TO THE TITLE";
+    int w = ui_measureLabel((u8 *)a);
+    ui_drawLabel(box.x + (box.w - w) / 2, box.y + 22, 2, (s32)a, 0);
+    w = ui_measureLabel((u8 *)b);
+    ui_drawLabel(box.x + (box.w - w) / 2, box.y + 52, 2, (s32)b, (VSync(-1) >> 5) & 1 ? 2 : 0);
+    w = ui_measureLabel((u8 *)c);
+    ui_drawLabel(box.x + (box.w - w) / 2, box.y + 68, 2, (s32)c, 2);
+    win_drawBox(&box, 3, 2);
 }
 
 static void draw_title(void) {
@@ -785,16 +800,18 @@ void port_bottom_hud(void) {
     int title = g_gameState->mode == 0 && port_title_live();
     int boot = g_gameState->mode == 0 && !title && !port_menu_state(); /* (before the title: boot_live) */
     boot_live = boot;
+    int gameover = g_gameState->mode == 7;
+    gameover_live = gameover;
     if (!title) title_opts = 0;
     if (world && world_choices) shown = 1; /* (the world map's question, drawn with its map: port_world_choices) */
-    if (g_gameState->mode != 1 && !battle && !world && !title && !boot) return;
+    if (g_gameState->mode != 1 && !battle && !world && !title && !boot && !gameover) return;
     if (!g_gameState->gameData->font) return; /* (the common images aren't loaded yet) */
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
-    if (!boot && (d.rgb24 || d.w < 256)) return; /* (a movie) */
+    if (!boot && !gameover && (d.rgb24 || d.w < 256)) return; /* (a movie) */
     /* (a cutscene or movie field: nothing to show yet, but a question the game asks there (the end of disc 1's "save your
      * game?") still gets its choices as buttons, alone) */
-    int ctl = battle || world || title || boot || had_control();
+    int ctl = battle || world || title || boot || gameover || had_control();
     if (!ctl && !choice_open()) return;
     choices_only = !ctl;
 
@@ -815,6 +832,7 @@ void port_bottom_hud(void) {
     else if (world) drew = 0; /* (the world map's own: world_navi.c) */
     else if (title) draw_title();
     else if (boot) draw_boot();
+    else if (gameover) draw_gameover();
     else draw();
     unsigned used = (unsigned)(g_primPtr - (u8 *)hud_mem);
     g_ot = saved_ot;
