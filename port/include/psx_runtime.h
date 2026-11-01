@@ -41,6 +41,8 @@ void port_scenario_validate_return(void);
 void port_scenario_battle_ready(void);
 void port_scenario_field_entering(int field);
 void port_scenario_field_ready(int field);
+void port_field_entering(int field); /* (around fld_load: port/game/field_hud.c) */
+void port_field_ready(int field);
 int port_scenario_seed(int ordinary_seed);
 
 /* Print to the debug console. */

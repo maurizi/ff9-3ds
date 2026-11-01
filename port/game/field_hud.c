@@ -458,13 +458,29 @@ static void button(RECT *r, const u8 *label, const u8 *count) {
 
 u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, int bh);
 
+/* A field's data current: from its fld_load's end until the game leaves field mode (a battle, the world map) or loads
+ * another. Outside it the location name points into event data being replaced and the walkmesh is half-loaded. */
+void port_scenario_field_entering(int field);
+void port_scenario_field_ready(int field);
+static int field_ready;
+void port_field_entering(int field) {
+    field_ready = 0;
+    port_scenario_field_entering(field);
+}
+void port_field_ready(int field) {
+    field_ready = 1;
+    port_scenario_field_ready(field);
+}
+int port_field_current(void) { return field_ready; }
+
 static void draw(void) {
     static const u8 menu[] = "MENU", cards[] = "CARDS", party[] = "PARTY", map[] = "MAP", gil_suffix[] = "G";
     GameData *g = g_gameState->gameData;
     u8 buf[16];
 
     /* the header: where, and since when and with what */
-    if (ram_ok(g->locationName, 1) && *g->locationName != 0xFF) text_drawBlock(r_head.x + 8, r_head.y + 6, 2, g->locationName, 0);
+    if ((field_ready || g_gameState->mode != 1) && ram_ok(g->locationName, 1) && *g->locationName != 0xFF)
+        text_drawBlock(r_head.x + 8, r_head.y + 6, 2, g->locationName, 0);
     ui_drawSprite(r_head.x + 178, r_head.y + 8, 2, 0xB1, 0);
     ui_drawSmallDigits(r_head.x + 191, r_head.y + 9, 2, buf, text_formatTime(game_getPlayTime(), buf, 1));
     ui_drawSprite(r_head.x + 236, r_head.y + 8, 2, 0xB2, 0);
@@ -476,8 +492,9 @@ static void draw(void) {
     if (!draw_choices() && log_on) opts_on ? draw_options() : draw_log();
     else if (!n_choices) {
         ui_drawLabel(r_map.x + 8, r_map.y - 3, 2, (s32)map, 0);
-        g_primPtr = port_field_map_draw(&g_ot[2], g_primPtr, (u8 *)(hud_mem + OTN + BUF_WORDS) - 64, r_map.x + 3,
-                                        r_map.y + 3, r_map.w - 6, r_map.h - 6);
+        if (field_ready || g_gameState->mode != 1)
+            g_primPtr = port_field_map_draw(&g_ot[2], g_primPtr, (u8 *)(hud_mem + OTN + BUF_WORDS) - 64, r_map.x + 3,
+                                            r_map.y + 3, r_map.w - 6, r_map.h - 6);
         win_drawBox(&r_map, 3, 2);
         if (menu_allowed()) {
             ui_drawLabel(r_party.x + 8, r_party.y - 3, 2, (s32)party, 0);
@@ -529,6 +546,7 @@ void port_bottom_hud(void) {
     if (!g_gameState || !g_gameState->gameData || port_menu_state()) return;
     int battle = g_gameState->mode == 2, world = g_gameState->mode == 3;
     if (!battle) port_battle_hud_on = 0;
+    if (battle || world) field_ready = 0; /* (the field is reloaded after) */
     if (g_gameState->mode != 1 && !battle && !world) return;
     if (!g_gameState->gameData->font) return; /* (the common images aren't loaded yet) */
     PsxDisplayInfo d;

@@ -9,7 +9,7 @@ src/main/main.c | game_initData(); | game_initData(); port_scenario_bootstrap();
 src/main/main.c | game_loadModeOverlay(GS_MODE_FIELD); | port_scenario_validate_return(); game_loadModeOverlay(GS_MODE_FIELD); | 1
 src/main/evt_main.c | rand_init(GetRCnt(2)); | rand_init(port_scenario_seed(GetRCnt(2))); | 1
 # Test-only field loader observations; ordinary play returns immediately from the hooks.
-src/ovl_0a/fld_main.c | fld_load(arg0); | port_scenario_field_entering(arg0); fld_load(arg0); port_scenario_field_ready(arg0); | 1
+src/ovl_0a/fld_main.c | fld_load(arg0); | port_field_entering(arg0); fld_load(arg0); port_field_ready(arg0); | 1
 # Blocking loader polls must service the virtual drive between sector events.
 src/main/cd.c | return g_cdLoad.state; | psx_cd_pump(); return g_cdLoad.state; | 1
 src/main/preload.c | while (preload_poll() > 0) { | while (preload_poll() > 0) { psx_cd_pump(); | 2
