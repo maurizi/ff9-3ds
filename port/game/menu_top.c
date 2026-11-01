@@ -34,6 +34,7 @@ static int ram_ok(const void *p, unsigned size) { /* (PS1 RAM and the overlays' 
 }
 /* the overlays' statics (their layouts: the decomp session's offsets) */
 extern u8 s_menuItem[], s_menuItemHelp[], s_menuEquip[], s_menuEquipItemHelp[], s_menuAbility[], s_menuSave[];
+extern u8 s_menuParty[];
 extern u8 s_shop[], s_shopBuy[], s_shopSell[], s_shopSynth[], s_shopItemHelp[];
 /* The ability names are the Ability screen's (ovl_33, file 0/0x33 read to 0x801EDF00): its action table (0x10-byte
  * entries, the name offset at +0xE) at 0x801F34EC, action names at 0x801F40EC, support names at 0x801F6540. Shops run
@@ -284,6 +285,16 @@ int port_menu_top_draw(void) {
         }
         default: return 0;
         }
+    case 3: { /* party select: whoever the cursor is on, turning in their gear (model_view.c) */
+        if (g_menu.state != 3) return 0;
+        const u8 *ps = s_menuParty; /* (ovl_3b.h PartySelect: mode, size, cursor[2] {idx, row}, ..., slots[2][8] at 10) */
+        int mode = ps[0] & 1, idx = ps[4 + mode * 2], row = ps[5 + mode * 2] & 1;
+        int id = ps[10 + row * 8 + (idx & 7)];
+        if (id >= 9) return 0;
+        void port_model_view(Character *c, float cx, float cy, float height);
+        port_model_view(&g->characters[id], 200, 226, 160);
+        return 0;
+    }
     case 2: { /* a shop */
         const u8 *sh = s_shop;
         const u8 *help = s_shopItemHelp;

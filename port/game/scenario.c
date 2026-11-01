@@ -189,6 +189,24 @@ void port_scenario_field_ready(int field) {
             scenario.tetra=-1;
         }
         if(scenario.menu>0 && scenario.kind==1) {
+            if(scenario.menu-1==3) { /* (party select: its request, as event op B2 builds it: the party, the rest in reserve) */
+                static u8 req[24] __attribute__((aligned(4)));
+                __builtin_memset(req,0xFF,sizeof req);
+                req[0]=(u8)(scenario.menu_arg ? scenario.menu_arg : 4);
+                req[1]=req[2]=req[3]=0;
+                int n=0,r=0;
+                for(int i=0;i<4;i++) {
+                    Character *c=g_gameState->gameData->party[i];
+                    if(c) req[4+n++]=(u8)(c-g_gameState->gameData->characters);
+                }
+                for(int id=0;id<9 && r<8;id++) {
+                    int inp=0;
+                    for(int k=0;k<n;k++) inp|=req[4+k]==id;
+                    if(!inp) req[8+r++]=(u8)id;
+                }
+                __builtin_memset(req+16,0,8);
+                menu_open(3,(s32)req);
+            } else
             menu_open(scenario.menu-1,scenario.menu_arg);
             port_log("scenario: menu %d,%d\n",scenario.menu-1,scenario.menu_arg);
             scenario.menu=-1;
