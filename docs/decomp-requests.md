@@ -378,6 +378,13 @@ Field, battle and world map model formats in RAM (mesh, skeleton, animation, fac
 path (bone matrices, camera, projection, the per-face emitters), how to load and pose a party member's model outside
 battle for the Equip view, and how model lighting/colour is computed. Asked of the decomp session.
 
+### R36. Story states for an ATE and the end-of-disc-1 disc change (2026-11-01)
+For scenario fixtures: a field id with the story value and global vars under which an Active Time Event is offered
+soon after entering (the ATE button's first real check), and the state just before the script's disc change at the
+end of disc 1 (op 0xAC / menu type 8). Opening menu type 8 directly from a disc-1 field leaves the field reloading in a
+loop, with the stock flow too: the script sets something around the op that a direct open lacks. Asked of the decomp
+session.
+
 ---
 
 ## Open findings from the port (queued while the decomp session was offline)

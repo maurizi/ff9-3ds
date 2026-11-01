@@ -57,7 +57,7 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"gil")) scenario.gil=number(eq,0,9999999);
         else if(!__builtin_strcmp(s,"menu")) {
             char *comma=__builtin_strchr(eq,',');
-            if(comma) *comma=0,scenario.menu_arg=number(comma+1,0,255);
+            if(comma) *comma=0,scenario.menu_arg=number(comma+1,0,0xFFFF);
             scenario.menu=1+number(eq,0,8);
         }
         else if(!__builtin_strcmp(s,"tetra")) scenario.tetra=number(eq,0,1)?9:0; /* kind=field: then a card game */
@@ -171,8 +171,11 @@ static void cache_field_ids(void) {
         field_ids[entries[n_field_ids].field>>5]|=1u<<(entries[n_field_ids].field&31);
     }
 }
+static int disc_changed;
+void port_scenario_disc_changed(void) { disc_changed=1; } /* (port/game/disc_change.c) */
 void port_scenario_field_entering(int field) {
     if(!scenario.enabled || !scenario.consumed) return;
+    if(disc_changed) return; /* (a disc changed during the run: its fields aren't checked against the fixture's disc) */
     if(n_field_ids<0) cache_field_ids();
     port_log("scenario field entering: %d\n",field);
     if(field>=0 && field<4096 && (field_ids[field>>5]>>(field&31)&1)) return;
