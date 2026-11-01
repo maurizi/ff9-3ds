@@ -352,12 +352,14 @@ static void bar_mark(int x, int y, int w, int h) { /* a small bright bar (as the
     g_primPtr = (u8 *)(p + 4);
 }
 static RECT opt_rect(int row, int c) { RECT r = {(s16)(112 + c * 66), (s16)(64 + row * 36), 60, 28}; return r; }
+static int opt_row; /* the row the D-pad is on (the panel by buttons: port_pad_filter) */
 static void draw_options(void) {
     static const u8 label[] = "OPTIONS";
     RECT box = r_logbox;
     ui_drawLabel(box.x + 8, box.y - 3, 2, (s32)label, 0);
     for (int i = 0; i < 3; i++) {
-        ui_drawLabel(box.x + 10, 64 + i * 36 + 11, 2, (s32)opts[i].name, 0);
+        ui_drawLabel(box.x + 10, 64 + i * 36 + 11, 2, (s32)opts[i].name, i == opt_row ? 0 : 2);
+        if (i == opt_row) ui_drawSprite(box.x + 2, 64 + i * 36 + 9, 2, 1, 0); /* (the hand: where the D-pad is) */
         int v = port_setting_get(i);
         for (int c = 0; c < opts[i].n; c++) {
             RECT r = opt_rect(i, c);
@@ -412,6 +414,7 @@ static void draw_title(void) {
     title_button(&r_tnew, "NEW GAME", cur == 0, 0);
     title_button(&r_tcont, "CONTINUE", cur == 1, !port_title_has_save());
     title_button(&r_topt, "OPTIONS", 0, 0);
+    ui_drawSprite(r_topt.x + 8, r_topt.y + 9, 2, 6, 0); /* (Square: Y) */
 }
 static int title_tap(int x, int y) {
     if (title_opts) {
@@ -441,6 +444,7 @@ static void draw_config_overlay(void) {
         return;
     }
     title_button(&r_cfgbtn, "3DS OPTIONS", 0, 0);
+    ui_drawSprite(r_cfgbtn.x + 4, r_cfgbtn.y + 5, 2, 6, 0); /* (Square: the 3DS's Y opens it too) */
 }
 static int config_overlay_tap(int x, int y) {
     if (cfg_opts) {
@@ -450,6 +454,37 @@ static int config_overlay_tap(int x, int y) {
     }
     if (inside(&r_cfgbtn, x, y)) { cfg_opts = 1; snd_playSe(SE_CURSOR); return 1; }
     return 0;
+}
+
+/* The options panel by buttons (the title's, the Config screen's, the log's): Y opens it on the title and the Config
+ * screen; while it is up the D-pad picks a row and changes its setting, B or Y closes it, and the game gets no buttons
+ * (a button still held as it closes is kept from the game until released, so B doesn't also back out of the screen). */
+static unsigned pad_prev, pad_swallow;
+static void set_opt(int row, int dir) {
+    int v = port_setting_get(row) + dir;
+    if (v < 0 || v >= opts[row].n) return;
+    port_setting_set(row, v);
+    snd_playSe(SE_CURSOR);
+}
+unsigned int port_pad_filter(unsigned int b) {
+    unsigned pressed = b & ~pad_prev;
+    pad_prev = b;
+    pad_swallow &= b; /* (released: the game may have it again) */
+    if (!g_gameState || !g_gameState->gameData) return b;
+    int *open = title_opts ? &title_opts : cfg_opts ? &cfg_opts : (log_on && opts_on) ? &opts_on : NULL;
+    if (open) {
+        if (pressed & 0x0010) opt_row = (opt_row + 2) % 3, snd_playSe(SE_CURSOR);
+        if (pressed & 0x0040) opt_row = (opt_row + 1) % 3, snd_playSe(SE_CURSOR);
+        if (pressed & 0x0080) set_opt(opt_row, -1);
+        if (pressed & 0x0020) set_opt(opt_row, +1);
+        if (pressed & (0x2000 | 0x8000)) { *open = 0; snd_playSe(SE_CANCEL); pad_swallow = b; }
+        return 0;
+    }
+    if (pressed & 0x8000) {
+        if (g_gameState->mode == 0 && port_title_live()) { title_opts = 1, opt_row = 0, pad_swallow = b; snd_playSe(SE_CURSOR); }
+        else if (config_open() && !fade_isBusy()) { cfg_opts = 1, opt_row = 0, pad_swallow = b; snd_playSe(SE_CURSOR); }
+    }
+    return b & ~pad_swallow;
 }
 
 static void draw_log(void) {

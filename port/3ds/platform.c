@@ -59,12 +59,14 @@ static void read_input(void) {
     for (unsigned i = 0; i < sizeof keymap / sizeof keymap[0]; i++)
         if (held & keymap[i].key) b |= keymap[i].psx;
     if ((held & (KEY_L | KEY_R)) == (KEY_L | KEY_R)) b |= 0x0300;
-    pad_now = b | ctr_ui_pad_buttons(frames);
+    /* (the port's own screens may take the buttons first: port/game/field_hud.c, its options panel) */
+    unsigned int port_pad_filter(unsigned int buttons);
+    pad_now = port_pad_filter(b | ctr_ui_pad_buttons(frames) | input_script_buttons(frames));
 }
 
 unsigned int plat_pad_buttons(int port) {
     if (port != 0) return 0;
-    return pad_now | input_script_buttons(frames);
+    return pad_now;
 }
 
 /* ---- frame pacing ----------------------------------------------------------------------------------------- */
