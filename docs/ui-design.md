@@ -37,6 +37,11 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
     and cutscene stretches may hold a placeholder party); CARDS once the card game has been met. **[done]**
   - The map is the walkmesh area connected to where the player stands (other parts are other screens), scaled to
     fill its box. **[done]**
+  - The maps are baked at build time from the discs (`make maps`: tools/bake_maps.py over the decomp's offline field
+    reader, decomp R39) into build/maps.bin, packed beside the disc pack: every exit the field's script has, whatever
+    the story state; walkable as stored; save moogles and shops where the script places them. Without maps.bin the
+    game builds each map as a field loads. **[done; per-story-state variants for the 179 fields whose walkable area
+    changes (doors, bridges) not yet]**
 
 ## Options
 - The port's settings: 3D depth (low / normal / high, on top of the slider), top screen (fit: scaled to the screen's

@@ -55,7 +55,88 @@ static struct {
     u32 in[MAX_TRIS];           /* per triangle: the areas it shows in (bit a) */
     u8 exit[MAX_TRIS];          /* shaded as an exit */
     int x0[MAX_AREAS], z0[MAX_AREAS], x1[MAX_AREAS], z1[MAX_AREAS];
+    int from_file;              /* read from maps.bin (tools/bake_maps.py): kept as it is, its markers below */
+    int nmarks;
+    s16 mx[16], mz[16];
+    u8 mk[16];                  /* 2 shop, 4 save */
 } bk;
+
+/* ---- the maps baked from the disc at build time (tools/bake_maps.py: build/maps.bin, beside the disc pack) ----
+ * A field's record has its walkmesh triangles (by index, the walkmesh's own order) with the areas each shows in and
+ * whether it is an exit's, the areas' bounds, and the save moogles' and shops' places. With a record the map is the
+ * field's data as baked; without one (no maps.bin, or a field it doesn't have) it is built here as before. */
+void *port_asset_open(const char *name); /* (asset_file.c) */
+int port_asset_read(void *f, void *buf, unsigned long n);
+int port_asset_seek(void *f, unsigned long at);
+void port_asset_close(void *f);
+static void *maps_fp;
+static int maps_state; /* 0 not opened, 1 open, -1 none found */
+static u16 maps_field[1024];
+static u32 maps_at[1024];
+static int maps_count;
+
+static void maps_open(void) {
+    maps_state = -1;
+    maps_fp = port_asset_open("maps.bin");
+    if (!maps_fp) return;
+    u8 h[16];
+    if (!port_asset_read(maps_fp, h, 16) || __builtin_memcmp(h, "FF9M", 4) || h[4] != 1) {
+        port_asset_close(maps_fp);
+        maps_fp = NULL;
+        return;
+    }
+    maps_count = h[8] | h[9] << 8;
+    if (maps_count > 1024) maps_count = 1024;
+    for (int i = 0; i < maps_count; i++) {
+        u8 e[8];
+        if (!port_asset_read(maps_fp, e, 8)) { maps_count = i; break; }
+        maps_field[i] = (u16)(e[0] | e[1] << 8);
+        maps_at[i] = (u32)(e[4] | e[5] << 8 | e[6] << 16 | (u32)e[7] << 24);
+    }
+    maps_state = 1;
+}
+
+/* field's baked map into bk if maps.bin has it, for a walkmesh of n triangles: 1 if read */
+static int maps_load(int field, int n) {
+    if (!maps_state) maps_open();
+    if (maps_state < 0) return 0;
+    int i = 0;
+    while (i < maps_count && maps_field[i] != field) i++;
+    if (i == maps_count || !port_asset_seek(maps_fp, maps_at[i])) return 0;
+    u8 h[8];
+    if (!port_asset_read(maps_fp, h, 8) || (h[0] | h[1] << 8) != n || n > MAX_TRIS || h[2] > MAX_AREAS) return 0;
+    int na = h[2], nm = h[3] > 16 ? 16 : h[3];
+    s16 a[4];
+    for (int k = 0; k < na; k++) {
+        if (!port_asset_read(maps_fp, a, 8)) return 0;
+        bk.x0[k] = a[0], bk.z0[k] = a[1], bk.x1[k] = a[2], bk.z1[k] = a[3];
+    }
+    for (int t = 0; t < n; t++) {
+        u8 r[20];
+        if (!port_asset_read(maps_fp, r, 20)) return 0;
+        for (int k = 0; k < 3; k++) {
+            bk.x[t][k] = (s16)(r[k * 2] | r[k * 2 + 1] << 8);
+            bk.z[t][k] = (s16)(r[6 + k * 2] | r[7 + k * 2] << 8);
+        }
+        bk.in[t] = (u32)(r[12] | r[13] << 8 | r[14] << 16 | (u32)r[15] << 24);
+        bk.exit[t] = r[16];
+    }
+    bk.nmarks = 0;
+    for (int k = 0; k < nm; k++) {
+        u8 r[8];
+        if (!port_asset_read(maps_fp, r, 8)) break;
+        bk.mx[k] = (s16)(r[0] | r[1] << 8), bk.mz[k] = (s16)(r[2] | r[3] << 8), bk.mk[k] = r[4];
+        bk.nmarks++;
+    }
+    bk.n = n;
+    bk.areas = na;
+    bk.cur = 0;
+    for (int k = 1; k < na; k++) /* (until the player's triangle is known: the largest) */
+        if ((bk.x1[k] - bk.x0[k]) * (bk.z1[k] - bk.z0[k]) > (bk.x1[bk.cur] - bk.x0[bk.cur]) * (bk.z1[bk.cur] - bk.z0[bk.cur]))
+            bk.cur = k;
+    bk.from_file = 1;
+    return 1;
+}
 
 /* the field's exits (their polygons), collected before the map is built */
 static struct { int n; s16 x[8], z[8]; } exits[16];
@@ -403,10 +484,14 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     int since;
     unsigned serial = port_field_serial(&since);
     if (bk.serial != serial) {
-        if (since < 15) return pkt; /* (the field's scripts still making its regions) */
-        bake(n);
-        bk.serial = serial;
-    } else if (since % 30 == 0) { /* (a region made or a triangle switched since: baked again, still the same map) */
+        bk.from_file = 0;
+        if (maps_load(g_gameState->gameData->fieldId, n)) bk.serial = serial; /* (baked at build time) */
+        else {
+            if (since < 15) return pkt; /* (the field's scripts still making its regions) */
+            bake(n);
+            bk.serial = serial;
+        }
+    } else if (!bk.from_file && since % 30 == 0) { /* (a region made or a triangle switched since: baked again, still the same map) */
         collect_exits();
         if (signature(n) != bk.sig) {
             int cur = bk.cur;
@@ -461,10 +546,30 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         addPrim(ot, p); /* (after its edges in the list: added later, drawn first) */
         p += 5;
     }
-    /* shopkeepers and save moogles: a diamond where each stands */
-    collect_menus();
+    /* shopkeepers and save moogles: a diamond where each stands (baked: where the script first places them) */
+    for (int k = 0; bk.from_file && k < bk.nmarks && (u8 *)(p + 10) <= pkt_end; k++) {
+        int mx = (x1 - x0) / 4, mz = (z1 - z0) / 4;
+        if (mx < 512) mx = 512;
+        if (mz < 512) mz = 512;
+        if (bk.mx[k] < x0 - mx || bk.mx[k] > x1 + mx || bk.mz[k] < z0 - mz || bk.mz[k] > z1 + mz) continue;
+        int qx = MX(bk.mx[k]), qy = MY(bk.mz[k]);
+        if (qx < bx + 5) qx = bx + 5;
+        if (qx > bx + bw - 5) qx = bx + bw - 5;
+        if (qy < by + 5) qy = by + 5;
+        if (qy > by + bh - 5) qy = by + bh - 5;
+        for (int half = 0; half < 2; half++) {
+            p[0] = 4u << 24;
+            p[1] = 0x20000000u | (bk.mk[k] == 2 ? MAP_SHOP : MAP_SAVE);
+            p[2] = xy(qx - 4, qy);
+            p[3] = xy(qx + 4, qy);
+            p[4] = xy(qx, half ? qy + 4 : qy - 4);
+            addPrim(ot - 1, p);
+            p += 5;
+        }
+    }
+    if (!bk.from_file) collect_menus();
     int guard = 0;
-    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next) {
+    for (EvtListNode *nd = evt_getObjectList(); !bk.from_file && ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next) {
         EvtObject *o = nd->obj;
         if (o == pl || !ram_ok(o, sizeof *o) || o->kind != 4 || (u8 *)(p + 10) > pkt_end) continue;
         /* (in this area: shopkeepers stand behind their counters, off the walkmesh, so with a margin) */

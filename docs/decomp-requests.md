@@ -387,6 +387,12 @@ loop, with the stock flow too: the script sets something around the op that a di
 from field 70 with b[2..3] = 1 (tests/scenarios/disc1_disc_change.cfg). A direct open skips fld_discChangeLeave's
 file_loadDirTables / fld_refindSectors, hence the loop; the real path (op AC from a field) is fine.
 
+### R37 / R38 / R39 (2026-11-01)
+R37: world-map vehicle / chocobo / moogle / Blackjack fixtures (answered: ff9-decomp docs/r32/3ds-requests-7.md;
+tests/scenarios/disc3_world_*.cfg, disc3_hot_cold.cfg). R38: field minigame fixtures (asked). R39: each field's
+walkmesh, exit regions, walkmesh-switching ops and NPC places read offline (answered: docs/r32/3ds-requests-9.md and
+its reader tools/field_maps.py, which tools/bake_maps.py calls).
+
 ---
 
 ## Open findings from the port (queued while the decomp session was offline)

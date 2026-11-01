@@ -233,9 +233,10 @@ $(BUILD)/ff9.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr conf
 	@mkdir -p $(BUILD)/romfs-none
 	@$(MAKEROM) -f cia -o $@ -elf $< -rsf config/ff9.rsf -icon $(BUILD)/ff9.smdh -banner $(BUILD)/ff9.bnr -target t \
 		-DAPP_ROMFS=$(BUILD)/romfs-none
-$(BUILD)/ff9-full.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr config/ff9.rsf $(BUILD)/discs.bin
+$(BUILD)/ff9-full.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr config/ff9.rsf $(BUILD)/discs.bin $(wildcard $(BUILD)/maps.bin)
 	@echo "CIA  $@ (with the disc pack)"
-	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin
+	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin \
+		$(if $(wildcard $(BUILD)/maps.bin),&& ln -f $(BUILD)/maps.bin $(BUILD)/romfs/maps.bin)
 	@$(MAKEROM) -f cia -o $@ -elf $< -rsf config/ff9.rsf -icon $(BUILD)/ff9.smdh -banner $(BUILD)/ff9.bnr -target t \
 		-DAPP_ROMFS=$(BUILD)/romfs
 cia: $(BUILD)/ff9.cia
@@ -245,12 +246,21 @@ $(if $(and $(TEST_OPTS),$(filter cia cia-full $(BUILD)/ff9.cia $(BUILD)/ff9-full
   $(error make cia / cia-full take no test options (they build the game as a player gets it)))
 .PHONY: cia cia-full 3ds-full
 
+# The bottom screen's field maps, baked from your discs (tools/bake_maps.py: the decomp's offline field reader, decomp
+# R39); packed beside the discs in the full builds when present (else the game builds each map as a field loads).
+# Run on the host (it reads the decomp checkout's tools): make maps [DECOMP=../ff9-decomp]. Never share the output.
+DECOMP ?= ../ff9-decomp
+maps:
+	python3 tools/bake_maps.py --decomp $(DECOMP) --img $(DECOMP)/disks/us --out $(BUILD)/maps.bin
+.PHONY: maps
+
 $(BUILD)/discs.bin: tools/pack_discs.py
 	@echo "PACK $@"
 	@$(PYTHON) tools/pack_discs.py --img disks/us --out $@
-$(BUILD)/ff9-full.3dsx: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/discs.bin
+$(BUILD)/ff9-full.3dsx: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/discs.bin $(wildcard $(BUILD)/maps.bin)
 	@echo "3DSX $@ (with the disc pack)"
-	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin
+	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin \
+		$(if $(wildcard $(BUILD)/maps.bin),&& ln -f $(BUILD)/maps.bin $(BUILD)/romfs/maps.bin)
 	@3dsxtool $< $@ --smdh=$(BUILD)/ff9.smdh --romfs=$(BUILD)/romfs
 3ds-full: $(BUILD)/ff9-full.3dsx
 
