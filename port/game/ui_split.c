@@ -12,10 +12,25 @@ __attribute__((weak)) void port_ui_packets(const void *lo, const void *hi) { (vo
 /* A field minigame's own panels (its how-to-play box, its score) belong on the bottom screen with the touch controls,
  * not over the scene; its speech balloons stay with the speakers. 1: window w goes to the bottom screen. */
 void port_bottom_packets(const void *lo, const void *hi);
+/* (the minigames' panels by field and message id, decomp R38: ff9-decomp docs/r32/3ds-requests-8.md) */
+static const struct { u16 field, lo, hi; } panels[] = {
+    {103, 0xEA, 0xF6},   /* jump rope: "N times", the girls' comments, "Come play with us again!" */
+    {1850, 0x93, 0x99},  /* Hippaul racing: how to play, "Press Square and Circle alternately!", who wins */
+    {657, 0x183, 0x183}, /* frog catching: "Frogs Captured: N" */
+    {909, 0xC9, 0xD0},   /* the Treno auction: bid status, the bid entry, too low / no funds */
+    {64, 0x6F, 0x6F},    /* the Prima Vista play's sword fight: its instructions */
+    {64, 0x78, 0x80},    /* ... the nobles' verdict, the gil */
+};
 static int to_bottom(const Window *w) {
     if (g_gameState->mode != 1) return 0;
     int field = g_gameState->gameData->fieldId;
-    if (field == 2950) return w->style != WIN_STYLE_BALLOON; /* (Chocobo Hot and Cold: the how-to-play box) */
+    if (field == 2950) return w->style != WIN_STYLE_BALLOON; /* (Chocobo Hot and Cold: its how-to-play box, its score) */
+    for (int k = 0; k < 10; k++) {
+        const MsgWindow *m = &g_msgWindows[k];
+        if (!m->open || m->window != w) continue;
+        for (unsigned i = 0; i < sizeof panels / sizeof panels[0]; i++)
+            if (panels[i].field == field && m->msgId >= panels[i].lo && m->msgId <= panels[i].hi) return 1;
+    }
     return 0;
 }
 

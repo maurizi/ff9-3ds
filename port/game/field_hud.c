@@ -622,8 +622,32 @@ static void draw_disc_prompt(void) { /* (the end of a disc's "save your game?": 
         win_drawBox(&r_disc[i], 3, 2);
     }
 }
+/* The Prima Vista play's sword fight (field 64, decomp R38): its "Press <button>!" balloon over Blank (messages
+ * 0x70-0x77; the button: field byte 0x2E, 0-7 Left, Right, Triangle, Down, Cross, Up, Circle, Square) also as one
+ * large prompt on the bottom screen,
+ * the button as the 3DS names it (display only: the button is still the input) */
+static int canary_prompt(void) {
+    if (g_gameState->mode != 1 || g_gameState->gameData->fieldId != 64) return -1;
+    if (!ram_ok(g_evtState, sizeof *g_evtState)) return -1;
+    for (int k = 0; k < 10; k++) /* (a "Press" balloon up: messages 0x70-0x77; the button is field byte 0x2E) */
+        if (g_msgWindows[k].open && g_msgWindows[k].msgId >= 0x70 && g_msgWindows[k].msgId <= 0x77)
+            return g_evtState->fieldVars[0x2E] & 7;
+    return -1;
+}
+static void draw_canary(int b) {
+    static const char *const names[8] = {"LEFT", "RIGHT", "X", "DOWN", "A", "UP", "B", "Y"};
+    static const u8 icon[8] = {0, 0, 7, 0, 4, 0, 5, 6}; /* (the game's button sprites, drawn as the 3DS's: 0 none) */
+    static RECT box = {60, 70, 200, 100};
+    int w = ui_measureLabel((u8 *)"PRESS");
+    ui_drawLabel(box.x + (box.w - w) / 2, box.y + 22, 2, (s32) "PRESS", 2);
+    w = ui_measureLabel((u8 *)names[b]);
+    if (icon[b]) ui_drawSprite(box.x + box.w / 2 - 8, box.y + 40, 2, icon[b], 0);
+    ui_drawLabel(box.x + (box.w - w) / 2, box.y + (icon[b] ? 64 : 52), 2, (s32)names[b], 0);
+    win_drawBox(&box, 3, 2);
+}
 static int choice_open(void) {
     if (port_disc_prompt_live()) return 1;
+    if (canary_prompt() >= 0) return 1;
     return g_msgChoiceLine >= 0 && g_msgChoiceCount > 0 && g_msgChoiceWindow >= 0 && g_msgChoiceWindow < 10 &&
            g_msgWindows[g_msgChoiceWindow].open;
 }
@@ -636,6 +660,7 @@ static void draw(void) {
         draw_disc_prompt();
         return;
     }
+    { int b = canary_prompt(); if (b >= 0) { draw_canary(b); return; } }
     if (choices_only) {
         draw_choices();
         return;
