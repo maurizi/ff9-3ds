@@ -49,6 +49,7 @@ static u8 near_player[MAX_TRIS]; /* (mark_connected's: connected to its start: 1
 /* the baked map */
 static struct {
     unsigned serial;            /* the field load it was baked for (port_field_serial) */
+    u32 sig;                    /* what it was baked from (signature: the walkable triangles, the exits) */
     int n, areas, cur;          /* triangles, areas, the area shown */
     s16 x[MAX_TRIS][3], z[MAX_TRIS][3];
     u32 in[MAX_TRIS];           /* per triangle: the areas it shows in (bit a) */
@@ -321,8 +322,19 @@ static inline u32 xy(int x, int y) { return (u32)(x & 0xFFFF) | (u32)y << 16; }
 
 /* the map of the field as loaded: each walkable triangle's position, its areas (flood fills from each triangle not
  * yet in one, stopping at the exits), whether it is shaded as an exit, each area's bounds */
+/* what the map is made of, in a word: the walkable triangles and the exits (the field's scripts make regions and
+ * switch triangles on after it loads: a cutscene's end opens the way out) */
+static u32 signature(int n) {
+    u32 h = 2166136261u;
+    for (int i = 0; i < n; i++) h = (h ^ (u32)bound_tri(&g_fieldBgi.triangles[i])) * 16777619u;
+    h = (h ^ (u32)n_exits) * 16777619u;
+    for (int e = 0; e < n_exits; e++) h = (h ^ (u32)(u16)exits[e].x[0] ^ (u32)(u16)exits[e].z[0] << 16) * 16777619u;
+    return h;
+}
+
 static void bake(int n) {
     collect_exits();
+    bk.sig = signature(n);
     bk.n = n;
     bk.areas = bk.cur = 0;
     __builtin_memset(bk.in, 0, sizeof bk.in);
@@ -394,6 +406,13 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         if (since < 15) return pkt; /* (the field's scripts still making its regions) */
         bake(n);
         bk.serial = serial;
+    } else if (since % 30 == 0) { /* (a region made or a triangle switched since: baked again, still the same map) */
+        collect_exits();
+        if (signature(n) != bk.sig) {
+            int cur = bk.cur;
+            bake(n);
+            if (cur < bk.areas) bk.cur = cur;
+        }
     }
     if (!bk.areas) return pkt;
     int pt = player_triangle(pl);

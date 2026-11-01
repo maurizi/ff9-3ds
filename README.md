@@ -81,4 +81,4 @@ and the game's log (`sdmc:/3ds/ff9/log.txt`); `make 3ds SCENARIO=sdmc:/3ds/ff9/s
 into a fixture with per-category timers; `DUMP_AT=N` writes the GPU's VRAM mirror and textures to the SD card;
 `AUTOPRESS=`/`AUTOTOUCH=` script buttons and taps.
 
-Licence: port code GPL (as ff9-ds); tools CC0 like the decomp's.
+Licence: port code GPL-3.0-or-later ([LICENSE](LICENSE)); `port/psx/mdec_decode.c` adapts GPL-2.0-or-later Mednafen code ([third_party/mednafen](third_party/mednafen)); tools CC0 like the decomp's.
