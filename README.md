@@ -3,12 +3,12 @@
 A native Nintendo 3DS port of Final Fantasy IX (PS1, NTSC-U), built from the C source of the
 [ff9-decomp](https://github.com/maurizi/ff9-decomp) matching decompilation.
 
-The game's runs natively on the 3DS's ARM11 without emulation, and features stereoscopic 3D and a full dual-screen redesign of the UI.
+The game runs natively on the 3DS's ARM11 without emulation, and features stereoscopic 3D and a full dual-screen redesign of the UI.
 
 This repository contains no game data. Building and running it both require your own copy of the four NTSC-U
 discs (SLUS-01251/01295/01296/01297).
 
-** Final Fantasy IX © is owned by Square Enix; this project is not affiliated with or endorsed by Square Enix.
+Final Fantasy IX © is owned by Square Enix; this project is not affiliated with or endorsed by Square Enix.
 
 ## Building
 
