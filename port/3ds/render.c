@@ -602,6 +602,10 @@ static void set_texscale(const C3D_Tex *t) {
 }
 
 /* Replay the recorded batches into each eye's mirror. */
+static C3D_RenderTarget *outline_rt[2][2]; /* (the outline masks, [buffer][eye]: below) */
+static void outline_proj(int x0, int y0);
+/* a framebuffer's mask: the second one when it lies right of (battles: x 320) or below (fields: y 256) the first */
+static inline int outline_buf(int x, int y) { return x >= 256 || y >= 256; }
 static void submit(void) {
     run_flush();
     if (!nbatches) return;
@@ -610,11 +614,11 @@ static void submit(void) {
     unsigned any_ui = 0;
     for (unsigned i = 0; i < nbatches; i++) any_ui |= 1u << batches[i].target;
     /* passes: each eye's mirror, then each UI layer (no stereo: the bottom screen is flat) */
-    for (int pass = 0; pass < 6; pass++) {
-        int eye = pass == 1 || pass == 5, target = pass >= 4 ? 3 : pass >= 2 ? pass - 1 : 0;
-        if ((pass == 1 || pass == 5) && !stereo_on) continue;
+    for (int pass = 0; pass < 8; pass++) {
+        int eye = pass == 1 || pass == 5 || pass == 7, target = pass >= 6 ? 4 : pass >= 4 ? 3 : pass >= 2 ? pass - 1 : 0;
+        if ((pass == 1 || pass == 5 || pass == 7) && !stereo_on) continue;
         if (target && !(any_ui & (1u << target))) continue;
-        int height = target == 3 ? 240 : target ? UI_H : VH;
+        int height = target == 3 ? 240 : target == 4 ? VH : target ? UI_H : VH;
         if (target == 3) { /* the top screen (its render target is the rotated 240x400): no scissor, as screen_quad */
             C3D_FrameDrawOn(top_rt[eye]);
             C3D_Mtx pm;
@@ -622,6 +626,9 @@ static void submit(void) {
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &pm);
             C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
             C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+        } else if (target == 4) { /* the models' outline masks (outline_draw), as the mirror's pass, at half size */
+            if (!outline_rt[0][0]) continue;
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, eye ? stereo_k : -stereo_k, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
         } else if (target) {
             C3D_FrameDrawOn(layers[target - 1].rt);
             set_proj_ortho(UI_W, UI_H, 0.0f);
@@ -640,21 +647,32 @@ static void submit(void) {
         for (unsigned i = 0; i < nbatches; i++) {
             Batch *b = &batches[i];
             if (b->target != target) continue;
-            if (!target && !(b->eyes & (1 << eye))) continue;
+            if ((!target || target == 4) && !(b->eyes & (1 << eye))) continue;
             if (b->ordered != ordered) {
                 ordered = b->ordered;
                 C3D_DepthTest(ordered, GPU_GEQUAL, ordered ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
-                C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, target ? 0 : k, stereo_inv_zc, 1.0f / 4096.0f,
+                C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, target && target != 4 ? 0 : k, stereo_inv_zc, 1.0f / 4096.0f,
                               ordered ? -depth_off * (1.0f / 16384) : -0.5f);
             }
             if (b->abr != abr || b->mask != bmask || b->kind != kind) {
-                if (b->kind != kind) set_tev_for(kind = b->kind, target != 0);
-                set_blend_mask(abr = b->abr, target != 0, bmask = b->mask, kind);
+                if (b->kind != kind) set_tev_for(kind = b->kind, target != 0 && target != 4);
+                if (target == 4) abr = b->abr, bmask = b->mask, set_blend(NO_BLEND, 0);
+                else set_blend_mask(abr = b->abr, target != 0, bmask = b->mask, kind);
             }
             if (b->tex != tex) {
                 tex = b->tex;
                 if (tex) C3D_TexBind(0, tex);
                 set_texscale(tex);
+            }
+            if (target == 4) { /* (the framebuffer this batch draws into: its mask, its area's projection) */
+                if (b->sc[0] != sc[0] || b->sc[1] != sc[1]) {
+                    sc[0] = b->sc[0], sc[1] = b->sc[1];
+                    C3D_FrameDrawOn(outline_rt[outline_buf(sc[0], sc[1])][eye]);
+                    outline_proj(sc[0], sc[1]);
+                    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+                }
+                C3D_DrawArrays(GPU_TRIANGLES, b->first, b->count);
+                continue;
             }
             if (target != 3 && memcmp(sc, b->sc, sizeof sc)) {
                 memcpy(sc, b->sc, sizeof sc);
@@ -1066,6 +1084,10 @@ static int ui_list_layer;  /* the layer the UI list draws into */
 static int ui_layer_for(int x, int y, int clear);
 static int ui_packet(void);
 static int flat_packet(void);
+extern int ctr_outline;
+static int model_packet(void);
+static int outline_init(void);
+
 static const u8 *zoom_lo, *zoom_hi; /* port_bottom_zoom's */
 static float zoom_cx, zoom_cy;
 static int zoom_factor;
@@ -1162,6 +1184,15 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         Vtx *o = alloc_vtx(n);
         memcpy(o, v, n * sizeof *v);
         add_batch(passes[p], pabr, 3, sc, tex, o - vb, n);
+    }
+    /* a model's polygon: again into the outline mask, white (outline_draw) */
+    if (ctr_outline && layer < 0 && !ui_mode && n % 3 == 0 && model_packet() && outline_init()) {
+        Vtx *o = alloc_vtx(n);
+        for (unsigned i = 0; i < n; i++) o[i] = v[i], o[i].rgba = 0xFFFFFFFF, o[i].d = 0;
+        int saved = cur_target;
+        cur_target = 4;
+        add_batch(K_UNTEX, NO_BLEND, 3, sc, NULL, o - vb, n);
+        cur_target = saved;
     }
 }
 
@@ -1489,6 +1520,101 @@ void port_bottom_zoom(const void *lo, const void *hi, int cx, int cy, int factor
     zoom_cy = (float)cy;
     zoom_factor = factor;
 }
+static float top_scale(int w, int h);
+/* ---- cel-shading outlines (New 3DS option: ctr_outline) ----
+ * Model polygons (the packet ranges the model drawers report: port_model_packets) are drawn a second time, white,
+ * into a mask the size of the mirror (per eye, with the same parallax; in linear memory: VRAM is full). At the
+ * present, per eye, the mask's displayed part spread a pixel each way less the mask itself is the outline, and the
+ * top screen is darkened by it: a dark line round each model's silhouette, over the scene. */
+int ctr_outline; /* (off: shelved, 2026-10-31; the mask matches the models, the edge pass is unfinished) */
+static C3D_Tex outline_tex[2][2], outline_edge_tex[2]; /* the masks per PS1 framebuffer (y 0 / 256) and eye */
+static C3D_RenderTarget *outline_edge_rt[2];
+#define MAX_MODEL_RANGES 96
+static struct { const u8 *lo, *hi; unsigned frame; } models[MAX_MODEL_RANGES];
+static int nmodels;
+void port_model_packets(const void *lo, const void *hi) {
+    if (!ctr_outline) return;
+    for (int i = 0; i < nmodels; i++)
+        if (((const u8 *)lo < models[i].hi && (const u8 *)hi > models[i].lo) || frames_drawn - models[i].frame > 2)
+            models[i] = models[--nmodels], i--;
+    if (nmodels == MAX_MODEL_RANGES) nmodels--;
+    models[nmodels].lo = lo, models[nmodels].hi = hi, models[nmodels].frame = frames_drawn;
+    nmodels++;
+}
+static int model_packet(void) {
+    const u8 *p = (const u8 *)psx_gpu_packet;
+    for (int i = 0; i < nmodels; i++)
+        if (p >= models[i].lo && p < models[i].hi) return 1;
+    return 0;
+}
+static int outline_init(void) {
+    static int failed;
+    if (outline_rt[0][0]) return 1;
+    if (failed) return 0;
+    /* (VRAM: render targets must be; half size: a framebuffer's 512x256 area each) */
+    for (int k = 0; k < 6; k++) {
+        C3D_Tex *t = k < 4 ? &outline_tex[k >> 1][k & 1] : &outline_edge_tex[k - 4];
+        C3D_RenderTarget **rt = k < 4 ? &outline_rt[k >> 1][k & 1] : &outline_edge_rt[k - 4];
+        if (!C3D_TexInitVRAM(t, 256, 128, GPU_RGBA4) || !(*rt = C3D_RenderTargetCreateFromTex(t, GPU_TEXFACE_2D, 0, -1))) {
+            port_log("outline: no VRAM for its masks: off\n");
+            outline_rt[0][0] = NULL;
+            failed = 1;
+            return 0;
+        }
+        C3D_RenderTargetClear(*rt, C3D_CLEAR_ALL, 0, 0);
+    }
+    port_log("outline: on\n");
+    return 1;
+}
+/* the mask pass's projection: the 512x256 VRAM area from the framebuffer's origin (x0, y0) onto the half-size mask */
+static void outline_proj(int x0, int y0) {
+    C3D_Mtx m;
+    Mtx_Zeros(&m);
+    m.r[0].x = 2.0f / 512; m.r[0].w = -1.0f - 2.0f * x0 / 512;
+    m.r[1].y = -2.0f / 256; m.r[1].w = 1.0f + 2.0f * y0 / 256;
+    m.r[2].z = 1.0f; m.r[2].w = 0;
+    m.r[3].w = 1.0f;
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &m);
+}
+/* the outline of the displayed part (dx, dy, w, h of the mirror) onto the top screen's eye, placed as draw_to_top */
+static void outline_draw(int eye, int dx, int dy, int w, int h) {
+    if (!outline_rt[0][0]) return;
+    int e = stereo_on ? eye : 0, buf = outline_buf(dx, dy);
+    /* the edge: the mask spread a texel each way (added), less the mask (subtracted); all in the half-size mask */
+    int mx = 0, my = 0, mw = (w + 1) / 2, mh = (h + 1) / 2; /* (the mask holds the buffer from its origin) */
+    C3D_RenderTargetClear(outline_edge_rt[e], C3D_CLEAR_ALL, 0, 0);
+    C3D_FrameDrawOn(outline_edge_rt[e]);
+    set_proj_ortho(256, 128, 0.0f);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
+    set_tev(K_BLIT);
+    C3D_TexBind(0, &outline_tex[buf][e]);
+    set_texscale(&outline_tex[buf][e]);
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    static const s8 off[5][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {0, 0}};
+    for (int i = 0; i < 5; i++) {
+        if (i < 4) C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE, GPU_ONE, GPU_ONE);
+        else C3D_AlphaBlend(GPU_BLEND_REVERSE_SUBTRACT, GPU_BLEND_REVERSE_SUBTRACT, GPU_ONE, GPU_ONE, GPU_ONE, GPU_ONE);
+        Vtx *v = alloc_vtx(6);
+        quad(v, mx + off[i][0], my + off[i][1], mx + mw + off[i][0], my + mh + off[i][1], mx, my, mx + mw, my + mh, 0xFFFFFFFF);
+        C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+    }
+    /* the top screen darkened where the edge is: dst x (1 - edge) */
+    float sc = top_scale(w, h);
+    int dw = (int)(w * sc + 0.5f), dh = (int)(h * sc + 0.5f);
+    C3D_FrameDrawOn(top_rt[eye]);
+    C3D_Mtx pm;
+    Mtx_OrthoTilt(&pm, 0.0f, 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &pm);
+    C3D_TexBind(0, &outline_edge_tex[e]);
+    set_texscale(&outline_edge_tex[e]);
+    C3D_TexSetFilter(&outline_edge_tex[e], GPU_LINEAR, GPU_LINEAR);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ZERO, GPU_ONE_MINUS_SRC_COLOR, GPU_ZERO, GPU_ONE);
+    Vtx *v = alloc_vtx(6);
+    quad(v, (400 - dw) / 2, (240 - dh) / 2, (400 - dw) / 2 + dw, (240 - dh) / 2 + dh, mx, my, mx + mw, my + mh, 0xFFFFFFFF);
+    C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+    set_blend(NO_BLEND, 0);
+}
+
 /* the windows' packets that stay on the top screen: drawn at the screen plane in stereo (box and text together) */
 static struct { const u8 *lo, *hi; unsigned frame; } flat[8];
 static int nflat;
@@ -1975,7 +2101,16 @@ void ctr_present(long frame) {
                 draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h, freeze_w, freeze_h, edge);
                 screen_dim(top_rt[eye], 0x80);
             }
-            else draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, w, h, edge);
+            else {
+                draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, w, h, edge);
+                outline_draw(eye, d.x, d.y, w, h);
+            }
+            /* (the display has moved to the other framebuffer: the one it left is drawn next, its mask cleared) */
+            static int shown_buf = -1;
+            if (eye == (stereo_on ? 1 : 0) && outline_rt[0][0] && outline_buf(d.x, d.y) != shown_buf) {
+                shown_buf = outline_buf(d.x, d.y);
+                for (int e = 0; e < 2; e++) C3D_RenderTargetClear(outline_rt[!shown_buf][e], C3D_CLEAR_ALL, 0, 0);
+            }
         }
     }
     for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) { /* (models over the scene, under the panels) */

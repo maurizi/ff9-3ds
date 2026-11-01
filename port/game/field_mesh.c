@@ -283,6 +283,8 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     u8 *grp = (u8 *)&model->model->groups[group];
     u8 *pkt = *(u8 **)((u8 *)model->groupOut + group * 12 + 4);
     if (gd->drawBuf != 0) pkt += *(u16 *)grp;
+    void port_model_packets(const void *lo, const void *hi); /* (render.c: model polygons, for the 3DS's outlines) */
+    port_model_packets(pkt, pkt + *(u16 *)grp);
     NativeFieldMesh n;
     n.model = model;
     n.group = grp;
@@ -311,6 +313,8 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshClipY(ModelObj *model, u8 group) {
     u8 *grp = (u8 *)&model->model->groups[group];
     u8 *pkt = *(u8 **)((u8 *)model->groupOut + group * 12 + 4);
     if (gd->drawBuf != 0) pkt += *(u16 *)grp;
+    void port_model_packets(const void *lo, const void *hi); /* (render.c: model polygons, for the 3DS's outlines) */
+    port_model_packets(pkt, pkt + *(u16 *)grp);
     NativeFieldMesh n;
     n.model = model;
     n.group = grp;
@@ -338,6 +342,8 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshMirrored(ModelObj *model, u8 group
     u8 *grp = (u8 *)&model->model->groups[group];
     u8 *pkt = *(u8 **)((u8 *)model->groupOut + group * 12 + 4);
     if (gd->drawBuf != 0) pkt += *(u16 *)grp;
+    void port_model_packets(const void *lo, const void *hi); /* (render.c: model polygons, for the 3DS's outlines) */
+    port_model_packets(pkt, pkt + *(u16 *)grp);
     NativeFieldMesh n;
     n.model = model;
     n.group = grp;

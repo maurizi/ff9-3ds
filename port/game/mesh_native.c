@@ -242,8 +242,16 @@ __attribute__((weak)) int port_native_bg(const NativeBg *r) { (void)r; return 0;
 u8 *o0b_btl_drawMesh_packets(BtlUnit9C *m, u8 meshIdx, u8 *out);
 u8 *o0b_btl_drawMesh(BtlUnit9C *m, u8 meshIdx, u8 *out);
 
+void port_model_packets(const void *lo, const void *hi); /* (render.c: model polygons, for the 3DS's outlines) */
+__attribute__((weak)) void port_model_packets(const void *lo, const void *hi) { (void)lo; (void)hi; }
+static u8 *packets(BtlUnit9C *m, u8 meshIdx, u8 *out) {
+    u8 *end = o0b_btl_drawMesh_packets(m, meshIdx, out);
+    port_model_packets(out, end); /* (the group's packets, written from out) */
+    return end;
+}
+
 u8 *o0b_btl_drawMesh(BtlUnit9C *m, u8 meshIdx, u8 *out) {
-    if (m->flags & 0x10) return o0b_btl_drawMesh_packets(m, meshIdx, out);
+    if (m->flags & 0x10) return packets(m, meshIdx, out);
     BtlMesh *g = &m->header->meshes[meshIdx];
     NativeMesh n;
     n.src = (const unsigned char *)g->prims;
@@ -261,7 +269,7 @@ u8 *o0b_btl_drawMesh(BtlUnit9C *m, u8 meshIdx, u8 *out) {
     /* the buffer this frame's OT is drawn into (btl_endFrame: shown until then) */
     n.draw_x = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.x;
     n.draw_y = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.y;
-    if (!port_native_mesh(&n)) return o0b_btl_drawMesh_packets(m, meshIdx, out);
+    if (!port_native_mesh(&n)) return packets(m, meshIdx, out);
     if (m->prims == 0) m->prims = (s32)out;
     out[7] = 0xFF;
     return out + 8;
