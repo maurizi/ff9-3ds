@@ -20,6 +20,7 @@
 #include "psyq_port.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -196,7 +197,33 @@ static unsigned int pack_first, pack_n;
 static int sector_is_data; /* the last read_raw rebuilt a data record (no EDC/ECC) */
 
 static unsigned int le32(const u8 *p);
+/* Read-ahead: the pack is read in blocks of RA_BYTES and sectors are served from the last one. A movie reads ~150
+ * consecutive sectors a second; one file read each cost real time on a 3DS's SD card (the game fell to ~88% speed in
+ * movies and their sound ran dry), one read per 128 KiB doesn't. */
+#define RA_BYTES (128 * 1024)
+static u8 *ra_buf;
+static long ra_at = -1, ra_len;
 static void pack_read(long at, void *buf, unsigned int bytes) {
+    if (bytes <= RA_BYTES) {
+        if (!ra_buf) ra_buf = malloc(RA_BYTES);
+        if (ra_buf && !(at >= ra_at && at + (long)bytes <= ra_at + ra_len)) {
+            ra_at = -1;
+            if (lseek(disc, at, SEEK_SET) == at) {
+                long got = 0;
+                while (got < RA_BYTES) {
+                    int n = (int)read(disc, ra_buf + got, (size_t)(RA_BYTES - got));
+                    if (n <= 0) break;
+                    got += n;
+                }
+                if (got >= (long)bytes) ra_at = at, ra_len = got;
+            }
+        }
+        if (ra_buf && ra_at >= 0 && at >= ra_at && at + (long)bytes <= ra_at + ra_len) {
+            __builtin_memcpy(buf, ra_buf + (at - ra_at), bytes);
+            disc_at = at + (long)bytes;
+            return;
+        }
+    }
     if (!read_at(disc, at, buf, bytes))
         port_fatal("disc %d: can't read discs.bin at %ld", disc_no, at);
     disc_at = at + (long)bytes;
@@ -267,6 +294,9 @@ void psx_cd_swap(unsigned n) {
     if (n < 1 || n > 4 || (int)n == disc_no) return;
     if (disc >= 0) close(disc);
     disc = -1;
+#ifdef PORT_DISC_PACK
+    ra_at = -1; /* (the read-ahead was the old disc's) */
+#endif
     disc_no = (int)n;
     disc_at = -1;
     reading = 0;
