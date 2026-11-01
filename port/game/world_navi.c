@@ -82,8 +82,29 @@ void o0c_wm_naviDraw(void) {
     u8 visible = g_worldNaviVisible;
     g_worldTitleId = -1;
     if (mode != 2) g_worldNaviMode = 2, g_worldNaviVisible = 1;
+    /* (its place cursor is drawn by the text pen into the main ordering table, not the map's packets: in the scene on
+     * the top screen. Not drawn by the game: in its own full-map mode (Select) it is drawn below into the map's
+     * packets, on the bottom with the map; walking, the game leaves its flag set though no cursor is shown) */
+    u8 cursor = g_worldNaviCursorDraw;
+    g_worldNaviCursorDraw = 0;
     s32 lo = g_worldPrimPtr;
     o0c_wm_naviDraw_game();
+    g_worldNaviCursorDraw = cursor;
+    if (mode == 2 && visible && cursor) {
+        u32 *saved_ot = g_ot;
+        u8 *saved_prim = g_primPtr;
+        g_ot = (u32 *)g_worldOt[*g_worldBufIndex];
+        g_primPtr = (u8 *)g_worldPrimPtr;
+        msg_setOtz(1); /* (in front of the map) */
+        pen_begin();
+        pen_setPos((g_worldNaviCursorX >> 12) + 18, (g_worldNaviCursorY >> 12) + 6);
+        pen_drawSprite(1);
+        pen_endSmall();
+        msg_setOtz(2);
+        g_worldPrimPtr = (s32)g_primPtr;
+        g_ot = saved_ot;
+        g_primPtr = saved_prim;
+    }
     s32 hi = g_worldPrimPtr;
     g_worldTitleId = title;
     g_worldNaviMode = mode;
