@@ -240,6 +240,9 @@ $(BUILD)/ff9-full.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr
 		-DAPP_ROMFS=$(BUILD)/romfs
 cia: $(BUILD)/ff9.cia
 cia-full: $(BUILD)/ff9-full.cia
+# an installable title is always the player build
+$(if $(and $(TEST_OPTS),$(filter cia cia-full $(BUILD)/ff9.cia $(BUILD)/ff9-full.cia,$(MAKECMDGOALS))),\
+  $(error make cia / cia-full take no test options (they build the game as a player gets it)))
 .PHONY: cia cia-full 3ds-full
 
 $(BUILD)/discs.bin: tools/pack_discs.py

@@ -5,7 +5,8 @@
  *   (Cross: the game's own check of what is owned and the chocobo's ability)
  *   tap the title: back from the list to the tabs, or out of the screen (Circle)
  * Top screen: the highlighted chocograph (in the list) or the one chosen (on the tabs) large: its picture in the
- * game's frame, name, clue and the ability it needs, drawn with the screen's own code. */
+ * game's frame, name, clue and the ability it needs, drawn with the screen's own code. With the hint on the top, the
+ * bottom's list takes the hint box's place too (menuChocograph_init wrapped: config/renames.txt). */
 #define M2CTX
 #include "ovl_32.h"
 
@@ -76,4 +77,12 @@ int port_chocograph_top(void) {
     text_drawBlock(28, 112, 2, text_get(id + CHOCO_TEXT_CLUE), TEXT_PAL_WHITE);
     win_drawBox(&box, 4, WIN_STYLE_BEVEL);
     return 1;
+}
+
+void o32_menuChocograph_init_game(void);
+void o32_menuChocograph_init(void) {
+    o32_menuChocograph_init_game();
+    RECT *l = &s_menuChocograph.listRect, *h = &s_menuChocograph.infoRect;
+    l->w = (s16)(h->x + h->w - l->x); /* (the list to the hint box's right edge) */
+    h->x = 1024; /* (the hint box off the screen: it is on the top) */
 }
