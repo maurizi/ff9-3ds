@@ -70,11 +70,11 @@ void akao_initState(void) {
     AkaoChannel *c;
 
     g_akaoSubSeq = NULL;
-    D_800809EC = g_akaoChannels;
+    g_akaoChannelsPtr = g_akaoChannels;
     g_akaoSubChannels = NULL;
-    D_8007F8D8[1] = 0;
+    g_akaoInstrumentSets[1] = 0;
     g_akaoSeq = &g_akaoMainSeq;
-    D_8007F8D8[0] = 0;
+    g_akaoInstrumentSets[0] = 0;
     g_akaoLoadedBanks[5] = 0;
     g_akaoLoadedBanks[4] = 0;
     g_akaoLoadedBanks[3] = 0;
@@ -82,7 +82,7 @@ void akao_initState(void) {
     g_akaoLoadedBanks[1] = 0;
     g_akaoRandIndex = 0;
     g_akaoLoadedBanks[0] = 0;
-    D_8007F8E0 = 1;
+    g_akaoInitDone = 1;
     g_akaoFlags.bankUpload = 0;
     g_akaoFlags.mode = 1;
     g_akaoSeState.activeMask = 0;
@@ -126,7 +126,7 @@ void akao_initState(void) {
     g_akaoVoiceModeMasks[2] = 0;
     g_akaoVoiceModeMasks[1] = 0;
     g_akaoVoiceModeMasks[0] = 0;
-    D_80080A20 = 0;
+    g_akaoCrossfade.fadeLen = 0; /* (akao_init clears it through its own symbol, the same word) */
     psx_spu_write(0x1aa, (i & ~5) | 1);
     for (c = g_akaoChannels, i = 0; i < 32; i++, c++) {
         c->flags = 0;

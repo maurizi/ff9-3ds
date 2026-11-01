@@ -37,6 +37,8 @@
 /* Fixed PS1 RAM addresses the decomp uses as memory (ff9.h's PSX_RAM): into psx_ram */
 #include "psx_mem.h"
 #define PSX_RAM(type, addr) ((type)PSX_ADDR(addr))
+/* A pointer the original code dereferences while NULL (ff9.h's PSX_NULLABLE, at every known site): low RAM there */
+#define PSX_NULLABLE(p) PSX_NZ(p)
 #include PORT_HEADER
 #include "port_hw.h"
 #ifdef BTLFX_EXPORTS

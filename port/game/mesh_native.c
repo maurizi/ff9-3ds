@@ -11,14 +11,14 @@
 #include "port_hw.h"
 #include "native_mesh.h"
 
-void o0b_btl_projectMesh(BtlUnit9C *arg0, u8 arg1);
+void o0b_btl_projectMesh(BtlModel *arg0, u8 arg1);
 
 /* A battle unit's model (party, enemy, weapon) has its triangle lists put in strip order once (strip_order): the
  * hybrid renderer draws a model's opaque triangles as the 3D engine's triangle strips (gx_hybrid.c native_strips),
  * where a triangle sharing an edge with the one before costs one vertex instead of three. The order only decides
  * which of two polygons at the same OT entry the PS1 draws first. Not effect models (modules index their split
  * vertices in list order) nor the Zombie's (model 14: effect 0x17F numbers its polygons, docs R26). */
-#define STRIP_ORDERED 0x8000 /* BtlUnit9C8.flags: done (the game reads bit 0 only; a reloaded file starts clear) */
+#define STRIP_ORDERED 0x8000 /* BtlModelHeader.flags: done (the game reads bit 0 only; a reloaded file starts clear) */
 #ifdef PORT_NDS
 #define STRIP_COLD __attribute__((target("thumb")))
 #else
@@ -113,7 +113,7 @@ PORT_OVERLAY_CODE(0b) STRIP_COLD static void strip_links(u8 *list, int n, const 
     }
 }
 
-PORT_OVERLAY_CODE(0b) STRIP_COLD static void strip_order(BtlUnit9C8 *h) {
+PORT_OVERLAY_CODE(0b) STRIP_COLD static void strip_order(BtlModelHeader *h) {
     h->flags |= STRIP_ORDERED;
     for (u32 g = 0; g < h->meshCount; ++g) {
         BtlMesh *m = &h->meshes[g];
@@ -174,7 +174,7 @@ PORT_OVERLAY_CODE(0b) STRIP_COLD static void strip_order(BtlUnit9C8 *h) {
 }
 
 /* a battle unit's own model or weapon (not an effect's, not the Zombie's) */
-PORT_OVERLAY_CODE(0b) STRIP_COLD static int strip_unit_model(const BtlUnit9C *m) {
+PORT_OVERLAY_CODE(0b) STRIP_COLD static int strip_unit_model(const BtlModel *m) {
     Battle *bt = g_gameState->gameData->ctx.battle;
     if (!bt) return 0;
     for (int i = 0; i < 8; ++i) {
@@ -185,7 +185,7 @@ PORT_OVERLAY_CODE(0b) STRIP_COLD static int strip_unit_model(const BtlUnit9C *m)
     return 0;
 }
 
-void o0b_btl_projectMesh(BtlUnit9C *arg0, u8 arg1) {
+void o0b_btl_projectMesh(BtlModel *arg0, u8 arg1) {
     MATRIX m;
     if (!(arg0->header->flags & STRIP_ORDERED) && strip_unit_model(arg0)) strip_order(arg0->header);
     BtlMesh *g = &arg0->header->meshes[arg1];
@@ -239,18 +239,18 @@ __attribute__((weak)) int port_native_bg(const NativeBg *r) { (void)r; return 0;
 /* btl_drawMesh: the game's packets (mesh_packets.c, renamed by config/renames.txt) unless the renderer takes the
  * mesh, in which case only the bookkeeping the packets' function does stays: the model's first packet, the terminator
  * byte, out + 8. */
-u8 *o0b_btl_drawMesh_packets(BtlUnit9C *m, u8 meshIdx, u8 *out);
-u8 *o0b_btl_drawMesh(BtlUnit9C *m, u8 meshIdx, u8 *out);
+u8 *o0b_btl_drawMesh_packets(BtlModel *m, u8 meshIdx, u8 *out);
+u8 *o0b_btl_drawMesh(BtlModel *m, u8 meshIdx, u8 *out);
 
 void port_model_packets(const void *lo, const void *hi); /* (render.c: model polygons, for the 3DS's outlines) */
 __attribute__((weak)) void port_model_packets(const void *lo, const void *hi) { (void)lo; (void)hi; }
-static u8 *packets(BtlUnit9C *m, u8 meshIdx, u8 *out) {
+static u8 *packets(BtlModel *m, u8 meshIdx, u8 *out) {
     u8 *end = o0b_btl_drawMesh_packets(m, meshIdx, out);
     port_model_packets(out, end); /* (the group's packets, written from out) */
     return end;
 }
 
-u8 *o0b_btl_drawMesh(BtlUnit9C *m, u8 meshIdx, u8 *out) {
+u8 *o0b_btl_drawMesh(BtlModel *m, u8 meshIdx, u8 *out) {
     if (m->flags & 0x10) return packets(m, meshIdx, out);
     BtlMesh *g = &m->header->meshes[meshIdx];
     NativeMesh n;

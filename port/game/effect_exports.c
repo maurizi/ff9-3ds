@@ -15,7 +15,7 @@ typedef struct {
     u16 unk6; /* offset */
     Unk800E8F50Entry unk8[1];
 } Unk800E8F50;
-typedef struct { void *unk0; /* BtlUnit9C * */ } BtlObjSlotHead;
+typedef struct { void *unk0; /* BtlModel * */ } BtlObjSlotHead;
 
 u16 o0b_Hi_RegisterTexListModel(void *, void *, s16 *, s32);
 u16 o0b_Hi_RegisterGouEffModel(void *);
