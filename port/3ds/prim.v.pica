@@ -42,6 +42,8 @@
     ifc cmp.x
         rcp r2.x, inpos.z           ; 1/Z
         add r2.y, stereo.y, -r2.x   ; 1/Zc - 1/Z
+        mov r2.w, -stereo.y         ; (no nearer than the background is far: the near pop-out clamped to the same
+        max r2.y, r2.y, r2.w        ;  parallax as infinity, else models near the camera double up)
         mul r2.z, stereo.x, r2.y
         add r0.x, r0.x, r2.z        ; x += k (1/Zc - 1/Z)
         mul r1, stereo.zzzz, inpos.zzzz
