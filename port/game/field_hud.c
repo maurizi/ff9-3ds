@@ -136,7 +136,10 @@ unsigned port_hud_drive(void) {
 }
 __attribute__((weak)) int port_world_tap(int x, int y) { (void)x; (void)y; return 0; }
 int port_name_tap(int x, int y, unsigned *seq, int max);
+static int title_tap(int x, int y);
+int port_title_live(void);
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
+    if (g_gameState && g_gameState->mode == 0 && port_title_live()) return title_tap(x, y) ? -1 : 0; /* (title_ui.c) */
     { int n = port_name_tap(x, y - oy, seq, max); if (n) return n; } /* (name entry: port/game/name_touch.c) */
     { int port_menu_tap(int, int); if (port_menu_tap(x, y - oy)) return -1; } /* (main menu: menu_touch.c) */
     { int port_tm_tap(int, int); if (port_tm_tap(x, y - oy)) return -1; } /* (the card game: tm_ui.c) */
@@ -362,6 +365,40 @@ static int options_tap(int x, int y) {
     return 0;
 }
 
+/* ---- the title screen's choices (port/game/title_ui.c) ---- */
+int port_title_cursor(void), port_title_has_save(void);
+void port_title_choose(int choice);
+static int title_opts; /* OPTIONS shown in place of the choices */
+static RECT r_tnew = {40, 40, 240, 44}, r_tcont = {40, 92, 240, 44}, r_topt = {40, 156, 240, 32};
+static void title_button(RECT *r, const char *label, int on, int dim) {
+    int w = ui_measureLabel((u8 *)label);
+    ui_drawLabel(r->x + (r->w - w) / 2, r->y + (r->h - 6) / 2, 2, (s32)label, dim ? 2 : 0);
+    if (on) bar_mark(r->x + 4, r->y + 6, 3, r->h - 12); /* (where the D-pad's cursor is) */
+    win_drawBox(r, 3, 2);
+}
+static void draw_title(void) {
+    if (title_opts) {
+        draw_options();
+        title_button(&r_log, "BACK", 0, 0);
+        return;
+    }
+    int cur = port_title_cursor();
+    title_button(&r_tnew, "NEW GAME", cur == 0, 0);
+    title_button(&r_tcont, "CONTINUE", cur == 1, !port_title_has_save());
+    title_button(&r_topt, "OPTIONS", 0, 0);
+}
+static int title_tap(int x, int y) {
+    if (title_opts) {
+        if (inside(&r_log, x, y)) { title_opts = 0; snd_playSe(SE_CANCEL); }
+        else options_tap(x, y);
+        return 1;
+    }
+    if (inside(&r_tnew, x, y)) port_title_choose(0);
+    else if (inside(&r_tcont, x, y)) port_title_choose(1);
+    else if (inside(&r_topt, x, y)) { title_opts = 1; snd_playSe(SE_CURSOR); }
+    return 1;
+}
+
 static void draw_log(void) {
     static const u8 label[] = "LOG", optl[] = "OPTIONS";
     RECT box = r_logbox;
@@ -560,12 +597,14 @@ void port_bottom_hud(void) {
     if (!battle) port_battle_hud_on = 0;
     if (battle || world) field_ready = 0; /* (the field is reloaded after) */
     if (g_gameState->mode == 1 && field_ready) field_frames++;
-    if (g_gameState->mode != 1 && !battle && !world) return;
+    int title = g_gameState->mode == 0 && port_title_live();
+    if (!title) title_opts = 0;
+    if (g_gameState->mode != 1 && !battle && !world && !title) return;
     if (!g_gameState->gameData->font) return; /* (the common images aren't loaded yet) */
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
     if (d.rgb24 || d.w < 256) return; /* (a movie) */
-    if (!battle && !world && !had_control()) return; /* (a cutscene or movie field: nothing to show yet) */
+    if (!battle && !world && !title && !had_control()) return; /* (a cutscene or movie field: nothing to show yet) */
 
     ClearOTagR(hud_ot, OTN);
     u32 *saved_ot = g_ot;
@@ -582,6 +621,7 @@ void port_bottom_hud(void) {
     int drew = 1;
     if (battle) drew = port_battle_hud_draw(); /* (battle_ui.c: over the battle's own UI list) */
     else if (world) drew = 0; /* (the world map's own: world_navi.c) */
+    else if (title) draw_title();
     else draw();
     unsigned used = (unsigned)(g_primPtr - (u8 *)hud_mem);
     g_ot = saved_ot;
