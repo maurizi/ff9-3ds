@@ -137,9 +137,12 @@ unsigned port_hud_drive(void) {
 __attribute__((weak)) int port_world_tap(int x, int y) { (void)x; (void)y; return 0; }
 int port_name_tap(int x, int y, unsigned *seq, int max);
 static int title_tap(int x, int y);
+static int config_open(void);
+static int config_overlay_tap(int x, int y);
 int port_title_live(void);
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (g_gameState && g_gameState->mode == 0 && port_title_live()) return title_tap(x, y) ? -1 : 0; /* (title_ui.c) */
+    if (g_gameState && config_open() && config_overlay_tap(x, y)) return -1; /* (the Config screen's 3DS OPTIONS) */
     { int n = port_name_tap(x, y - oy, seq, max); if (n) return n; } /* (name entry: port/game/name_touch.c) */
     { int port_menu_tap(int, int); if (port_menu_tap(x, y - oy)) return -1; } /* (main menu: menu_touch.c) */
     { int port_tm_tap(int, int); if (port_tm_tap(x, y - oy)) return -1; } /* (the card game: tm_ui.c) */
@@ -399,6 +402,33 @@ static int title_tap(int x, int y) {
     return 1;
 }
 
+/* ---- the Config screen's way in to the port's options: a button in the strip left of its title box, the options
+ * over the screen when tapped (drawn over the menu's own frame on the bottom screen) ---- */
+static int cfg_opts;
+static RECT r_cfgbtn = {12, 8, 96, 22};
+static int config_open(void) {
+    return port_menu_state() == 2 && g_menuScreen.active && g_menuScreen.screen == MENU_SCREEN_CONFIG;
+}
+static void draw_config_overlay(void) {
+    if (cfg_opts) {
+        static RECT shade = {4, 30, 312, 160};
+        win_drawBox(&shade, 4, 2); /* (an opaque panel under the options: the Config rows don't show through) */
+        draw_options();
+        title_button(&r_log, "BACK", 0, 0);
+        return;
+    }
+    title_button(&r_cfgbtn, "3DS OPTIONS", 0, 0);
+}
+static int config_overlay_tap(int x, int y) {
+    if (cfg_opts) {
+        if (inside(&r_log, x, y)) { cfg_opts = 0; snd_playSe(SE_CANCEL); }
+        else options_tap(x, y);
+        return 1;
+    }
+    if (inside(&r_cfgbtn, x, y)) { cfg_opts = 1; snd_playSe(SE_CURSOR); return 1; }
+    return 0;
+}
+
 static void draw_log(void) {
     static const u8 label[] = "LOG", optl[] = "OPTIONS";
     RECT box = r_logbox;
@@ -587,12 +617,41 @@ void psx_ui_list_begin_keep(void);
 extern int port_battle_hud_on;
 static void top_hud(void);
 __attribute__((weak)) void ctr_flat_background(int on) { (void)on; } /* (the 3DS renderer's: stereo depth) */
+/* the Config screen's overlay as a list of its own over the menu's frame (as the battle's over its UI) */
+static void config_overlay(void) {
+    PsxDisplayInfo d;
+    psx_gpu_display_info(&d);
+    if (d.rgb24) return;
+    ClearOTagR(hud_ot, OTN);
+    u32 *saved_ot = g_ot;
+    u8 *saved_prim = g_primPtr;
+    u32 *p = hud_mem + OTN;
+    p[0] = 3u << 24;
+    p[1] = 0xE3000000u | (u32)d.x | (u32)d.y << 10;
+    p[2] = 0xE4000000u | (u32)(d.x + d.w - 1) | (u32)(d.y + d.h - 1) << 10;
+    p[3] = 0xE5000000u | ((u32)d.x & 0x7FF) | ((u32)d.y & 0x7FF) << 11;
+    addPrim(&hud_ot[OTN - 1], p);
+    g_ot = hud_ot;
+    g_primPtr = (u8 *)(p + 4);
+    draw_config_overlay();
+    g_ot = saved_ot;
+    g_primPtr = saved_prim;
+    Gp0State saved_gp0 = gp0_state;
+    psx_ui_list_begin_keep();
+    port_draw_ot_buffer(&hud_ot[OTN - 1], hud_mem, sizeof hud_mem);
+    psx_ui_list_end();
+    gp0_state = saved_gp0;
+}
+
 void port_bottom_hud(void) {
     shown = shown_battle = 0;
     ctr_flat_background(g_gameState && g_gameState->mode == 1);
     if (g_gameState && g_gameState->gameData) cards_step();
     if (g_gameState && g_gameState->gameData && g_gameState->gameData->font) top_hud();
-    if (!g_gameState || !g_gameState->gameData || port_menu_state()) return;
+    if (!g_gameState || !g_gameState->gameData) return;
+    if (!config_open()) cfg_opts = 0;
+    else if (g_gameState->gameData->font) { config_overlay(); return; }
+    if (port_menu_state()) return;
     int battle = g_gameState->mode == 2, world = g_gameState->mode == 3;
     if (!battle) port_battle_hud_on = 0;
     if (battle || world) field_ready = 0; /* (the field is reloaded after) */

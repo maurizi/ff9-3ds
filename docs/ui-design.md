@@ -39,9 +39,15 @@ item is marked **[done]**, **[partial]** (what is missing follows) or **[todo]**
     fill its box. **[done]**
 
 ## Options
-- In the field screen's log view, OPTIONS opens the port's settings in the log's place: 3D depth (low / normal /
-  high, on top of the slider), top screen (fit: scaled to the screen's height; sharp: the PS1's pixels 1:1), voices
-  (on / off). Kept in sdmc:/3ds/ff9/settings.cfg (port/3ds/settings.c). **[done]**
+- The port's settings: 3D depth (low / normal / high, on top of the slider), top screen (fit: scaled to the screen's
+  height; sharp: the PS1's pixels 1:1), voices (on / off). Kept in sdmc:/3ds/ff9/settings.cfg (port/3ds/settings.c).
+  Three ways in: the title screen's OPTIONS button; 3DS OPTIONS beside the Config screen's title (the panel over the
+  screen, BACK returns); the field screen's LOG view, OPTIONS in the log's place. **[done]**
+
+## Title
+- **Top**: the title picture and logo only (the PS1's NEW GAME / CONTINUE and hand are not drawn there). **Bottom**:
+  NEW GAME, CONTINUE (dim with no save) and OPTIONS as large buttons, the D-pad's choice marked; a tap acts directly
+  (the game's cursor set, its own decide). **[done: port/game/title_ui.c]**
 
 ## Dialogue
 - The text stays on top in FF9's speaker-anchored bubbles, at the screen plane. **[done]**
