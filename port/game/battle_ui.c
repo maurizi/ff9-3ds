@@ -460,10 +460,26 @@ void o0b_btlui_targetInput(void) {
  * in menus; render.c leaves the window off the bottom while port_battle_help_on */
 int port_battle_help_on;
 void port_help_panel(u8 *text);
+/* the party's ATB along the top screen's top edge (docs/ui-design.md: pips at a glance while watching the scene; the
+ * cards on the bottom have them with names): a thin gauge per member left to right in party order, white when ready,
+ * dark when out of action */
+static void atb_pips(void) {
+    for (int i = 0; i < 4; i++) {
+        BtlUnit *u = party_unit(i);
+        if (!u || !ram_ok(u->max, 8)) continue;
+        int x = 8 + i * 96, w = 88;
+        int max = u->max->maxAtb > 0 ? u->max->maxAtb : 1, atb = u->atb > max ? max : u->atb < 0 ? 0 : u->atb;
+        bar(&g_ot[3], x, 4, w, 4, 0x201818);
+        if (u->hp == 0) continue;
+        bar(&g_ot[2], x, 4, w * atb / max, 4, atb >= max ? 0xF0F0F0 : 0xC09040);
+    }
+}
+
 int port_battle_help_top(void) {
     u8 *text = (u8 *)g_btluiHelp.text; /* (an address held as s32) */
     port_battle_help_on = port_battle_hud_on && ram_ok(g_btlUi, sizeof *g_btlUi) && g_btluiHelp.open && text &&
                           ram_ok(text, 1) && *text != TEXT_END;
+    if (port_battle_hud_on && ram_ok(g_btlUi, sizeof *g_btlUi) && g_btlUi->partyCount) atb_pips();
     if (port_battle_help_on) port_help_panel(text);
-    return port_battle_help_on;
+    return port_battle_hud_on;
 }
