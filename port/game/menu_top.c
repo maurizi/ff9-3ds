@@ -501,7 +501,7 @@ int port_menu_top_draw(void) {
  * help_draw is inside its object, so help_draw itself can't be): the same steps, with the port's help_draw. */
 int port_menu_state(void);
 void help_draw(void);
-void func_8003573C(void);
+void help_onDraw(void);
 
 static int help_moved(void) {
     int st = port_menu_state(); /* (a menu, or the card game: tm_ui.c shows its hints on top) */
@@ -522,7 +522,7 @@ static void help_draw_port(void) {
         if (g_menuHelp.cursorOnTop) ui_drawHand(g_menuHelp.x, g_menuHelp.y, otz);
         sprAnim_draw(g_menuHelp.x + 5, g_menuHelp.y + 2, otz, &g_menuHelp.iconAnim);
     }
-    func_8003573C();
+    help_onDraw();
 }
 
 void help_update(void) { /* (help.c's, drawing with help_draw_port) */

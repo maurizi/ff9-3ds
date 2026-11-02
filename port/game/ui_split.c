@@ -12,6 +12,7 @@ __attribute__((weak)) void port_ui_packets(const void *lo, const void *hi) { (vo
 /* A field minigame's own panels (its how-to-play box, its score) belong on the bottom screen with the touch controls,
  * not over the scene; its speech balloons stay with the speakers. 1: window w goes to the bottom screen. */
 void port_bottom_packets(const void *lo, const void *hi);
+__attribute__((weak)) void port_bottom_shift(const void *lo, const void *hi, int dx, int dy) { (void)lo, (void)hi, (void)dx, (void)dy; }
 /* (the minigames' panels by field and message id, decomp R38: ff9-decomp docs/r32/3ds-requests-8.md) */
 static const struct { u16 field, lo, hi; } panels[] = {
     {103, 0xEA, 0xEB},   /* jump rope: "N times" (the girls' comments are speech: on the top) */

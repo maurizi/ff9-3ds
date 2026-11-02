@@ -8,7 +8,7 @@
 #include "ovl_14.h"
 
 void o14_opening_titleInput(void);
-void o14_opening_titleDrawStub(void);
+void o14_opening_titleOnDraw(void);
 void o14_opening_titleDrawBackground(void);
 void o14_opening_titleTick(void);
 void o14_opening_titleDecide(void);
@@ -31,7 +31,7 @@ void o14_opening_titleUpdate(void) {
     }
     tap = -1;
     o14_opening_titleInput();
-    o14_opening_titleDrawStub();
+    o14_opening_titleOnDraw();
     o14_opening_titleDrawBackground();
     o14_opening_titleTick();
     live_frame = VSync(-1);
