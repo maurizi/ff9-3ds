@@ -896,6 +896,7 @@ typedef struct {
 } TexSlot;
 
 #define MAX_SLOTS 96
+#define SLOT_RESERVE (3u << 20)
 static TexSlot slots[MAX_SLOTS];
 static int nslots;
 static u32 rgba_lut[65536];
@@ -929,7 +930,12 @@ static TexSlot *slot_for(u32 key, u32 twin) {
     for (int i = 0; i < nslots; i++) {
         if (slots[i].serial != frame_serial && (victim < 0 || slots[i].serial < slots[victim].serial)) victim = i;
     }
-    if (nslots < MAX_SLOTS && C3D_TexInit(&slots[nslots].tex, 256, 256, GPU_RGBA8)) {
+    /* (the cache stops growing with SLOT_RESERVE of linear memory left: 96 slots are more than there is, and what
+     * allocates later (a voice line's buffers, the HUD's images) would find none) */
+    static int capped;
+    if (!capped && nslots < MAX_SLOTS && linearSpaceFree() <= SLOT_RESERVE)
+        capped = 1, port_log("renderer: texture cache held at %d pages (linear memory)\n", nslots);
+    if (nslots < MAX_SLOTS && linearSpaceFree() > SLOT_RESERVE && C3D_TexInit(&slots[nslots].tex, 256, 256, GPU_RGBA8)) {
         victim = nslots++;
         C3D_TexSetFilter(&slots[victim].tex, GPU_NEAREST, GPU_NEAREST);
         C3D_TexSetWrap(&slots[victim].tex, GPU_REPEAT, GPU_REPEAT);
@@ -2015,14 +2021,19 @@ static struct { float x[3], y[3], z, u[3], v[3], par[3]; u8 tex; } model_tri[MOD
 static int n_model_tris;
 static u16 model_order[MODEL_TRIS];
 
+/* (at start-up, before the texture cache takes its share of linear memory: made when first needed, late in a long
+ * session, there was none left and the Equip view's model drew nothing on hardware) */
+static void model_tex_init(void) {
+    for (int i = 0; i < MODEL_TEXS; i++) {
+        if (!C3D_TexInit(&model_tex[i], 256, 256, GPU_RGBA8)) { port_log("model view: no memory for texture %d\n", i); return; }
+        C3D_TexSetFilter(&model_tex[i], GPU_LINEAR, GPU_NEAREST);
+        model_tex_ok[i] = 1;
+    }
+}
+
 void ctr_model_texture(int slot, const u32 *rgba) { /* rgba: 256x256, rows from the top, 0xRRGGBBAA */
     trace("model_texture", slot, 0);
-    if (slot < 0 || slot >= MODEL_TEXS) return;
-    if (!model_tex_ok[slot]) {
-        if (!C3D_TexInit(&model_tex[slot], 256, 256, GPU_RGBA8)) return;
-        C3D_TexSetFilter(&model_tex[slot], GPU_LINEAR, GPU_NEAREST);
-        model_tex_ok[slot] = 1;
-    }
+    if (slot < 0 || slot >= MODEL_TEXS || !model_tex_ok[slot]) return;
     gpu_quiet();
     u32 *dst = model_tex[slot].data;
     for (int y = 0; y < 256; y++)
@@ -2444,6 +2455,7 @@ void ctr_video_init(void) {
     AttrInfo_AddLoader(&attr, 2, GPU_UNSIGNED_BYTE, 4);
     AttrInfo_AddLoader(&attr, 3, GPU_FLOAT, 1);
 
+    model_tex_init();
     for (int i = 0; i < 2; i++) {
         vb_half[i] = linearAlloc(VB_MAX * sizeof(Vtx));
         staging_half[i] = linearAlloc(STAGING_SIZE);
