@@ -947,3 +947,12 @@ past the field's OT; its link word (a KUSEG packet address) overwrites another M
 PS1 reads through its RAM mirror. The port leaves such a packet unlinked (counted patch, `PSX_OT_OUTSIDE`). Asked:
 a comment at the link saying the index can pass the table (and what lies after it), so the next reader doesn't take
 it for a port bug. No behaviour change.
+
+### F36 (2026-11-02). btl_loadEnemyModelsStep reads ids[-1] on the first model
+`src/ovl_0b/btl_main.c` case 2: `dup = &ids[cnt] - 1; do { if (*dup == w) goto next; ... } while (dup >= ids);`
+compares the first model id with `ids[-1]` (`ids = task->fileIds.h`), the high half of `task->dst`, before the
+loop test. On the PS1 that is 0x801F (`battle->partyBufs[0]`, KSEG0), never a model id. The port's `dst` is a
+native pointer: on hardware it was 0x009Bxxxx, so the Bomb (model 155 = 0x9B) counted as already listed and was
+never loaded, and battle 334 (Prima Vista, field 60) crashed in btl_applyModelTextures on a NULL header. The port
+compares only inside the list (counted patch). Asked: a comment at the walk that the first compare reads the word
+before the list (and what lies there), or a form that doesn't if one still matches.

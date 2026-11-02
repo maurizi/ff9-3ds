@@ -174,3 +174,8 @@ src/ovl_0d/tm_game.c | tm_updatePad(&tm); | tm_updatePad(&tm); port_tm_frame(&tm
 src/ovl_15/blackjack.c | ui_drawSmallDigits(0x10C - (text_measureSmall(text) >> 1), | if (0) ui_drawSmallDigits(0x10C - (text_measureSmall(text) >> 1), | 8   # Blackjack's side panel (bankroll, wager, moves): on the bottom screen as buttons (port/game/blackjack_ui.c)
 src/ovl_15/bj_action.c | help_drawCursor(&g_menuHelp, &g_bjAction); | ; | 1   # (its hand: the bottom screen marks the move)
 src/ovl_15/bj_wager.c | help_drawCursor(&g_menuHelp, &g_bjWagerMenu); | ; | 1
+
+# btl_loadEnemyModelsStep's duplicate check starts at ids[-1] when the list is empty: the high half of task->dst.
+# On the PS1 that is 0x801F (KSEG0), never a model id; a native pointer's high half can be one (0x009B = the Bomb's
+# model 155 skipped: NULL model header in battle 334 on hardware). Compare only inside the list.
+src/ovl_0b/btl_main.c | if (*dup == w) { | if (dup >= ids && *dup == w) { | 1
