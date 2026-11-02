@@ -79,6 +79,9 @@ int plat_async(void (*fn)(void *), void *arg) {
 /* Wait for the job. If the worker hasn't even started it after half a second, it isn't being scheduled (a core the
  * system doesn't give this application): the job runs here, and every later one too. */
 void plat_async_wait(void) {
+    extern volatile const char *ctr_where;
+    const char *was = (const char *)ctr_where;
+    ctr_where = "waiting for the worker (movie / async job)";
     u64 t0 = osGetTime();
     while (busy) {
         LightEvent_WaitTimeout(&done, 20000000);
@@ -89,10 +92,12 @@ void plat_async_wait(void) {
             void *arg = job_arg;
             busy = 0;
             fn(arg);
+            ctr_where = was;
             return;
         }
     }
     __sync_synchronize();
+    ctr_where = was;
 }
 
 void ctr_async_exit(void) {

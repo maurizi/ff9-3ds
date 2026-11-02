@@ -251,7 +251,11 @@ static unsigned depth_next = 1, depth_submitted = 1; /* the next depth value; th
 static void frame_begin(void) {
     if (in_frame) return;
     unsigned profile_start = port_profile_begin();
+    extern volatile const char *ctr_where;
+    const char *was = (const char *)ctr_where;
+    ctr_where = "C3D_FrameBegin (waiting for the GPU)";
     C3D_FrameBegin(0); /* waits for the GPU to finish what was sent: the other half is free */
+    ctr_where = was;
     port_profile_end(PORT_PROFILE_SCALE, profile_start); /* ("scale": the wait for the GPU) */
     gpu_busy = 0;
     in_frame = 1;
@@ -812,6 +816,8 @@ static void blit_cells(int cx0, int cy0, int cx1, int cy1) {
 
 /* Read cells [cx0,cx1)x[cy0,cy1) whose shadow is stale back from the left eye's mirror. */
 static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
+    extern volatile const char *ctr_where;
+    ctr_where = "readback";
     gpu_sync();
     const u16 *m = mirror_tex[0].data;
     for (int cy = cy0; cy < cy1; cy++)
@@ -2107,6 +2113,8 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
 unsigned ctr_frames_presented(void) { return frames_drawn; }
 
 void ctr_present(long frame) {
+    extern volatile const char *ctr_where;
+    ctr_where = "present";
     (void)frame;
     submit(); /* (with the parallax its runs were ordered for: stereo_k changes below) */
     button_icons_frame(); /* (for the next frame's sprites) */

@@ -149,6 +149,8 @@ static void put(u32 type, u32 arg, u32 b) {
     u32 backlog = head - shared.tail;
     if (backlog > ctr_spu_backlog_max) ctr_spu_backlog_max = backlog;
     if (backlog >= SPU7_RING) {
+        extern volatile const char *ctr_where;
+        ctr_where = "waiting for the audio thread (SPU ring full)";
         kick();
         /* (full: the audio core catches up; if it makes no progress at all for a second, it isn't being scheduled:
          * the SPU runs on the game's thread from then on) */

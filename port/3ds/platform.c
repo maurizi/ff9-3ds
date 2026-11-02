@@ -82,8 +82,38 @@ void plat_vsync_begin(unsigned int n) {
     vsync_owed = n;
 }
 
+/* Watchdog: the main loop marks where it is (ctr_where) and counts its frames; a thread on another core logs the mark
+ * and the frame when a frame hasn't ended for 3 seconds (a hang on hardware: where the game is stuck, even when the
+ * HOME button no longer answers) */
+volatile const char *ctr_where = "start";
+static volatile unsigned wd_frames;
+static void watchdog_main(void *unused) {
+    (void)unused;
+    unsigned last = 0, still = 0;
+    for (;;) {
+        svcSleepThread(1000000000LL);
+        unsigned f = wd_frames;
+        if (f != last) { last = f, still = 0; continue; }
+        if (++still % 3 == 0) {
+            char line[160];
+            int n = snprintf(line, sizeof line, "WATCHDOG: no frame for %us at frame %u, in %s\n", still, f, (const char *)ctr_where);
+            void ctr_console_raw(const char *, int);
+            ctr_console_raw(line, n);
+        }
+    }
+}
+void ctr_watchdog_start(void) {
+    static Thread t;
+    if (t) return;
+    s32 prio = 0x30;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    t = threadCreate(watchdog_main, NULL, 8 * 1024, prio - 3, ctr_is_new3ds() ? 2 : 1, true);
+}
+
 void plat_wait_frame(void) {
     frames++;
+    wd_frames = (unsigned)frames;
+    ctr_where = "game frame";
 #ifdef PORT_PROBE_AT
     { extern int psx_trace_gpu; psx_trace_gpu = frames >= PORT_PROBE_AT - 5 && frames < PORT_PROBE_AT; }
     { extern unsigned int psx_probe_top; if (frames >= PORT_PROBE_AT - 10 && frames <= PORT_PROBE_AT) port_log("top polys f%ld: %u\n", frames, psx_probe_top); psx_probe_top = 0; }
@@ -232,6 +262,7 @@ int main(void) {
     port_log("ff9-3ds (%s 3DS)\n", is_new3ds ? "New" : "Old");
     ctr_audio_init();
     ctr_async_init();
+    { void ctr_watchdog_start(void); ctr_watchdog_start(); }
 #ifdef PORT_AUTOPRESS
     input_script_add_list(PORT_AUTOPRESS);
 #endif

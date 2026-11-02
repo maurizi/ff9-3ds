@@ -57,3 +57,10 @@ void ctr_console_show(void) {
         if (*l) printf("%s%s", l, l[strlen(l) - 1] == '\n' ? "" : "\n");
     }
 }
+
+/* a line written at once from any thread (the watchdog's): no shared buffer */
+void ctr_console_raw(const char *text, int n) {
+    svcOutputDebugString(text, n);
+    if (logfile) { fwrite(text, 1, n, logfile); fflush(logfile); }
+    if (netlog) { fwrite(text, 1, n, stderr); fflush(stderr); }
+}
