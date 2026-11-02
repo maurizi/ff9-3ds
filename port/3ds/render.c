@@ -1155,7 +1155,9 @@ static unsigned fit_age = ~0u;                    /* presents since it was fitte
  * and text at the screen plane are always in front of what they cover (a model nearer than the plane they're drawn
  * over is a clash the eyes can't resolve). A field's background layers all go at one depth, the scene's mean: a
  * layer of its own depth comes apart from the layer under it (an overlay cut from the same picture, as a table over
- * the floor), which shows as a ghost or a hole beside it. */
+ * the floor), which shows as a ghost or a hole beside it. In a field the screen plane is that background depth
+ * instead: a model nearer than it (the shader flattens what is nearer than the plane) would stand out of the picture
+ * while the picture's own overlays (the pots in front of the Alexandria kitchen's chef) still cut into it. */
 static float zc_smooth = 1500.0f;   /* the scene's mean depth, smoothed */
 static float near_smooth = 1500.0f; /* its nearest, smoothed: the convergence depth */
 static float fit_zmin = 1e9f;       /* this frame's nearest sample */
@@ -1166,7 +1168,7 @@ static void fit_frame(void) {
         zc_smooth += (fit_z / fit_n - zc_smooth) * 0.1f;
         float nz = fit_zmin < zc_smooth / 4 ? zc_smooth / 4 : fit_zmin > zc_smooth ? zc_smooth : fit_zmin;
         near_smooth += (nz - near_smooth) * 0.1f;
-        stereo_inv_zc = 1.0f / near_smooth;
+        stereo_inv_zc = 1.0f / (ctr_flat_bg ? zc_smooth : near_smooth);
         float den = fit_n * fit_ss - fit_s * fit_s;
         if (den > 1e-3f) {
             fit_a = (fit_n * fit_sz - fit_s * fit_z) / den;
