@@ -68,9 +68,29 @@ void win_drawAll(void) {
         up[i] = w->visible;
         w->visible = down[i];
     }
+    /* on the bottom screen: a panel, not a balloon (no speech tail, no shadow); the packets moved as a block so the
+     * first one sits centred along the top (port_bottom_shift: the game's own layout and text kept) */
+    u8 saved_style[10], saved_shadow[10];
+    int bx0 = 1 << 30, bx1 = -(1 << 30), by0 = 1 << 30;
+    for (int i = 0; i < 10; i++) {
+        if (!down[i]) continue;
+        Window *w = &g_windows[i];
+        saved_style[i] = w->style, saved_shadow[i] = w->shadow;
+        if (w->style == WIN_STYLE_BALLOON) w->style = WIN_STYLE_BEVEL;
+        w->shadow = 0;
+        if (w->cur.x < bx0) bx0 = w->cur.x;
+        if (w->cur.x + w->cur.w > bx1) bx1 = w->cur.x + w->cur.w;
+        if (w->cur.y < by0) by0 = w->cur.y;
+    }
     u8 *lo2 = g_primPtr;
     win_drawAll_game();
-    if (g_primPtr != lo2) port_bottom_packets((const void *)PSX_PTR(lo2), (const void *)PSX_PTR(g_primPtr));
+    for (int i = 0; i < 10; i++)
+        if (down[i]) g_windows[i].style = saved_style[i], g_windows[i].shadow = saved_shadow[i];
+    if (g_primPtr != lo2) {
+        void port_bottom_shift(const void *, const void *, int, int);
+        port_bottom_packets((const void *)PSX_PTR(lo2), (const void *)PSX_PTR(g_primPtr));
+        port_bottom_shift((const void *)PSX_PTR(lo2), (const void *)PSX_PTR(g_primPtr), (320 - (bx1 - bx0)) / 2 - bx0, 12 - by0);
+    }
     for (int i = 0; i < 10; i++) g_windows[i].visible = (u8)(up[i] | down[i] | hide[i]);
 }
 
