@@ -163,60 +163,71 @@ static int decode_frame(const u8 *a, long avail, int n, int frame, s32 root[3], 
     return 1;
 }
 
-/* ---- the loaded model ---- */
-static struct {
+/* ---- the loaded models: one per slot (Equip's view uses slot 0, Order's formation 0-3), each with its three
+ * textures in the renderer's slots 3 slot .. 3 slot + 2 ---- */
+#define SLOTS 4
+typedef struct {
     int kind, weapon_item, ok;
     u8 *body, *wpn;
     long body_size, wpn_size, head, motion, whead;
     int frames;
-} m = {-1, -1, 0, NULL, NULL, 0, 0, 0, 0, 0, 0};
+} Loaded;
+static Loaded ms[SLOTS] = {{-1, -1, 0, NULL, NULL, 0, 0, 0, 0, 0, 0}, {-1, -1, 0, NULL, NULL, 0, 0, 0, 0, 0, 0},
+                           {-1, -1, 0, NULL, NULL, 0, 0, 0, 0, 0, 0}, {-1, -1, 0, NULL, NULL, 0, 0, 0, 0, 0, 0}};
 static u32 texbuf[256 * 256];
 
-static void unload(void) {
-    free(m.body);
-    free(m.wpn);
-    m.body = m.wpn = NULL;
-    m.ok = 0;
+static void unload(Loaded *m) {
+    free(m->body);
+    free(m->wpn);
+    m->body = m->wpn = NULL;
+    m->ok = 0;
 }
 
-static int load(int kind, int item) {
-    unload();
-    m.kind = kind;
-    m.weapon_item = item;
+static int load(int slot, int kind, int item) {
+    Loaded *m = &ms[slot];
+    unload(m);
+    m->kind = kind;
+    m->weapon_item = item;
     if (kind < 0 || kind >= 19) return 0;
     int id = kinds[kind].body;
-    m.body = read_file(10, id, &m.body_size);
-    if (!m.body) return 0;
-    long pack = db_find(m.body, m.body_size, 0, 0x1B0000), tims = db_find(m.body, m.body_size, 0, 0x1B0001);
-    m.head = db_find(m.body, m.body_size, pack, 0x020000 | id);
-    m.motion = db_find(m.body, m.body_size, pack, kinds[kind].idle);
-    if (m.head < 0 || m.motion < 0) { port_log("model view: model %d: no header/motion\n", id); return 0; }
-    m.frames = rd16(m.body + m.motion + 2);
+    m->body = read_file(10, id, &m->body_size);
+    if (!m->body) return 0;
+    long pack = db_find(m->body, m->body_size, 0, 0x1B0000), tims = db_find(m->body, m->body_size, 0, 0x1B0001);
+    m->head = db_find(m->body, m->body_size, pack, 0x020000 | id);
+    m->motion = db_find(m->body, m->body_size, pack, kinds[kind].idle);
+    if (m->head < 0 || m->motion < 0) { port_log("model view: model %d: no header/motion\n", id); return 0; }
+    m->frames = rd16(m->body + m->motion + 2);
     for (int n = 0; n < 2; n++) { /* (the body's two textures: TIM-local uvs) */
         __builtin_memset(texbuf, 0, sizeof texbuf);
-        long to = db_nth(m.body, m.body_size, tims, n); /* (keyed by their VRAM place: in order) */
-        int ok = tim_rgba(m.body, m.body_size, to, texbuf, 0);
-        if (ok) ctr_model_texture(n, texbuf);
+        long to = db_nth(m->body, m->body_size, tims, n); /* (keyed by their VRAM place: in order) */
+        int ok = tim_rgba(m->body, m->body_size, to, texbuf, 0);
+        if (ok) ctr_model_texture(slot * 3 + n, texbuf);
     }
-    m.whead = -1;
+    m->whead = -1;
     int wid = item >= 0 && item < 0x58 ? rd16((const u8 *)g_weaponTable + item * 0xC + 2) : 0;
-    if (wid) m.wpn = read_file(8, wid, &m.wpn_size);
-    if (m.wpn) {
-        long wpack = db_find(m.wpn, m.wpn_size, 0, 0x1B0000), wtims = db_find(m.wpn, m.wpn_size, 0, 0x1B0001);
-        m.whead = db_find(m.wpn, m.wpn_size, wpack, 0x020000 | wid);
+    if (wid) m->wpn = read_file(8, wid, &m->wpn_size);
+    if (m->wpn) {
+        long wpack = db_find(m->wpn, m->wpn_size, 0, 0x1B0000), wtims = db_find(m->wpn, m->wpn_size, 0, 0x1B0001);
+        m->whead = db_find(m->wpn, m->wpn_size, wpack, 0x020000 | wid);
         __builtin_memset(texbuf, 0, sizeof texbuf);
-        if (!tim_rgba(m.wpn, m.wpn_size, db_nth(m.wpn, m.wpn_size, wtims, 0), texbuf, 0x50)) m.whead = -1;
-        else ctr_model_texture(2, texbuf); /* (its v is 0x50 less: placed at 0x50) */
+        if (!tim_rgba(m->wpn, m->wpn_size, db_nth(m->wpn, m->wpn_size, wtims, 0), texbuf, 0x50)) m->whead = -1;
+        else ctr_model_texture(slot * 3 + 2, texbuf); /* (its v is 0x50 less: placed at 0x50) */
     }
-    port_log("model view: body %d (motion 0x%06x, %d frames), weapon %d%s\n", id, kinds[kind].idle, m.frames, wid,
-             m.whead >= 0 ? "" : " (none)");
-    m.ok = 1;
+    port_log("model view %d: body %d (motion 0x%06x, %d frames), weapon %d%s\n", slot, id, kinds[kind].idle,
+             m->frames, wid, m->whead >= 0 ? "" : " (none)");
+    m->ok = 1;
     return 1;
 }
 
-/* the groups of the model at d+h posed by bones[], drawn with textures tex0 + tex (body) */
-static void draw(const u8 *d, long h, const Mat *bones, int nbones_used, int tex_base, const Mat *turn, float cx,
-                 float cy, float scale) {
+/* the view: model space -> the turn (and place: its t) -> the camera's tilt, then a perspective about (cx, cy) */
+typedef struct {
+    Mat turn, cam;
+    float cx, cy, scale, dist;
+} View;
+
+/* the groups of the model at d+h posed by bones[], drawn with texture slots tex_base + (0, 1) (body) or tex_base (a
+ * weapon) */
+static void draw(const u8 *d, long h, const Mat *bones, int nbones_used, int tex_base, int weapon, const View *w) {
     int nb = d[h + 2], ng = d[h + 3];
     long mesh = h + (s32)rd32(d + h + 0x10);
     static s32 pos[1024][3];
@@ -231,9 +242,12 @@ static void draw(const u8 *d, long h, const Mat *bones, int nbones_used, int tex
             int n = rd16(vc + b * 2);
             for (int i = 0; i < n && k < 1024; i++, k++) {
                 s16 v[3] = {(s16)rd16(vs + k * 8), (s16)rd16(vs + k * 8 + 2), (s16)rd16(vs + k * 8 + 4)};
-                s32 p[3];
+                s32 p[3], q[3];
                 apply(&bones[b], v, p);
-                apply(turn, (s16[3]){(s16)p[0], (s16)p[1], (s16)p[2]}, pos[k]);
+                for (int r = 0; r < 3; r++) /* (placed: past s16) */
+                    q[r] = w->turn.t[r] + ((w->turn.m[r][0] * p[0] + w->turn.m[r][1] * p[1] + w->turn.m[r][2] * p[2]) >> 12);
+                for (int r = 0; r < 3; r++)
+                    pos[k][r] = (w->cam.m[r][0] * q[0] + w->cam.m[r][1] * q[1] + w->cam.m[r][2] * q[2]) >> 12;
             }
         }
         int nft4 = rd16(gm + 2), nft3 = rd16(gm + 4);
@@ -253,9 +267,9 @@ static void draw(const u8 *d, long h, const Mat *bones, int nbones_used, int tex
                     int a = corners[t][c];
                     if (vi[a] >= k) goto next;
                     float px = (float)pos[vi[a]][0], py = (float)pos[vi[a]][1], pz = (float)pos[vi[a]][2];
-                    float f = 1400.0f / (1400.0f + pz); /* (a gentle perspective) */
-                    x[c] = cx + px * scale * f;
-                    y[c] = cy + py * scale * f;
+                    float f = w->dist / (w->dist + pz); /* (a gentle perspective) */
+                    x[c] = w->cx + px * w->scale * f;
+                    y[c] = w->cy + py * w->scale * f;
                     z[c] = pz;
                     u[c] = uv[ui[a] * 2];
                     v[c] = uv[ui[a] * 2 + 1];
@@ -265,33 +279,29 @@ static void draw(const u8 *d, long h, const Mat *bones, int nbones_used, int tex
                     float cr = (x[1] - x[0]) * (y[2] - y[0]) - (y[1] - y[0]) * (x[2] - x[0]);
                     if ((t == 0 ? cr : -cr) <= 0) continue;
                 }
-                ctr_model_tri(tex_base == 2 ? 2 : tex & 1, x, y, z, u, v, par);
+                ctr_model_tri(weapon ? tex_base : tex_base + (tex & 1), x, y, z, u, v, par);
             next:;
             }
         }
     }
 }
 
-/* the Equip view: character c turning at (cx, cy) on the top screen, about `height` pixels tall */
-void port_model_view(Character *c, float cx, float cy, float height) {
-    if (!c) return;
+/* character c in slot `slot`, in its idle motion `phase` frames along, seen through w */
+static void draw_member(int slot, Character *c, int phase, const View *w) {
     int kind = (int)c->info.b.kind, item = c->equip[0];
-    if (kind != m.kind || item != m.weapon_item) load(kind, item);
-    if (!m.ok) return;
-    static int frame;
-    static s32 yaw;
+    Loaded *m = &ms[slot];
+    if (kind != m->kind || item != m->weapon_item) load(slot, kind, item);
+    if (!m->ok) return;
     int ticks = (int)VSync(-1);
-    frame = (ticks / 4) % (m.frames ? m.frames : 1); /* (15 frames a second, as in battle) */
-    yaw = (ticks * 6) & 0xFFF;
-    /* bones */
-    const u8 *d = m.body;
-    long h = m.head;
+    int frame = (ticks / 4 + phase) % (m->frames ? m->frames : 1); /* (15 frames a second, as in battle) */
+    const u8 *d = m->body;
+    long h = m->head;
     int nb = d[h + 2];
     if (nb > 64) return;
     Mat bones[64];
     s32 root[3];
     s16 ang[64][3];
-    if (!decode_frame(d + m.motion, m.body_size - m.motion, nb, frame, root, ang)) return;
+    if (!decode_frame(d + m->motion, m->body_size - m->motion, nb, frame, root, ang)) return;
     const u8 *bd = d + h + (s32)rd32(d + h + 0xC);
     for (int i = 0; i < nb; i++) {
         s32 l[3][3];
@@ -307,14 +317,48 @@ void port_model_view(Character *c, float cx, float cy, float height) {
         s16 len[3] = {0, 0, (s16)rd16(bd + i * 4)};
         apply(&bones[p], len, bones[i].t);
     }
-    /* turntable: about y, the model's feet (y 0) low on the screen */
-    Mat turn;
-    rot_zyx(0, yaw, 0, turn.m);
-    turn.t[0] = turn.t[1] = turn.t[2] = 0;
-    float scale = height / 520.0f;
-    draw(d, h, bones, nb, 0, &turn, cx, cy, scale);
-    if (m.whead >= 0) {
+    draw(d, h, bones, nb, slot * 3, 0, w);
+    if (m->whead >= 0) {
         int wb = kinds[kind].bone < nb ? kinds[kind].bone : 0;
-        draw(m.wpn, m.whead, &bones[wb], 1, 2, &turn, cx, cy, scale);
+        draw(m->wpn, m->whead, &bones[wb], 1, slot * 3 + 2, 1, w);
+    }
+}
+
+/* the Equip view: character c turning at (cx, cy) on the top screen, about `height` pixels tall */
+void port_model_view(Character *c, float cx, float cy, float height) {
+    if (!c) return;
+    View w;
+    rot_zyx(0, ((int)VSync(-1) * 6) & 0xFFF, 0, w.turn.m); /* (turntable: about y, the feet (y 0) low on the screen) */
+    w.turn.t[0] = w.turn.t[1] = w.turn.t[2] = 0;
+    rot_zyx(0, 0, 0, w.cam.m);
+    w.cx = cx, w.cy = cy, w.scale = height / 520.0f, w.dist = 1400.0f;
+    draw_member(0, c, 0, &w);
+}
+
+/* Order: the party as they stand in battle, seen from behind them and above, turned toward where the enemies would
+ * be (up the screen): members across in party order, the back row a step nearer the camera. Each member's feet on
+ * the screen go to feet[i] (x, y; x < 0: not drawn), for their names and the cursor. */
+#define FORM_SPACING 470
+#define FORM_BACK 420
+#define FORM_YAW 0xA00
+#define FORM_TILT 0x130
+void port_party_view(Character *const party[4], const int backrow[4], float height, float feet[4][2]) {
+    View w;
+    rot_zyx(FORM_TILT, 0, 0, w.cam.m);
+    w.cx = 200, w.cy = 140, w.scale = height / 520.0f, w.dist = 3000.0f;
+    for (int i = 0; i < 4; i++) {
+        feet[i][0] = -1;
+        if (!party[i]) continue;
+        rot_zyx(0, FORM_YAW, 0, w.turn.m);
+        w.turn.t[0] = (s32)((i - 1.5f) * FORM_SPACING);
+        w.turn.t[1] = 0;
+        w.turn.t[2] = backrow[i] ? -FORM_BACK : 0;
+        draw_member(i, party[i], i * 3, &w);
+        /* (where its feet land: the same transform of its place) */
+        s32 q[3] = {w.turn.t[0], 0, w.turn.t[2]}, p[3];
+        for (int r = 0; r < 3; r++) p[r] = (w.cam.m[r][0] * q[0] + w.cam.m[r][1] * q[1] + w.cam.m[r][2] * q[2]) >> 12;
+        float f = w.dist / (w.dist + p[2]);
+        feet[i][0] = w.cx + p[0] * w.scale * f;
+        feet[i][1] = w.cy + p[1] * w.scale * f;
     }
 }

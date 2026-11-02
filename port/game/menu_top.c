@@ -380,28 +380,31 @@ static void member_view(Character *c) {
     win_drawBox(&box, 4, 2);
 }
 
-/* Order: the party in formation, large: each member's portrait in their row (the back row set back), front and back
- * row lanes marked (Character.battleRow: 1 the front row, 0 the back, as the menu sets the back row in) */
+/* Order: the party as they stand in battle (model_view.c: each in their battle idle with their weapon, the back row a
+ * step nearer the camera), each one's name and row under their feet, the Order cursor's member marked by a bar under
+ * theirs (Character.battleRow: 1 the front row, 0 the back, as the menu sets the back row in) */
 static void order_view(int cur) {
     GameData *g = g_gameState->gameData;
-    static RECT front = {200, 8, 192, 224}, back = {8, 8, 188, 224};
-    ui_drawLabel(back.x + 8, back.y - 3, 2, (s32) "BACK ROW", 0);
-    ui_drawLabel(front.x + 8, front.y - 3, 2, (s32) "FRONT ROW", 0);
-    u8 a[8];
+    Character *party[4];
+    int backrow[4];
+    float feet[4][2];
     for (int i = 0; i < 4; i++) {
         Character *c = g->party[i];
-        if (!ram_ok(c, sizeof *c)) continue;
-        int backrow = c->info.b.battleRow == 0; /* (1: the front row, as the menu draws it) */
-        int x = backrow ? back.x + 16 : front.x + 16, y = 14 + i * 54;
-        if (i == cur) bar_at((backrow ? back.x : front.x) + 4, y - 2, (backrow ? back.w : front.w) - 8, 52); /* (the Order cursor) */
-        face(4 + i, chr_portrait(c), x, y, 48);
-        text_drawBlock(x + 56, y + 6, 2, c->name, 0);
-        ui_drawLabel(x + 56, y + 28, 2, (s32) "LV", 0);
-        text_formatNumber(c->level, a, 2, 1);
-        ui_drawDigits(x + 74, y + 27, 2, a, 0);
+        party[i] = ram_ok(c, sizeof *c) ? c : NULL;
+        backrow[i] = party[i] && c->info.b.battleRow == 0;
     }
-    win_drawBox(&front, 4, 2);
-    win_drawBox(&back, 4, 2);
+    void port_party_view(Character *const party[4], const int backrow[4], float height, float feet[4][2]);
+    port_party_view(party, backrow, 104, feet);
+    for (int i = 0; i < 4; i++) {
+        if (!party[i] || feet[i][0] < 0) continue;
+        int x = (int)feet[i][0] - 44, y = (int)feet[i][1] + 8;
+        if (x < 4) x = 4;
+        if (x > 308) x = 308;
+        if (y > 202) y = 202;
+        if (i == cur) bar_at(x, y - 2, 88, 34);
+        text_drawBlock(x + 4, y, 2, party[i]->name, 0);
+        ui_drawLabel(x + 4, y + 16, 2, (s32)(backrow[i] ? "BACK ROW" : "FRONT ROW"), 0);
+    }
 }
 
 int port_menu_top_draw(void) {

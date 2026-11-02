@@ -2007,7 +2007,7 @@ void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int
  * A model's textures as 256x256 RGBA8 (from its TIMs, CLUT applied, texel 0 clear), and its triangles already posed
  * and projected (screen x, y in the top screen's 400x240, depth z, texel u, v) with a per-eye parallax: sorted back
  * to front and drawn over the top screen's scene, under its panels. */
-#define MODEL_TEXS 3
+#define MODEL_TEXS 12
 #define MODEL_TRIS 4096
 static C3D_Tex model_tex[MODEL_TEXS];
 static int model_tex_ok[MODEL_TEXS];
