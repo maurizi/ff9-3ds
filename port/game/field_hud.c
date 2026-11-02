@@ -847,6 +847,7 @@ void port_bottom_hud(void) {
      * game?") still gets its choices as buttons, alone) */
     int ctl = battle || world || title || boot || gameover || bj || had_control();
     if (!ctl && !choice_open()) return;
+    { int port_minigame_panel_up(void); if (g_gameState->mode == 1 && port_minigame_panel_up()) return; } /* (a minigame's panel: ui_split.c) */
     choices_only = !ctl;
 
     ClearOTagR(hud_ot, OTN);

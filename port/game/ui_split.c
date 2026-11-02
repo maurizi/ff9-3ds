@@ -34,6 +34,11 @@ static int to_bottom(const Window *w) {
     return 0;
 }
 
+/* a minigame's panel was drawn to the bottom screen on the last frames: the field's bottom screen gives way to it */
+static long panel_frame = -100;
+long VSync(long);
+int port_minigame_panel_up(void) { return VSync(-1) - panel_frame <= 2; }
+
 void win_drawAll(void) {
     u8 *lo = g_primPtr;
     u8 down[10], any = 0;
@@ -45,6 +50,7 @@ void win_drawAll(void) {
     win_drawAll_game();
     if (g_primPtr != lo) port_ui_packets((const void *)PSX_PTR(lo), (const void *)PSX_PTR(g_primPtr));
     if (!any) return;
+    panel_frame = VSync(-1);
     u8 up[10];
     for (int i = 0; i < 10; i++) { /* (a second pass with only those, its packets to the bottom screen) */
         Window *w = &g_windows[i];
