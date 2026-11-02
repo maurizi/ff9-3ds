@@ -1208,7 +1208,10 @@ static const Vtx *ot_depth(const Vtx *v, unsigned n, Vtx *out, int w, int h) {
      * the opening's dark room, would otherwise extrapolate a glow around it far off its depth) */
     if (s < fit_min) s = fit_min;
     if (s > fit_max) s = fit_max;
-    float d = ctr_flat_bg ? zc_smooth : fit_a * s + fit_b;
+    /* (a field's background: at the screen plane itself, which is its depth there. Placed at a depth, its tiles
+     * moved by a fraction of a pixel per eye, and the joins between them showed as vertical lines) */
+    if (ctr_flat_bg) return v;
+    float d = fit_a * s + fit_b;
     if (d < 64) return v;
     for (unsigned i = 0; i < n; i++) out[i] = v[i], out[i].z = d;
     return out;
