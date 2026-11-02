@@ -131,7 +131,7 @@ void ctr_spu_exit(void) {
     if (!thread) return;
     quit = 1;
     LightEvent_Signal(&kick_event);
-    threadJoin(thread, U64_MAX);
+    threadJoin(thread, 1000000000ULL); /* (a second at most: closing must not hang) */
     threadFree(thread);
     thread = NULL;
 }

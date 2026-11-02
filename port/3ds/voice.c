@@ -154,7 +154,7 @@ void ctr_voice_exit(void) {
     quit = 1;
     stop_req = 1;
     LightEvent_Signal(&kick);
-    threadJoin(thread, U64_MAX);
+    threadJoin(thread, 1000000000ULL); /* (a second at most: closing must not hang) */
     threadFree(thread);
     thread = NULL;
 }

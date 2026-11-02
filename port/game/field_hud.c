@@ -435,7 +435,7 @@ static void draw_boot(void) {
     int w = ui_measureLabel((u8 *)name);
     ui_drawLabel(r_boot.x + (r_boot.w - w) / 2, r_boot.y + 22, 2, (s32)name, 0);
     w = ui_measureLabel((u8 *)go);
-    ui_drawLabel(r_boot.x + (r_boot.w - w) / 2, r_boot.y + 52, 2, (s32)go, (VSync(-1) >> 5) & 1 ? 2 : 0); /* (slowly blinking) */
+    ui_drawLabel(r_boot.x + (r_boot.w - w) / 2, r_boot.y + 52, 2, (s32)go, 0);
     w = ui_measureLabel((u8 *)tap);
     ui_drawLabel(r_boot.x + (r_boot.w - w) / 2, r_boot.y + 70, 2, (s32)tap, 2);
     win_drawBox(&r_boot, 3, 2);
@@ -448,7 +448,7 @@ static void draw_gameover(void) {
     int w = ui_measureLabel((u8 *)a);
     ui_drawLabel(box.x + (box.w - w) / 2, box.y + 22, 2, (s32)a, 0);
     w = ui_measureLabel((u8 *)b);
-    ui_drawLabel(box.x + (box.w - w) / 2, box.y + 52, 2, (s32)b, (VSync(-1) >> 5) & 1 ? 2 : 0);
+    ui_drawLabel(box.x + (box.w - w) / 2, box.y + 52, 2, (s32)b, 0);
     w = ui_measureLabel((u8 *)c);
     ui_drawLabel(box.x + (box.w - w) / 2, box.y + 68, 2, (s32)c, 2);
     win_drawBox(&box, 3, 2);
@@ -935,12 +935,6 @@ static void big_portrait(int slot, Character *c, int x, int y, int size) {
 }
 
 void port_big_portrait(int slot, Character *c, int x, int y, int size) { big_portrait(slot, c, x, y, size); } /* (rewards_top.c) */
-void port_big_portrait_index(int slot, int index, int x, int y, int size) { /* (by portrait index: save_top.c) */
-    const u8 *e = port_portrait(index);
-    if (!e) return;
-    ctr_hud_image(slot, 0x300u | (u32)index, (const u16 *)e, port_portrait_face(index), 32, 32);
-    ctr_hud_draw_top(slot, x, y, 32, 32, size, size);
-}
 
 static void stat(int x, int y, const char *label, int value) {
     u8 a[12];

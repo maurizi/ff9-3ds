@@ -2490,14 +2490,21 @@ void ctr_video_init(void) {
 }
 
 void ctr_shutdown(void) {
+    extern volatile const char *ctr_where;
     void ctr_audio_exit(void);
+    ctr_where = "closing: worker";
     ctr_async_exit();
     void ctr_spu_exit(void);
+    ctr_where = "closing: audio thread";
     ctr_spu_exit();
+    ctr_where = "closing: voices";
     ctr_voice_exit();
+    ctr_where = "closing: audio";
     ctr_audio_exit();
-    if (in_frame) frame_end();
+    ctr_where = "closing: graphics";
+    if (in_frame) frame_end(); /* (not waited for: C3D_Fini and the process's end take the GPU down) */
     C3D_Fini();
     gfxExit();
+    ctr_where = "closing: done";
 }
 #endif

@@ -102,10 +102,9 @@ void plat_async_wait(void) {
 
 void ctr_async_exit(void) {
     if (!worker) return;
-    plat_async_wait();
     quit = 1;
     LightEvent_Signal(&go);
-    threadJoin(worker, U64_MAX);
+    threadJoin(worker, 1000000000ULL); /* (a second at most: closing must not hang) */
     threadFree(worker);
     worker = NULL;
 }

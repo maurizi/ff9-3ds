@@ -35,26 +35,41 @@ int port_save_tap(int x, int y, unsigned *press) {
     return 1;
 }
 
-/* No memory card slots on a 3DS (the saves are files on the SD card, the port's slot 1): the slot screen picks slot 1
- * at once with the game's own select; coming back to it from the file list (Circle there) leaves the save screen
- * instead, as Circle on the slots would. menuSave_inputSlot and menuSave_returnToSlots are wrapped
- * (config/renames.txt). */
-void o39_menuSave_inputSlot_game(void);
-void o39_menuSave_returnToSlots_game(void);
-void o39_menuSave_selectSlot(void);
-static int came_back;
-void o39_menuSave_returnToSlots(void) {
-    came_back = 1;
-    o39_menuSave_returnToSlots_game();
+/* No memory card slots on a 3DS (the saves are files on the SD card, the port's slot 1): the screen goes straight to
+ * the file list and leaves straight from it.
+ *   - the slot window is never drawn (menuSave_drawSlotWindow, the slot and check states' draw);
+ *   - at the slot state the first time, slot 1 is chosen with the game's own select as soon as its card answers;
+ *   - back at the slot state after that (an error notice closed, or the list left), the screen closes as Circle
+ *     on the slots would close it;
+ *   - Circle in the file list closes the screen at once, instead of fading back to the slots.
+ * (menuSave_init, _inputSlot, _inputFileList and _drawSlotWindow wrapped: config/renames.txt; the last three are
+ * reached through the screen's state tables.) */
+void o39_menuSave_init_game(void), o39_menuSave_inputSlot_game(void), o39_menuSave_inputFileList_game(void);
+void o39_menuSave_selectSlot(void), o39_menuSave_close(void);
+u8 o39_menuSave_isSlotReady(s32 port, u8 allowNew);
+static int chose;
+
+static void leave(void) { /* (Circle on the slots: the game's own way out) */
+    snd_playSe(SE_CANCEL);
+    if (g_menu.type != 0) o39_menuSave_close();
+    else menuScreen_open(0);
 }
+void o39_menuSave_init(void) {
+    o39_menuSave_init_game();
+    chose = 0;
+}
+void o39_menuSave_drawSlotWindow(void) {}
 void o39_menuSave_inputSlot(void) {
     if (fade_isBusy()) return;
-    if (came_back) {
-        came_back = 0;
-        g_padRepeat |= BTN_CIRCLE; /* (the game's own way out from the slots) */
-        o39_menuSave_inputSlot_game();
-        return;
-    }
+    if (chose) { leave(); return; }
+    s_menuSave.showCursor = 0; /* (no hand on the hidden slots) */
+    if (!o39_menuSave_isSlotReady(0, 1)) return; /* (its card still being looked at) */
+    chose = 1;
     g_menu.cardSlot = 0;
+    s_menuSave.showCursor = 1;
     o39_menuSave_selectSlot();
+}
+void o39_menuSave_inputFileList(void) {
+    if (!s_menuSave.list.scroll && (g_padRepeat & BTN_CIRCLE)) { leave(); return; }
+    o39_menuSave_inputFileList_game();
 }

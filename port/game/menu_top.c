@@ -459,10 +459,6 @@ int port_menu_top_draw(void) {
         port_model_view(&g->characters[id], 200, 226, 160);
         return 0;
     }
-    case 4: { /* save / load: the file under the cursor (save_top.c) */
-        int port_save_top(void);
-        return port_save_top();
-    }
     case 5: { /* the Chocograph screen (chocograph_touch.c) */
         int port_chocograph_top(void);
         return port_chocograph_top();
