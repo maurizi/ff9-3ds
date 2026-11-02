@@ -99,6 +99,7 @@ static void watchdog_main(void *unused) {
             int n = snprintf(line, sizeof line, "WATCHDOG: no frame for %us at frame %u, in %s\n", still, f, (const char *)ctr_where);
             void ctr_console_raw(const char *, int);
             ctr_console_raw(line, n);
+            if (still == 3) { void ctr_trace_dump(void); ctr_trace_dump(); }
         }
     }
 }

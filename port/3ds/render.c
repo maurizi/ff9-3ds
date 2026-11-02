@@ -106,7 +106,27 @@ static void flush_pending(void) {
     ndirty = 0;
 }
 /* the command list goes to the GPU (the frame's end, or a sync) */
+/* the last GPU-side steps (the watchdog prints them when the GPU never finishes a frame) */
+#define TRACE_N 48
+static struct { const char *what; int a, b; unsigned frame; } trace_ring[TRACE_N];
+static volatile unsigned trace_n;
+static unsigned frames_drawn;
+static void trace(const char *what, int a, int b) {
+    unsigned i = trace_n++ % TRACE_N;
+    trace_ring[i].what = what, trace_ring[i].a = a, trace_ring[i].b = b, trace_ring[i].frame = frames_drawn;
+}
+void ctr_trace_dump(void) { /* (platform.c's watchdog, once) */
+    void ctr_console_raw(const char *, int);
+    char line[96];
+    unsigned n = trace_n, first = n > TRACE_N ? n - TRACE_N : 0;
+    for (unsigned k = first; k < n; k++) {
+        unsigned i = k % TRACE_N;
+        int len = snprintf(line, sizeof line, "  trace %u: %s %d %d (frame %u)\n", k, trace_ring[i].what, trace_ring[i].a, trace_ring[i].b, trace_ring[i].frame);
+        ctr_console_raw(line, len);
+    }
+}
 static void frame_end(void) {
+    trace("frame_end", vb_used, (int)staging_used);
     flush_pending();
     C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
 }
@@ -149,7 +169,7 @@ static int stereo_on;            /* eye 1 drawn as well */
 static float stereo_k;           /* parallax constant of eye 1 (eye 0 gets -k) */
 static float stereo_inv_zc = 1.0f / 1500.0f;
 #define STEREO_MAX_PX 8.0f
-static unsigned display_shown_gen = ~0u, frames_drawn;
+static unsigned display_shown_gen = ~0u;
 unsigned int ctr_render_stats[8];
 unsigned int ctr_depth_stats[2]; /* vertices with / without GTE depth */ /* batches, primitives, blits, readbacks, texture blocks, slots, syncs */
 
@@ -247,6 +267,7 @@ static C3D_BufInfo bufinfo;
 #define DEPTH_MAX 16000 /* depth values per clear (1/16384 apart, as the shader maps them) */
 static void *mirror_depth;
 static unsigned depth_next = 1, depth_submitted = 1; /* the next depth value; the first of this submit's */
+static int depth_clear; /* the depth buffer to be cleared at the next frame's begin (submit) */
 
 static void frame_begin(void) {
     if (in_frame) return;
@@ -256,6 +277,10 @@ static void frame_begin(void) {
     ctr_where = "C3D_FrameBegin (waiting for the GPU)";
     C3D_FrameBegin(0); /* waits for the GPU to finish what was sent: the other half is free */
     ctr_where = was;
+    if (depth_clear) { /* (runs' depth values used up: submit) */
+        C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
+        depth_clear = 0;
+    }
     port_profile_end(PORT_PROFILE_SCALE, profile_start); /* ("scale": the wait for the GPU) */
     gpu_busy = 0;
     in_frame = 1;
@@ -281,6 +306,7 @@ static void half_restart(void) {
 
 /* everything recorded so far executed and finished (the CPU may then read the mirror, or rewrite a texture) */
 static void gpu_sync(void) {
+    trace("gpu_sync", vb_used, in_frame);
     submit();
     if (in_frame) {
         frame_end();
@@ -626,6 +652,7 @@ static void outline_proj(int x0, int y0);
 /* a framebuffer's mask: the second one when it lies right of (battles: x 320) or below (fields: y 256) the first */
 static inline int outline_buf(int x, int y) { return x >= 256 || y >= 256; }
 static void submit(void) {
+    trace("submit", (int)nbatches, (int)vb_used);
     run_flush();
     if (!nbatches) return;
     unsigned profile_start = port_profile_begin();
@@ -711,10 +738,14 @@ static void submit(void) {
         /* runs' depth values used up: from 1 again, the depth buffer cleared after what was drawn with them (a GX
          * fill runs in the GPU's queue, not its command list: the list so far goes in first). Here, with nothing
          * recorded that holds a value: the values are given as runs are recorded, before their frame begins. */
-        flush_pending();
-        C3D_FrameSplit(0);
-        C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
+        /* (the clear right after a frame's begin, the GPU idle: a fill in the middle of a frame (split off) hung the
+         * GPU on a 3DS, though not in an emulator) */
         depth_next = depth_submitted = 1;
+        depth_clear = 1;
+        frame_end();
+        in_frame = 0;
+        frame_begin();
+        half_restart();
     }
     port_profile_end(PORT_PROFILE_GPU, profile_start);
 }
@@ -803,6 +834,7 @@ static void blit_run(int cx0, int cx1, int cy) {
     }
 }
 static void blit_cells(int cx0, int cy0, int cx1, int cy1) {
+    trace("blit_cells", cx0 | cy0 << 8, cx1 | cy1 << 8);
     if (!psx_vram) return;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1;) {
@@ -816,6 +848,7 @@ static void blit_cells(int cx0, int cy0, int cx1, int cy1) {
 
 /* Read cells [cx0,cx1)x[cy0,cy1) whose shadow is stale back from the left eye's mirror. */
 static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
+    trace("readback", cx0 | cy0 << 8, cx1 | cy1 << 8);
     extern volatile const char *ctr_where;
     ctr_where = "readback";
     gpu_sync();
@@ -1021,12 +1054,8 @@ static int gpu_owned(int x0, int y0, int x1, int y1) {
 }
 static void submit(void);
 static C3D_Tex *mirror_page(int tx, int ty) {
-    if (!page_rt) {
-        if (!C3D_TexInitVRAM(&page_tex, 256, 256, GPU_RGBA5551)) return NULL;
-        if (!(page_rt = C3D_RenderTargetCreateFromTex(&page_tex, GPU_TEXFACE_2D, 0, -1))) return NULL;
-        C3D_TexSetFilter(&page_tex, GPU_NEAREST, GPU_NEAREST);
-        C3D_RenderTargetClear(page_rt, C3D_CLEAR_ALL, 0x000000FF, 0); /* (its alpha 1, once: the copies write colour) */
-    }
+    trace("mirror_page", tx, ty);
+    if (!page_rt) return NULL; /* (made at init: ctr_init) */
     if (page_x == tx && page_y == ty && page_serial == frame_serial) return &page_tex;
     int cx0, cy0, cx1, cy1; /* (the mirror current there first: cells the CPU wrote since) */
     if (cell_range(tx, ty, tx + 256, ty + 256, &cx0, &cy0, &cx1, &cy1))
@@ -1955,6 +1984,7 @@ static int n_hud_draw;
 
 /* image slot: w x h (<= 64x64) 8-bit pixels through a CLUT of PS1 colours, kept while key is the same */
 void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h) {
+    trace("hud_image", slot, (int)key);
     if (slot < 0 || slot >= HUD_IMAGES || w > 64 || h > 64) return;
     if (hud_img[slot].ok && hud_img[slot].key == key) return;
     if (!hud_img[slot].ok) {
@@ -1984,6 +2014,7 @@ static int n_model_tris;
 static u16 model_order[MODEL_TRIS];
 
 void ctr_model_texture(int slot, const u32 *rgba) { /* rgba: 256x256, rows from the top, 0xRRGGBBAA */
+    trace("model_texture", slot, 0);
     if (slot < 0 || slot >= MODEL_TEXS) return;
     if (!model_tex_ok[slot]) {
         if (!C3D_TexInit(&model_tex[slot], 256, 256, GPU_RGBA8)) return;
@@ -2095,6 +2126,7 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
 }
 
 static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy) {
+    trace("present_rgb24", w, h);
     cpu_reads(d->x, d->y, d->x + (w * 3 + 1) / 2, d->y + h);
     unsigned tw = pow2_at_least(w), th = pow2_at_least(h);
     u8 *px = staging_alloc(tw * th * 3);
@@ -2113,6 +2145,7 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
 unsigned ctr_frames_presented(void) { return frames_drawn; }
 
 void ctr_present(long frame) {
+    trace("present", (int)frame, 0);
     extern volatile const char *ctr_where;
     ctr_where = "present";
     (void)frame;
@@ -2255,9 +2288,14 @@ void ctr_present(long frame) {
     n_hud_draw = 0;
     frame_end();
     in_frame = 0;
+#ifdef PORT_NO_OVERLAP
+    frame_begin(); /* (test: the frame waited for at once, one half, as before the overlap) */
+    half_restart();
+#else
     gpu_busy = 1; /* (drawn while the next frame is recorded into the other half) */
     half ^= 1;
     half_restart();
+#endif
     frames_drawn++;
     extern unsigned int psx_depth_frame;
     psx_depth_frame++;
@@ -2431,6 +2469,13 @@ void ctr_video_init(void) {
         layers[k].rt = C3D_RenderTargetCreateFromTex(&layers[k].tex, GPU_TEXFACE_2D, 0, -1);
         layers[k].x = layers[k].y = -1;
         C3D_RenderTargetClear(layers[k].rt, C3D_CLEAR_ALL, 0, 0);
+    }
+    /* the page a 15-bit texture is copied into (mirror_page), cleared here once, before any frame: a fill in the middle
+     * of a frame is what hung the GPU on hardware (the depth reset) */
+    if (C3D_TexInitVRAM(&page_tex, 256, 256, GPU_RGBA5551) &&
+        (page_rt = C3D_RenderTargetCreateFromTex(&page_tex, GPU_TEXFACE_2D, 0, -1))) {
+        C3D_TexSetFilter(&page_tex, GPU_NEAREST, GPU_NEAREST);
+        C3D_RenderTargetClear(page_rt, C3D_CLEAR_ALL, 0x000000FF, 0); /* (its alpha 1: the copies write colour) */
     }
     bottom_rt = C3D_RenderTargetCreate(240, 320, GPU_RB_RGBA8, -1);
     C3D_RenderTargetSetOutput(bottom_rt, GFX_BOTTOM, GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
