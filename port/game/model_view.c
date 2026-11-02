@@ -290,6 +290,12 @@ static void draw(const u8 *d, long h, const Mat *bones, int nbones_used, int tex
 static void draw_member(int slot, Character *c, int phase, const View *w) {
     int kind = (int)c->info.b.kind, item = c->equip[0];
     Loaded *m = &ms[slot];
+    unsigned ctr_model_generation(void);
+    static unsigned gen;
+    if (gen != ctr_model_generation()) { /* (the renderer gave their textures back: load again) */
+        gen = ctr_model_generation();
+        for (int i = 0; i < SLOTS; i++) unload(&ms[i]), ms[i].kind = -1;
+    }
     if (kind != m->kind || item != m->weapon_item) load(slot, kind, item);
     if (!m->ok) return;
     int ticks = (int)VSync(-1);

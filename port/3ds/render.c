@@ -269,6 +269,9 @@ static void *mirror_depth;
 static unsigned depth_next = 1, depth_submitted = 1; /* the next depth value; the first of this submit's */
 static int depth_clear; /* the depth buffer to be cleared at the next frame's begin (submit) */
 
+static int model_free_pending; /* (the menu's model textures to give back: model_tex_free) */
+static unsigned model_gen;
+static void model_tex_free(void);
 static void frame_begin(void) {
     if (in_frame) return;
     unsigned profile_start = port_profile_begin();
@@ -281,6 +284,7 @@ static void frame_begin(void) {
         C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
         depth_clear = 0;
     }
+    if (model_free_pending) model_tex_free();
     port_profile_end(PORT_PROFILE_SCALE, profile_start); /* ("scale": the wait for the GPU) */
     gpu_busy = 0;
     in_frame = 1;
@@ -896,9 +900,10 @@ typedef struct {
 } TexSlot;
 
 #define MAX_SLOTS 96
-#define SLOT_RESERVE (3u << 20)
+#define SLOT_RESERVE (512u << 10)
 static TexSlot slots[MAX_SLOTS];
 static int nslots;
+static int slots_held_at = -1; /* (slot_for: the size the cache stopped growing at) */
 static u32 rgba_lut[65536];
 
 /* (key, twin) -> slot + 1, open addressing; a slot's entry is removed when it is reused */
@@ -931,11 +936,16 @@ static TexSlot *slot_for(u32 key, u32 twin) {
         if (slots[i].serial != frame_serial && (victim < 0 || slots[i].serial < slots[victim].serial)) victim = i;
     }
     /* (the cache stops growing with SLOT_RESERVE of linear memory left: 96 slots are more than there is, and what
-     * allocates later (a voice line's buffers, the HUD's images) would find none) */
-    static int capped;
-    if (!capped && nslots < MAX_SLOTS && linearSpaceFree() <= SLOT_RESERVE)
-        capped = 1, port_log("renderer: texture cache held at %d pages (linear memory)\n", nslots);
-    if (nslots < MAX_SLOTS && linearSpaceFree() > SLOT_RESERVE && C3D_TexInit(&slots[nslots].tex, 256, 256, GPU_RGBA8)) {
+     * allocates later (a voice line's buffers, the HUD's images) would find none; the menu's models take theirs back
+     * with slot_shrink) */
+    /* (linear memory is asked only while the cache may still grow: held_at is the size it stopped at, cleared when
+     * the menu's models give theirs back) */
+    if (slots_held_at == nslots) {
+    } else if (nslots < MAX_SLOTS && linearSpaceFree() <= SLOT_RESERVE) {
+        slots_held_at = nslots;
+        port_log("renderer: texture cache held at %d pages (linear memory)\n", nslots);
+    }
+    if (nslots < MAX_SLOTS && slots_held_at != nslots && C3D_TexInit(&slots[nslots].tex, 256, 256, GPU_RGBA8)) {
         victim = nslots++;
         C3D_TexSetFilter(&slots[victim].tex, GPU_NEAREST, GPU_NEAREST);
         C3D_TexSetWrap(&slots[victim].tex, GPU_REPEAT, GPU_REPEAT);
@@ -954,6 +964,19 @@ static TexSlot *slot_for(u32 key, u32 twin) {
     slot_hash[h] = (u16)(victim + 1);
     memset(s->stamp, 0, sizeof s->stamp);
     return s;
+}
+
+/* the cache's last slot given up (its texture freed), for memory someone else needs now; 0 if none is left */
+static int slot_shrink(void) {
+    if (!nslots) return 0;
+    int i = nslots - 1;
+    if (slots[i].key) hash_remove(i);
+    C3D_TexDelete(&slots[i].tex);
+    slots[i].key = 0;
+    slots[i].twin = 0xFFFFFFFFu; /* (never asked for: slot_for's last-hit check can't match it) */
+    nslots = i;
+    ctr_render_stats[5] = nslots;
+    return 1;
 }
 
 static inline int cells_newer(int x0, int y0, int x1, int y1, u32 stamp) {
@@ -2024,19 +2047,33 @@ static struct { float x[3], y[3], z, u[3], v[3], par[3]; u8 tex; } model_tri[MOD
 static int n_model_tris;
 static u16 model_order[MODEL_TRIS];
 
-/* (at start-up, before the texture cache takes its share of linear memory: made when first needed, late in a long
- * session, there was none left and the Equip view's model drew nothing on hardware) */
-static void model_tex_init(void) {
-    for (int i = 0; i < MODEL_TEXS; i++) {
-        if (!C3D_TexInit(&model_tex[i], 256, 256, GPU_RGBA8)) { port_log("model view: no memory for texture %d\n", i); return; }
-        C3D_TexSetFilter(&model_tex[i], GPU_LINEAR, GPU_NEAREST);
-        model_tex_ok[i] = 1;
-    }
+/* Made when a menu first needs them, from the scene's texture cache if linear memory is short (late in a session
+ * the cache holds nearly all of it: the Equip view's model drew nothing on hardware), and given back
+ * MODEL_IDLE_FRAMES after the last model drawn, so play keeps the whole cache (holding them for good slowed fields
+ * down). model_view.c reloads its models when the generation changes. */
+#define MODEL_IDLE_FRAMES 300
+static unsigned model_idle;
+unsigned ctr_model_generation(void) { return model_gen; }
+/* (called by frame_begin once the GPU has finished what was sent: no draw can still read them) */
+static void model_tex_free(void) {
+    for (int i = 0; i < MODEL_TEXS; i++)
+        if (model_tex_ok[i]) C3D_TexDelete(&model_tex[i]), model_tex_ok[i] = 0;
+    model_gen++;
+    model_free_pending = 0;
+    slots_held_at = -1; /* (the cache may grow again) */
 }
 
 void ctr_model_texture(int slot, const u32 *rgba) { /* rgba: 256x256, rows from the top, 0xRRGGBBAA */
     trace("model_texture", slot, 0);
-    if (slot < 0 || slot >= MODEL_TEXS || !model_tex_ok[slot]) return;
+    if (slot < 0 || slot >= MODEL_TEXS) return;
+    model_idle = 0;
+    if (!model_tex_ok[slot]) {
+        gpu_quiet(); /* (the slots given up may be in this frame's draws) */
+        while (linearSpaceFree() < 256 * 256 * 4 + SLOT_RESERVE && slot_shrink()) {}
+        if (!C3D_TexInit(&model_tex[slot], 256, 256, GPU_RGBA8)) { port_log("model view: no memory for texture %d\n", slot); return; }
+        C3D_TexSetFilter(&model_tex[slot], GPU_LINEAR, GPU_NEAREST);
+        model_tex_ok[slot] = 1;
+    }
     gpu_quiet();
     u32 *dst = model_tex[slot].data;
     for (int y = 0; y < 256; y++)
@@ -2275,6 +2312,8 @@ void ctr_present(long frame) {
             }
         }
     }
+    if (n_model_tris) model_idle = 0;
+    else if (++model_idle == MODEL_IDLE_FRAMES) model_free_pending = 1;
     for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) { /* (models over the scene, under the panels) */
         if (!n_model_tris) break;
         C3D_FrameDrawOn(top_rt[eye]);
@@ -2458,7 +2497,6 @@ void ctr_video_init(void) {
     AttrInfo_AddLoader(&attr, 2, GPU_UNSIGNED_BYTE, 4);
     AttrInfo_AddLoader(&attr, 3, GPU_FLOAT, 1);
 
-    model_tex_init();
     for (int i = 0; i < 2; i++) {
         vb_half[i] = linearAlloc(VB_MAX * sizeof(Vtx));
         staging_half[i] = linearAlloc(STAGING_SIZE);
