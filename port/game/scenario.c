@@ -14,6 +14,9 @@ void port_scenario_set_enemy_hp(const int *values);
 s32 chr_resetToLevel(s32,s32,u8);
 static struct {
     int blackjack; /* blackjack=1 with field_exit=4: the ending's movie skipped and The End's code taken (blackjack_ui.c) */
+    int talk_uid,talk_after,talk_auction; /* talk=UID[,FRAMES]: talk to that object once the player has control (decomp R40) */
+    int place_uid,place_x,place_z,place_dir,place_set; /* place=UID,X,Z,DIR8: the object put there first (as op 1D) */
+    int quina; /* quina=1: character record 5 joins as Quina (the game's PARTY_JOIN 05 01 05 05 05, decomp R40) */
     int chocograph; /* GameData.chocograph (1-24, 0 none): the one the chocobo digs for (not an event byte, decomp R37) */
     int enabled,consumed,kind,disc,field,battle,world,world_explicit,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil,tetra;
     int menu,menu_arg; /* kind=field: menu=TYPE[,ARG] opens that menu once the field is ready (4,2: the save menu) */
@@ -58,6 +61,16 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"world")) {scenario.world=number(eq,0,65535);scenario.world_explicit=1;}
         else if(!__builtin_strcmp(s,"chocograph")) scenario.chocograph=number(eq,0,24);
         else if(!__builtin_strcmp(s,"blackjack")) scenario.blackjack=number(eq,0,1);
+        else if(!__builtin_strcmp(s,"talk")) { char *c=__builtin_strchr(eq,','); if(c) *c=0,scenario.talk_after=number(c+1,0,100000); scenario.talk_uid=number(eq,1,255); }
+        else if(!__builtin_strcmp(s,"talk_auction")) scenario.talk_auction=number(eq,0,1);
+        else if(!__builtin_strcmp(s,"quina")) scenario.quina=number(eq,0,1);
+        else if(!__builtin_strcmp(s,"place")) {
+            char *c1=__builtin_strchr(eq,','),*c2=c1?__builtin_strchr(c1+1,','):0,*c3=c2?__builtin_strchr(c2+1,','):0;
+            if(!c3) port_fatal("scenario: place=UID,X,Z,DIR");
+            *c1=*c2=*c3=0;
+            scenario.place_uid=number(eq,1,255);scenario.place_x=number(c1+1,-32768,32767);
+            scenario.place_z=number(c2+1,-32768,32767);scenario.place_dir=number(c3+1,0,255);scenario.place_set=1;
+        }
         else if(!__builtin_strcmp(s,"level")) scenario.level=number(eq,1,99);
         else if(!__builtin_strcmp(s,"story")) scenario.story=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"gil")) scenario.gil=number(eq,0,9999999);
@@ -322,6 +335,16 @@ void port_scenario_bootstrap(void) {
         if(scenario.hp[i]>=0) {if(scenario.hp[i]>c->maxHp) port_fatal("scenario: HP exceeds maximum");c->hp=(u16)scenario.hp[i];}
     }
     if(scenario.chocograph) d->chocograph=scenario.chocograph;
+    if(scenario.quina) { void chr_join(s32, u8, s32); /* (the game's PARTY_JOIN 05 01 05 05 05 on record 5: Quina, not Cinna) */
+        static const u8 name[10]={0x20,0x44,0x38,0x3D,0x30,0xFF,0xFF,0xFF,0xFF,0xFF};
+        Character *c=&d->characters[5];
+        c->classFlags=0x05;
+        c->info.b.row=5;
+        chr_join(5,1,5);
+        __builtin_memcpy(c->name,name,10);
+        *(u32 *)&c->info=0x00005EE5u;
+        g_evtGlobalVars.b[0x13]|=0x20;
+    }
     rand_init((s32)scenario.seed);g_gameState->mode=(u8)scenario.kind;
     g_gameState->prevMode=1; /* ordinary battle entry from a field */
     d->fieldId=(u16)scenario.field;
@@ -352,3 +375,39 @@ void port_scenario_bootstrap(void) {
 }
 
 int port_scenario_blackjack(void) { return scenario.enabled && scenario.blackjack; }
+
+/* once a frame between the message update and the object update (field_hud.c's evt_updateObjects): the placing and
+ * the talking a fixture asks for, once the player has control (decomp R40) */
+void o0a_bgi_setActorActive(s32, s32);
+void chr_join(s32, u8, s32);
+void port_scenario_object_step(void) {
+    static int frames, done_place, done_talk;
+    if(!scenario.enabled || (!scenario.talk_uid && !scenario.place_set) || g_gameState->mode!=1) return;
+    if(!g_evtState || !g_evtState->controlEnabled) return;
+    if(scenario.place_set && !done_place) {
+        EvtObject *o=evt_getObject(scenario.place_uid);
+        if(!o) return;
+        int model=o->modelId!=EVT_MODEL_NONE;
+        if(model) o0a_bgi_setActorActive(o->modelSlot,0);
+        o->pos.vx=o->prevPos.vx=(s16)scenario.place_x;
+        o->pos.vy=o->prevPos.vy=-0x8000;
+        o->pos.vz=o->prevPos.vz=(s16)scenario.place_z;
+        if(model) o0a_bgi_setActorActive(o->modelSlot,1);
+        if(o->kind==EVT_KIND_ACTOR) { o->moveDistSq=EVT_MOVE_DIST_NONE; o->pitch=0; o->moveFlags&=~(EVT_MOVE_FACING_SET|EVT_MOVE_APPROACHING); }
+        o->pos.rotY=(s16)(scenario.place_dir<<4);
+        g_evtPosSetThisFrame=1;
+        done_place=1;
+        port_log("scenario: placed uid %d at %d,%d\n",scenario.place_uid,scenario.place_x,scenario.place_z);
+        return;
+    }
+    if(!scenario.talk_uid || done_talk || ++frames<scenario.talk_after) return;
+    if(scenario.talk_auction) { /* (an NPC bid up, the auctioneer free: Fu8[0x39] 1..5, Fu8[0x3C] 0) */
+        u8 top=g_evtState->fieldVars[0x39];
+        if(top<1 || top>5 || g_evtState->fieldVars[0x3C]) return;
+    }
+    EvtObject *o=evt_getObject(scenario.talk_uid);
+    if(!o) return;
+    evt_callObjectFunc(o,1,3,0);
+    done_talk=1;
+    port_log("scenario: talked to uid %d\n",scenario.talk_uid);
+}

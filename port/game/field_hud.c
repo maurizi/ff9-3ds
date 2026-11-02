@@ -110,6 +110,9 @@ static int choice_cross;
 static int choice_open(void);
 s32 evt_updateObjects_game(void);
 s32 evt_updateObjects(void) {
+    void port_scenario_object_step(void), port_auction_step(void);
+    port_scenario_object_step(); /* (scenario.c: a fixture's placing and talking) */
+    port_auction_step(); /* (auction_ui.c: a tapped bid) */
     if (choice_cross) choice_cross = 0, g_msgPadPressed |= 0x20000;
     return evt_updateObjects_game();
 }
@@ -142,6 +145,7 @@ static int world_choices; /* the world map's question up as buttons (port_bottom
 static int boot_live; /* the boot card shown (port_bottom_hud) */
 static int gameover_live; /* the game over card shown */
 static int bj_live; /* Blackjack's buttons shown (blackjack_ui.c) */
+static int auction_live; /* the Treno auction's panel shown (auction_ui.c) */
 static RECT r_disc[2];
 int port_disc_prompt_live(void);
 void port_disc_prompt_set(int c);
@@ -153,6 +157,7 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (g_gameState && g_gameState->mode == 0 && boot_live && max > 0) { seq[0] = 0x0008; return 1; } /* (START) */
     if (g_gameState && g_gameState->mode == 7 && gameover_live && max > 0) { seq[0] = 0x4000; return 1; } /* (Cross) */
     if (g_gameState && g_gameState->mode == 4 && bj_live) { int port_bj_tap(int, int); port_bj_tap(x, y - oy); return -1; }
+    if (g_gameState && g_gameState->mode == 1 && auction_live) { int port_auction_tap(int, int); if (port_auction_tap(x, y - oy)) return -1; }
     if (g_gameState && config_open() && config_overlay_tap(x, y)) return -1; /* (the Config screen's 3DS OPTIONS) */
     { int n = port_name_tap(x, y - oy, seq, max); if (n) return n; } /* (name entry: port/game/name_touch.c) */
     { int port_menu_tap(int, int); if (port_menu_tap(x, y - oy)) return -1; } /* (main menu: menu_touch.c) */
@@ -847,7 +852,10 @@ void port_bottom_hud(void) {
      * game?") still gets its choices as buttons, alone) */
     int ctl = battle || world || title || boot || gameover || bj || had_control();
     if (!ctl && !choice_open()) return;
-    { int port_minigame_panel_up(void); if (g_gameState->mode == 1 && port_minigame_panel_up()) return; } /* (a minigame's panel: ui_split.c) */
+    int port_auction_live(void);
+    int auction = g_gameState->mode == 1 && port_auction_live();
+    auction_live = auction;
+    { int port_minigame_panel_up(void); if (g_gameState->mode == 1 && !auction && port_minigame_panel_up()) return; } /* (a minigame's panel: ui_split.c) */
     choices_only = !ctl;
 
     ClearOTagR(hud_ot, OTN);
@@ -869,6 +877,7 @@ void port_bottom_hud(void) {
     else if (boot) draw_boot();
     else if (gameover) draw_gameover();
     else if (bj) { void port_bj_draw(void); port_bj_draw(); }
+    else if (auction) { void port_auction_draw(void); port_auction_draw(); }
     else draw();
     unsigned used = (unsigned)(g_primPtr - (u8 *)hud_mem);
     g_ot = saved_ot;

@@ -141,3 +141,14 @@ with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
 ## FMVs
 - **Top**: the video at the screen plane, realtime overlays with it. **[done]**
 - **Bottom**: black or a static location card. **[done: black]**
+
+## Field minigames
+- Their counters and prompts move to the bottom screen (by field and message id, decomp R38/R40: the jump rope's
+  count, Hippaul's "Press Square and Circle alternately!", the frog count, Chocobo Hot and Cold's how-to); speech
+  balloons stay with the speakers; the field's bottom screen gives way while one is up. The Prima Vista sword fight's
+  current button is also shown large on the bottom (display only). **[done]**
+- The Treno auction: price, funds and who leads on the bottom; PLACE A BID opens the game's bid (its bid region's own
+  talk); the bid's digits up / down within the script's rules, BID and CANCEL give its bid loop the button it polls.
+  The game's bid windows are not drawn. **[done: port/game/auction_ui.c]**
+- Button-timing games (jump rope, Hippaul) stay on the buttons: no tap stand-ins for presses.
+

@@ -14,16 +14,21 @@ __attribute__((weak)) void port_ui_packets(const void *lo, const void *hi) { (vo
 void port_bottom_packets(const void *lo, const void *hi);
 /* (the minigames' panels by field and message id, decomp R38: ff9-decomp docs/r32/3ds-requests-8.md) */
 static const struct { u16 field, lo, hi; } panels[] = {
-    {103, 0xEA, 0xF6},   /* jump rope: "N times", the girls' comments, "Come play with us again!" */
-    {1850, 0x93, 0x99},  /* Hippaul racing: how to play, "Press Square and Circle alternately!", who wins */
+    {103, 0xEA, 0xEB},   /* jump rope: "N times" (the girls' comments are speech: on the top) */
+    {1850, 0x94, 0x94},  /* Hippaul racing: "Press Square and Circle alternately!" (Hippolady's lines and GO! are speech) */
     {657, 0x183, 0x183}, /* frog catching: "Frogs Captured: N" */
-    {909, 0xC9, 0xD0},   /* the Treno auction: bid status, the bid entry, too low / no funds */
     {64, 0x6F, 0x6F},    /* the Prima Vista play's sword fight: its instructions */
     {64, 0x78, 0x80},    /* ... the nobles' verdict, the gil */
 };
 static int to_bottom(const Window *w) {
     if (g_gameState->mode != 1) return 0;
     int field = g_gameState->gameData->fieldId;
+    if (field == 909) { /* (the Treno auction: its bid windows replaced by auction_ui.c's panel: off the top screen) */
+        for (int k = 0; k < 10; k++)
+            if (g_msgWindows[k].open && g_msgWindows[k].window == w && g_msgWindows[k].msgId >= 0xC9 && g_msgWindows[k].msgId <= 0xCE)
+                return 2;
+        return 0;
+    }
     if (field == 2950) return w->style != WIN_STYLE_BALLOON; /* (Chocobo Hot and Cold: its how-to-play box, its score) */
     for (int k = 0; k < 10; k++) {
         const MsgWindow *m = &g_msgWindows[k];
@@ -41,15 +46,21 @@ int port_minigame_panel_up(void) { return VSync(-1) - panel_frame <= 2; }
 
 void win_drawAll(void) {
     u8 *lo = g_primPtr;
-    u8 down[10], any = 0;
+    u8 down[10], hide[10], any = 0;
     for (int i = 0; i < 10; i++) { /* (the bottom screen's windows hidden from the first pass) */
         Window *w = &g_windows[i];
-        down[i] = w->state != WIN_STATE_CLOSED && w->visible && to_bottom(w);
-        if (down[i]) w->visible = 0, any = 1;
+        int b = w->state != WIN_STATE_CLOSED && w->visible ? to_bottom(w) : 0;
+        down[i] = b == 1;
+        hide[i] = b == 2;
+        if (b) w->visible = 0, any |= b == 1;
+        if (b == 2) panel_frame = VSync(-1);
     }
     win_drawAll_game();
     if (g_primPtr != lo) port_ui_packets((const void *)PSX_PTR(lo), (const void *)PSX_PTR(g_primPtr));
-    if (!any) return;
+    if (!any) {
+        for (int i = 0; i < 10; i++) if (hide[i]) g_windows[i].visible = 1;
+        return;
+    }
     panel_frame = VSync(-1);
     u8 up[10];
     for (int i = 0; i < 10; i++) { /* (a second pass with only those, its packets to the bottom screen) */
@@ -60,7 +71,7 @@ void win_drawAll(void) {
     u8 *lo2 = g_primPtr;
     win_drawAll_game();
     if (g_primPtr != lo2) port_bottom_packets((const void *)PSX_PTR(lo2), (const void *)PSX_PTR(g_primPtr));
-    for (int i = 0; i < 10; i++) g_windows[i].visible = (u8)(up[i] | down[i]);
+    for (int i = 0; i < 10; i++) g_windows[i].visible = (u8)(up[i] | down[i] | hide[i]);
 }
 
 /* Whether a menu is up (menu_doOpen .. menu_finish): 0 no, 1 opening (the scene fades out), 2 showing (the scene is
