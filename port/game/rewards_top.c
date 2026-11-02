@@ -77,35 +77,6 @@ static void member(int i, int x, int y) {
     win_drawBox(&box, 4, WIN_STYLE_BEVEL);
 }
 
-/* the top screen's view while the rewards screen is up: 1 if drawn */
-int port_rewards_top(void) {
-    if (!s_rewards.running) return 0;
-    for (int i = 0; i < 4; i++) member(i, 8 + (i & 1) * 196, 6 + (i >> 1) * 96);
-    static RECT strip = {8, 198, 384, 36};
-    u8 a[16];
-    ui_drawLabel(16, 204, 2, (s32) "GIL", 0);
-    a[0] = '+';
-    text_formatNumber((s32)g_btlRewards.gil, a + 1, -1, TEXT_NUM_ASCII);
-    ui_drawSmallDigits(36, 205, 2, a, 0);
-    int x = 16, y = 218;
-    Rewards *r = &s_rewards.rewards;
-    for (u32 k = 0; k < r->itemCount && k < REWARDS_ITEM_KINDS && x < 360; k++) {
-        int id = r->items[k][0];
-        if (id == 0xFF) continue;
-        u8 *name = g_itemNames + g_itemTable[id].name;
-        ui_drawItemIcon(x, y, 2, id, 1);
-        text_drawBlock(x + 16, y - 2, 2, name, 0);
-        int w = text_measure(name).w;
-        a[0] = 'x';
-        text_formatNumber(r->items[k][1], a + 1, -1, TEXT_NUM_ASCII);
-        ui_drawSmallDigits(x + 20 + w, y + 1, 2, a, 0);
-        x += w + 52;
-    }
-    if (r->card != 0xFF && r->card >= 0 && r->card < 100) {
-        ui_drawLabel(120, 204, 2, (s32) "CARD", 0);
-        u8 *cn = (u8 *)card_getName(r->card); /* (the card's name, as the game's text) */
-        if (cn) text_drawBlock(150, 200, 2, cn, 0);
-    }
-    win_drawBox(&strip, 4, WIN_STYLE_BEVEL);
-    return 1;
-}
+/* the top screen's view while the rewards screen is up: none. The top keeps the battle as it ended (its last frame
+ * before the exit fade: battle_ui.c, render.c); the numbers are on the bottom, where the game counts them. */
+int port_rewards_top(void) { return 0; }

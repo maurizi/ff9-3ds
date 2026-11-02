@@ -156,6 +156,7 @@ static UiLayer layers[2];
 static C3D_Tex freeze_tex[2];
 static C3D_RenderTarget *freeze_rt[2];
 static int freeze_w, freeze_h, frozen;
+int ctr_freeze_held; /* the menu snapshot kept as it is (battle_ui.c: from the battle's exit fade on) */
 #define MAG_W 200 /* the card game's magnified area (to 400x240 on the top screen) */
 #define MAG_H 120
 static int menu_state; /* port_menu_state(), read at each present */
@@ -2256,7 +2257,7 @@ void ctr_present(long frame) {
         /* the scene kept for the top while a menu is up: copied every frame without one (a menu opens with a fade,
          * which a copy taken then would hold), frozen when one opens */
         int want_menu = menu_state == 1 || menu_state == 2;
-        if (!menu_state && w >= 256) {
+        if (!menu_state && w >= 256 && !ctr_freeze_held) { /* (held: the battle's exit fade, battle_ui.c) */
             for (int eye = 0; eye < 2; eye++) {
                 C3D_FrameDrawOn(freeze_rt[eye]);
                 set_proj_ortho(UI_W, UI_H, 0.0f);
@@ -2298,7 +2299,7 @@ void ctr_present(long frame) {
                 (void)mag_ry;
             } else if (frozen) { /* a menu is up: the paused scene, dimmed to half (its panels are drawn over it after) */
                 draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h, freeze_w, freeze_h, edge);
-                screen_dim(top_rt[eye], 0x80);
+                if (port_game_mode() != 8) screen_dim(top_rt[eye], 0x80); /* (the rewards: the battle as it ended) */
             }
             else {
                 draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, w, h, edge);

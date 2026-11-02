@@ -155,7 +155,7 @@ int port_title_live(void);
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (g_gameState && g_gameState->mode == 0 && port_title_live()) return title_tap(x, y) ? -1 : 0; /* (title_ui.c) */
     if (g_gameState && g_gameState->mode == 0 && boot_live && max > 0) { seq[0] = 0x0008; return 1; } /* (START) */
-    if (g_gameState && g_gameState->mode == 7 && gameover_live && max > 0) { seq[0] = 0x4000; return 1; } /* (Cross) */
+    if (g_gameState && gameover_live && max > 0) { seq[0] = 0x4000; return 1; } /* (Cross; a field's or a battle's) */
     if (g_gameState && g_gameState->mode == 4 && bj_live) { int port_bj_tap(int, int); port_bj_tap(x, y - oy); return -1; }
     if (g_gameState && g_gameState->mode == 1 && auction_live) { int port_auction_tap(int, int); if (port_auction_tap(x, y - oy)) return -1; }
     if (g_gameState && config_open() && config_overlay_tap(x, y)) return -1; /* (the Config screen's 3DS OPTIONS) */
@@ -836,7 +836,9 @@ void port_bottom_hud(void) {
     int title = g_gameState->mode == 0 && port_title_live();
     int boot = g_gameState->mode == 0 && !title && !port_menu_state(); /* (before the title: boot_live) */
     boot_live = boot;
-    int gameover = g_gameState->mode == 7;
+    /* (game over: a field's (mode 7) or a battle's, which battle_end runs in its own mode) */
+    int gameover = g_gameState->mode == 7 || (g_gameState->mode == 8 && g_gameState->gameData &&
+                                              g_gameState->gameData->battleResult == BATTLE_END_GAME_OVER);
     int port_bj_live(void);
     int bj = g_gameState->mode == 4 && port_bj_live();
     bj_live = bj;

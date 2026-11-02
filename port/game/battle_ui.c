@@ -50,10 +50,19 @@ int ctr_touch_held(int *x, int *y);
 extern int ctr_ui_oy;
 void o0b_btl_tryEscape(u8);
 
+static int ram_ok(const void *p, unsigned size);
 void port_battle_ui_frame(void) {
     static int forced, had;
     if (!g_gameState) return;
     int battle = g_gameState->mode == 2;
+    { /* the top screen's snapshot for the rewards: the battle's last frame before its exit fade (BTL_PHASE_EXIT
+       * subphase 2 on: fade_out started), kept through the rewards screen (mode 8) */
+        extern int ctr_freeze_held;
+        Battle *b = battle && g_gameState->gameData ? g_gameState->gameData->ctx.battle : NULL;
+        if (b && ram_ok(b, sizeof *b) && b->phase == BTL_PHASE_EXIT && b->subPhase >= 2) ctr_freeze_held = 1;
+        else if (g_gameState->mode != 8 && !battle) ctr_freeze_held = 0;
+        else if (battle && !(b && ram_ok(b, sizeof *b) && b->phase == BTL_PHASE_EXIT)) ctr_freeze_held = 0;
+    }
     { /* RUN held: the escape poll's own steps (escapeHeld, the hold count, btl_tryEscape) */
         int tx, ty;
         running = 0;
@@ -185,10 +194,22 @@ static void draw_commands(void) {
 }
 
 static RECT r_list[5], r_desc = {6, 174, 232, 46}, r_back = {242, 174, 74, 46};
-static int list_shown, list_first, list_n;
+static int list_shown, list_n, list_entry[5]; /* (the list entry each row shows) */
 s32 o0b_btlui_getListHelpText(void);
 s32 o0b_btlui_getAbilityState(s32);
 void *o0b_btl_getUnitName(BtlUnit *);
+
+/* An ability list holds every ability of the member's command, the ones they haven't (not learned, not on their gear)
+ * as blank rows the PS1's cursor still stops on. Here only the ones they have are rows, and the cursor is kept on
+ * them (keep_on_listed): a blank one showed as nothing highlighted and no help. */
+static int listed(int i) {
+    return g_btluiList.cmd->kind != 1 || o0b_btlui_getAbilityState(g_btlCmdAbilities[g_btluiList.cmd->first + i]);
+}
+static void list_set_cursor(MenuList *L, int i) { /* (the game's view moves so the entry is in it) */
+    if (i < L->top) L->top = (u8)i;
+    if (L->visibleRows && i >= L->top + L->visibleRows) L->top = (u8)(i - L->visibleRows + 1);
+    L->cursor = (u8)(i - L->top);
+}
 
 static int draw_list(void) {
     static const u8 back[] = "BACK", hp[] = "HP", mp[] = "MP";
@@ -198,8 +219,15 @@ static int draw_list(void) {
     MenuList *L = &w->list;
     if (L->cols != 1 || L->count <= 0) return 0; /* (only single-column lists: battle's are) */
     int count = L->count, cur = L->top + L->cursor;
-    int vis = 5, first = cur - 2;
-    if (first > count - vis) first = count - vis;
+    static int idx[256];
+    int n = 0, pos = 0;
+    for (int i = 0; i < count && n < 256; i++) {
+        if (!listed(i)) continue;
+        if (i <= cur) pos = n;
+        idx[n++] = i;
+    }
+    int vis = 5, first = pos - 2;
+    if (first > n - vis) first = n - vis;
     if (first < 0) first = 0;
     MenuView v;
     menuList_getView(L, &v);
@@ -207,23 +235,18 @@ static int draw_list(void) {
     RECT saved = w->cur;
     w->cur.h = w->h; /* (the row functions offset by the open animation's h - cur.h: none) */
     list_n = 0;
-    for (int i = 0; i < vis && first + i < count; i++) {
+    for (int i = 0; i < vis && first + i < n; i++) {
         RECT *r = &r_list[i];
+        int e = list_entry[i] = idx[first + i];
         r->x = 6; r->y = 40 + i * 26; r->w = 202; r->h = 24;
         list_n = i + 1;
-        /* (an ability the member hasn't: no row, as the game draws none) */
-        if (g_btluiList.cmd->kind == 1 && !o0b_btlui_getAbilityState(g_btlCmdAbilities[g_btluiList.cmd->first + first + i])) {
-            r->w = 0;
-            continue;
-        }
         w->cur.x = r->x + 4;
         w->cur.y = r->y + 5;
-        g_btluiListRowFns[g_btluiList.cmd->kind](0, 0, first + i, &v);
-        if (first + i == cur) bar(&g_ot[6], r->x + 2, r->y + 5, 3, r->h - 10, 0x40E0F8);
+        g_btluiListRowFns[g_btluiList.cmd->kind](0, 0, e, &v);
+        if (e == cur) bar(&g_ot[6], r->x + 2, r->y + 5, 3, r->h - 10, 0x40E0F8);
         win_drawBox(r, 9, 2);
     }
     w->cur = saved;
-    list_first = first;
     u8 *help = (u8 *)o0b_btlui_getListHelpText();
     if (help) text_drawBlock(r_desc.x + 8, r_desc.y + 5, 2, help, 0);
     win_drawBox(&r_desc, 4, 2);
@@ -348,7 +371,7 @@ int port_battle_tap(int x, int y, unsigned *seq, int max) {
     }
     if (list_shown) {
         for (int i = 0; i < list_n; i++)
-            if (inside(&r_list[i], x, y)) { tap_kind = TAP_LIST; tap_arg = list_first + i; return -1; }
+            if (inside(&r_list[i], x, y)) { tap_kind = TAP_LIST; tap_arg = list_entry[i]; return -1; }
         if (inside(&r_back, x, y)) tap_kind = TAP_LIST_BACK;
         return -1;
     }
@@ -414,6 +437,17 @@ void o0b_btlui_cmdInput(void) {
     o0b_btlui_cmdInput_game();
 }
 
+/* after the game's own step: a cursor on an ability the member hasn't goes on to the next one they have, the way it
+ * moved (down if it didn't: the list just opened), else back the other way */
+static void keep_on_listed(MenuList *L, int was) {
+    int cur = L->top + L->cursor;
+    if (cur < 0 || cur >= L->count || listed(cur)) return;
+    int dir = cur < was ? -1 : 1;
+    for (int pass = 0; pass < 2; pass++, dir = -dir)
+        for (int i = cur + dir; i >= 0 && i < L->count; i += dir)
+            if (listed(i)) { list_set_cursor(L, i); return; }
+}
+
 void o0b_btlui_listInput(void) {
     Window *w = g_btlUi->windows[2];
     int k = tap_kind;
@@ -426,13 +460,14 @@ void o0b_btlui_listInput(void) {
             else g_btluiList.doubleCast--;
             return;
         }
-        if (tap_arg < w->list.top) w->list.top = (s16)tap_arg; /* (the list's view moves so the entry is in it) */
-        w->list.cursor = (s16)(tap_arg - w->list.top);
+        list_set_cursor(&w->list, tap_arg);
         o0b_btlui_listConfirm();
         return;
     }
     if (k != TAP_NONE && k != TAP_LIST && k != TAP_LIST_BACK) tap_kind = TAP_NONE;
+    int was = w ? w->list.top + w->list.cursor : 0;
     o0b_btlui_listInput_game();
+    if (w && g_btlUi->windows[2] == w && w->state == 3 && g_btluiList.cmd) keep_on_listed(&w->list, was);
 }
 
 void o0b_btlui_targetInput(void) {
@@ -462,8 +497,10 @@ int port_battle_help_on;
 void port_help_panel(u8 *text);
 int port_battle_help_top(void) {
     u8 *text = (u8 *)g_btluiHelp.text; /* (an address held as s32) */
-    port_battle_help_on = port_battle_hud_on && ram_ok(g_btlUi, sizeof *g_btlUi) && g_btluiHelp.open && text &&
-                          ram_ok(text, 1) && *text != TEXT_END;
-    if (port_battle_help_on) port_help_panel(text);
-    return port_battle_help_on;
+    /* (open with no text, as on an entry without help: still kept off the bottom, where it showed behind the port's
+     * panels as an empty HELP window) */
+    port_battle_help_on = port_battle_hud_on && ram_ok(g_btlUi, sizeof *g_btlUi) && g_btluiHelp.open;
+    if (!port_battle_help_on || !text || !ram_ok(text, 1) || *text == TEXT_END) return 0;
+    port_help_panel(text);
+    return 1;
 }
