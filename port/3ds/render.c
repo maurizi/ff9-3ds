@@ -2518,10 +2518,9 @@ void ctr_shutdown(void) {
     ctr_voice_exit();
     ctr_where = "closing: audio";
     ctr_audio_exit();
-    ctr_where = "closing: graphics";
-    if (in_frame) frame_end(); /* (not waited for: C3D_Fini and the process's end take the GPU down) */
-    C3D_Fini();
-    gfxExit();
+    /* No graphics teardown: closing comes from the HOME menu, which holds the GPU by then, so ending the frame or
+     * C3D_Fini waits for GPU work that never runs (the close hung on "Closing software" on hardware). The process's
+     * end frees our GPU memory and the GSP session. */
     ctr_where = "closing: done";
 }
 #endif
