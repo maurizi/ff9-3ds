@@ -205,10 +205,10 @@ void port_rewards_live_draw(void) {
     live_env[1] = 0xE3000000u | (u32)d.x | (u32)d.y << 10;
     live_env[2] = 0xE4000000u | (u32)(d.x + d.w - 1) | (u32)(d.y + d.h - 1) << 10;
     live_env[3] = 0xE5000000u | ((u32)d.x & 0x7FF) | ((u32)d.y & 0x7FF) << 11;
-    void psx_ui_list_begin_keep(void);
+    void psx_ui_list_begin(void);
     void psx_ui_list_end(void);
     void port_draw_ot_buffer(unsigned int *head, const void *buffer, unsigned int size);
-    psx_ui_list_begin_keep();
+    psx_ui_list_begin(); /* (the layer cleared first: drawn again each frame, its shading would build up and flicker) */
     port_draw_ot_buffer(&live_ot[live_cur][OT_LAST], live_buf[live_cur], LIVE_PRIMS);
     psx_ui_list_end();
 }

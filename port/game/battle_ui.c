@@ -325,7 +325,10 @@ unsigned port_battle_drive(void) { return 0; } /* (port/3ds/touch.c's steering: 
 int port_rewards_live_state(void);
 int port_battle_hud_draw(void) {
     port_battle_hud_on = 0;
-    if (port_rewards_live_state() >= 2) return 0; /* (the rewards have the bottom screen, then the battle fades: below) */
+    if (port_rewards_live_state() >= 2) { /* (the rewards have the bottom screen, then the battle fades: below) */
+        cmd_shown = list_shown = tgt_shown = sys_shown = 0; /* (nothing of the battle's to tap meanwhile) */
+        return 0;
+    }
     if (!ram_ok(g_gameState->gameData->ctx.battle, 16) || !ram_ok(g_btlUi, sizeof *g_btlUi) || !g_btlUi->partyCount) return 0;
     int st = g_btlUi->menuState;
     cmd_shown = list_shown = tgt_shown = 0;
@@ -519,12 +522,10 @@ int port_battle_help_top(void) {
 #define EXIT_HOLD 20  /* (the rewards up, or waiting for ovl_65) */
 static int live; /* 0 not yet, 1 waiting for ovl_65 and its data, 2 showing, 3 shown (mode 8 skips), -1 not this time */
 static int live_wait;
-static int since, loop_len; /* (o0b_btl_update: frames since the victory camera's scene began, and its length to the cue) */
+static int orbit_start, orbiting; /* (the victory camera's cue seen; the camera circling the party) */
 int port_rewards_live_state(void) { return live; }
 void port_rewards_live_consumed(void) { live = 0; }
 s32 o0b_btl_update_game(void);
-void o0b_btlcam_playScene(s32);
-s32 o0b_btl_getSceneData(s32);
 s32 o0b_btl_saveParty_game(Battle *);
 int port_rewards_live_eligible(void);
 int port_rewards_live_ready(void);
@@ -543,19 +544,18 @@ s32 o0b_btl_update(void) {
         /* (on entering the exit: subphase 0 while the victory camera plays, 1 at once without one) */
         live = g_gameState->gameData->battleResult == BATTLE_END_VICTORY && port_rewards_live_eligible() ? 1 : -1;
         if (live == 1) b->subPhase = b->subPhase == 1 ? EXIT_HOLD : EXIT_ARMED;
-        since = loop_len = 0;
+        orbit_start = orbiting = 0;
     }
     s32 r = o0b_btl_update_game();
+    /* (after the rewards, the exit's own steps: 1 starts the fade, 2 counts it to the leave. Nothing may move it on
+     * from 2, as a victory camera's cue would (subphase++): the battle would stay, faded out, for good) */
+    if (b->phase == BTL_PHASE_EXIT && live == 3 && b->subPhase > 2) b->subPhase = 2;
     if (b->phase != BTL_PHASE_EXIT || (live != 1 && live != 2)) return r;
-    /* the victory camera (its scene started with the exit): from its start to its cue is what the PS1 shows before the
-     * fade, so the top loops that, its scene restarted every time that long has gone by again */
-    since++;
-    if (b->subPhase == EXIT_ARMED + 1) loop_len = since; /* (the cue, the first time) */
-    if (b->subPhase > EXIT_ARMED) b->subPhase = EXIT_HOLD;
-    if (b->subPhase == EXIT_ARMED) loop_len = 0;
-    else if (loop_len > 0 && since >= loop_len && ((b->scene.flags >> BTL_SCENE_VICTORY_BIT) & 1)) {
-        o0b_btlcam_playScene(o0b_btl_getSceneData(2));
-        since = 0;
+    /* the victory camera's cue (its scene's subphase++, where the PS1 fades): from there the camera circles the party
+     * (o0b_btlcam_update below) */
+    if (b->subPhase > EXIT_ARMED && b->subPhase != EXIT_HOLD) {
+        b->subPhase = EXIT_HOLD;
+        orbit_start = 1;
     }
     if (live == 1 && b->subPhase == EXIT_HOLD) {
         if (port_rewards_live_ready()) {
@@ -581,4 +581,64 @@ void game_updateFade_game(void);
 void game_updateFade(void) {
     game_updateFade_game();
     if (live == 2 && g_gameState->mode == GS_MODE_BATTLE) ClearOTagR(fade_getOt(g_gameState->gameData->drawBuf), 1);
+}
+
+/* The camera while the rewards are up, and on through the fade after them: from where the victory camera gave its cue it circles the party at that
+ * distance and height, slowly (a turn in ORBIT_FRAMES), its aim easing from where the script looked to the party's
+ * middle: the victory loops without a cut. */
+#define ORBIT_FRAMES (60 * 24)
+#define ORBIT_EASE 60
+void o0b_btlcam_update_game(void);
+void o0b_btlcam_lookAt(MATRIX *, SVECTOR *, SVECTOR *);
+void o0b_btlcam_update(void) {
+    static s32 cx, cy, cz, r, h, a0, t0;
+    static s32 ax0, ay0, az0;
+    Battle *b = g_gameState->gameData->ctx.battle;
+    if (!((live == 1 || live == 2 || live == 3) && b->phase == BTL_PHASE_EXIT && (orbit_start || orbiting))) {
+        orbiting = 0;
+        o0b_btlcam_update_game();
+        return;
+    }
+    MATRIX *view = &g_gameState->gameData->viewMatrix;
+    if (orbit_start) { /* (the party's middle, and the camera relative to it, as the script left it) */
+        s32 n = 0, sx = 0, sy = 0, sz = 0;
+        for (BtlUnit *u = b->unitList; u; u = u->next)
+            if ((u->flags & BTL_UNIT_PARTY) && u->hp) sx += u->pos[0] >> 16, sy += u->pos[1] >> 16, sz += u->pos[2] >> 16, n++;
+        if (!n) { orbit_start = 0; o0b_btlcam_update_game(); return; }
+        cx = sx / n, cy = sy / n - 500, cz = sz / n; /* (aimed at the chest: y is down) */
+        s32 dx = g_btlCamera.eye.vx - cx, dz = g_btlCamera.eye.vz - cz;
+        r = SquareRoot0(dx * dx + dz * dz);
+        h = g_btlCamera.eye.vy - cy;
+        a0 = ratan2(dx, dz);
+        t0 = VSync(-1);
+        /* (where the script looked: along the view's z axis, as far as the party's middle) */
+        s32 d = SquareRoot0(dx * dx + h * h + dz * dz);
+        ax0 = g_btlCamera.eye.vx + view->m[2][0] * d / 4096;
+        ay0 = g_btlCamera.eye.vy + view->m[2][1] * d / 4096;
+        az0 = g_btlCamera.eye.vz + view->m[2][2] * d / 4096;
+        orbit_start = 0;
+        orbiting = 1;
+    }
+    s32 t = VSync(-1) - t0;
+    s32 a = a0 + (s32)((long long)t * 4096 / ORBIT_FRAMES);
+    SVECTOR eye, at;
+    eye.vx = (s16)(cx + r * math_sin(a & 0xFFF) / 4096);
+    eye.vy = (s16)(cy + h);
+    eye.vz = (s16)(cz + r * math_cos(a & 0xFFF) / 4096);
+    s32 e = t >= ORBIT_EASE ? 4096 : t * 4096 / ORBIT_EASE;
+    e = e * e / 4096 * (3 * 4096 - 2 * e) / 4096; /* (smoothstep) */
+    at.vx = (s16)(ax0 + (cx - ax0) * e / 4096);
+    at.vy = (s16)(ay0 + (cy - ay0) * e / 4096);
+    at.vz = (s16)(az0 + (cz - az0) * e / 4096);
+    g_btlCamera.eye = eye;
+    o0b_btlcam_lookAt(view, &eye, &at);
+    g_btlCamera.yaw = -ratan2(eye.vx - at.vx, eye.vz - at.vz) - 0x800;
+}
+
+/* no pause while the rewards run under the battle (Start there is the rewards', which ignore it, as on the PS1's
+ * rewards screen): a pause stops the battle's update and the rewards in it */
+u8 o0b_btlui_isPauseRequested_game(void);
+u8 o0b_btlui_isPauseRequested(void) {
+    if (live == 1 || live == 2) { g_btluiState.pauseReq = 0; return 0; }
+    return o0b_btlui_isPauseRequested_game();
 }
