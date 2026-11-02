@@ -820,6 +820,7 @@ static void overlay(void (*fn)(void)) {
 }
 
 void port_bottom_hud(void) {
+    { void port_rewards_live_draw(void); port_rewards_live_draw(); } /* (the rewards under a battle: rewards_top.c) */
     shown = shown_battle = 0;
     ctr_flat_background(g_gameState && g_gameState->mode == 1);
     if (g_gameState && g_gameState->gameData) cards_step();

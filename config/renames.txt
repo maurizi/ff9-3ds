@@ -55,3 +55,15 @@ src/ovl_15/bj_wager o15_bj_wagerUpdate o15_bj_wagerUpdate_game
 src/ovl_15/bj_action o15_bj_actionUpdate o15_bj_actionUpdate_game
 src/ovl_15/the_end o15_ending_theEnd o15_ending_theEnd_game
 src/ovl_15/blackjack o15_ending_playMovie o15_ending_playMovie_game
+# The rewards screen run inside the battle's exit, under its looping victory pose (port/game/battle_ui.c,
+# port/game/rewards_top.c): the battle's update holds its exit, its party save runs once, and mode 8 then skips the
+# rewards it already showed. The game's fade stays off the battle's scene meanwhile (the rewards' own screen change).
+src/ovl_0b/btl_update o0b_btl_update o0b_btl_update_game
+src/ovl_0b/btl_status o0b_btl_saveParty o0b_btl_saveParty_game
+src/ovl_65/battle_end o65_rewards_init o65_rewards_init_game
+src/ovl_65/battle_end o65_rewards_update o65_rewards_update_game
+src/ovl_65/battle_end o65_rewards_exit o65_rewards_exit_game
+src/ovl_65/battle_end o65_battleEnd_loadDb o65_battleEnd_loadDb_game
+src/ovl_65/battle_end o65_battleEnd_loadPortraits o65_battleEnd_loadPortraits_game
+src/main/menu game_updateFade game_updateFade_game
+src/ovl_65/battle_end o65_battleEnd_unloadDb o65_battleEnd_unloadDb_game

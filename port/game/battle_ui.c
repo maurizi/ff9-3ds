@@ -322,8 +322,10 @@ static int draw_targets(void) {
 unsigned port_battle_drive(void) { return 0; } /* (port/3ds/touch.c's steering: nothing to steer now) */
 
 /* field_hud.c's frame: whether the battle screen is the port's this frame (then it draws, into g_ot / g_primPtr) */
+int port_rewards_live_state(void);
 int port_battle_hud_draw(void) {
     port_battle_hud_on = 0;
+    if (port_rewards_live_state() >= 2) return 0; /* (the rewards have the bottom screen, then the battle fades: below) */
     if (!ram_ok(g_gameState->gameData->ctx.battle, 16) || !ram_ok(g_btlUi, sizeof *g_btlUi) || !g_btlUi->partyCount) return 0;
     int st = g_btlUi->menuState;
     cmd_shown = list_shown = tgt_shown = 0;
@@ -503,4 +505,80 @@ int port_battle_help_top(void) {
     if (!port_battle_help_on || !text || !ram_ok(text, 1) || *text == TEXT_END) return 0;
     port_help_panel(text);
     return 1;
+}
+
+/* ---- the rewards under the battle's victory pose ----------------------------------------------------------------
+ * On the PS1 a won battle fades out and mode 8 (ovl_65) shows the rewards on a black screen. Here the rewards run
+ * inside the battle's exit (BTL_PHASE_EXIT, held at a subphase that only updates and draws the units: the victory
+ * pose loops, the camera goes on) on the bottom screen, the battle on the top; when they close the battle fades and
+ * leaves as before, and mode 8 skips them (rewards_top.c). The party is saved first, as btl_saveParty does before the
+ * rewards on the PS1, and not again. Not for game overs, escapes or rewards an event script runs (rewards_top.c:
+ * port_rewards_live_eligible): those keep the PS1's path. */
+#define EXIT_ARMED 10 /* (BTL_PHASE_EXIT: 1 starts the fade, 2 counts it; other subphases only update the units.
+                       * Armed, the victory camera's end (its script's subphase++) makes it 11: the rewards' cue) */
+#define EXIT_HOLD 20  /* (the rewards up, or waiting for ovl_65) */
+static int live; /* 0 not yet, 1 waiting for ovl_65 and its data, 2 showing, 3 shown (mode 8 skips), -1 not this time */
+static int live_wait;
+static int since, loop_len; /* (o0b_btl_update: frames since the victory camera's scene began, and its length to the cue) */
+int port_rewards_live_state(void) { return live; }
+void port_rewards_live_consumed(void) { live = 0; }
+s32 o0b_btl_update_game(void);
+void o0b_btlcam_playScene(s32);
+s32 o0b_btl_getSceneData(s32);
+s32 o0b_btl_saveParty_game(Battle *);
+int port_rewards_live_eligible(void);
+int port_rewards_live_ready(void);
+void port_rewards_live_start(void);
+int port_rewards_live_step(void);
+
+s32 o0b_btl_saveParty(Battle *battle) {
+    if (live == 2 || live == 3) return 1; /* (saved when the rewards began: their level-ups would be undone) */
+    return o0b_btl_saveParty_game(battle);
+}
+
+s32 o0b_btl_update(void) {
+    Battle *b = g_gameState->gameData->ctx.battle;
+    if (b->phase == BTL_PHASE_INTRO) live = 0, live_wait = 0;
+    if (b->phase == BTL_PHASE_EXIT && live == 0) {
+        /* (on entering the exit: subphase 0 while the victory camera plays, 1 at once without one) */
+        live = g_gameState->gameData->battleResult == BATTLE_END_VICTORY && port_rewards_live_eligible() ? 1 : -1;
+        if (live == 1) b->subPhase = b->subPhase == 1 ? EXIT_HOLD : EXIT_ARMED;
+        since = loop_len = 0;
+    }
+    s32 r = o0b_btl_update_game();
+    if (b->phase != BTL_PHASE_EXIT || (live != 1 && live != 2)) return r;
+    /* the victory camera (its scene started with the exit): from its start to its cue is what the PS1 shows before the
+     * fade, so the top loops that, its scene restarted every time that long has gone by again */
+    since++;
+    if (b->subPhase == EXIT_ARMED + 1) loop_len = since; /* (the cue, the first time) */
+    if (b->subPhase > EXIT_ARMED) b->subPhase = EXIT_HOLD;
+    if (b->subPhase == EXIT_ARMED) loop_len = 0;
+    else if (loop_len > 0 && since >= loop_len && ((b->scene.flags >> BTL_SCENE_VICTORY_BIT) & 1)) {
+        o0b_btlcam_playScene(o0b_btl_getSceneData(2));
+        since = 0;
+    }
+    if (live == 1 && b->subPhase == EXIT_HOLD) {
+        if (port_rewards_live_ready()) {
+            o0b_btl_saveParty_game(b);
+            live = 2;
+            port_log("rewards: under the battle (waited %d frames)\n", live_wait);
+            port_rewards_live_start();
+        } else if (++live_wait > 300) { /* (ovl_65 not preloaded: the PS1's path) */
+            port_log("rewards: ovl_65 or its data not preloaded, after the battle as on the PS1\n");
+            live = -1;
+            b->subPhase = 1;
+        }
+    } else if (live == 2 && !port_rewards_live_step()) {
+        port_log("rewards: closed, the battle leaves\n");
+        live = 3;
+        b->subPhase = 1; /* (the fade out, then the battle leaves) */
+    }
+    return r;
+}
+
+/* the game's fade while the rewards run in the battle: their screen change (EXP to items) is theirs, not the scene's */
+void game_updateFade_game(void);
+void game_updateFade(void) {
+    game_updateFade_game();
+    if (live == 2 && g_gameState->mode == GS_MODE_BATTLE) ClearOTagR(fade_getOt(g_gameState->gameData->drawBuf), 1);
 }
