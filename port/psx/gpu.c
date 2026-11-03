@@ -10,6 +10,8 @@
  * link rebuilds as (psx_ram & 0xFF000000) | addr24. The walker applies VRAM fills and copies to the shadow and
  * hands every packet to the GP0 decoder (gp0.c), which drives the active renderer backend.
  */
+#include <stdlib.h>
+
 #include "psyq_port.h"
 #include "profile.h"
 #include "psx_display.h"
@@ -170,6 +172,27 @@ static u16 rgb15(int r, int g, int b) {
  * output are dropped */
 int psx_load_image_skip;
 
+/* Uploads recorded (port/game/rewards_top.c: the rewards' images loaded while the battle still draws from that VRAM):
+ * each one's rectangle, what VRAM held there before and what it was given, to put either back */
+int psx_load_record;
+PsxLoadRec psx_load_recs[PSX_LOAD_RECS];
+int psx_n_load_recs;
+static void load_record(const RECT *r, const u32 *p) {
+    if (psx_n_load_recs == PSX_LOAD_RECS || r->w <= 0 || r->h <= 0 || (r->x & 1023) + r->w > VRAM_W) return;
+    PsxLoadRec *k = &psx_load_recs[psx_n_load_recs++];
+    unsigned n = (unsigned)r->w * (unsigned)r->h;
+    k->x = r->x, k->y = r->y, k->w = r->w, k->h = r->h;
+    k->was = malloc(n * 2);
+    k->given = malloc(n * 2);
+    if (!k->was || !k->given) { free(k->was); free(k->given); psx_n_load_recs--; return; }
+    for (int j = 0; j < r->h; j++) __builtin_memcpy(k->was + j * r->w, vram_at(r->x, r->y + j), (unsigned)r->w * 2);
+    __builtin_memcpy(k->given, (const u16 *)((uintptr_t)p & ~(uintptr_t)3), n * 2);
+}
+void psx_load_records_free(void) {
+    for (int i = 0; i < psx_n_load_recs; i++) free(psx_load_recs[i].was), free(psx_load_recs[i].given);
+    psx_n_load_recs = 0;
+}
+
 int LoadImage(RECT *r, u32 *p) {
     if (psx_trace_gpu) {
         port_log("gpu: LoadImage %d,%d %dx%d\n", r->x, r->y, r->w, r->h);
@@ -177,6 +200,7 @@ int LoadImage(RECT *r, u32 *p) {
     if (!psx_vram || psx_load_image_skip) {
         return 0;
     }
+    if (psx_load_record) load_record(r, p);
     const int check_mask=gp0_state.check_mask;
     const u16 set_mask=gp0_state.set_mask?0x8000:0;
     if (check_mask) psx_vram_read(r->x,r->y,r->w,r->h);

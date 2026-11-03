@@ -8,6 +8,7 @@
 #include "ovl_65.h"
 #include "psx_display.h"
 #include "gp0.h"
+#include "psx_runtime.h"
 
 void port_big_portrait(int slot, Character *c, int x, int y, int size);
 
@@ -120,7 +121,19 @@ int port_rewards_live_ready(void) {
     return o->dest - (u32)psx_ram == 0x1EDF00; /* (RAM_SUB_OVL, as a native address) */
 }
 
+/* The rewards' images (the party's portraits, their own pictures and CLUTs) load where the battle's textures are
+ * (its background's page among them: a tile of the arena went white as the rewards opened): VRAM holds the battle's
+ * there, and the rewards' only while their table draws (port_rewards_live_draw). 1: theirs, 0: the battle's. */
+static void live_vram(int rewards) {
+    for (int i = 0; i < psx_n_load_recs; i++) {
+        PsxLoadRec *k = &psx_load_recs[i];
+        RECT r = {k->x, k->y, k->w, k->h};
+        LoadImage(&r, (u32 *)(rewards ? k->given : k->was));
+    }
+}
 void port_rewards_live_start(void) {
+    psx_load_records_free();
+    psx_load_record = 1; /* (the battle still draws from what they overwrite: live_vram) */
     s32 db = (s32)preload_find(FILE_BTL_END_DB)->dest; /* (as stored: a native address) */
     db_register(db, 0); /* (battleEnd_loadDb's, read where the battle preloaded it) */
     o65_battleEnd_loadPortraits_game();
@@ -157,6 +170,8 @@ void port_rewards_live_start(void) {
     o65_rewards_loadImages();
     o65_rewards_initGil();
     o65_rewards_initWindows();
+    psx_load_record = 0;
+    live_vram(0);
 }
 
 /* a frame of them (battleEnd_update's, and the window step battleEnd_main does); 0 once they have closed. They draw
@@ -205,6 +220,8 @@ int port_rewards_live_step(void) {
     live_cur = cur;
     if (!more) {
         o65_rewards_exit_game(); /* (as battleEnd_update: the VRAM row back) */
+        live_vram(0);
+        psx_load_records_free();
         live_cur = -1;
     }
     return more;
@@ -241,8 +258,10 @@ void port_rewards_live_draw(void) {
     extern int ctr_keep_layers;
     ctr_keep_layers = port_rewards_live_state() == 2 && live_cur >= 0;
     if (!ctr_keep_layers) return;
+    live_vram(1);
     live_draw_into(0);
     live_draw_into(1);
+    live_vram(0);
 }
 
 /* mode 8 after the rewards ran in the battle: nothing more of them (the screen goes straight on, as an empty rewards

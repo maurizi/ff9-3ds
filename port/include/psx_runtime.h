@@ -57,4 +57,11 @@ void port_fatal(const char *fmt, ...) __attribute__((noreturn, format(printf, 1,
 /* Called by generated stubs for routines the port doesn't provide yet. */
 void port_stub_hit(const char *name) __attribute__((noreturn));
 
+/* LoadImage's recorder (gpu.c): the rectangle, VRAM there before, and what was loaded */
+#define PSX_LOAD_RECS 24
+typedef struct { short x, y, w, h; unsigned short *was, *given; } PsxLoadRec;
+extern int psx_load_record, psx_n_load_recs;
+extern PsxLoadRec psx_load_recs[PSX_LOAD_RECS];
+void psx_load_records_free(void);
+
 #endif
