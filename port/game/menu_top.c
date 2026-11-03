@@ -156,23 +156,32 @@ static int changes(int x, int y, Character *c, int slot, int id, int n) {
     return shown;
 }
 
-/* an item (equipment): who can wear it and what it changes for each; 0 if it isn't equipment */
-static int item_view(int id) {
+/* an item (equipment): its description, who can wear it and what it changes for each; 0 if it isn't equipment */
+static int item_view(int id, u8 *help) {
     static RECT box = {8, 8, 384, 224};
     if (id < 0 || id >= 0xFF) return 0;
     ItemInfo *it = &g_itemTable[id];
     int slot = -1;
     for (int s = 0; s < 5; s++)
         if (it->slots & g_equipSlotMasks[s]) slot = s;
-    if (slot < 0) return 0;
+    if (slot < 0 || !(it->equipMask & 0xFFF)) return 0; /* (nobody wears it: Phoenix Pinion, the throwing items) */
     ui_drawItemIcon(22, 20, 2, id, 1);
     text_drawBlock(42, 20, 2, g_itemNames + it->name, 0);
+    /* (its description under the name, as Select's help gave it; the party's rows share what is left) */
+    int top = 46, step = 46, size = 40;
+    if (help && ram_ok(help, 1) && *help != TEXT_END) {
+        text_drawBlock(22, 38, 2, help, 0);
+        top = 38 + text_measure(help).h + 6;
+        step = (226 - top) / 4;
+        if (step > 46) step = 46;
+        size = step - 4 < 40 ? step - 4 : 40;
+    }
     GameData *g = g_gameState->gameData;
     for (int i = 0; i < 4; i++) {
         Character *c = g->party[i];
         if (!ram_ok(c, sizeof *c)) continue;
-        int ok = (it->equipMask & (0x800 >> chr_getDefaultSet(c))) != 0, y = 46 + i * 46;
-        face(i, chr_portrait(c), 22, y, 40);
+        int ok = (it->equipMask & (0x800 >> chr_getDefaultSet(c))) != 0, y = top + i * step;
+        face(i, chr_portrait(c), 22, y, size);
         text_drawBlock(70, y, 2, c->name, ok ? 0 : 2);
         if (!ok) {
             ui_drawLabel(70, y + 18, 2, (s32)"CAN T EQUIP", 2);
@@ -218,7 +227,9 @@ static int equip_view(const u8 *st) {
     return 1;
 }
 
-/* the Ability screen: the highlighted ability's AP and what teaches it */
+/* the Ability screen's list: the highlighted ability's description (its Select help, which the top shows instead) and
+ * what teaches it */
+void o33_menuAbility_updateHelp(void);
 static int ability_view(const u8 *st) {
     static RECT box = {8, 8, 384, 224};
     static const u8 taught[] = "TAUGHT BY";
@@ -228,30 +239,33 @@ static int ability_view(const u8 *st) {
     Character *c = g->party[member];
     int tab = st[0];
     MenuList *L = (MenuList *)(st + (tab ? 0x18 : 8));
+    if (L->count <= 0) return 0;
     int n = (L->top + L->cursor) * L->cols + L->col, id = tab ? st[0x728 + n] : st[0x668 + n * 4];
-    if (!id) return 0;
-    int taught_any = 0; /* (nothing drawn unless something teaches it: else the caller's view instead) */
-    for (int s = 0; s < 5; s++)
-        for (int k = 0; k < 3 && c->equip[s] != 0xFF; k++) taught_any |= g_itemTable[c->equip[s]].abilities[k] == id;
-    if (!taught_any) return 0;
-    int chr = (int)(*(u32 *)((u8 *)c + 0x34) & 0xF);
+    /* (the game's own help text for it: its update, as help.c runs it while the help is open; text and bounds only) */
+    u8 *was = g_menuHelp.text;
+    o33_menuAbility_updateHelp();
+    u8 *help = g_menuHelp.text;
+    g_menuHelp.text = was;
     face(0, chr_portrait(c), 22, 20, 48);
     text_drawBlock(80, 24, 2, c->name, 0);
-    (void)chr;
-    ui_drawLabel(28, 92, 2, (s32)taught, 0);
-    int y = 108, any = 0;
-    for (int s = 0; s < 5; s++) {
+    int y = 80;
+    if (help && ram_ok(help, 1) && *help != TEXT_END) {
+        text_drawBlock(28, y, 2, help, 0);
+        y += text_measure(help).h + 14;
+    }
+    int any = 0;
+    for (int s = 0; id && s < 5; s++) {
         int it = c->equip[s];
         if (it == 0xFF) continue;
         for (int k = 0; k < 3; k++)
             if (g_itemTable[it].abilities[k] == id) {
+                if (!any) ui_drawLabel(28, y, 2, (s32)taught, 0), y += 16;
                 ui_drawItemIcon(28, y, 2, it, 1);
                 text_drawBlock(48, y, 2, g_itemNames + g_itemTable[it].name, 0);
                 y += 20;
                 any = 1;
             }
     }
-    if (!any) return 0;
     win_drawBox(&box, 5, 2);
     return 1;
 }
@@ -320,7 +334,7 @@ static int consumable_view(int id, u8 *help) {
 /* any item for the top screen: equipment as item_view, the rest as consumable_view; help: its description */
 int port_item_panel(int id, u8 *help) {
     if (id < 0 || id >= 0xFF) return empty_panel();
-    return item_view(id) || consumable_view(id, help);
+    return item_view(id, help) || consumable_view(id, help);
 }
 /* a key item: its name and description, large */
 int port_key_item_panel(u8 *name, u8 *help) {
@@ -411,7 +425,6 @@ static void order_view(int cur) {
     }
 }
 
-static long top_shows_help = -100; /* (the frame a top view last showed the highlighted entry's description) */
 long VSync(long);
 int port_menu_top_draw(void) {
     GameData *g = g_gameState->gameData;
@@ -427,9 +440,7 @@ int port_menu_top_draw(void) {
         switch (g_menuScreen.screen) {
         case 1: { /* Item: the item or key item under the cursor (item_top.c) */
             int port_item_top(void);
-            int drew = port_item_top();
-            if (drew) top_shows_help = VSync(-1); /* (its description: Select's help would repeat it) */
-            return drew;
+            return port_item_top();
         }
         case 2: { /* Ability: the highlighted ability's teachers; else (the tabs, where L / R switch member) as Status */
             if (ability_view(s_menuAbility)) return 1;
@@ -520,6 +531,16 @@ int port_menu_state(void);
 void help_draw(void);
 void help_onDraw(void);
 
+/* the top screen shows the highlighted entry's description (the item list, the ability list): Select opens no help
+ * there, and help left open from another screen isn't drawn over the list (it would be, under the top's panels) */
+int port_item_top_describes(void);
+static int top_describes(void) {
+    if (port_menu_state() != 2 || g_menu.type != 0 || !g_menuScreen.active) return 0;
+    if (g_menuScreen.screen == 1) return port_item_top_describes();
+    if (g_menuScreen.screen == 2) return s_menuAbility[1] == 2; /* (ABILITY_STATE_LIST) */
+    return 0;
+}
+
 static int help_moved(void) {
     int st = port_menu_state(); /* (a menu, or the card game: tm_ui.c shows its hints on top) */
     return (st == 1 || st == 2 || st == 3) && g_menuHelp.isOpen && g_menuHelp.textShown && g_menuHelp.text &&
@@ -544,9 +565,9 @@ static void help_draw_port(void) {
 
 void help_update(void) { /* (help.c's, drawing with help_draw_port) */
     /* (Select opens no help where the top screen already shows the highlighted entry's description: the item list) */
-    int shown = VSync(-1) - top_shows_help <= 2;
+    int shown = top_describes();
     if (!g_menuHelp.locked && !fade_isBusy() && (g_padRepeat & BTN_SELECT) && (g_menuHelp.isOpen || !shown)) help_toggle();
-    if (g_menuHelp.isOpen && !fade_isBusy() && g_menuHelp.callback) {
+    if (g_menuHelp.isOpen && !shown && !fade_isBusy() && g_menuHelp.callback) {
         g_menuHelp.callback();
         if (g_menuHelp.text && *g_menuHelp.text != TEXT_END) help_draw_port();
     }
@@ -568,7 +589,7 @@ void port_help_panel(u8 *text) {
 
 /* the menu's help text there (field_hud.c's top frame, over the menu's views): 1 if drawn */
 int port_help_top_draw(void) {
-    if (!help_moved() || port_menu_state() == 3) return 0;
+    if (!help_moved() || port_menu_state() == 3 || top_describes()) return 0;
     port_help_panel(g_menuHelp.text);
     return 1;
 }
