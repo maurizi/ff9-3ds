@@ -407,6 +407,8 @@ static void order_view(int cur) {
     }
 }
 
+static long top_shows_help = -100; /* (the frame a top view last showed the highlighted entry's description) */
+long VSync(long);
 int port_menu_top_draw(void) {
     GameData *g = g_gameState->gameData;
     switch (g_menu.type) {
@@ -421,7 +423,9 @@ int port_menu_top_draw(void) {
         switch (g_menuScreen.screen) {
         case 1: { /* Item: the item or key item under the cursor (item_top.c) */
             int port_item_top(void);
-            return port_item_top();
+            int drew = port_item_top();
+            if (drew) top_shows_help = VSync(-1); /* (its description: Select's help would repeat it) */
+            return drew;
         }
         case 2: return ability_view(s_menuAbility) || (s_menuAbility[1] == 2 && empty_panel());
         case 3: { /* the slot's candidates, or the member's model turning in what they wear (model_view.c) and what
@@ -525,7 +529,9 @@ static void help_draw_port(void) {
 }
 
 void help_update(void) { /* (help.c's, drawing with help_draw_port) */
-    if (!g_menuHelp.locked && !fade_isBusy() && (g_padRepeat & BTN_SELECT)) help_toggle();
+    /* (Select opens no help where the top screen already shows the highlighted entry's description: the item list) */
+    int shown = VSync(-1) - top_shows_help <= 2;
+    if (!g_menuHelp.locked && !fade_isBusy() && (g_padRepeat & BTN_SELECT) && (g_menuHelp.isOpen || !shown)) help_toggle();
     if (g_menuHelp.isOpen && !fade_isBusy() && g_menuHelp.callback) {
         g_menuHelp.callback();
         if (g_menuHelp.text && *g_menuHelp.text != TEXT_END) help_draw_port();

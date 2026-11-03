@@ -23,6 +23,8 @@ extern u16 g_worldVtxDepth[]; /* per-vertex depths (SZ, u32, for the world block
 
 /* Without the hybrid renderer (PC, the DS's software paths) every block writes its packets. */
 __attribute__((weak)) int port_native_world_block(const NativeWorldBlock *b) { (void)b; return 0; }
+/* the faces a block wrote (render.c: the terrain's stereo depth, smooth across the blocks' seams) */
+__attribute__((weak)) void port_terrain_packets(const void *lo, const void *hi) { (void)lo; (void)hi; }
 
 PORT_OVERLAY_CODE(0c) void o0c_wm_drawBlock(u8 *arg0, s32 arg1, s32 arg2) {
     s32 t = g_worldOt[*g_worldBufIndex];
@@ -44,9 +46,11 @@ PORT_OVERLAY_CODE(0c) void o0c_wm_drawBlock(u8 *arg0, s32 arg1, s32 arg2) {
     n.draw_x = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.x;
     n.draw_y = g_gameState->drawEnv[g_gameState->gameData->drawBuf].clip.y;
     if (port_native_world_block(&n)) return;
+    s32 lo = g_worldPrimPtr;
     if (variant == WORLD_FACES_FOG) g_worldPrimPtr = o0c_wm_blockFacesFog(arg0, g_worldPrimPtr, t);
     else if (variant == WORLD_FACES_NEAR) g_worldPrimPtr = o0c_wm_blockFacesNear(arg0, g_worldPrimPtr, t);
     else g_worldPrimPtr = o0c_wm_blockFacesFar(arg0, g_worldPrimPtr, t);
+    port_terrain_packets((const void *)lo, (const void *)g_worldPrimPtr);
 }
 
 /* wm_drawBackdrop (w_memoryman.c), the sky and horizon mesh: the same, with the backdrop's face routine. */

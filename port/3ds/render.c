@@ -1193,7 +1193,73 @@ static float near_smooth = 1500.0f; /* its nearest, smoothed: the convergence de
 static float fit_zmin = 1e9f;       /* this frame's nearest sample */
 static int ctr_flat_bg;             /* in a field: its background layers at one depth (ctr_flat_background) */
 void ctr_flat_background(int on) { ctr_flat_bg = on; } /* (port/game/field_hud.c, each frame) */
+/* The world map's terrain in stereo: each block of it is projected on its own (near and far blocks at different
+ * precision), so where two meet the same ground point has slightly different depths, and each side shifted by its
+ * own parallax: hairline cracks along the blocks' seams. Its depth is instead the ground's as seen: 1/Z is linear
+ * in screen y for a plane in perspective, fitted over the terrain's own vertices each frame (the last frame's line):
+ * points that meet on the screen get the same parallax. Models keep theirs. (port/game/world_native.c reports the
+ * blocks' packets: port_terrain_packets.) */
+extern const u32 *psx_gpu_packet;
+int port_game_mode(void);
+static int model_packet(void);
+#define MAX_TERRAIN 64
+static struct { const u8 *lo, *hi; unsigned frame; } terrain[MAX_TERRAIN];
+static int nterrain;
+void port_terrain_packets(const void *lo, const void *hi) {
+    if (lo == hi) return;
+    for (int i = 0; i < nterrain; i++)
+        if (frames_drawn - terrain[i].frame > 1) terrain[i] = terrain[--nterrain], i--;
+    if (nterrain && terrain[nterrain - 1].hi == (const u8 *)lo && terrain[nterrain - 1].frame == frames_drawn) {
+        terrain[nterrain - 1].hi = hi; /* (blocks write one after another: one range) */
+        return;
+    }
+    if (nterrain == MAX_TERRAIN) nterrain--;
+    terrain[nterrain].lo = lo, terrain[nterrain].hi = hi, terrain[nterrain].frame = frames_drawn;
+    nterrain++;
+}
+static int terrain_packet(void) {
+    const u8 *p = (const u8 *)psx_gpu_packet;
+    for (int i = 0; i < nterrain; i++)
+        if (p >= terrain[i].lo && p < terrain[i].hi) return 1;
+    return 0;
+}
+static float tf_n, tf_y, tf_w, tf_yy, tf_yw, tf_wmin = 1e9f, tf_wmax = -1e9f; /* this frame's sums: w = 1 / Z by y */
+static float tf_a, tf_b, tf_lo, tf_hi;                                        /* the last line, and its w range */
+static int tf_ok;
+static const Vtx *terrain_depth(const Vtx *v, unsigned n, Vtx *out) {
+    for (unsigned i = 0; i < n; i++) {
+        if (v[i].z <= 0) continue; /* (a corner whose word the GTE didn't store: no depth of its own) */
+        float w = 1.0f / v[i].z, y = v[i].y - (float)gp0_state.area_y0; /* (from the frame's top: either buffer) */
+        tf_n += 1; tf_y += y; tf_w += w; tf_yy += y * y; tf_yw += y * w;
+        if (w < tf_wmin) tf_wmin = w;
+        if (w > tf_wmax) tf_wmax = w;
+    }
+    if (!tf_ok) return v;
+    /* (every corner of every face of the ground, those without a depth of their own too: some faces have none, and
+     * one shifted beside one left at the screen plane tore the ground apart) */
+    for (unsigned i = 0; i < n; i++) {
+        float w = tf_a * (v[i].y - (float)gp0_state.area_y0) + tf_b;
+        if (w < tf_lo) w = tf_lo;
+        if (w > tf_hi) w = tf_hi;
+        out[i] = v[i];
+        out[i].z = 1.0f / w;
+    }
+    return out;
+}
+static void terrain_fit_frame(void) {
+    float den = tf_n * tf_yy - tf_y * tf_y;
+    tf_ok = tf_n >= 64 && den > 1e-3f && tf_wmin > 0;
+    if (tf_ok) {
+        tf_a = (tf_n * tf_yw - tf_y * tf_w) / den;
+        tf_b = (tf_w - tf_a * tf_y) / tf_n;
+        tf_lo = tf_wmin, tf_hi = tf_wmax;
+    }
+    tf_n = tf_y = tf_w = tf_yy = tf_yw = 0;
+    tf_wmin = 1e9f, tf_wmax = -1e9f;
+}
+
 static void fit_frame(void) {
+    terrain_fit_frame();
     if (fit_n >= 16) {
         zc_smooth += (fit_z / fit_n - zc_smooth) * 0.1f;
         float nz = fit_zmin < zc_smooth / 4 ? zc_smooth / 4 : fit_zmin > zc_smooth ? zc_smooth : fit_zmin;
@@ -1335,6 +1401,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         /* (the field's windows, and anything under a drawing area smaller than a frame (a window's clip, a draw off
          * screen), stay at the screen plane: else text shifts per eye inside a box or clip that doesn't, and each eye
          * cuts it in a different place) */
+        if (nterrain && terrain_packet()) v = terrain_depth(v, n, moved); /* (the world map's ground) */
         if (gp0_state.area_x1 - gp0_state.area_x0 >= 255 && gp0_state.area_y1 - gp0_state.area_y0 >= 200 && !flat_packet())
             v = ot_depth(v, n, moved, bx1 - bx0, by1 - by0);
     }
@@ -1705,7 +1772,6 @@ static C3D_RenderTarget *outline_edge_rt[2];
 static struct { const u8 *lo, *hi; unsigned frame; } models[MAX_MODEL_RANGES];
 static int nmodels;
 void port_model_packets(const void *lo, const void *hi) {
-    if (!ctr_outline) return;
     for (int i = 0; i < nmodels; i++)
         if (((const u8 *)lo < models[i].hi && (const u8 *)hi > models[i].lo) || frames_drawn - models[i].frame > 2)
             models[i] = models[--nmodels], i--;
