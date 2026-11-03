@@ -7,6 +7,7 @@
 #define M2CTX
 #include "ovl_65.h"
 #include "psx_display.h"
+#include "gp0.h"
 
 void port_big_portrait(int slot, Character *c, int x, int y, int size);
 
@@ -108,6 +109,7 @@ s32 o65_battleEnd_loadPortraits_game(void);
 s32 o65_battleEnd_unloadDb_game(void);
 s32 preload_isInVram(PreloadEntry *);
 
+static u8 *live_text[2]; /* (the rewards' text packets: port_rewards_live_start) */
 int port_rewards_live_eligible(void) { return o65_rewards_getKind() == 1; } /* (a screen, no event script) */
 
 int port_rewards_live_ready(void) {
@@ -142,6 +144,13 @@ void port_rewards_live_start(void) {
     }
     text_setBank(g_rewardsText);
     o65_rewards_initPrimBufs();
+    { /* (their text's packets in buffers of their own too: s_rewardsPrimBufs, in ovl_65's area by RAM_SUB_OVL, is written
+       * by the battle meanwhile, and a text packet's link overwritten cut the rest of the table off every few frames) */
+        void *psx_spare_alloc(unsigned int size);
+        if (!live_text[0]) live_text[0] = psx_spare_alloc(sizeof s_rewardsPrimBufs[0]), live_text[1] = psx_spare_alloc(sizeof s_rewardsPrimBufs[1]);
+        s_rewards.primBufs[0] = live_text[0];
+        s_rewards.primBufs[1] = live_text[1];
+    }
     o65_rewards_initExp();
     o65_rewards_initLearns();
     o65_rewards_resetFullWarning();
@@ -157,7 +166,7 @@ void port_rewards_live_start(void) {
 #define LIVE_PRIMS 0x8000
 static u32 *live_ot[2];
 static u8 *live_buf[2];
-static u32 *live_env;  /* the packet setting the drawing area to the displayed buffer, first in the table */
+static u32 *live_env[2]; /* each table's packet setting the drawing area to its framebuffer, first in it */
 static int live_cur = -1;
 int port_rewards_live_step(void) {
     void *psx_spare_alloc(unsigned int size);
@@ -175,19 +184,24 @@ int port_rewards_live_step(void) {
     u32 held = g_padPortHeld[0];
     g_padPortPressed[0] = held & ~prev;
     prev = held;
+    s_rewards.primBufs[0] = s_rewards.primBufs[1] = live_text[cur]; /* (its text in the buffer paired with this table:
+       * picked by the battle UI's buffer index, a later step could rewrite packets an earlier table still links) */
     int more = o65_rewards_update_game();
     game_updateWindows();
     u32 *env = (u32 *)g_primPtr; /* (added last at OT_LAST: drawn first) */
-    env[0] = 3u << 24;
+    env[0] = 6u << 24;
     env[1] = 0xE3000000u;
     env[2] = 0xE4000000u;
     env[3] = 0xE5000000u;
+    env[4] = 0xE6000000u; /* (no mask bit set or checked: the battle's frame ends setting it, DR_STP(1, 0)) */
+    env[5] = 0xE2000000u; /* (no texture window, and the draw mode the game's own frame starts with) */
+    env[6] = 0xE1000200u;
     addPrim(&live_ot[cur][OT_LAST], env);
-    g_primPtr = (u8 *)(env + 4);
+    g_primPtr = (u8 *)(env + 7);
     if (g_primPtr > live_buf[cur] + LIVE_PRIMS) port_fatal("rewards: packet buffer overrun (%d bytes)", (int)(g_primPtr - live_buf[cur]));
     g_ot = saved_ot;
     g_primPtr = saved_prim;
-    live_env = env;
+    live_env[cur] = env;
     live_cur = cur;
     if (!more) {
         o65_rewards_exit_game(); /* (as battleEnd_update: the VRAM row back) */
@@ -196,21 +210,39 @@ int port_rewards_live_step(void) {
     return more;
 }
 
-/* field_hud.c, each frame: the rewards' table on the bottom screen, drawn in the displayed buffer's coordinates as the
- * port's own bottom screen is */
-void port_rewards_live_draw(void) {
-    if (port_rewards_live_state() != 2 || live_cur < 0) return;
-    PsxDisplayInfo d;
-    psx_gpu_display_info(&d);
-    live_env[1] = 0xE3000000u | (u32)d.x | (u32)d.y << 10;
-    live_env[2] = 0xE4000000u | (u32)(d.x + d.w - 1) | (u32)(d.y + d.h - 1) << 10;
-    live_env[3] = 0xE5000000u | ((u32)d.x & 0x7FF) | ((u32)d.y & 0x7FF) << 11;
-    void psx_ui_list_begin(void);
+/* field_hud.c, each frame: the rewards' latest table on the bottom screen, into the UI layers of both of the battle's
+ * framebuffers (its VBlank callback flips the shown one, at times between this and the present): built for the
+ * buffer the battle drew then (its windows' clip areas are that buffer's), it is drawn into the other's layer with
+ * every drawing area and offset shifted across (psx_area_dx/dy; the previous table there showed the gil count a
+ * step behind, jumping back and forth). As a UI list (the layer and its origin fixed for the whole table: a menu's
+ * way picks the layer by each packet's drawing area), each layer cleared first; meanwhile the renderer neither
+ * restarts nor drops layers on its own (ctr_keep_layers: the battle's frame draws restarted the shown one, and one
+ * not drawn for 2 presents counted as gone, the battle stepping every 4th VBlank). */
+static void live_draw_into(int j) {
+    void psx_ui_list_begin_at(int x, int y);
     void psx_ui_list_end(void);
     void port_draw_ot_buffer(unsigned int *head, const void *buffer, unsigned int size);
-    psx_ui_list_begin(); /* (the layer cleared first: drawn again each frame, its shading would build up and flicker) */
-    port_draw_ot_buffer(&live_ot[live_cur][OT_LAST], live_buf[live_cur], LIVE_PRIMS);
+    extern int psx_area_dx, psx_area_dy;
+    int i = live_cur;
+    RECT *b = &g_gameState->drawEnv[i].clip, *r = &g_gameState->drawEnv[j].clip;
+    u32 *env = live_env[i];
+    env[1] = 0xE3000000u | (u32)b->x | (u32)b->y << 10;
+    env[2] = 0xE4000000u | (u32)(b->x + b->w - 1) | (u32)(b->y + b->h - 1) << 10;
+    env[3] = 0xE5000000u | ((u32)b->x & 0x7FF) | ((u32)b->y & 0x7FF) << 11;
+    Gp0State saved = gp0_state; /* (the battle's drawing state is the battle's again after, as field_hud.c's) */
+    psx_ui_list_begin_at(r->x, r->y);
+    psx_area_dx = r->x - b->x, psx_area_dy = r->y - b->y;
+    port_draw_ot_buffer(&live_ot[i][OT_LAST], live_buf[i], LIVE_PRIMS);
+    psx_area_dx = psx_area_dy = 0;
     psx_ui_list_end();
+    gp0_state = saved;
+}
+void port_rewards_live_draw(void) {
+    extern int ctr_keep_layers;
+    ctr_keep_layers = port_rewards_live_state() == 2 && live_cur >= 0;
+    if (!ctr_keep_layers) return;
+    live_draw_into(0);
+    live_draw_into(1);
 }
 
 /* mode 8 after the rewards ran in the battle: nothing more of them (the screen goes straight on, as an empty rewards
@@ -232,3 +264,7 @@ void o65_rewards_exit(void) {
 s32 o65_battleEnd_loadDb(void) { return port_rewards_live_state() == 3 ? 0 : o65_battleEnd_loadDb_game(); }
 s32 o65_battleEnd_loadPortraits(void) { return port_rewards_live_state() == 3 ? 0 : o65_battleEnd_loadPortraits_game(); }
 s32 o65_battleEnd_unloadDb(void) { return port_rewards_live_state() == 3 ? 0 : o65_battleEnd_unloadDb_game(); }
+
+/* gpu.c: the battle UI's own list, drawn at each VBlank, is left out while the rewards are under the battle (it would
+ * start the bottom screen's layer afresh after port_rewards_live_draw); the battle's windows are all closed by then */
+int psx_skip_vblank_list(void) { return port_rewards_live_state() == 2; }

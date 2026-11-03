@@ -350,6 +350,8 @@ static const u8 *msg_plain(const u8 *t, u8 *o, int max, u8 stop) {
         } else if (*t >= 0xFA && *t <= 0xFD) { /* (a two-byte character) */
             *o++ = *t++;
             *o++ = *t++;
+        } else if (*t == TEXT_SPACE_1PX) { /* (message windows only: text_drawBlock draws it as a glyph, a box over the next letter) */
+            t++;
         } else if (*t == 0xFE) { /* (a page break: a new line here) */
             *o++ = TEXT_NEWLINE;
             t++;

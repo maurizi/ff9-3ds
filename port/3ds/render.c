@@ -1244,6 +1244,7 @@ static const Vtx *ot_depth(const Vtx *v, unsigned n, Vtx *out, int w, int h) {
 static int ui_ox, ui_oy; /* the displayed buffer's origin, which the UI list draws at */
 static int ui_list_layer;  /* the layer the UI list draws into */
 static int ui_layer_for(int x, int y, int clear);
+int ctr_keep_layers; /* the UI layers are kept by their owner (the rewards under a battle): no restart, no staleness */
 static int ui_packet(void);
 static int flat_packet(void);
 extern int ctr_outline;
@@ -1841,7 +1842,7 @@ static void ranges_age(void) {
 /* gpu.c: an ordering table drawn into a framebuffer starts that frame's UI layer afresh, once it has been shown */
 void psx_gpu_ot_begin(const u32 *ot) {
     (void)ot;
-    if (ui_mode) return;
+    if (ui_mode || ctr_keep_layers) return;
     int x, y, w, h;
     psx_gpu_draw_area(&x, &y, &w, &h);
     if (w >= 256 && h >= 192) {
@@ -1905,6 +1906,17 @@ void psx_ui_list_begin(void) {
     ui_oy = d.y;
     n_ui_cache = 0;
     ui_list_layer = ui_layer_for(d.x, d.y, 1);
+}
+
+/* the same for the framebuffer at (x, y), shown or not (the rewards under a battle: drawn into both buffers' layers,
+ * as the battle's VBlank flip may come between the drawing and the present) */
+void psx_ui_list_begin_at(int x, int y) {
+    submit();
+    ui_mode = 1;
+    ui_ox = x;
+    ui_oy = y;
+    n_ui_cache = 0;
+    ui_list_layer = ui_layer_for(x, y, 1);
 }
 
 /* the same, drawing over what the layer has this frame (the battle screen's own drawing after the battle list) */
@@ -1997,7 +2009,9 @@ int ctr_ui_oy;
 static int bottom_layer(const PsxDisplayInfo *d) {
     int k = layers[0].x == d->x && layers[0].y == d->y ? 0 : layers[1].x == d->x && layers[1].y == d->y ? 1 : -1;
     if (menu_state == 3) return -1;
-    if (k >= 0 && frames_drawn - layers[k].drawn > 2) k = -1; /* (nothing drawn into it lately) */
+    /* (nothing drawn into it lately; unless its owner keeps it: the rewards under a battle draw at the battle's pace,
+     * every 4th present) */
+    if (k >= 0 && frames_drawn - layers[k].drawn > 2 && !ctr_keep_layers) k = -1;
     return k;
 }
 /* ---- the top screen's UI list: the port's own drawing (menus' detail views: port/game/field_hud.c), built with the

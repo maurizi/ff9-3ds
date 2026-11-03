@@ -738,11 +738,13 @@ s32 BreakDraw(void) {
 __attribute__((weak)) int psx_skip_vblank_list(void) { return 0; }
 /* ... or draw it itself (the battle UI's native renderer: port/game/btlui_native.c); 1: drawn */
 __attribute__((weak)) int psx_vblank_list_native(u32 *list) { (void)list; return 0; }
+__attribute__((weak)) int ctr_keep_layers;
 
 /* The renderer may draw the inserted list (the battle UI) somewhere of its own: the 3DS's bottom screen
  * (port/3ds/render.c). Between the two calls every primitive belongs to it. */
 __attribute__((weak)) void psx_ui_list_begin(void) {}
 __attribute__((weak)) void psx_ui_list_begin_keep(void) {}
+__attribute__((weak)) void psx_ui_list_begin_at(int x, int y) { (void)x; (void)y; }
 __attribute__((weak)) int port_battle_help_on;
 __attribute__((weak)) int port_battle_hud_on, port_battle_hud_targets;
 int psx_ui_list_battle; /* the list being drawn is the battle UI's (its OT has 0x18 entries, head g_ot[0x17]) */

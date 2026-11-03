@@ -80,6 +80,9 @@ static void set_clut(Gp0Mode *m, unsigned int uv) {
 /* One GP0 command at w[0]; returns the words it used. */
 /* The drawing-state commands (E1-E6; others from E0 up do nothing): about half of all commands, so they're
  * decided before a draw's mode is set up. */
+/* a shift of every drawing area and offset command: a table built for one framebuffer drawn into another's place
+ * (the rewards under a battle: port/game/rewards_top.c) */
+int psx_area_dx, psx_area_dy;
 static unsigned int state_command(unsigned int w0) {
     switch (w0 >> 24) {
     case 0xE1:
@@ -92,18 +95,18 @@ static unsigned int state_command(unsigned int w0) {
         gp0_state.twin_off_y = ((w0 >> 15) & 31) * 8;
         break;
     case 0xE3:
-        gp0_state.area_x0 = w0 & 0x3FF;
-        gp0_state.area_y0 = (w0 >> 10) & 0x1FF;
+        gp0_state.area_x0 = ((w0 & 0x3FF) + psx_area_dx) & 0x3FF;
+        gp0_state.area_y0 = (((w0 >> 10) & 0x1FF) + psx_area_dy) & 0x1FF;
         area_hits_valid = 0;
         break;
     case 0xE4:
-        gp0_state.area_x1 = w0 & 0x3FF;
-        gp0_state.area_y1 = (w0 >> 10) & 0x1FF;
+        gp0_state.area_x1 = ((w0 & 0x3FF) + psx_area_dx) & 0x3FF;
+        gp0_state.area_y1 = (((w0 >> 10) & 0x1FF) + psx_area_dy) & 0x1FF;
         area_hits_valid = 0;
         break;
     case 0xE5:
-        gp0_state.ofs_x = sext11((int)(w0 & 0x7FF));
-        gp0_state.ofs_y = sext11((int)((w0 >> 11) & 0x7FF));
+        gp0_state.ofs_x = sext11((int)(w0 & 0x7FF)) + psx_area_dx;
+        gp0_state.ofs_y = sext11((int)((w0 >> 11) & 0x7FF)) + psx_area_dy;
         break;
     case 0xE6:
         gp0_state.set_mask = w0 & 1;
