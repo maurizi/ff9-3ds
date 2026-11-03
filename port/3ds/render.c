@@ -161,6 +161,10 @@ int ctr_freeze_held; /* the menu snapshot kept as it is (battle_ui.c: from the b
 #define MAG_H 120
 static int menu_state; /* port_menu_state(), read at each present */
 static int have_freeze; /* freeze_tex holds a scene */
+#define UNDIM_FRAMES 12 /* a closed menu's paused scene undimmed over these presents */
+static int prev_mode;
+int port_game_mode(void);
+int port_fade_busy(void);
 __attribute__((weak)) int port_menu_state(void) { return 0; }
 static C3D_RenderTarget *bottom_rt;
 
@@ -2110,6 +2114,7 @@ static void screen_dim(C3D_RenderTarget *rt, unsigned frac) {
 
 
 __attribute__((weak)) int port_game_mode(void) { return 0; }
+__attribute__((weak)) int port_fade_busy(void) { return 0; }
 
 /* The bottom screen: the UI layer of the displayed buffer, on a plain backdrop (the scene is on the top screen only). */
 int ctr_ui_oy;
@@ -2378,7 +2383,15 @@ void ctr_present(long frame) {
         /* the scene kept for the top while a menu is up: copied every frame without one (a menu opens with a fade,
          * which a copy taken then would hold), frozen when one opens */
         int want_menu = menu_state == 1 || menu_state == 2;
-        if (!menu_state && w >= 256 && !ctr_freeze_held) { /* (held: the battle's exit fade, battle_ui.c) */
+        /* a menu closed: the game fades the scene in from black; the top keeps the paused scene instead, undimmed over
+         * UNDIM_FRAMES, until the fade is done (the live scene then as it was: no flash to black) */
+        static int prev_menu, closing;
+        if (prev_menu && !menu_state && frozen && port_game_mode() != 8 && prev_mode == port_game_mode()) closing = 1;
+        prev_menu = menu_state, prev_mode = port_game_mode();
+        static int settled; /* (presents since the fade was done: the displayed buffer was drawn a frame or two before) */
+        settled = closing && !port_fade_busy() ? settled + 1 : 0;
+        if (closing && (menu_state || (closing > UNDIM_FRAMES && settled > 3) || closing > 180)) closing = 0;
+        if (!menu_state && w >= 256 && !ctr_freeze_held && !closing) { /* (held: the battle's exit fade, battle_ui.c) */
             for (int eye = 0; eye < 2; eye++) {
                 C3D_FrameDrawOn(freeze_rt[eye]);
                 set_proj_ortho(UI_W, UI_H, 0.0f);
@@ -2398,7 +2411,7 @@ void ctr_present(long frame) {
             have_freeze = 1;
         }
         if (want_menu && have_freeze) frozen = 1;
-        else if (!menu_state || menu_state == 3) frozen = 0;
+        else if ((!menu_state && !closing) || menu_state == 3) frozen = 0;
         /* the card game: the board is on the bottom screen; the top magnifies (2x) where the game's cursor is, so
          * the card it points at (its art, arrows and stats) is large and readable */
         static float mag_x = -1, mag_y;
@@ -2420,12 +2433,14 @@ void ctr_present(long frame) {
                 (void)mag_ry;
             } else if (frozen) { /* a menu is up: the paused scene, dimmed to half (its panels are drawn over it after) */
                 draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h, freeze_w, freeze_h, edge);
-                if (port_game_mode() != 8) screen_dim(top_rt[eye], 0x80); /* (the rewards: the battle as it ended) */
+                unsigned dim = closing ? 0x80 + 0x80 * (unsigned)closing / UNDIM_FRAMES : 0x80;
+                if (port_game_mode() != 8 && dim < 0x100) screen_dim(top_rt[eye], dim); /* (the rewards: the battle as it ended) */
             }
             else {
                 draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, w, h, edge);
                 outline_draw(eye, d.x, d.y, w, h);
             }
+            if (closing && eye == (stereo_on ? 1 : 0)) closing++;
             /* (the display has moved to the other framebuffer: the one it left is drawn next, its mask cleared) */
             static int shown_buf = -1;
             if (eye == (stereo_on ? 1 : 0) && outline_rt[0][0] && outline_buf(d.x, d.y) != shown_buf) {

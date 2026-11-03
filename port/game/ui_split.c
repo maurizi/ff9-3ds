@@ -103,13 +103,27 @@ int port_menu_state(void) {
     if (g_gameState->mode == 9) return 3; /* (the card game: all UI, on both screens) */
     /* (the battle's end (ovl_65: EXP / AP, gil, items, level-ups) is its own screen, not the menu system's: a menu like
      * the others, to the bottom screen, the battle's last frame dimmed on top) */
-    if (g_gameState->mode == 8) return 2;
+    { /* (unless they ran under the battle already: then the mode passes, its frames black; through the whole mode,
+       * which outlasts the state) */
+        int port_rewards_live_state(void);
+        static int passed;
+        if (g_gameState->mode != 8) passed = 0;
+        else {
+            if (port_rewards_live_state() == 3) passed = 1;
+            return passed ? 0 : 2;
+        }
+    }
     /* (the world map's own full map (Select; the airship's Go to): the world stops and the frame is the map, as a
      * menu: to the bottom screen, the world kept dimmed on the top) */
     { extern s32 g_worldNaviMode; if (g_gameState->mode == 3 && g_worldNaviMode == 2) return 2; }
     /* (the field's battle transition sets these flags too, with the menu system idle: not a menu) */
     if (!(g->flags & GD_MENU_OPEN) || g_menu.state == 0) return 0;
     return (g->flags & GD_HIDE_ALL) == GD_HIDE_ALL ? 2 : 1; /* (events hide parts of the scene by these flags too) */
+}
+
+/* the game's screen fade is running (render.c: a closed menu's paused scene kept on the top meanwhile) */
+int port_fade_busy(void) {
+    return fade_isActive();
 }
 
 /* the game's mode (g_gameState->mode: 1 field, 2 battle, 3 world map, ...) */
