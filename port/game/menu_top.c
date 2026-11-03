@@ -223,13 +223,17 @@ static int ability_view(const u8 *st) {
     static RECT box = {8, 8, 384, 224};
     static const u8 taught[] = "TAUGHT BY";
     GameData *g = g_gameState->gameData;
-    int member = g_menuScreen.member;
+    int member = st[2]; /* (AbilityMenu.slot: the member shown; g_menuScreen.member is the one the screen opened on) */
     if (st[1] != 2 || member > 3 || !ram_ok(g->party[member], sizeof(Character))) return 0;
     Character *c = g->party[member];
     int tab = st[0];
     MenuList *L = (MenuList *)(st + (tab ? 0x18 : 8));
     int n = (L->top + L->cursor) * L->cols + L->col, id = tab ? st[0x728 + n] : st[0x668 + n * 4];
     if (!id) return 0;
+    int taught_any = 0; /* (nothing drawn unless something teaches it: else the caller's view instead) */
+    for (int s = 0; s < 5; s++)
+        for (int k = 0; k < 3 && c->equip[s] != 0xFF; k++) taught_any |= g_itemTable[c->equip[s]].abilities[k] == id;
+    if (!taught_any) return 0;
     int chr = (int)(*(u32 *)((u8 *)c + 0x34) & 0xF);
     face(0, chr_portrait(c), 22, 20, 48);
     text_drawBlock(80, 24, 2, c->name, 0);
@@ -427,7 +431,17 @@ int port_menu_top_draw(void) {
             if (drew) top_shows_help = VSync(-1); /* (its description: Select's help would repeat it) */
             return drew;
         }
-        case 2: return ability_view(s_menuAbility) || (s_menuAbility[1] == 2 && empty_panel());
+        case 2: { /* Ability: the highlighted ability's teachers; else (the tabs, where L / R switch member) as Status */
+            if (ability_view(s_menuAbility)) return 1;
+            void port_model_view(Character *c, float cx, float cy, float height);
+            int member = s_menuAbility[2];
+            if (member < 4 && ram_ok(g->party[member], sizeof(Character))) {
+                port_model_view(g->party[member], 104, 226, 160);
+                member_view(g->party[member]);
+                return 1;
+            }
+            return s_menuAbility[1] == 2 && empty_panel();
+        }
         case 3: { /* the slot's candidates, or the member's model turning in what they wear (model_view.c) and what
                    * their gear is teaching them */
             if (equip_view(s_menuEquip)) return 1;
