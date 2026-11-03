@@ -571,6 +571,8 @@ s32 o0b_btl_update(void) {
     } else if (live == 2 && !port_rewards_live_step()) {
         port_log("rewards: closed, the battle leaves\n");
         live = 3;
+        fade_cancel(); /* (the rewards' own closing fade, kept off the battle while they ran: covered, it would show
+                        * black before the battle's fade out starts from its scene) */
         b->subPhase = 1; /* (the fade out, then the battle leaves) */
     }
     return r;
