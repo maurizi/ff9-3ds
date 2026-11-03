@@ -262,6 +262,7 @@ void psx_vram_read(int x, int y, int w, int h) {
 /* ---- the C3D frame ------------------------------------------------------------------------------------------ */
 
 static C3D_AttrInfo attr;
+static C3D_Tex dither_tex; /* the PS1 dither pattern (set_tev_for), on texture unit 1 */
 static C3D_BufInfo bufinfo;
 
 /* the mirrors' depth buffer, for reordered runs (run_add): */
@@ -291,6 +292,7 @@ static void frame_begin(void) {
     in_frame = 1;
     C3D_BindProgram(&shader);
     C3D_SetAttrInfo(&attr);
+    if (dither_tex.data) C3D_TexBind(1, &dither_tex); /* (set_tev_for's dithering: unit 1 throughout) */
     BufInfo_Init(&bufinfo);
     BufInfo_Add(&bufinfo, vb, sizeof(Vtx), 4, 0x3210);
     C3D_SetBufInfo(&bufinfo);
@@ -333,6 +335,7 @@ enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE, K_SCENE };
 #define MASK_SET 1   /* drawn pixels get the mask bit (alpha 1); else the texel's (textured) or 0 */
 #define MASK_CHECK 2 /* pixels with the mask bit keep their colour (opaque draws) */
 #define MASK_COPY 4  /* an upload: the source's mask bits as they are */
+#define MASK_DITHER 8 /* (not a mask: the PS1's dithering on, GP0 E1 bit 9, for a draw into the mirror: set_tev_for) */
 static int cur_mask;  /* add_batch's: gp0_state's at the primitive (blits: MASK_SET, alpha from the source) */
 #define NO_BLEND 4
 
@@ -510,6 +513,7 @@ static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex
 }
 
 static void set_tev_for(int kind, int layer);
+static int tev_dither; /* set_tev_for: the PS1's dither added (a mirror draw with dithering on) */
 static void set_tev(int kind) { set_tev_for(kind, 1); }
 /* (layer: a UI layer's, or a screen's; else the mirror's, whose alpha is the mask bit) */
 static void set_tev_for(int kind, int layer) {
@@ -577,6 +581,17 @@ static void set_tev_for(int kind, int layer) {
             C3D_TexEnvScale(e1, C3D_Alpha, GPU_TEVSCALE_2);
         }
         break;
+    }
+    /* The PS1 dithers what it draws (GP0 E1 bit 9) before keeping 5 bits per channel, and FF9 counts on it: a smooth
+     * shade (the world map's fogged ground) in the mirror's 5 bits without it shows as bands. Its 4x4 pattern (-4..+3
+     * of 255 per pixel) is added here, from a texture tiled over the framebuffer (prim.v.pica's texcoord1). */
+    C3D_TexEnv *e2 = C3D_GetTexEnv(2);
+    C3D_TexEnvInit(e2);
+    if (tev_dither && kind != K_BLIT && kind != K_COMPOSITE && kind != K_SCENE) {
+        C3D_TexEnvSrc(e2, C3D_RGB, GPU_PREVIOUS, GPU_TEXTURE1, 0);
+        C3D_TexEnvFunc(e2, C3D_RGB, GPU_ADD_SIGNED);
+        C3D_TexEnvSrc(e2, C3D_Alpha, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(e2, C3D_Alpha, GPU_REPLACE);
     }
     if (kind == K_TEX) C3D_AlphaTest(true, GPU_GREATER, 0);
     else if (kind == K_TEX_P1 || kind == K_TEX_P2) C3D_AlphaTest(true, GPU_GREATER, 0x7F);
@@ -706,7 +721,11 @@ static void submit(void) {
                               ordered ? -depth_off * (1.0f / 16384) : -0.5f);
             }
             if (b->abr != abr || b->mask != bmask || b->kind != kind) {
-                if (b->kind != kind) set_tev_for(kind = b->kind, target != 0 && target != 4);
+                if (b->kind != kind || ((b->mask ^ bmask) & MASK_DITHER)) {
+                    tev_dither = !target && (b->mask & MASK_DITHER);
+                    set_tev_for(kind = b->kind, target != 0 && target != 4);
+                    tev_dither = 0;
+                }
                 if (target == 4) abr = b->abr, bmask = b->mask, set_blend(NO_BLEND, 0);
                 else set_blend_mask(abr = b->abr, target != 0, bmask = b->mask, kind);
             }
@@ -1226,23 +1245,43 @@ static int terrain_packet(void) {
 static float tf_n, tf_y, tf_w, tf_yy, tf_yw, tf_wmin = 1e9f, tf_wmax = -1e9f; /* this frame's sums: w = 1 / Z by y */
 static float tf_a, tf_b, tf_lo, tf_hi;                                        /* the last line, and its w range */
 static int tf_ok;
+#define WELD_N 4096 /* (terrain_depth: this frame's corners by pixel, open addressing) */
+static struct { unsigned frame; short x, y; float z; } weld[WELD_N];
 static const Vtx *terrain_depth(const Vtx *v, unsigned n, Vtx *out) {
+    int bare = 0;
     for (unsigned i = 0; i < n; i++) {
-        if (v[i].z <= 0) continue; /* (a corner whose word the GTE didn't store: no depth of its own) */
+        if (v[i].z <= 0) { bare++; continue; } /* (a corner whose word the GTE didn't store: no depth of its own) */
         float w = 1.0f / v[i].z, y = v[i].y - (float)gp0_state.area_y0; /* (from the frame's top: either buffer) */
         tf_n += 1; tf_y += y; tf_w += w; tf_yy += y * y; tf_yw += y * w;
         if (w < tf_wmin) tf_wmin = w;
         if (w > tf_wmax) tf_wmax = w;
     }
-    if (!tf_ok) return v;
-    /* (every corner of every face of the ground, those without a depth of their own too: some faces have none, and
-     * one shifted beside one left at the screen plane tore the ground apart) */
+    (void)bare;
+    /* (a corner without one gets the ground's, for its parallax only: as a negative depth, which the shader takes for
+     * the shift and not for the texture's perspective (the face was mapped flat): some faces have none at all, and
+     * one left at the screen plane beside shifted ones cracked the ground along their edges; given as a depth, their
+     * textures warped into rows. And a corner on a pixel another face's corner had this frame takes that one's depth:
+     * the blocks' depths differ there (and a bare corner's fit from a real one's), pinholes in stereo.) */
     for (unsigned i = 0; i < n; i++) {
-        float w = tf_a * (v[i].y - (float)gp0_state.area_y0) + tf_b;
-        if (w < tf_lo) w = tf_lo;
-        if (w > tf_hi) w = tf_hi;
         out[i] = v[i];
-        out[i].z = 1.0f / w;
+        float z = v[i].z;
+        if (z <= 0) {
+            if (!tf_ok) continue;
+            float w = tf_a * (v[i].y - (float)gp0_state.area_y0) + tf_b;
+            if (w < tf_lo) w = tf_lo;
+            if (w > tf_hi) w = tf_hi;
+            z = 1.0f / w;
+        }
+        int px = (int)floorf(v[i].x + 0.5f), py = (int)floorf(v[i].y + 0.5f);
+        unsigned h = ((unsigned)px * 73856093u ^ (unsigned)py * 19349663u) & (WELD_N - 1);
+        for (unsigned k = 0; k < 8; k++, h = (h + 1) & (WELD_N - 1)) {
+            if (weld[h].frame != frames_drawn + 1) {
+                weld[h].frame = frames_drawn + 1, weld[h].x = (short)px, weld[h].y = (short)py, weld[h].z = z;
+                break;
+            }
+            if (weld[h].x == px && weld[h].y == py) { z = weld[h].z; break; }
+        }
+        out[i].z = v[i].z > 0 ? z : -z;
     }
     return out;
 }
@@ -1283,6 +1322,7 @@ static void fit_frame(void) {
 
 static const Vtx *ot_depth(const Vtx *v, unsigned n, Vtx *out, int w, int h) {
     if (psx_ot_entry < 0 || psx_ot_side) return v; /* (the UI's table: the screen plane) */
+    if (v[0].z < 0) return v; /* (a parallax depth given already: terrain_depth) */
     float s = (float)psx_ot_entry, z = 0;
     for (unsigned i = 0; i < n; i++) z += v[i].z;
     if (z > 0) { /* projected: a sample */
@@ -1405,7 +1445,8 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         if (gp0_state.area_x1 - gp0_state.area_x0 >= 255 && gp0_state.area_y1 - gp0_state.area_y0 >= 200 && !flat_packet())
             v = ot_depth(v, n, moved, bx1 - bx0, by1 - by0);
     }
-    cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0);
+    cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0) |
+               (layer < 0 && (gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
     ctr_render_stats[1]++;
     int passes[2], np = 0, abr = m->semi ? m->abr : NO_BLEND;
     if (!m->textured) passes[np++] = K_UNTEX;
@@ -2578,6 +2619,19 @@ void ctr_video_init(void) {
     AttrInfo_AddLoader(&attr, 2, GPU_UNSIGNED_BYTE, 4);
     AttrInfo_AddLoader(&attr, 3, GPU_FLOAT, 1);
 
+    /* the PS1's 4x4 dither pattern, as 128 + its offset (set_tev_for adds it signed), tiled to 8x8 */
+    static const signed char dither[4][4] = {{-4, 0, -3, 1}, {2, -2, 3, -1}, {-3, 1, -4, 0}, {3, -1, 2, -2}};
+    if (C3D_TexInit(&dither_tex, 8, 8, GPU_RGBA8)) {
+        C3D_TexSetFilter(&dither_tex, GPU_NEAREST, GPU_NEAREST);
+        C3D_TexSetWrap(&dither_tex, GPU_REPEAT, GPU_REPEAT);
+        u32 *d = dither_tex.data;
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++) {
+                u32 c = (u32)(128 + dither[y & 3][x & 3]);
+                d[tiled(x, y, 8)] = c << 24 | c << 16 | c << 8 | 0xFF;
+            }
+        GSPGPU_FlushDataCache(d, 8 * 8 * 4);
+    }
     for (int i = 0; i < 2; i++) {
         vb_half[i] = linearAlloc(VB_MAX * sizeof(Vtx));
         staging_half[i] = linearAlloc(STAGING_SIZE);
