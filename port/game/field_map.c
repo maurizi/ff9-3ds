@@ -10,6 +10,7 @@
  * function (run while the player is inside) holds GOTO_FIELD (2B) or GOTO_WORLD (B6) with a literal destination, their
  * polygon (op 29: +0x14 count, +0x18 points) drawn in green (decomp-requests R30). Shops and save moogles are marked
  * where they stand: the field's characters whose script opens a shop (MENU 75 with type 2) or the save screen (type 4). */
+#include <math.h>
 #include "psyq_port.h"
 #include "ovl_0a.h"
 
@@ -507,10 +508,35 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     int x0 = bk.x0[a], z0 = bk.z0[a], x1 = bk.x1[a], z1 = bk.z1[a];
     /* scale (16.16): one for all areas (0.07 px per field unit: a room as large as Dali's weapon shop fills the box),
      * less to fit a larger one, centred */
+    /* turned as the camera looks: the map's right is the camera's right on the ground, its up the camera's forward
+     * (the field's own x and z aren't the camera's in every field: the Ice Cavern looks along -z, its map was upside
+     * down); bounds and centre in those turned coordinates */
+    int rc = 4096, rs = 0;
+    if (ram_ok(g_fieldBgData, sizeof *g_fieldBgData)) {
+        BgCamera *cam = fldbg_cameraPtr(g_fieldBgState.cameraId);
+        if (ram_ok(cam, sizeof *cam)) {
+            int ax = cam->rot[0][0], az = cam->rot[0][2], len = (int)sqrtf((float)(ax * ax + az * az));
+            if (len > 256) rc = ax * 4096 / len, rs = az * 4096 / len;
+        }
+    }
+#define RU(wx, wz) ((int)(((long long)rc * (wx) + (long long)rs * (wz)) >> 12))
+#define RV(wx, wz) ((int)(((long long)rc * (wz) - (long long)rs * (wx)) >> 12))
+    int u0 = 1 << 30, u1 = -(1 << 30), v0 = 1 << 30, v1 = -(1 << 30);
+    for (int i = 0; i < bk.n; i++) {
+        if (!(bk.in[i] & bit)) continue;
+        for (int k = 0; k < 3; k++) {
+            int u = RU(bk.x[i][k], bk.z[i][k]), v = RV(bk.x[i][k], bk.z[i][k]);
+            if (u < u0) u0 = u;
+            if (u > u1) u1 = u;
+            if (v < v0) v0 = v;
+            if (v > v1) v1 = v;
+        }
+    }
+    if (u1 <= u0 || v1 <= v0) return pkt;
     const int m = 8;
-    int sx = ((bw - 2 * m) << 16) / (x1 - x0), sz = ((bh - 2 * m) << 16) / (z1 - z0), s = sx < sz ? sx : sz;
+    int sx = ((bw - 2 * m) << 16) / (u1 - u0), sz = ((bh - 2 * m) << 16) / (v1 - v0), s = sx < sz ? sx : sz;
     if (s > MAP_SCALE) s = MAP_SCALE; /* (the same scale everywhere: smaller only for an area too big for the box) */
-    const int ox = bx + bw / 2, oy = by + bh / 2, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    const int ox = bx + bw / 2, oy = by + bh / 2, cu = (u0 + u1) / 2, cv = (v0 + v1) / 2;
     __builtin_memset(edges, 0, sizeof edges);
     for (int i = 0; i < bk.n; i++) {
         if (!(bk.in[i] & bit)) continue;
@@ -519,14 +545,14 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
             if (edges[e].count < 255) edges[e].count++;
         }
     }
-#define MX(wx) (ox + (int)(((long long)((wx) - cx) * s) >> 16))
-#define MY(wz) (oy - (int)(((long long)((wz) - cz) * s) >> 16))
+#define MX(wx, wz) (ox + (int)(((long long)(RU(wx, wz) - cu) * s) >> 16))
+#define MY(wx, wz) (oy - (int)(((long long)(RV(wx, wz) - cv) * s) >> 16))
     u32 *p = (u32 *)pkt;
     for (int i = 0; i < bk.n; i++) {
         if (!(bk.in[i] & bit)) continue; /* (only the player's area: the others are other screens) */
         if ((u8 *)(p + 5 + 3 * 4) > pkt_end) break;
         int x[3], y[3];
-        for (int k = 0; k < 3; k++) x[k] = MX(bk.x[i][k]), y[k] = MY(bk.z[i][k]);
+        for (int k = 0; k < 3; k++) x[k] = MX(bk.x[i][k], bk.z[i][k]), y[k] = MY(bk.x[i][k], bk.z[i][k]);
         /* the outline: edges no other drawn triangle shares */
         for (int k = 0; k < 3; k++) {
             int b = (k + 1) % 3;
@@ -552,7 +578,7 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         if (mx < 512) mx = 512;
         if (mz < 512) mz = 512;
         if (bk.mx[k] < x0 - mx || bk.mx[k] > x1 + mx || bk.mz[k] < z0 - mz || bk.mz[k] > z1 + mz) continue;
-        int qx = MX(bk.mx[k]), qy = MY(bk.mz[k]);
+        int qx = MX(bk.mx[k], bk.mz[k]), qy = MY(bk.mx[k], bk.mz[k]);
         if (qx < bx + 5) qx = bx + 5;
         if (qx > bx + bw - 5) qx = bx + bw - 5;
         if (qy < by + 5) qy = by + 5;
@@ -579,7 +605,7 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         if (o->pos.vx < x0 - mx || o->pos.vx > x1 + mx || o->pos.vz < z0 - mz || o->pos.vz > z1 + mz) continue;
         int kind = menu_of[o->uid];
         if (!kind) continue;
-        int qx = MX(o->pos.vx), qy = MY(o->pos.vz);
+        int qx = MX(o->pos.vx, o->pos.vz), qy = MY(o->pos.vx, o->pos.vz);
         if (qx < bx + 5) qx = bx + 5;
         if (qx > bx + bw - 5) qx = bx + bw - 5;
         if (qy < by + 5) qy = by + 5;
@@ -596,9 +622,10 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     }
     /* the player: an arrow from where he stands, the way he faces (rotY: 0 toward the camera, 1024 a quarter turn) */
     if (pl && (u8 *)(p + 5) <= pkt_end) {
-        int px = MX(pl->pos.vx), py = MY(pl->pos.vz);
+        int px = MX(pl->pos.vx, pl->pos.vz), py = MY(pl->pos.vx, pl->pos.vz);
         int a = pl->pos.rotY & 0xFFF;
-        int dx = -math_sin(a), dy = math_cos(a); /* (4096 = 1) */
+        int fx = -math_sin(a), fz = -math_cos(a); /* (the way he faces in the field, 4096 = 1; turned as the map) */
+        int dx = RU(fx, fz), dy = -RV(fx, fz);
         int tip_x = px + dx * 7 / 4096, tip_y = py + dy * 7 / 4096;
         int lx = px - dx * 4 / 4096 - dy * 4 / 4096, ly = py - dy * 4 / 4096 + dx * 4 / 4096;
         int rx = px - dx * 4 / 4096 + dy * 4 / 4096, ry = py - dy * 4 / 4096 - dx * 4 / 4096;
@@ -612,5 +639,7 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     }
 #undef MX
 #undef MY
+#undef RU
+#undef RV
     return (u8 *)p;
 }
