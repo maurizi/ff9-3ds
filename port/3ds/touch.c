@@ -43,12 +43,12 @@ static void tap(int x, int y) {
 }
 
 #ifdef PORT_AUTOTOUCH
-static struct { int x, y, x2, y2; long frame, hold; } script[32];
+static struct { int x, y, x2, y2; long frame, hold; } script[512];
 static int nscript, script_parsed;
 static void parse_script(void) {
     const char *p = PORT_AUTOTOUCH;
     script_parsed = 1;
-    while (*p && nscript < 32) {
+    while (*p && nscript < 512) {
         char *e;
         int x = (int)strtol(p, &e, 10);
         if (*e != ',') break;

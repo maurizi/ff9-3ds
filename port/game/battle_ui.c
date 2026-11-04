@@ -63,6 +63,27 @@ void port_battle_ui_frame(void) {
         else if (g_gameState->mode != 8 && !battle) ctr_freeze_held = 0;
         else if (battle && !(b && ram_ok(b, sizeof *b) && b->phase == BTL_PHASE_EXIT)) ctr_freeze_held = 0;
     }
+    { /* a battle won but not leaving (btl_victory waits for the effects, the command queue and every enemy hidden):
+       * what it waits on, in the log, every 10 s (a hardware report: the Sealion's last hit, Zidane's trance ending,
+       * then the battle stayed) */
+        static int ended;
+        Battle *b = battle && g_gameState->gameData ? g_gameState->gameData->ctx.battle : NULL;
+        if (b && ram_ok(b, sizeof *b) && b->phase == BTL_PHASE_END) {
+            if (++ended % 600 == 0) {
+                port_log("battle end waiting %d s: sub %d fx %d cur %d/%d phase %d\n", ended / 60, b->subPhase,
+                         ram_ok(g_btlfxEnv, sizeof *g_btlfxEnv) && ram_ok(g_btlfxEnv->state, 4) ? g_btlfxEnv->state->phase : -99,
+                         b->curCmd && ram_ok(b->curCmd, sizeof *b->curCmd) ? b->curCmd->cmdNo : -1,
+                         b->curCmd && ram_ok(b->curCmd, sizeof *b->curCmd) ? b->curCmd->subNo : -1, b->cmdPhase);
+                int guard = 0;
+                for (BtlCmd *c = b->cmdQueue.next; c && ram_ok(c, sizeof *c) && guard++ < 16; c = c->next)
+                    port_log("  queued cmd %d/%d caster %08x\n", c->cmdNo, c->subNo,
+                             c->caster && ram_ok(c->caster, sizeof *c->caster) ? (unsigned)c->caster->flags : 0);
+                guard = 0;
+                for (BtlUnit *u = b->unitList; u && ram_ok(u, sizeof *u) && guard++ < 8; u = u->next)
+                    port_log("  unit flags %08x status %08x hp %d\n", (unsigned)u->flags, (unsigned)u->status, u->hp);
+            }
+        } else ended = 0;
+    }
     { /* RUN held: the escape poll's own steps (escapeHeld, the hold count, btl_tryEscape) */
         int tx, ty;
         running = 0;
