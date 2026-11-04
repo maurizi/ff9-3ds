@@ -1359,6 +1359,8 @@ static int ui_packet(void);
 static int flat_packet(void);
 extern int ctr_outline;
 static int model_packet(void);
+static int model_index(void);
+static const Vtx *model_weld(const Vtx *v, unsigned n, Vtx *out, int m);
 static int outline_init(void);
 
 static const u8 *zoom_lo, *zoom_hi; /* port_bottom_zoom's */
@@ -1448,6 +1450,8 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         if (nterrain && terrain_packet()) v = terrain_depth(v, n, moved); /* (the world map's ground) */
         if (gp0_state.area_x1 - gp0_state.area_x0 >= 255 && gp0_state.area_y1 - gp0_state.area_y0 >= 200 && !flat_packet())
             v = ot_depth(v, n, moved, bx1 - bx0, by1 - by0);
+        int mi = model_index();
+        if (mi) v = model_weld(v, n, moved, mi); /* (a model's meshes meeting: one depth where their corners do) */
     }
     cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0) |
                (layer < 0 && (gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
@@ -1824,11 +1828,41 @@ void port_model_packets(const void *lo, const void *hi) {
     models[nmodels].lo = lo, models[nmodels].hi = hi, models[nmodels].frame = frames_drawn;
     nmodels++;
 }
-static int model_packet(void) {
+static int model_index(void) { /* (the model range the packet is in, + 1; 0 if none) */
     const u8 *p = (const u8 *)psx_gpu_packet;
     for (int i = 0; i < nmodels; i++)
-        if (p >= models[i].lo && p < models[i].hi) return 1;
+        if (p >= models[i].lo && p < models[i].hi) return i + 1;
     return 0;
+}
+static int model_packet(void) { return model_index() != 0; }
+/* A model's meshes are projected one by one (a head, the body under it), so where two meet, the same point on the
+ * screen can have slightly different depths: in stereo each side shifted by its own parallax, a hairline crack down
+ * the seam (the back of Zidane's head). A corner on a pixel another corner of the same model had this frame, at
+ * nearly its depth (within 1/20: not a limb in front of the body), takes that depth. */
+#define MWELD_N 2048
+static struct { unsigned frame; short x, y, m; float z; } mweld[MWELD_N];
+static const Vtx *model_weld(const Vtx *v, unsigned n, Vtx *out, int m) {
+    for (unsigned i = 0; i < n; i++) {
+        out[i] = v[i];
+        float z = v[i].z;
+        if (z <= 0) continue;
+        int px = (int)floorf(v[i].x + 0.5f), py = (int)floorf(v[i].y + 0.5f);
+        unsigned h = ((unsigned)px * 73856093u ^ (unsigned)py * 19349663u ^ (unsigned)m * 83492791u) & (MWELD_N - 1);
+        for (unsigned k = 0; k < 8; k++, h = (h + 1) & (MWELD_N - 1)) {
+            if (mweld[h].frame != frames_drawn + 1) {
+                mweld[h].frame = frames_drawn + 1, mweld[h].x = (short)px, mweld[h].y = (short)py, mweld[h].m = (short)m;
+                mweld[h].z = z;
+                break;
+            }
+            if (mweld[h].x == px && mweld[h].y == py && mweld[h].m == m) {
+                float d = mweld[h].z - z;
+                if (d < 0) d = -d;
+                if (d * 20 <= z) out[i].z = mweld[h].z;
+                break;
+            }
+        }
+    }
+    return out;
 }
 static int outline_init(void) {
     static int failed;
