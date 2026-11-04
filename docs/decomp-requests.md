@@ -967,3 +967,11 @@ subPhase (`if (subPhase != BTL_END_DEFEAT) subPhase = VICTORY`), so a subPhase b
 win into a defeat that waits forever for a KO pose. btl_initState zeroes it at battle start. Asked: a name for the
 flag and its argument, a comment at Battle.subPhase that camera scripts can increment it, and which scenes or
 effect cameras use it with arg != 1 (any that play in BTL_PHASE_COMBAT). Sent to the decomp session.
+
+### F38 (2026-11-04). evt_moveObjectTo's object mode is the sign of a pointer
+`src/main/event.c`: EVT_OP_MOVE_TO_OBJ calls `evt_moveObjectTo(x, y, z, (s32)po)`; the callee tells the object mode
+by `flags < 0` (a KSEG0 pointer) and stops when the mover touches that object (`hit != flags`). A native pointer is
+positive: the walk never ended against its target. Field 312 (leaving the Ice Cavern): Garnet walks to Zidane,
+stands against him, the cutscene waits for good (3DS hardware and the host). The port treats any value past
+EVT_MOVETO_NO_TURN|EVT_MOVETO_3D as an object (counted patch). Asked: the object passed separately (or a named
+predicate the port can redefine), or at least a comment that the mode is the pointer's sign. Sent to the decomp session.
