@@ -30,7 +30,7 @@ int port_card_top(void) {
     if (!g_menuScreen.active || g_menuScreen.screen != MENU_SCREEN_CARD) return 0;
     static RECT card_box = {16, 12, 150, 176}, info = {174, 12, 210, 176};
     int id = s_menuCard.col * CARD_GRID_ROWS + s_menuCard.row;
-    if (id >= 0 && id < CARD_COUNT && s_menuCard.count[id]) {
+    if (id >= 0 && id < CARD_KINDS && s_menuCard.count[id]) {
         CardEntry *e = card_find(id, s_menuCard.shown[id] % s_menuCard.count[id]);
         if (e && e != (CardEntry *)-1)
             port_card_panel(id, e->arrows, e->power, e->type, e->physDef, e->magicDef, s_menuCard.cache.shown == id ? 1 : 2);

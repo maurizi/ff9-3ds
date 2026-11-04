@@ -39,6 +39,9 @@
 #define PSX_RAM(type, addr) ((type)PSX_ADDR(addr))
 /* A pointer the original code dereferences while NULL (ff9.h's PSX_NULLABLE, at every known site): low RAM there */
 #define PSX_NULLABLE(p) PSX_NZ(p)
+/* a value holding either a small number or a pointer, which the PS1 tells apart by the sign (KSEG0, 0x8xxxxxxx):
+ * a native pointer is positive (evt_moveObjectTo's flags for EVT_OP_MOVE_TO_OBJ: decomp-requests F38) */
+#define PSX_IS_PTR(v) ((u32)(v) > 0xFFFFu)
 #include PORT_HEADER
 #include "port_hw.h"
 #ifdef BTLFX_EXPORTS

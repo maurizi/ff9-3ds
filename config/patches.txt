@@ -24,8 +24,8 @@ src/ovl_0b/btlfx_script.c | task->handler(1, task->work, g_btlfxEnv, task, args)
 src/ovl_0b/btlfx_script.c | task->handler(2, task->work, g_btlfxEnv, task, NULL) | port_effect_call((u32)task->handler, 2, (u32)task->work, (u32)g_btlfxEnv, (u32)task, 0) | 1
 # Effect descriptors are reused. Native pointers do not have KSEG0's sign bit;
 # only a remaining offset can be relocated, never a previously native pointer.
-src/ovl_0b/btlfx_heap.c | el->tex != -1 && !(el->tex & 0x80000000) | (u32)el->tex < PSX_RAM_SIZE | 1
-src/ovl_0b/btlfx_heap.c | el->tex2 != -1 && !(el->tex2 & 0x80000000) | (u32)el->tex2 < PSX_RAM_SIZE | 1
+src/ovl_0b/btlfx_heap.c | el->tex != -1 && !(el->tex & BTLFX_TEX_ADDR) | (u32)el->tex < PSX_RAM_SIZE | 1
+src/ovl_0b/btlfx_heap.c | el->tex2 != -1 && !(el->tex2 & BTLFX_TEX_ADDR) | (u32)el->tex2 < PSX_RAM_SIZE | 1
 # Position fields can also be rewritten by the module after pool registration.
 # Decode the local read without changing the module's stored pointer bits.
 src/ovl_0b/btlfx_heap.c | base = emitter->origin; | base = (SVECTOR *)port_effect_data((u32)emitter->origin); | 6
@@ -185,9 +185,3 @@ src/ovl_0b/btl_main.c | if (*dup == w) { | if (dup >= ids && *dup == w) { | 1
 # (Black Waltz 1 + Sealion) on hardware: subPhase 1 in combat, the win taken for a defeat, BTL_PHASE_END waiting
 # for a KO pose from a living Zidane forever. Keep a DEFEAT only once the phase is END.
 src/ovl_0b/btl_status.c | if (battle->subPhase != BTL_END_DEFEAT) { | if (battle->phase != BTL_PHASE_END || battle->subPhase != BTL_END_DEFEAT) { | 1
-# evt_moveObjectTo's flags carry the target object's pointer for EVT_OP_MOVE_TO_OBJ ((s32)po): the PS1 tells that
-# mode by its sign (KSEG0, 0x80xxxxxx: negative) and stops the walk when the mover touches that object
-# (hit == flags). A native pointer is positive: the walk never ended against the target (field 312, leaving the Ice
-# Cavern: Garnet walks to Zidane, stops against him, the cutscene waits for good). Any value past the flag bits is
-# an object (both are 4-aligned, so EVT_MOVETO_NO_TURN / _3D read the same as on the PS1).
-src/main/event.c | if (flags < 0) { | if (flags < 0 || (u32)flags > (EVT_MOVETO_NO_TURN|EVT_MOVETO_3D)) { | 1
