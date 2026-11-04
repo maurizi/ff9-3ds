@@ -67,10 +67,17 @@ void port_battle_ui_frame(void) {
         static int lsub;
         Battle *b = battle && g_gameState->gameData ? g_gameState->gameData->ctx.battle : NULL;
         if (b && ram_ok(b, sizeof *b)) {
-            if (b->phase == BTL_PHASE_COMBAT && b->subPhase != lsub)
-                port_log("battle: subPhase %d in combat (cmd %d)\n", b->subPhase,
-                         b->curCmd && ram_ok(b->curCmd, sizeof *b->curCmd) ? b->curCmd->cmdNo : -1);
-            lsub = b->subPhase;
+            static int lphase;
+            if (b->subPhase != lsub && b->phase < BTL_PHASE_END && b->phase == lphase)
+            {
+                s32 o0b_btl_getSceneData(s32);
+                u8 *pc = g_btlCamScript.pc;
+                port_log("battle: subPhase %d in phase %d (cmd %d) cam mode %d frame %u pc %p scenes %p %p %p\n",
+                         b->subPhase, b->phase, b->curCmd && ram_ok(b->curCmd, sizeof *b->curCmd) ? b->curCmd->cmdNo : -1,
+                         g_btlCamera.mode, (unsigned)g_btlCamScript.frame, (void *)pc, (void *)o0b_btl_getSceneData(0),
+                         (void *)o0b_btl_getSceneData(1), (void *)o0b_btl_getSceneData(2));
+            }
+            lsub = b->subPhase, lphase = b->phase;
         }
     }
     { /* a battle won but not leaving (btl_victory waits for the effects, the command queue and every enemy hidden):
