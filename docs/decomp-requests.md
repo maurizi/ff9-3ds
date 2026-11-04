@@ -956,3 +956,14 @@ native pointer: on hardware it was 0x009Bxxxx, so the Bomb (model 155 = 0x9B) co
 never loaded, and battle 334 (Prima Vista, field 60) crashed in btl_applyModelTextures on a NULL header. The port
 compares only inside the list (counted patch). Asked: a comment at the walk that the first compare reads the word
 before the list (and what lies there), or a form that doesn't if one still matches.
+
+### F37 (2026-11-04). The battle camera script's subPhase cue (flag 0x4000) unnamed
+`src/ovl_0b/btlcam_o1.c`: `if (flags & 0x4000) { arg = *pc; if (arg == 1) g_btlCamera.endIntro = arg; else
+battle->subPhase++; pc += 2; }`. A scene cue: 1 ends the intro camera; any other value increments Battle.subPhase,
+which the victory camera uses as "fade now" in BTL_PHASE_EXIT (the port's rewards under the battle wait for it).
+It can increment subPhase in any phase. On hardware, battle 21 (Black Waltz 1 + Sealion, Zidane alone) ended in
+BTL_PHASE_END with subPhase 1 = BTL_END_DEFEAT, Zidane alive: btl_checkSideDefeated keeps a DEFEAT already in
+subPhase (`if (subPhase != BTL_END_DEFEAT) subPhase = VICTORY`), so a subPhase bumped to 1 during combat turns the
+win into a defeat that waits forever for a KO pose. btl_initState zeroes it at battle start. Asked: a name for the
+flag and its argument, a comment at Battle.subPhase that camera scripts can increment it, and which scenes or
+effect cameras use it with arg != 1 (any that play in BTL_PHASE_COMBAT). Sent to the decomp session.
