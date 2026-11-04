@@ -1818,14 +1818,19 @@ int ctr_outline; /* (off: shelved, 2026-10-31; the mask matches the models, the 
 static C3D_Tex outline_tex[2][2], outline_edge_tex[2]; /* the masks per PS1 framebuffer (y 0 / 256) and eye */
 static C3D_RenderTarget *outline_edge_rt[2];
 #define MAX_MODEL_RANGES 96
-static struct { const u8 *lo, *hi; unsigned frame; } models[MAX_MODEL_RANGES];
+static struct { const u8 *lo, *hi; unsigned frame; float zsum, zlast; int zn; } models[MAX_MODEL_RANGES];
 static int nmodels;
 void port_model_packets(const void *lo, const void *hi) {
+    float zlast = 0; /* (the range's depth last frame, carried over when the same model writes there again) */
     for (int i = 0; i < nmodels; i++)
-        if (((const u8 *)lo < models[i].hi && (const u8 *)hi > models[i].lo) || frames_drawn - models[i].frame > 2)
+        if (((const u8 *)lo < models[i].hi && (const u8 *)hi > models[i].lo) || frames_drawn - models[i].frame > 2) {
+            if (models[i].lo == (const u8 *)lo)
+                zlast = models[i].zn ? models[i].zsum / models[i].zn : models[i].zlast;
             models[i] = models[--nmodels], i--;
+        }
     if (nmodels == MAX_MODEL_RANGES) nmodels--;
     models[nmodels].lo = lo, models[nmodels].hi = hi, models[nmodels].frame = frames_drawn;
+    models[nmodels].zsum = 0, models[nmodels].zn = 0, models[nmodels].zlast = zlast;
     nmodels++;
 }
 static int model_index(void) { /* (the model range the packet is in, + 1; 0 if none) */
@@ -1842,9 +1847,19 @@ static int model_packet(void) { return model_index() != 0; }
 #define MWELD_N 2048
 static struct { unsigned frame; short x, y, m; float z; } mweld[MWELD_N];
 static const Vtx *model_weld(const Vtx *v, unsigned n, Vtx *out, int m) {
+    /* a corner without a depth of its own (one the GTE didn't store; in a field with a flat background a polygon
+     * without any stays at the screen plane) takes its polygon's, else its model's: parts of a model left unshifted
+     * beside shifted ones came apart in stereo (a far NPC behind a near Steiner, Dali's barrels) */
+    float zs = 0, mz;
+    int zc = 0;
+    for (unsigned i = 0; i < n; i++)
+        if (v[i].z > 0) zs += v[i].z, zc++;
+    if (zc) models[m - 1].zsum += zs / zc, models[m - 1].zn++;
+    mz = zc ? zs / zc : models[m - 1].zn ? models[m - 1].zsum / models[m - 1].zn : models[m - 1].zlast;
     for (unsigned i = 0; i < n; i++) {
         out[i] = v[i];
-        float z = v[i].z;
+        if (out[i].z <= 0 && mz > 0) out[i].z = mz;
+        float z = out[i].z;
         if (z <= 0) continue;
         int px = (int)floorf(v[i].x + 0.5f), py = (int)floorf(v[i].y + 0.5f);
         unsigned h = ((unsigned)px * 73856093u ^ (unsigned)py * 19349663u ^ (unsigned)m * 83492791u) & (MWELD_N - 1);
