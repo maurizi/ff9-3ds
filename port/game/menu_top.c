@@ -531,11 +531,13 @@ int port_menu_state(void);
 void help_draw(void);
 void help_onDraw(void);
 
-/* the top screen shows the highlighted entry's description (the item list, the ability list): Select opens no help
+/* the top screen shows the highlighted entry's description (the item list, the ability list, a shop's lists): Select opens no help
  * there, and help left open from another screen isn't drawn over the list (it would be, under the top's panels) */
 int port_item_top_describes(void);
 static int top_describes(void) {
-    if (port_menu_state() != 2 || g_menu.type != 0 || !g_menuScreen.active) return 0;
+    if (port_menu_state() != 2) return 0;
+    if (g_menu.type == 2) return s_shop[3] != 0; /* (a shop's buy / sell / synthesis list: port_menu_top_draw's item panel) */
+    if (g_menu.type != 0 || !g_menuScreen.active) return 0;
     if (g_menuScreen.screen == 1) return port_item_top_describes();
     if (g_menuScreen.screen == 2) return s_menuAbility[1] == 2; /* (ABILITY_STATE_LIST) */
     return 0;
