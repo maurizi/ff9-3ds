@@ -179,3 +179,9 @@ src/ovl_15/bj_wager.c | help_drawCursor(&g_menuHelp, &g_bjWagerMenu); | ; | 1
 # On the PS1 that is 0x801F (KSEG0), never a model id; a native pointer's high half can be one (0x009B = the Bomb's
 # model 155 skipped: NULL model header in battle 334 on hardware). Compare only inside the list.
 src/ovl_0b/btl_main.c | if (*dup == w) { | if (dup >= ids && *dup == w) { | 1
+# btl_checkSideDefeated keeps a DEFEAT already in subPhase when the last enemy falls, but subPhase is only the end
+# kind once the phase is END: in combat it can hold a camera cue (btlcam flag 0x4000 with arg != 1: subPhase++,
+# decomp-requests F37) from a scene a battle script played just before BTL_SETVAR_RESUME zeroed it. Battle 21
+# (Black Waltz 1 + Sealion) on hardware: subPhase 1 in combat, the win taken for a defeat, BTL_PHASE_END waiting
+# for a KO pose from a living Zidane forever. Keep a DEFEAT only once the phase is END.
+src/ovl_0b/btl_status.c | if (battle->subPhase != BTL_END_DEFEAT) { | if (battle->phase != BTL_PHASE_END || battle->subPhase != BTL_END_DEFEAT) { | 1

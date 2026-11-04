@@ -63,6 +63,16 @@ void port_battle_ui_frame(void) {
         else if (g_gameState->mode != 8 && !battle) ctr_freeze_held = 0;
         else if (battle && !(b && ram_ok(b, sizeof *b) && b->phase == BTL_PHASE_EXIT)) ctr_freeze_held = 0;
     }
+    { /* subPhase moving in combat (a camera scene's cue, decomp-requests F37: the end check took it for a defeat) */
+        static int lsub;
+        Battle *b = battle && g_gameState->gameData ? g_gameState->gameData->ctx.battle : NULL;
+        if (b && ram_ok(b, sizeof *b)) {
+            if (b->phase == BTL_PHASE_COMBAT && b->subPhase != lsub)
+                port_log("battle: subPhase %d in combat (cmd %d)\n", b->subPhase,
+                         b->curCmd && ram_ok(b->curCmd, sizeof *b->curCmd) ? b->curCmd->cmdNo : -1);
+            lsub = b->subPhase;
+        }
+    }
     { /* a battle won but not leaving (btl_victory waits for the effects, the command queue and every enemy hidden):
        * what it waits on, in the log, every 10 s (a hardware report: the Sealion's last hit, Zidane's trance ending,
        * then the battle stayed) */
