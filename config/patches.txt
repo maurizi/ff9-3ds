@@ -24,8 +24,6 @@ src/ovl_0b/btlfx_script.c | task->handler(1, task->work, g_btlfxEnv, task, args)
 src/ovl_0b/btlfx_script.c | task->handler(2, task->work, g_btlfxEnv, task, NULL) | port_effect_call((u32)task->handler, 2, (u32)task->work, (u32)g_btlfxEnv, (u32)task, 0) | 1
 # Effect descriptors are reused. Native pointers do not have KSEG0's sign bit;
 # only a remaining offset can be relocated, never a previously native pointer.
-src/ovl_0b/btlfx_heap.c | el->tex != -1 && !(el->tex & BTLFX_TEX_ADDR) | (u32)el->tex < PSX_RAM_SIZE | 1
-src/ovl_0b/btlfx_heap.c | el->tex2 != -1 && !(el->tex2 & BTLFX_TEX_ADDR) | (u32)el->tex2 < PSX_RAM_SIZE | 1
 # Position fields can also be rewritten by the module after pool registration.
 # Decode the local read without changing the module's stored pointer bits.
 src/ovl_0b/btlfx_heap.c | base = emitter->origin; | base = (SVECTOR *)port_effect_data((u32)emitter->origin); | 6
@@ -55,7 +53,6 @@ src/ovl_0b/hi_model.c | btl_getMeshCount(btlfx_getEffModel(modelId, s_hiSplitMdl
 # Battle sound panning accepts unit IDs 0..17 or an SVECTOR pointer. The PS1
 # address-bit test misses native ARM stack pointers (DS crash SystemError S/310).
 # All native pointers are above the 2 MiB PS1 address image; -1 is handled first.
-src/ovl_0b/btlfx_op.c | if (unit & 0x90000000) { | if ((u32)unit >= PSX_RAM_SIZE) { | 1
 
 # Full-screen TIM display follows OT[8]'s 24-bit link on the CPU (MIPS
 # 0x800B4DC4 / 0x800B4E40). Restore its native arena address before addPrim.
@@ -69,8 +66,6 @@ src/main/evt_object.c | obj = (EvtObject *)evt_popResult(); | obj = (EvtObject *
 
 # "This header field is already a RAM pointer (relocated from a file offset)": on the PS1 that's > 0x80000000,
 # in the port it's an address inside psx_ram.
-src/ovl_0a/tu_800B61A4.c | if (addr > 0x80000000) { | if (PORT_IS_RAM_PTR(addr)) { | 1
-src/ovl_0b/btl_model.c | if ((u32)ptr > 0x80000000) { | if (PORT_IS_RAM_PTR(ptr)) { | 1
 
 
 # Reads through a NULL pointer: on the PS1 they read low kernel RAM instead of faulting. PSX_NZ maps NULL to the

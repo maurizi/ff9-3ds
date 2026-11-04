@@ -42,6 +42,14 @@
 /* a value holding either a small number or a pointer, which the PS1 tells apart by the sign (KSEG0, 0x8xxxxxxx):
  * a native pointer is positive (evt_moveObjectTo's flags for EVT_OP_MOVE_TO_OBJ: decomp-requests F38) */
 #define PSX_IS_PTR(v) ((u32)(v) > 0xFFFFu)
+/* the other pointer-or-number tests (ff9.h, decomp docs/wip/psx_ptr_sign_sites.md): a unit id or a native stack
+ * SVECTOR * (btl_soundPan); a file offset or a pointer already relocated into psx_ram (effect textures, texture
+ * animation rects) */
+#define PSX_IS_PTR_BITS(v, bits) ((u32)(v) >= PSX_RAM_SIZE)
+#define PSX_IS_RELOCATED_BITS(v, bits) (!IS_OFFSET(v))
+#define PSX_IS_RELOCATED_ABOVE(v, addr) PORT_IS_RAM_PTR(v)
+/* the scratchpad used as memory: psx_scratchpad (psx_mem.h), as tools/portify.py maps its literal addresses */
+#define PSX_SPAD(type, ofs) ((type)PSX_HW(PSX_SPAD_BASE + (ofs)))
 #include PORT_HEADER
 #include "port_hw.h"
 #ifdef BTLFX_EXPORTS
