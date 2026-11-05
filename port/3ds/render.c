@@ -2814,6 +2814,14 @@ void ctr_present(long frame) {
     }
     present_bottom(&d, w, h);
     n_hud_draw = 0;
+    /* citro3d swaps the screens' buffers when the GPU finishes a frame, and the GSP shows the new one only at the next
+     * VBlank: a frame whose copy (at the end of this list) came before it would write into the buffer still on the
+     * screen. The 3DS's LCDs scan out by column, so that tore as a vertical line, worst while the field scrolled (the
+     * previous frame done just past a VBlank). The frame waits for the VBlank instead */
+    for (int i = 0; i < 3 && (gspIsPresentPending(GFX_TOP) || gspIsPresentPending(GFX_BOTTOM)); i++) {
+        if (!i) ctr_render_stats[7]++;
+        gspWaitForVBlank();
+    }
     frame_end();
     in_frame = 0;
 #ifdef PORT_NO_OVERLAP
