@@ -87,7 +87,53 @@ static void flush_range(void *p, unsigned n) {
     ctr_flushes++;
 }
 static void flush_pending(void);
+/* HAZARD=1 (test builds): what the GPU reads in a frame it may still be drawing (the frame sent at a present, drawn
+ * while the next is recorded) against what the CPU writes meanwhile. On hardware such a write changes what that frame
+ * shows; an emulator draws a frame at once, so it shows nothing there. Each one is logged: "hazard: ..." */
+#ifdef PORT_HAZARD
+#define HZ_N 160
+typedef struct { const u8 *p; unsigned n; const char *what; } HzUse;
+static HzUse hz_rec[HZ_N], hz_fly[HZ_N];
+static int hz_nrec, hz_nfly;
+unsigned ctr_hazards;
+static void hz_use(const void *p, unsigned n, const char *what) {
+    if (!p || !n) return;
+    for (int i = 0; i < hz_nrec; i++)
+        if (hz_rec[i].p == (const u8 *)p) { if (hz_rec[i].n < n) hz_rec[i].n = n; return; }
+    if (hz_nrec < HZ_N) hz_rec[hz_nrec].p = p, hz_rec[hz_nrec].n = n, hz_rec[hz_nrec++].what = what;
+}
+static void hz_check(const void *p, unsigned n, const char *how) {
+    if (!gpu_busy) return;
+    const u8 *b = p;
+    for (int i = 0; i < hz_nfly; i++)
+        if (b < hz_fly[i].p + hz_fly[i].n && b + n > hz_fly[i].p) {
+            ctr_hazards++;
+            if (ctr_hazards <= 40 || ctr_hazards % 500 == 0)
+                port_log("hazard %u: %s %p+%u over in-flight %s %p+%u\n", ctr_hazards, how, (void *)b, n, hz_fly[i].what,
+                         (void *)hz_fly[i].p, hz_fly[i].n);
+            return;
+        }
+}
+static void hz_sent(void) { /* (a present: the recorded frame is the one in flight now) */
+    for (int i = 0; i < hz_nrec; i++) hz_fly[i] = hz_rec[i];
+    hz_nfly = hz_nrec;
+    hz_nrec = 0;
+}
+static void hz_done(void) { hz_nfly = hz_nrec = 0; } /* (the GPU finished all that was sent) */
+#define HZ_TEX(t, what) do { if (t) hz_use((t)->data, (t)->size, what); } while (0)
+#else
+#define hz_use(p, n, w) ((void)0)
+#define hz_check(p, n, h) ((void)0)
+#define hz_sent() ((void)0)
+#define hz_done() ((void)0)
+#define HZ_TEX(t, what) ((void)0)
+#endif
+static inline void tex_bind(int unit, C3D_Tex *t) {
+    HZ_TEX(t, "texture");
+    C3D_TexBind(unit, t);
+}
 static void mark_dirty(void *p, unsigned n) {
+    hz_check(p, n, "cpu write");
     u8 *b = p;
     for (unsigned i = 0; i < ndirty; i++) { /* (adjacent blocks of one texture: one range) */
         if (dirty[i].p + dirty[i].n == b) { dirty[i].n += n; return; }
@@ -293,10 +339,11 @@ static void frame_begin(void) {
     if (model_free_pending) model_tex_free();
     port_profile_end(PORT_PROFILE_SCALE, profile_start); /* ("scale": the wait for the GPU) */
     gpu_busy = 0;
+    hz_done();
     in_frame = 1;
     C3D_BindProgram(&shader);
     C3D_SetAttrInfo(&attr);
-    if (dither_tex.data) C3D_TexBind(1, &dither_tex); /* (set_tev_for's dithering: unit 1 throughout) */
+    if (dither_tex.data) tex_bind(1, &dither_tex); /* (set_tev_for's dithering: unit 1 throughout) */
     BufInfo_Init(&bufinfo);
     BufInfo_Add(&bufinfo, vb, sizeof(Vtx), 4, 0x3210);
     C3D_SetBufInfo(&bufinfo);
@@ -359,6 +406,7 @@ static Vtx *alloc_vtx(unsigned n) {
     if (vb_used + n > VB_MAX) gpu_sync();
     Vtx *v = vb + vb_used;
     vb_used += n;
+    hz_check(v, n * sizeof(Vtx), "vertices");
     return v;
 }
 
@@ -735,7 +783,7 @@ static void submit(void) {
             }
             if (b->tex != tex) {
                 tex = b->tex;
-                if (tex) C3D_TexBind(0, tex);
+                if (tex) tex_bind(0, tex);
                 set_texscale(tex);
             }
             if (target == 4) { /* (the framebuffer this batch draws into: its mask, its area's projection) */
@@ -806,6 +854,7 @@ static void *staging_alloc(unsigned bytes) {
     if (staging_used + bytes > STAGING_SIZE) gpu_sync();
     void *p = staging + staging_used;
     staging_used += bytes;
+    hz_check(p, bytes, "staging");
     return p;
 }
 
@@ -1123,7 +1172,7 @@ static C3D_Tex *mirror_page(int tx, int ty) {
     set_tev(K_BLIT);
     set_blend(NO_BLEND, 0);
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_RED | GPU_WRITE_GREEN | GPU_WRITE_BLUE); /* (alpha stays 1) */
-    C3D_TexBind(0, &mirror_tex[0]);
+    tex_bind(0, &mirror_tex[0]);
     set_texscale(&mirror_tex[0]);
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     Vtx *v = alloc_vtx(6);
@@ -1919,7 +1968,7 @@ static void outline_draw(int eye, int dx, int dy, int w, int h) {
     set_proj_ortho(256, 128, 0.0f);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
     set_tev(K_BLIT);
-    C3D_TexBind(0, &outline_tex[buf][e]);
+    tex_bind(0, &outline_tex[buf][e]);
     set_texscale(&outline_tex[buf][e]);
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     static const s8 off[5][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {0, 0}};
@@ -1937,7 +1986,7 @@ static void outline_draw(int eye, int dx, int dy, int w, int h) {
     C3D_Mtx pm;
     Mtx_OrthoTilt(&pm, 0.0f, 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &pm);
-    C3D_TexBind(0, &outline_edge_tex[e]);
+    tex_bind(0, &outline_edge_tex[e]);
     set_texscale(&outline_edge_tex[e]);
     C3D_TexSetFilter(&outline_edge_tex[e], GPU_LINEAR, GPU_LINEAR);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ZERO, GPU_ONE_MINUS_SRC_COLOR, GPU_ZERO, GPU_ONE);
@@ -2118,7 +2167,7 @@ static void screen_quad_scaled(C3D_RenderTarget *rt, C3D_Tex *src, int kind, int
     C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
     set_tev(kind);
     set_blend(abr, 0);
-    C3D_TexBind(0, src);
+    tex_bind(0, src);
     set_texscale(src);
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     Vtx *v = alloc_vtx(6);
@@ -2298,7 +2347,7 @@ static void draw_models(int eye) {
         if (t < 0) break;
         if (t != tex) {
             tex = t;
-            C3D_TexBind(0, &model_tex[t]);
+            tex_bind(0, &model_tex[t]);
             set_texscale(&model_tex[t]);
         }
         typeof(model_tri[0]) *m = &model_tri[model_order[i]];
@@ -2448,7 +2497,7 @@ void ctr_present(long frame) {
                 set_tev(K_BLIT);
                 set_blend(NO_BLEND, 0);
                 C3D_Tex *src = &mirror_tex[stereo_on ? eye : 0];
-                C3D_TexBind(0, src);
+                tex_bind(0, src);
                 set_texscale(src);
                 C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
                 Vtx *v = alloc_vtx(6);
@@ -2534,6 +2583,9 @@ void ctr_present(long frame) {
     half_restart();
 #else
     gpu_busy = 1; /* (drawn while the next frame is recorded into the other half) */
+    hz_use(vb, VB_MAX * sizeof(Vtx), "vertex half");
+    hz_use(staging, STAGING_SIZE, "staging half");
+    hz_sent();
     half ^= 1;
     half_restart();
 #endif
