@@ -87,11 +87,21 @@ void plat_vsync_begin(unsigned int n) {
  * HOME button no longer answers) */
 volatile const char *ctr_where = "start";
 static volatile unsigned wd_frames;
+static volatile int watchdog_quit, watchdog_done, watchdog_on;
+static LightEvent watchdog_wake;
+/* (render.c ctr_shutdown: the thread woken and gone before the process's memory, its stack's, is freed) */
+void ctr_watchdog_stop(void) {
+    if (!watchdog_on) return;
+    watchdog_quit = 1;
+    LightEvent_Signal(&watchdog_wake);
+    for (int i = 0; i < 100 && !watchdog_done; i++) svcSleepThread(1000000);
+}
 static void watchdog_main(void *unused) {
     (void)unused;
     unsigned last = 0, still = 0;
     for (;;) {
-        svcSleepThread(1000000000LL);
+        LightEvent_WaitTimeout(&watchdog_wake, 1000000000LL);
+        if (watchdog_quit) break;
         unsigned f = wd_frames;
         if (f != last) { last = f, still = 0; continue; }
         if (++still % 3 == 0) {
@@ -102,13 +112,16 @@ static void watchdog_main(void *unused) {
             if (still == 3) { void ctr_trace_dump(void); ctr_trace_dump(); }
         }
     }
+    watchdog_done = 1;
 }
 void ctr_watchdog_start(void) {
     static Thread t;
     if (t) return;
     s32 prio = 0x30;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    LightEvent_Init(&watchdog_wake, RESET_ONESHOT);
     t = threadCreate(watchdog_main, NULL, 8 * 1024, prio - 3, ctr_is_new3ds() ? 2 : 1, true);
+    watchdog_on = t != NULL;
 }
 
 void plat_wait_frame(void) {

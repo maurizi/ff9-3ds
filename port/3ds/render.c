@@ -3043,7 +3043,13 @@ void ctr_shutdown(void) {
     ctr_audio_exit();
     /* No graphics teardown: closing comes from the HOME menu, which holds the GPU by then, so ending the frame or
      * C3D_Fini waits for GPU work that never runs (the close hung on "Closing software" on hardware). The process's
-     * end frees our GPU memory and the GSP session. */
+     * end frees our GPU memory. But the GSP service's event thread is stopped (gspExit: it waits for no GPU work):
+     * left running, it woke on an interrupt after the exit had freed the heap its stack is in, and the whole system
+     * stopped (a crash in gspEventThreadMain on closing, 3DS). So is the watchdog thread, whose stack is there too. */
+    void ctr_watchdog_stop(void);
+    ctr_watchdog_stop();
+    ctr_where = "closing: GSP";
+    gspExit();
     ctr_where = "closing: done";
 }
 #endif
