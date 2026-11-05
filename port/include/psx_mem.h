@@ -31,7 +31,13 @@ void psx_load_low_ram(void);
  * the walk never reaches; there a ModelObj's model pointer took a KUSEG packet address, which the PS1 reads through
  * its RAM mirror and the port can't. The port leaves the packet unlinked (drawn the same: not at all). */
 extern unsigned int *psx_main_ot, psx_main_ot_n;
-#define PSX_OT_OUTSIDE(s) (psx_main_ot_n && (unsigned int)((const unsigned int *)(s) - psx_main_ot) >= psx_main_ot_n)
+/* (against the scene's two ordering tables, the double buffer's: both are known once cleared, by ClearOTag or
+ * ClearOTagR (a movie background's field clears its pair forward: against the last ClearOTagR'd table alone, every
+ * model link into the other buffer's looked outside, and the models were drawn on every other movie frame only)) */
+extern unsigned int *psx_big_ot[2], psx_big_ot_n[2];
+#define PSX_OT_OUTSIDE(s) (psx_big_ot_n[0] && \
+                           (unsigned int)((const unsigned int *)(s) - psx_big_ot[0]) >= psx_big_ot_n[0] && \
+                           (!psx_big_ot_n[1] || (unsigned int)((const unsigned int *)(s) - psx_big_ot[1]) >= psx_big_ot_n[1]))
 
 /* A pointer the game passes to a library call that is really a small PS1 address (KUSEG, below 2 MB): Square's
  * code sometimes passes a constant where a pointer is expected (CdControlB(CdlSetmode, (u8 *)0x80, 0) in

@@ -524,7 +524,20 @@ int MargePrim(void *p0, void *p1) {
     return 0;
 }
 
+/* the scene's ordering tables, 0x1000 entries and up, the two most recently cleared (PSX_OT_OUTSIDE, psx_mem.h) */
+unsigned int *psx_big_ot[2], psx_big_ot_n[2];
+static void note_big_ot(u32 *ot, int n) {
+    if (n < 0x1000) return;
+    int k = psx_big_ot[0] == (unsigned int *)ot ? 0 : psx_big_ot[1] == (unsigned int *)ot ? 1 : -1;
+    if (k < 0) { /* (a new one replaces the older) */
+        psx_big_ot[1] = psx_big_ot[0], psx_big_ot_n[1] = psx_big_ot_n[0];
+        k = 0;
+    }
+    psx_big_ot[k] = (unsigned int *)ot, psx_big_ot_n[k] = (unsigned int)n;
+}
+
 u32 *ClearOTag(u32 *ot, int n) {
+    note_big_ot(ot, n);
     for (int i = 0; i < n - 1; i++) {
         ot[i] = (u32)&ot[i + 1] & 0xFFFFFF;
     }
@@ -539,6 +552,7 @@ unsigned int psx_main_ot_n, psx_ot_slot, psx_ot_generation; /* generation: bumpe
 
 u32 *ClearOTagR(u32 *ot, int n) {
     if (n >= 0x1000) { psx_main_ot = (unsigned int *)ot; psx_main_ot_n = (unsigned int)n; psx_ot_slot = (unsigned int)n; ++psx_ot_generation; }
+    note_big_ot(ot, n);
     ot[0] = OT_END;
     int i = 1;
     for (u32 a = (u32)(uintptr_t)ot; i + 4 <= n; i += 4) { /* (four a step: the battle's 0x1010 every frame) */
