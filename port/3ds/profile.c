@@ -55,11 +55,10 @@ void ctr_profile_frame(void) {
     static unsigned last[8];
     extern unsigned ctr_flushes, ctr_batch_why[6];
     static unsigned last_flushes;
-    port_log("[gpu] per frame: prims %u batches %u blits %u readbacks %u blocks %u syncs %u slots %u flushes %u tear waits %u\n",
+    port_log("[gpu] per frame: prims %u batches %u blits %u readbacks %u blocks %u syncs %u slots %u flushes %u\n",
              (ctr_render_stats[1] - last[1]) / frames, (ctr_render_stats[0] - last[0]) / frames,
              (ctr_render_stats[2] - last[2]) / frames, ctr_render_stats[3] - last[3], (ctr_render_stats[4] - last[4]) / frames,
-             ctr_render_stats[6] - last[6], ctr_render_stats[5], (ctr_flushes - last_flushes) / frames,
-             ctr_render_stats[7] - last[7]);
+             ctr_render_stats[6] - last[6], ctr_render_stats[5], (ctr_flushes - last_flushes) / frames);
     last_flushes = ctr_flushes;
     static unsigned last_why[6];
     port_log("[gpu] new batch for: kind %u blend %u tex %u scissor %u mask %u gap %u\n", (ctr_batch_why[0] - last_why[0]) / frames,
