@@ -9,6 +9,7 @@
 #                                         iteration, gdb, frame dumps, lockstep comparison with PCSX-Redux
 #   AUTOPRESS="..."   3DS: scripted presses, as the PC's --press ("CROSS@2500,UP@2900+3")
 #   AUTOTOUCH="..."  3DS: scripted taps on the bottom screen ("X,Y@FRAME ...")
+#   TEST_NAME="..."  a test build's name in the Homebrew Launcher ("FF9 TEST: ...")
 #   HAZARD=1         3DS: log CPU writes to what the frame the GPU may still be drawing uses ("hazard: ..."):
 #                    on hardware they change that frame; an emulator draws at once, so this is how to see them there
 #   SCENARIO=path     3DS: boot straight into a scenario (docs/scenario-testing.md)
@@ -207,9 +208,14 @@ $(BUILD)/ff9.smdh: $(BUILD)/3ds/icon.png
 # build/ff9.3dsx: that one is always the game as a player gets it.
 TEST_OPTS := $(strip $(HAZARD)$(NOOVERLAP)$(AUTOPRESS)$(AUTOTOUCH)$(SCENARIO)$(PROFILE)$(SOFT)$(DUMP_AT)$(DUMP_EVERY)$(LOGUI_AT)$(PROBE_AT)$(SPUSYNC)$(VOICELOG))
 OUT_3DSX := $(if $(TEST_OPTS),$(BUILD)/ff9-test.3dsx,$(BUILD)/ff9.3dsx)
-$(OUT_3DSX): $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh
+# (a test build's own name in the Homebrew Launcher, never the game's: TEST_NAME="..." says which)
+TEST_NAME ?= test build
+$(BUILD)/ff9-test.smdh: $(BUILD)/3ds/icon.png FORCE
+	@smdhtool --create "FF9 TEST: $(TEST_NAME)" "Test build, not the game" "$(APP_AUTHOR)" $< $@
+OUT_SMDH := $(if $(TEST_OPTS),$(BUILD)/ff9-test.smdh,$(BUILD)/ff9.smdh)
+$(OUT_3DSX): $(BUILD)/3ds/ff9ds.elf $(OUT_SMDH)
 	@echo "3DSX $@"
-	@3dsxtool $< $@ --smdh=$(BUILD)/ff9.smdh
+	@3dsxtool $< $@ --smdh=$(OUT_SMDH)
 
 3ds: $(OUT_3DSX)
 
