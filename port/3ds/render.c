@@ -2957,7 +2957,7 @@ void ctr_render_dump(void) {
  * copy is queued after the frame's drawing, into that one, and presented when the queue finishes (its callback, chained
  * after citro3d's), nothing waiting. */
 #define TOP_FB_SIZE (240 * 400 * 3) /* (one eye, RGB8) */
-static u8 *top_fb[3]; /* (each: the left eye, then the right) */
+static u8 *top_fb[3]; /* (each: the left eye, then the right, TOP_FB_SIZE on) */
 static gxCmdQueue_s *c3d_queue; /* (citro3d's: GX_BindQueue wrapped, -Wl,--wrap) */
 static void (*c3d_queue_done)(gxCmdQueue_s *);
 static volatile int top_shown = -1, top_presented = -1, top_queued = -1, top_queued_stereo;
@@ -3000,10 +3000,19 @@ static int top_queue(int stereo) {
 
 void ctr_video_init(void) {
     C3D_Init(0x100000);
-    if (c3d_queue && (top_fb[0] = linearAlloc(3 * 2 * TOP_FB_SIZE))) {
-        for (int b = 1; b < 3; b++) top_fb[b] = top_fb[0] + b * 2 * TOP_FB_SIZE;
-        memset(top_fb[0], 0, 3 * 2 * TOP_FB_SIZE);
-        GSPGPU_FlushDataCache(top_fb[0], 3 * 2 * TOP_FB_SIZE);
+    /* (two of the three are libctru's own top framebuffers, sized for both eyes, the right one half way, and unused
+     * once citro3d no longer copies to them: only the third is allocated. Three of our own took 1.7 MB of linear
+     * memory from the texture cache: 63 pages instead of 71, and the texture-heavy scenes slowed on the 3DS) */
+    u8 *extra = c3d_queue ? linearAlloc(2 * TOP_FB_SIZE) : NULL;
+    if (extra) {
+        top_fb[0] = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); /* (the back buffer) */
+        gfxSetDoubleBuffering(GFX_TOP, false);
+        top_fb[1] = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL); /* (the front one) */
+        gfxSetDoubleBuffering(GFX_TOP, true);
+        top_fb[2] = extra;
+        top_shown = 1; /* (gfxInit presented it) */
+        memset(extra, 0, 2 * TOP_FB_SIZE);
+        GSPGPU_FlushDataCache(extra, 2 * TOP_FB_SIZE);
         c3d_queue_done = c3d_queue->callback;
         gxCmdQueueSetCallback(c3d_queue, queue_done, c3d_queue->user);
     }
