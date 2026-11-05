@@ -842,7 +842,7 @@ void port_bottom_hud(void) {
     if (!config_open()) cfg_opts = 0;
     else if (g_gameState->gameData->font) { config_overlay(); return; }
 
-    if (port_menu_state()) return;
+    if (port_menu_state()) { boot_live = 0; return; } /* (not left from the frames between the title and its Continue) */
     int battle = g_gameState->mode == 2, world = g_gameState->mode == 3;
     if (!battle) port_battle_hud_on = 0;
     if (battle || world) field_ready = 0; /* (the field is reloaded after) */
