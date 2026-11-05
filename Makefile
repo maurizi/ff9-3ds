@@ -186,7 +186,7 @@ $(BUILD)/3ds/shaders/%_shbin.o: $(BUILD)/3ds/shaders/%.shbin
 3ds_EXTRAOBJS := $(patsubst port/3ds/%.v.pica,$(BUILD)/3ds/shaders/%_shbin.o,$(SHADERS))
 
 $(eval $(call target_rules,3ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(CTR_ARCH),3ds,arm,\
-	-specs=3dsx.specs -L$(CTRULIB)/lib -L$(DEVKITPRO)/portlibs/3ds/lib -Wl$(,)--gc-sections$(,)--wrap=GX_BindQueue,-lopusfile -lopus -logg -lcitro3d -lctru -lm))
+	-specs=3dsx.specs -L$(CTRULIB)/lib -L$(DEVKITPRO)/portlibs/3ds/lib -Wl$(,)--gc-sections,-lopusfile -lopus -logg -lcitro3d -lctru -lm))
 
 # Changing a runtime option must rebuild the port objects even when sources are unchanged.
 .PHONY: FORCE_3DS_CONFIG
