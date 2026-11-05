@@ -159,7 +159,11 @@ static int config_overlay_tap(int x, int y);
 int port_title_live(void);
 int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (g_gameState && g_gameState->mode == 0 && port_title_live()) return title_tap(x, y) ? -1 : 0; /* (title_ui.c) */
-    if (g_gameState && g_gameState->mode == 0 && boot_live && max > 0) { seq[0] = 0x0008; return 1; } /* (START) */
+    if (g_gameState && g_gameState->mode == 0 && boot_live && max > 0) { /* (START, held 8 frames more: the opening's
+                                                                          * movie reads the pad every 4th VBlank) */
+        seq[0] = 0x0008 | 8u << 24;
+        return 1;
+    }
     if (g_gameState && gameover_live && max > 0) { seq[0] = 0x4000; return 1; } /* (Cross; a field's or a battle's) */
     if (g_gameState && g_gameState->mode == 4 && bj_live) { int port_bj_tap(int, int); port_bj_tap(x, y - oy); return -1; }
     if (g_gameState && g_gameState->mode == 1 && auction_live) { int port_auction_tap(int, int); if (port_auction_tap(x, y - oy)) return -1; }
@@ -848,7 +852,9 @@ void port_bottom_hud(void) {
     if (battle || world) field_ready = 0; /* (the field is reloaded after) */
     if (g_gameState->mode == 1 && field_ready) field_frames++;
     int title = g_gameState->mode == 0 && port_title_live();
-    int boot = g_gameState->mode == 0 && !title && !port_menu_state(); /* (before the title: boot_live) */
+    int port_opening_takes_start(void);
+    int boot = g_gameState->mode == 0 && !title && !port_menu_state() && port_opening_takes_start(); /* (before the
+                                                                     * title, while Start does something: boot_live) */
     boot_live = boot;
     /* (game over: a field's (mode 7) or a battle's, which battle_end runs in its own mode) */
     int gameover = g_gameState->mode == 7 || (g_gameState->mode == 8 && g_gameState->gameData &&

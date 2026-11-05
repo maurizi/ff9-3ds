@@ -43,3 +43,20 @@ int port_title_live(void) { return VSync(-1) - live_frame <= 2 && g_titleMenu.sh
 int port_title_cursor(void) { return g_titleMenu.cursor; }
 int port_title_has_save(void) { return o14_opening_titleHasCard() != 0; }
 void port_title_choose(int choice) { tap = choice; }
+/* whether Start does something now: the opening movies (once playing, until they skip or end) and the attract images
+ * take it; the boot screens and logos before and the pauses between them don't (field_hud.c shows its PRESS START
+ * card only then) */
+extern u16 o14_g_movieFlags; /* (the opening overlay's: the native g_movieFlags is another, unused here) */
+int port_opening_takes_start(void) {
+    switch (g_openingState) {
+    case OPENING_MOVIE:
+    case OPENING_MOVIE2:
+        return (o14_g_movieFlags & (MOVIE_PLAYING | MOVIE_SKIPPING | MOVIE_ENDED)) == MOVIE_PLAYING; /* (the movie's own skip
+                                                                                                * check: before, the logos) */
+    case OPENING_ATTRACT1:
+    case OPENING_ATTRACT2:
+        return 1;
+    default:
+        return 0;
+    }
+}
