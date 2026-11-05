@@ -260,6 +260,20 @@ static int region_is_exit(int entry) {
     return 0;
 }
 
+/* a character near a baked marker's place now (a moogle's model for a save marker: 220, 129; anyone for a shop),
+ * within MARK_NEAR field units (they walk about a little, shopkeepers not at all) */
+#define MARK_NEAR 640
+static int mark_present(EvtObject *pl, int kind, int x, int z) {
+    int guard = 0;
+    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next) {
+        EvtObject *o = nd->obj;
+        if (o == pl || !ram_ok(o, sizeof *o) || o->kind != 4) continue;
+        if (kind == 4 && o->modelId != 220 && o->modelId != 129) continue;
+        if (abs(o->pos.vx - x) <= MARK_NEAR && abs(o->pos.vz - z) <= MARK_NEAR) return 1;
+    }
+    return 0;
+}
+
 /* ---- who opens a shop or the save screen (decomp R32, ff9-decomp docs/r32/3ds-requests-3.md) ----
  * An object's trigger functions (an actor's tags 3 talk and 8, a region's 3, 8 and 2) are walked an instruction at a
  * time (the argument layouts: build/gen/evt_ops.h, from the decomp's op table); a literal MENU (75 00 type arg) of type
@@ -572,12 +586,15 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         addPrim(ot, p); /* (after its edges in the list: added later, drawn first) */
         p += 5;
     }
-    /* shopkeepers and save moogles: a diamond where each stands (baked: where the script first places them) */
+    /* shopkeepers and save moogles: a diamond where each stands (baked: where the script first places them), while
+     * one is there: the field's init doesn't create them in every story state (611 L. Castle/Guest Room with Zidane
+     * in a soldier's armour: no moogle, the map still marked it) */
     for (int k = 0; bk.from_file && k < bk.nmarks && (u8 *)(p + 10) <= pkt_end; k++) {
         int mx = (x1 - x0) / 4, mz = (z1 - z0) / 4;
         if (mx < 512) mx = 512;
         if (mz < 512) mz = 512;
         if (bk.mx[k] < x0 - mx || bk.mx[k] > x1 + mx || bk.mz[k] < z0 - mz || bk.mz[k] > z1 + mz) continue;
+        if (!mark_present(pl, bk.mk[k], bk.mx[k], bk.mz[k])) continue;
         int qx = MX(bk.mx[k], bk.mz[k]), qy = MY(bk.mx[k], bk.mz[k]);
         if (qx < bx + 5) qx = bx + 5;
         if (qx > bx + bw - 5) qx = bx + bw - 5;
