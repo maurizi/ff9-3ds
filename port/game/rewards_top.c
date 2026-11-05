@@ -84,6 +84,13 @@ static void member(int i, int x, int y) {
  * before the exit fade: battle_ui.c, render.c); the numbers are on the bottom, where the game counts them. */
 int port_rewards_top(void) { return 0; }
 
+/* the battle's end with no rewards screen up (none to show, as the Festival of the Hunt's battles or an escape with no
+ * gil, or they ran under the battle already): mode 8 passes in a few frames, black; the top doesn't show the battle's
+ * last frame then (render.c: it flashed, undimmed, between the battle's fade and the field's) */
+int port_rewards_skipped(void) {
+    return g_gameState && g_gameState->mode == 8 && !s_rewards.running;
+}
+
 /* ---- the rewards run inside the battle (battle_ui.c: the battle's exit held under its victory pose) ----------------
  * ovl_65's code is native and its data is the overlay image the battle preloads to RAM_SUB_OVL as it ends
  * (btl_preloadExit), with the rewards' data file (FILE_BTL_END_DB) at the battle's load buffer: they start once both

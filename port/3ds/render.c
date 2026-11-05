@@ -185,6 +185,7 @@ static C3D_Tex mirror_tex[2];
 static C3D_RenderTarget *mirror_rt[2];
 static C3D_RenderTarget *top_rt[2];
 static int top_queue(int stereo); /* (the top screen's copy: three buffers, ctr_video_init) */
+int port_rewards_skipped(void); /* (rewards_top.c) */
 /* the bottom screen's UI layer: PS1 screen coordinates at 1:1 (the bottom screen is the PS1's 320 wide) */
 #define UI_W 512
 #define UI_H 256
@@ -2768,7 +2769,8 @@ void ctr_present(long frame) {
                 C3D_FrameDrawOn(top_rt[eye]);
                 (void)mag_rx;
                 (void)mag_ry;
-            } else if (frozen) { /* a menu is up: the paused scene, dimmed to half (its panels are drawn over it after) */
+            } else if (frozen && !port_rewards_skipped()) { /* a menu is up: the paused scene, dimmed to half (its panels
+                                                              * are drawn over it after) */
                 draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h, freeze_w, freeze_h, edge);
                 unsigned dim = closing ? 0x80 + 0x80 * (unsigned)closing / UNDIM_FRAMES : 0x80;
                 if (port_game_mode() != 8 && dim < 0x100) screen_dim(top_rt[eye], dim); /* (the rewards: the battle as it ended) */
