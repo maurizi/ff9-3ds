@@ -184,6 +184,7 @@ static int u_proj, u_stereo, u_texscale;
 static C3D_Tex mirror_tex[2];
 static C3D_RenderTarget *mirror_rt[2];
 static C3D_RenderTarget *top_rt[2];
+static int top_queue(int stereo); /* (the top screen's copy: three buffers, ctr_video_init) */
 /* the bottom screen's UI layer: PS1 screen coordinates at 1:1 (the bottom screen is the PS1's 320 wide) */
 #define UI_W 512
 #define UI_H 256
@@ -2814,6 +2815,7 @@ void ctr_present(long frame) {
     }
     present_bottom(&d, w, h);
     n_hud_draw = 0;
+    top_queue(stereo_on);
     frame_end();
     in_frame = 0;
 #ifdef PORT_NO_OVERLAP
@@ -2945,8 +2947,62 @@ void ctr_render_dump(void) {
      GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) | \
      GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
 
+/* The top screen in three buffers of our own (not citro3d's two). citro3d swaps a screen's two buffers as soon as the
+ * GPU finishes a frame, and the GSP shows the new one only at the next VBlank: when two frames finished within one
+ * refresh (busy fields on the 3DS: frames late, the GPU's end drifting against the VBlank), the second was copied into
+ * the buffer on the screen, a tear (a vertical line: the LCDs scan by column). Waiting for the VBlank instead cost the
+ * game a refresh most frames. With a third buffer a frame always has one that is neither shown nor about to be: the
+ * copy is queued after the frame's drawing, into that one, and presented when the queue finishes (its callback, chained
+ * after citro3d's), nothing waiting. */
+#define TOP_FB_SIZE (240 * 400 * 3) /* (one eye, RGB8) */
+static u8 *top_fb[3]; /* (each: the left eye, then the right) */
+static gxCmdQueue_s *c3d_queue; /* (citro3d's: GX_BindQueue wrapped, -Wl,--wrap) */
+static void (*c3d_queue_done)(gxCmdQueue_s *);
+static volatile int top_shown = -1, top_presented = -1, top_queued = -1, top_queued_stereo;
+void __real_GX_BindQueue(gxCmdQueue_s *queue);
+void __wrap_GX_BindQueue(gxCmdQueue_s *queue) {
+    c3d_queue = queue;
+    __real_GX_BindQueue(queue);
+}
+static void top_present(int b, int stereo) {
+    u32 mode = GSP_BGR8_OES | (stereo ? BIT(5) : BIT(6)) | 1 << 8; /* (3D or 2D; linear memory: as libctru's gfx.c) */
+    const u8 *a = top_fb[b];
+    /* (true: the present before was still pending, so replaced and never shown; else it is the one on the screen) */
+    if (!gspPresentBuffer(GFX_TOP, (unsigned)b & 1, a, stereo ? a + TOP_FB_SIZE : a, 240 * 3, mode)) top_shown = top_presented;
+    top_presented = b;
+}
+static void queue_done(gxCmdQueue_s *queue) { /* (the GSP's event thread) */
+    if (c3d_queue_done) c3d_queue_done(queue);
+    int b = top_queued;
+    if (b >= 0) top_present(b, top_queued_stereo), top_queued = -1;
+}
+/* the frame's top copy, queued after its drawing; 0 without the buffers (citro3d's output then, as before) */
+static int top_queue(int stereo) {
+    if (!top_fb[0]) return 0;
+    /* (the frame before presented: its queue was waited for at this frame's begin, its callback ends a moment later) */
+    for (int i = 0; i < 200 && top_queued >= 0; i++) svcSleepThread(50000);
+    if (top_queued >= 0) return 1; /* (never seen: skip the copy rather than write a shown buffer) */
+    if (!gspIsPresentPending(GFX_TOP) && top_presented >= 0) top_shown = top_presented;
+    int b = 0;
+    while (b == top_shown || b == top_presented) b++;
+    C3D_FrameSplit(0); /* (the drawing first) */
+    for (int eye = 0; eye < (stereo ? 2 : 1); eye++)
+        GX_DisplayTransfer((u32 *)top_rt[eye]->frameBuf.colorBuf, GX_BUFFER_DIM(240, 400),
+                           (u32 *)(top_fb[b] + eye * TOP_FB_SIZE), GX_BUFFER_DIM(240, 400), DISPLAY_TRANSFER_FLAGS);
+    top_queued_stereo = stereo;
+    top_queued = b;
+    return 1;
+}
+
 void ctr_video_init(void) {
     C3D_Init(0x100000);
+    if (c3d_queue && (top_fb[0] = linearAlloc(3 * 2 * TOP_FB_SIZE))) {
+        for (int b = 1; b < 3; b++) top_fb[b] = top_fb[0] + b * 2 * TOP_FB_SIZE;
+        memset(top_fb[0], 0, 3 * 2 * TOP_FB_SIZE);
+        GSPGPU_FlushDataCache(top_fb[0], 3 * 2 * TOP_FB_SIZE);
+        c3d_queue_done = c3d_queue->callback;
+        gxCmdQueueSetCallback(c3d_queue, queue_done, c3d_queue->user);
+    }
     for (int i = 0; i < 8; i++) {
         morton_x[i] = (u8)((i & 1) | (i & 2) << 1 | (i & 4) << 2);
         morton_y[i] = (u8)(morton_x[i] << 1);
@@ -2996,7 +3052,7 @@ void ctr_video_init(void) {
         if (eye == 0) mirror_depth = vramAlloc(VW * VH * 2);
         if (mirror_depth) C3D_FrameBufDepth(&mirror_rt[eye]->frameBuf, mirror_depth, GPU_RB_DEPTH16);
         top_rt[eye] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, -1);
-        C3D_RenderTargetSetOutput(top_rt[eye], GFX_TOP, eye ? GFX_RIGHT : GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
+        if (!top_fb[0]) C3D_RenderTargetSetOutput(top_rt[eye], GFX_TOP, eye ? GFX_RIGHT : GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
     }
     for (int eye = 0; eye < 2; eye++) {
         if (!C3D_TexInitVRAM(&freeze_tex[eye], UI_W, UI_H, GPU_RGB565)) port_fatal("no VRAM for the menu snapshot");
@@ -3025,8 +3081,9 @@ void ctr_video_init(void) {
     memset(mirror_ok, 0, sizeof mirror_ok);
     gp0_backend = &pica_backend;
     if (mirror_depth) C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
-    port_log("renderer: PICA200, %u KB linear, %u KB VRAM free%s\n", (unsigned)(linearSpaceFree() >> 10),
-             (unsigned)(vramSpaceFree() >> 10), mirror_depth ? "" : " (no depth for the mirror: runs not reordered)");
+    port_log("renderer: PICA200, %u KB linear, %u KB VRAM free%s%s\n", (unsigned)(linearSpaceFree() >> 10),
+             (unsigned)(vramSpaceFree() >> 10), mirror_depth ? "" : " (no depth for the mirror: runs not reordered)",
+             top_fb[0] ? "" : " (top screen double-buffered: may tear)");
 }
 
 void ctr_shutdown(void) {
