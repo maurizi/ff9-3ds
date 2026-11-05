@@ -1041,6 +1041,7 @@ static void hash_remove(int i) {
         slot_hash[k] = (u16)(j + 1);
     }
 }
+static unsigned slots_made; /* (slot_for: slots given a new key, a scene's change) */
 static TexSlot *slot_for(u32 key, u32 twin) {
     static int last = -1;
     if (last >= 0 && slots[last].key == key && slots[last].twin == twin) return &slots[last];
@@ -1071,6 +1072,7 @@ static TexSlot *slot_for(u32 key, u32 twin) {
     }
     if (slots[victim].key) hash_remove(victim);
     TexSlot *s = &slots[last = victim];
+    slots_made++;
     s->key = key;
     s->twin = twin;
     memset(s->epoch, 0, sizeof s->epoch);
@@ -1206,14 +1208,24 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
 #define REGROUP_FRAMES 64
 static u16 co[MAX_SLOTS][MAX_SLOTS];
 static int co_last = -1;
+static inline int cell_of(const TexSlot *t) {
+    return t->oy / 256 * (atlases[t->atlas].tex.width / 256) + t->ox / 256;
+}
+/* a 256x256 cell copied on the GPU's transfer engine (no CPU time): its 32 rows of 8x8 tiles, each 256 texels across
+ * and contiguous, with the gap to the next row in each texture */
 static void copy_cell(u32 *dst, unsigned dw, unsigned dx, unsigned dy, const u32 *src, unsigned sw, unsigned sx,
                       unsigned sy) {
-    for (unsigned r = 0; r < 256; r += 8) /* (a row of 8x8 tiles 256 texels across: contiguous in both) */
-        memcpy(dst + tiled(dx, dy + r, dw), src + tiled(sx, sy + r, sw), 256 * 8 * 4);
+    const unsigned line = 256 * 8 * 4 / 16; /* (in 16-byte units) */
+    C3D_SyncTextureCopy((u32 *)(src + tiled(sx, sy, sw)), GX_BUFFER_DIM(line, (sw - 256) * 8 * 4 / 16),
+                        dst + tiled(dx, dy, dw), GX_BUFFER_DIM(line, (dw - 256) * 8 * 4 / 16), 256 * 256 * 4,
+                        GX_TRANSFER_RAW_COPY(1));
 }
 static void slot_regroup(void) {
-    static u32 frame;
-    if (++frame % REGROUP_FRAMES || natlases < 2) return;
+    static u32 frame, wait = REGROUP_FRAMES, made_at;
+    if (++frame < wait || natlases < 2) return;
+    frame = 0;
+    if (slots_made - made_at >= 8) wait = REGROUP_FRAMES; /* (a new scene: looked at soon again) */
+    made_at = slots_made;
     int n = nslots;
     static u8 grp[MAX_SLOTS], gsize[MAX_SLOTS];
     for (int i = 0; i < n; i++) grp[i] = (u8)i, gsize[i] = 1;
@@ -1229,7 +1241,7 @@ static void slot_regroup(void) {
             if (np < (int)(sizeof pairs / sizeof pairs[0])) pairs[np].w = (u16)(w > 0xFFFF ? 0xFFFF : w), pairs[np].a = (u8)a, pairs[np].b = (u8)b, np++;
         }
     memset(co, 0, sizeof co);
-    if (now < REGROUP_FRAMES * 8) return; /* (fewer than 8 changes a frame: nothing to win) */
+    if (now < wait * 16) return; /* (fewer than 16 changes a frame: nothing worth a move) */
     for (int i = 1; i < np; i++) { /* (insertion sort by weight, descending: a few hundred pairs) */
         typeof(pairs[0]) t = pairs[i];
         int j = i - 1;
@@ -1251,17 +1263,34 @@ static void slot_regroup(void) {
     for (int i = 1; i < ng; i++) { u8 t = order[i]; int j = i - 1; while (j >= 0 && gsize[order[j]] < gsize[t]) order[j + 1] = order[j], j--; order[j + 1] = t; }
     static u8 placed[MAX_SLOTS];
     memset(placed, 0, sizeof placed);
+    /* (a group into the atlas holding most of it, if it has room; its slots there keep their cells: the fewest
+     * moves) */
+    for (int i = 0; i < n; i++) na[i] = 0xFF;
     for (int k = 0; k < ng; k++) {
-        int g = order[k], a;
-        for (a = 0; a < natlases; a++) if (atlases[a].cells - __builtin_popcount(occ[a]) >= gsize[g]) break;
-        if (a == natlases) continue; /* (no room as a whole: its slots placed singly below) */
-        for (int i = 0; i < n; i++)
-            if (grp[i] == g) {
-                int c = __builtin_ctz(~occ[a]);
-                occ[a] |= (u16)(1u << c), na[i] = (u8)a, nc[i] = (u8)c, placed[i] = 1;
+        int g = order[k], best = -1, best_here = -1;
+        for (int a = 0; a < natlases; a++) {
+            int here = 0, free = atlases[a].cells - __builtin_popcount(occ[a]);
+            for (int i = 0; i < n; i++) if (grp[i] == g && slots[i].atlas == a && !(occ[a] >> cell_of(&slots[i]) & 1)) here++;
+            if (free < gsize[g]) continue;
+            if (here > best_here) best_here = here, best = a;
+        }
+        if (best < 0) continue; /* (no room as a whole: its slots placed singly below) */
+        for (int pass = 0; pass < 2; pass++)
+            for (int i = 0; i < n; i++) {
+                if (grp[i] != g || placed[i]) continue;
+                int c = slots[i].atlas == best && !(occ[best] >> cell_of(&slots[i]) & 1) ? cell_of(&slots[i]) : -1;
+                if (pass == 0 && c < 0) continue;
+                if (c < 0) c = __builtin_ctz(~occ[best]);
+                occ[best] |= (u16)(1u << c), na[i] = (u8)best, nc[i] = (u8)c, placed[i] = 1;
             }
     }
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n; i++) { /* (the rest: their own cell if still free) */
+        if (placed[i] || slots[i].atlas == 0xFF) continue;
+        int a = slots[i].atlas, c = cell_of(&slots[i]);
+        if (occ[a] >> c & 1) continue;
+        occ[a] |= (u16)(1u << c), na[i] = (u8)a, nc[i] = (u8)c, placed[i] = 1;
+    }
+    for (int i = 0; i < n; i++) { /* (and the ones whose cell went to a group: anywhere free) */
         if (placed[i] || slots[i].atlas == 0xFF) continue;
         int a;
         for (a = 0; a < natlases; a++) if (__builtin_popcount(occ[a]) < atlases[a].cells) break;
@@ -1272,11 +1301,13 @@ static void slot_regroup(void) {
     /* the switches the new places would give (by the same counts): worth a move only for a quarter fewer */
     unsigned after = 0;
     for (int k = 0; k < np; k++) if (na[pairs[k].a] != na[pairs[k].b]) after += pairs[k].w;
-    if (after * 4 > now * 3) return;
-    /* move: nothing in flight may draw from the atlases meanwhile */
+    if (after * 2 > now) return; /* (worth a move only for half the changes or fewer) */
+    if (wait < REGROUP_FRAMES * 32) wait *= 2; /* (then looked at again later and later) */
+    /* move: nothing in flight may draw from the atlases meanwhile, and the GPU's copies run outside a frame */
     gpu_sync();
-    static u32 *tmp;
-    if (!tmp) tmp = malloc(256 * 256 * 4);
+    if (in_frame) frame_end(), in_frame = 0;
+    static u32 *tmp; /* (in linear memory: the GPU copies through it) */
+    if (!tmp) tmp = linearAlloc(256 * 256 * 4);
     if (!tmp) return;
     /* cell ids a * 16 + c. Any slot whose new cell is free moves; again until none can; a cycle left is broken by
      * parking one slot's texels in tmp (its cell then free), and the rest follow */
@@ -1315,7 +1346,11 @@ static void slot_regroup(void) {
     for (int a = 0; a < natlases; a++) atlases[a].occ = occ[a], atlases[a].used = (u8)__builtin_popcount(occ[a]);
     for (int i = 0; i < n; i++)
         if (slots[i].atlas != 0xFF) cell_xy(na[i], nc[i], &slots[i]);
-    for (int a = 0; a < natlases; a++) mark_dirty(atlases[a].tex.data, atlases[a].tex.size);
+    /* (written by the GPU: what the CPU's cache holds of them is stale, and a later write into a line of it would
+     * flush the stale rest back) */
+    for (int a = 0; a < natlases; a++) GSPGPU_InvalidateDataCache(atlases[a].tex.data, atlases[a].tex.size);
+    frame_begin();
+    half_restart();
     port_log("renderer: textures regrouped (%u slots moved, atlas changes %u -> %u)\n", moves, now, after);
 }
 
