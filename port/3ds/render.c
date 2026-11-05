@@ -987,28 +987,35 @@ static int nslots;
  * a busy field background switches between pages and CLUTs hundreds of times a frame (Lindblum's Castle Station:
  * 454 batches, 27 ms a frame in Azahar; 16 batches, 18 ms with one texture). */
 #define MAX_ATLASES MAX_SLOTS
-static struct { C3D_Tex tex; u8 cells, used; } atlases[MAX_ATLASES];
+static struct { C3D_Tex tex; u8 cells, used; u16 occ; } atlases[MAX_ATLASES]; /* (occ: its cells in use) */
 static int natlases;
-/* a new slot's place: the last atlas's next cell, or a new atlas (largest that fits), 0 if none */
-static int slot_place(TexSlot *s) {
-    if (!natlases || atlases[natlases - 1].used == atlases[natlases - 1].cells) {
-        if (natlases == MAX_ATLASES) return 0;
-        static const unsigned sizes[3] = {1024, 512, 256};
-        int ok = 0;
-        for (int k = 0; k < 3 && !ok; k++) {
-            unsigned w = sizes[k];
-            if (linearSpaceFree() < w * w * 4 + SLOT_RESERVE) continue;
-            ok = C3D_TexInit(&atlases[natlases].tex, w, w, GPU_RGBA8);
-        }
-        if (!ok) return 0;
-        C3D_TexSetFilter(&atlases[natlases].tex, GPU_NEAREST, GPU_NEAREST);
-        unsigned per = atlases[natlases].tex.width / 256;
-        atlases[natlases].cells = (u8)(per * per), atlases[natlases].used = 0;
-        natlases++;
-    }
-    int a = natlases - 1, c = atlases[a].used++;
+/* a new slot's place: a free cell (the last atlas's first), or a new atlas (largest that fits); 0 if none */
+static void cell_xy(int a, int c, TexSlot *s) {
     unsigned per = atlases[a].tex.width / 256;
     s->atlas = (u8)a, s->ox = (u16)((c % per) * 256), s->oy = (u16)((c / per) * 256);
+}
+static int slot_place(TexSlot *s) {
+    for (int a = natlases - 1; a >= 0; a--)
+        for (int c = 0; c < atlases[a].cells; c++)
+            if (!(atlases[a].occ >> c & 1)) {
+                atlases[a].occ |= (u16)(1u << c), atlases[a].used++;
+                cell_xy(a, c, s);
+                return 1;
+            }
+    if (natlases == MAX_ATLASES) return 0;
+    static const unsigned sizes[3] = {1024, 512, 256};
+    int ok = 0;
+    for (int k = 0; k < 3 && !ok; k++) {
+        unsigned w = sizes[k];
+        if (linearSpaceFree() < w * w * 4 + SLOT_RESERVE) continue;
+        ok = C3D_TexInit(&atlases[natlases].tex, w, w, GPU_RGBA8);
+    }
+    if (!ok) return 0;
+    C3D_TexSetFilter(&atlases[natlases].tex, GPU_NEAREST, GPU_NEAREST);
+    unsigned per = atlases[natlases].tex.width / 256;
+    int a = natlases++;
+    atlases[a].cells = (u8)(per * per), atlases[a].used = 1, atlases[a].occ = 1;
+    cell_xy(a, 0, s);
     return 1;
 }
 static inline C3D_Tex *slot_tex(const TexSlot *s) { return &atlases[s->atlas].tex; }
@@ -1074,17 +1081,36 @@ static TexSlot *slot_for(u32 key, u32 twin) {
     return s;
 }
 
-/* the cache's last slot given up (its texture freed), for memory someone else needs now; 0 if none is left */
+/* the cache's last atlas given up with its slots (its texture freed), for memory someone else needs now; 0 if none */
+static void hash_insert(int i) {
+    unsigned h = hash_of(slots[i].key, slots[i].twin);
+    while (slot_hash[h]) h = (h + 1) & (SLOT_HASH - 1);
+    slot_hash[h] = (u16)(i + 1);
+}
 static int slot_shrink(void) {
-    if (!nslots) return 0;
-    int i = nslots - 1;
-    if (slots[i].key) hash_remove(i);
-    slots[i].key = 0;
-    slots[i].twin = 0xFFFFFFFFu; /* (never asked for: slot_for's last-hit check can't match it) */
-    nslots = i;
+    if (!natlases) return 0;
+    int a = natlases - 1;
+    for (int i = 0; i < nslots; i++)
+        if (slots[i].atlas == a) {
+            if (slots[i].key) hash_remove(i);
+            slots[i].key = 0;
+            slots[i].twin = 0xFFFFFFFFu; /* (never asked for: slot_for's last-hit check can't match it) */
+            slots[i].atlas = 0xFF;
+        }
+    C3D_TexDelete(&atlases[a].tex);
+    natlases--;
+    for (int i = 0; i < nslots; i++) { /* (the slots left, at the front: the last ones moved into the holes) */
+        if (slots[i].atlas != 0xFF) continue;
+        while (nslots > i + 1 && slots[nslots - 1].atlas == 0xFF) nslots--;
+        if (nslots == i + 1) { nslots = i; break; }
+        int j = nslots - 1;
+        if (slots[j].key) hash_remove(j);
+        slots[i] = slots[j];
+        if (slots[i].key) hash_insert(i);
+        slots[j].key = 0, slots[j].twin = 0xFFFFFFFFu, slots[j].atlas = 0xFF;
+        nslots--;
+    }
     ctr_render_stats[5] = nslots;
-    int a = slots[i].atlas; /* (its atlas freed with its last slot) */
-    if (--atlases[a].used == 0 && a == natlases - 1) C3D_TexDelete(&atlases[a].tex), natlases--;
     return 1;
 }
 
@@ -1174,6 +1200,125 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     ctr_render_stats[4]++;
 }
 
+/* Slots drawn one after the other are kept in one atlas where they can be: the pairs that follow each other are
+ * counted, and every REGROUP_FRAMES frames, if a grouping (greedy, by those counts, 16 a group at most) would cut
+ * the atlas changes by a quarter, the slots are moved into it (their texels copied cell to cell: a few ms, once). */
+#define REGROUP_FRAMES 64
+static u16 co[MAX_SLOTS][MAX_SLOTS];
+static int co_last = -1;
+static void copy_cell(u32 *dst, unsigned dw, unsigned dx, unsigned dy, const u32 *src, unsigned sw, unsigned sx,
+                      unsigned sy) {
+    for (unsigned r = 0; r < 256; r += 8) /* (a row of 8x8 tiles 256 texels across: contiguous in both) */
+        memcpy(dst + tiled(dx, dy + r, dw), src + tiled(sx, sy + r, sw), 256 * 8 * 4);
+}
+static void slot_regroup(void) {
+    static u32 frame;
+    if (++frame % REGROUP_FRAMES || natlases < 2) return;
+    int n = nslots;
+    static u8 grp[MAX_SLOTS], gsize[MAX_SLOTS];
+    for (int i = 0; i < n; i++) grp[i] = (u8)i, gsize[i] = 1;
+    /* (the pairs by count, greedy: largest first) */
+    static struct { u16 w; u8 a, b; } pairs[MAX_SLOTS * MAX_SLOTS / 2];
+    int np = 0;
+    unsigned now = 0;
+    for (int a = 0; a < n; a++)
+        for (int b = a + 1; b < n; b++) {
+            unsigned w = co[a][b] + co[b][a];
+            if (!w) continue;
+            if (slots[a].atlas != slots[b].atlas) now += w;
+            if (np < (int)(sizeof pairs / sizeof pairs[0])) pairs[np].w = (u16)(w > 0xFFFF ? 0xFFFF : w), pairs[np].a = (u8)a, pairs[np].b = (u8)b, np++;
+        }
+    memset(co, 0, sizeof co);
+    if (now < REGROUP_FRAMES * 8) return; /* (fewer than 8 changes a frame: nothing to win) */
+    for (int i = 1; i < np; i++) { /* (insertion sort by weight, descending: a few hundred pairs) */
+        typeof(pairs[0]) t = pairs[i];
+        int j = i - 1;
+        while (j >= 0 && pairs[j].w < t.w) pairs[j + 1] = pairs[j], j--;
+        pairs[j + 1] = t;
+    }
+    for (int k = 0; k < np; k++) {
+        int ga = grp[pairs[k].a], gb = grp[pairs[k].b];
+        if (ga == gb || gsize[ga] + gsize[gb] > 16) continue;
+        for (int i = 0; i < n; i++) if (grp[i] == gb) grp[i] = (u8)ga;
+        gsize[ga] += gsize[gb], gsize[gb] = 0;
+    }
+    /* the groups into the atlases, largest first (first fit), then the slots left anywhere free */
+    static u8 na[MAX_SLOTS], nc[MAX_SLOTS];
+    u16 occ[MAX_ATLASES] = {0};
+    static u8 order[MAX_SLOTS];
+    int ng = 0;
+    for (int g = 0; g < n; g++) if (gsize[g] > 1) order[ng++] = (u8)g;
+    for (int i = 1; i < ng; i++) { u8 t = order[i]; int j = i - 1; while (j >= 0 && gsize[order[j]] < gsize[t]) order[j + 1] = order[j], j--; order[j + 1] = t; }
+    static u8 placed[MAX_SLOTS];
+    memset(placed, 0, sizeof placed);
+    for (int k = 0; k < ng; k++) {
+        int g = order[k], a;
+        for (a = 0; a < natlases; a++) if (atlases[a].cells - __builtin_popcount(occ[a]) >= gsize[g]) break;
+        if (a == natlases) continue; /* (no room as a whole: its slots placed singly below) */
+        for (int i = 0; i < n; i++)
+            if (grp[i] == g) {
+                int c = __builtin_ctz(~occ[a]);
+                occ[a] |= (u16)(1u << c), na[i] = (u8)a, nc[i] = (u8)c, placed[i] = 1;
+            }
+    }
+    for (int i = 0; i < n; i++) {
+        if (placed[i] || slots[i].atlas == 0xFF) continue;
+        int a;
+        for (a = 0; a < natlases; a++) if (__builtin_popcount(occ[a]) < atlases[a].cells) break;
+        if (a == natlases) return; /* (can't happen: as many cells as slots) */
+        int c = __builtin_ctz(~occ[a]);
+        occ[a] |= (u16)(1u << c), na[i] = (u8)a, nc[i] = (u8)c, placed[i] = 1;
+    }
+    /* the switches the new places would give (by the same counts): worth a move only for a quarter fewer */
+    unsigned after = 0;
+    for (int k = 0; k < np; k++) if (na[pairs[k].a] != na[pairs[k].b]) after += pairs[k].w;
+    if (after * 4 > now * 3) return;
+    /* move: nothing in flight may draw from the atlases meanwhile */
+    gpu_sync();
+    static u32 *tmp;
+    if (!tmp) tmp = malloc(256 * 256 * 4);
+    if (!tmp) return;
+    /* cell ids a * 16 + c. Any slot whose new cell is free moves; again until none can; a cycle left is broken by
+     * parking one slot's texels in tmp (its cell then free), and the rest follow */
+    static int owner[MAX_ATLASES * 16], ocell[MAX_SLOTS], ncell[MAX_SLOTS];
+    for (int k = 0; k < natlases * 16; k++) owner[k] = -1;
+    for (int i = 0; i < n; i++) {
+        ocell[i] = ncell[i] = -1;
+        if (slots[i].atlas == 0xFF) continue;
+        unsigned per = atlases[slots[i].atlas].tex.width / 256;
+        ocell[i] = slots[i].atlas * 16 + slots[i].oy / 256 * per + slots[i].ox / 256;
+        ncell[i] = na[i] * 16 + nc[i];
+        owner[ocell[i]] = i;
+    }
+#define CELL_OF(k) (u32 *)atlases[(k) / 16].tex.data, atlases[(k) / 16].tex.width, \
+                   (unsigned)((k) % 16 % (atlases[(k) / 16].tex.width / 256) * 256), \
+                   (unsigned)((k) % 16 / (atlases[(k) / 16].tex.width / 256) * 256)
+    int parked = -1;
+    unsigned moves = 0;
+    for (;;) {
+        int progress = 0;
+        for (int i = 0; i < n; i++) {
+            if (ocell[i] < 0 || ocell[i] == ncell[i] || owner[ncell[i]] >= 0) continue;
+            if (i == parked) copy_cell(CELL_OF(ncell[i]), tmp, 256, 0, 0), parked = -1;
+            else copy_cell(CELL_OF(ncell[i]), CELL_OF(ocell[i])), owner[ocell[i]] = -1;
+            owner[ncell[i]] = i, ocell[i] = ncell[i], moves++, progress = 1;
+        }
+        if (progress) continue;
+        if (parked >= 0) break; /* (can't happen: a parked slot's cycle always frees its cell) */
+        int i;
+        for (i = 0; i < n; i++) if (ocell[i] >= 0 && ocell[i] != ncell[i]) break;
+        if (i == n) break;
+        copy_cell(tmp, 256, 0, 0, CELL_OF(ocell[i]));
+        owner[ocell[i]] = -1, parked = i;
+    }
+#undef CELL_OF
+    for (int a = 0; a < natlases; a++) atlases[a].occ = occ[a], atlases[a].used = (u8)__builtin_popcount(occ[a]);
+    for (int i = 0; i < n; i++)
+        if (slots[i].atlas != 0xFF) cell_xy(na[i], nc[i], &slots[i]);
+    for (int a = 0; a < natlases; a++) mark_dirty(atlases[a].tex.data, atlases[a].tex.size);
+    port_log("renderer: textures regrouped (%u slots moved, atlas changes %u -> %u)\n", moves, now, after);
+}
+
 /* The texture for a textured primitive whose texels span [u0,u1]x[v0,v1] (inclusive, 0..255; u1 < u0 when it
  * wraps), with its blocks current; *flags = the union of their texel kinds. */
 /* A 15-bit texture read from VRAM the GPU has drawn (the field-to-battle swirl samples the frame it draws into): the
@@ -1244,6 +1389,9 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
     s->serial = frame_serial;
     *flags = f;
     tex_ou = s->ox, tex_ov = s->oy;
+    int id = (int)(s - slots);
+    if (co_last >= 0 && co_last != id && co[co_last][id] < 0xFFFF) co[co_last][id]++;
+    co_last = id;
     return slot_tex(s);
 }
 
@@ -2645,6 +2793,8 @@ void ctr_present(long frame) {
     half_restart();
 #endif
     frames_drawn++;
+    co_last = -1;
+    slot_regroup();
     extern unsigned int psx_depth_frame;
     psx_depth_frame++;
     ranges_age();
