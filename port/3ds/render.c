@@ -324,6 +324,7 @@ static int depth_clear; /* the depth buffer to be cleared at the next frame's be
 static int model_free_pending; /* (the menu's model textures to give back: model_tex_free) */
 static unsigned model_gen;
 static void model_tex_free(void);
+static unsigned texscale_wh = ~0u; /* (the size set last: the atlases share one, a switch between them sets nothing) */
 static void frame_begin(void) {
     if (in_frame) return;
     unsigned profile_start = port_profile_begin();
@@ -343,6 +344,7 @@ static void frame_begin(void) {
     in_frame = 1;
     C3D_BindProgram(&shader);
     C3D_SetAttrInfo(&attr);
+    texscale_wh = ~0u; /* (the uniforms set again in a new frame) */
     if (dither_tex.data) tex_bind(1, &dither_tex); /* (set_tev_for's dithering: unit 1 throughout) */
     BufInfo_Init(&bufinfo);
     BufInfo_Add(&bufinfo, vb, sizeof(Vtx), 4, 0x3210);
@@ -714,6 +716,9 @@ static void set_proj_ortho(float w, float h, float zplane) {
 }
 
 static void set_texscale(const C3D_Tex *t) {
+    unsigned wh = t ? (unsigned)t->width << 16 | t->height : 0;
+    if (wh == texscale_wh) return;
+    texscale_wh = wh;
     /* (texture memory runs top-down, t bottom-up: a texel row r is at t = 1 - r / height) */
     C3D_FVUnifSet(GPU_VERTEX_SHADER, u_texscale, t ? 1.0f / t->width : 0.0f, t ? -1.0f / t->height : 0.0f, 0, 1);
 }
@@ -965,7 +970,8 @@ typedef struct {
     u32 key;     /* depth << 30 | page x / 64 << 26 | page y / 256 << 25 | CLUT x / 16 << 9 | CLUT y; 0 = free */
     u32 twin;    /* the texture window baked in (GP0 E2: mask x, y, offset x, y in 8-texel units), 0 = none */
     u32 serial;  /* frame_serial when last drawn with */
-    C3D_Tex tex;
+    u16 ox, oy;  /* its 256x256 place in its atlas (texels) */
+    u8 atlas;    /* the atlas it is in (atlases[]) */
     u32 stamp[64]; /* per 32x32 block: gen_counter when converted (0 = not yet) */
     u32 epoch[64]; /* per block: tex_epoch when it was last known current (no write to any source cell since) */
     u8 flags[64];  /* per block: 1 = has opaque texels, 2 = has semi-transparent ones */
@@ -976,6 +982,37 @@ typedef struct {
 #define SLOT_RESERVE (512u << 10)
 static TexSlot slots[MAX_SLOTS];
 static int nslots;
+/* The slots live side by side in atlases (1024x1024: 16 of them; 512x512 or one alone when linear memory is short):
+ * primitives from different slots of one atlas are drawn in one batch. Each texture bind was a batch of its own, and
+ * a busy field background switches between pages and CLUTs hundreds of times a frame (Lindblum's Castle Station:
+ * 454 batches, 27 ms a frame in Azahar; 16 batches, 18 ms with one texture). */
+#define MAX_ATLASES MAX_SLOTS
+static struct { C3D_Tex tex; u8 cells, used; } atlases[MAX_ATLASES];
+static int natlases;
+/* a new slot's place: the last atlas's next cell, or a new atlas (largest that fits), 0 if none */
+static int slot_place(TexSlot *s) {
+    if (!natlases || atlases[natlases - 1].used == atlases[natlases - 1].cells) {
+        if (natlases == MAX_ATLASES) return 0;
+        static const unsigned sizes[3] = {1024, 512, 256};
+        int ok = 0;
+        for (int k = 0; k < 3 && !ok; k++) {
+            unsigned w = sizes[k];
+            if (linearSpaceFree() < w * w * 4 + SLOT_RESERVE) continue;
+            ok = C3D_TexInit(&atlases[natlases].tex, w, w, GPU_RGBA8);
+        }
+        if (!ok) return 0;
+        C3D_TexSetFilter(&atlases[natlases].tex, GPU_NEAREST, GPU_NEAREST);
+        unsigned per = atlases[natlases].tex.width / 256;
+        atlases[natlases].cells = (u8)(per * per), atlases[natlases].used = 0;
+        natlases++;
+    }
+    int a = natlases - 1, c = atlases[a].used++;
+    unsigned per = atlases[a].tex.width / 256;
+    s->atlas = (u8)a, s->ox = (u16)((c % per) * 256), s->oy = (u16)((c / per) * 256);
+    return 1;
+}
+static inline C3D_Tex *slot_tex(const TexSlot *s) { return &atlases[s->atlas].tex; }
+static int tex_ou, tex_ov; /* texture_for: the returned texture's offset of the primitive's page (texels) */
 static int slots_held_at = -1; /* (slot_for: the size the cache stopped growing at) */
 static u32 rgba_lut[65536];
 
@@ -1018,10 +1055,8 @@ static TexSlot *slot_for(u32 key, u32 twin) {
         slots_held_at = nslots;
         port_log("renderer: texture cache held at %d pages (linear memory)\n", nslots);
     }
-    if (nslots < MAX_SLOTS && slots_held_at != nslots && C3D_TexInit(&slots[nslots].tex, 256, 256, GPU_RGBA8)) {
+    if (nslots < MAX_SLOTS && slots_held_at != nslots && slot_place(&slots[nslots])) {
         victim = nslots++;
-        C3D_TexSetFilter(&slots[victim].tex, GPU_NEAREST, GPU_NEAREST);
-        C3D_TexSetWrap(&slots[victim].tex, GPU_REPEAT, GPU_REPEAT);
         ctr_render_stats[5] = nslots;
     } else if (victim < 0) {
         gpu_sync(); /* every slot is in this frame's batches */
@@ -1044,11 +1079,12 @@ static int slot_shrink(void) {
     if (!nslots) return 0;
     int i = nslots - 1;
     if (slots[i].key) hash_remove(i);
-    C3D_TexDelete(&slots[i].tex);
     slots[i].key = 0;
     slots[i].twin = 0xFFFFFFFFu; /* (never asked for: slot_for's last-hit check can't match it) */
     nslots = i;
     ctr_render_stats[5] = nslots;
+    int a = slots[i].atlas; /* (its atlas freed with its last slot) */
+    if (--atlases[a].used == 0 && a == natlases - 1) C3D_TexDelete(&atlases[a].tex), natlases--;
     return 1;
 }
 
@@ -1109,7 +1145,9 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
         const u16 *c = psx_vram + (m->clut_y & 511) * VW;
         for (int i = 0; i < ncl; i++) clut[i] = rgba_lut[c[(m->clut_x + i) & 1023]];
     }
-    u32 *dst = s->tex.data;
+    C3D_Tex *at = slot_tex(s);
+    u32 *dst = at->data;
+    const unsigned aw = at->width;
     unsigned flags = 0;
     for (int y = 0; y < 32; y++) {
         int v = by * 32 + y, sv = (int)(((unsigned)v & ~my) | (ofy & my));
@@ -1122,7 +1160,7 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
             else c = rgba_lut[row[(m->tx + su) & 1023]];
             unsigned a = c & 0xFF;
             flags |= a == 0xFF ? 1 : a == 0x80 ? 2 : 0;
-            dst[tiled(u, v, 256)] = c;
+            dst[tiled(s->ox + u, s->oy + v, aw)] = c;
         }
     }
     s->flags[b] = flags;
@@ -1131,8 +1169,8 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     mark_source(sx0, sy0, sx0 + sw, sy0 + 32);
     if (ncl) mark_source(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
 
-    /* (the block's four rows of tiles: 32 rows of the texture, contiguous) */
-    mark_dirty(dst + by * 32 * 256, 32 * 256 * 4);
+    /* (the block's four rows of tiles, each the slot's 256 texels across: contiguous) */
+    for (int r = 0; r < 4; r++) mark_dirty(dst + tiled(s->ox, s->oy + by * 32 + r * 8, aw), 256 * 8 * 4);
     ctr_render_stats[4]++;
 }
 
@@ -1187,7 +1225,7 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
     if (m->depth == 2 && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
         gpu_owned(m->tx + u0, m->ty + v0, m->tx + u1 + 1, m->ty + v1 + 1)) {
         C3D_Tex *t = mirror_page(m->tx, m->ty);
-        if (t) { *flags = 0; return t; }
+        if (t) { *flags = 0; tex_ou = tex_ov = 0; return t; }
     }
     u32 key = (u32)m->depth << 30 | (u32)(m->tx >> 6) << 26 | (u32)(m->ty >> 8) << 25 |
               (m->depth < 2 ? (u32)(m->clut_x >> 4) << 9 | (u32)m->clut_y : 0) | 1u << 24;
@@ -1205,7 +1243,8 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
         }
     s->serial = frame_serial;
     *flags = f;
-    return &s->tex;
+    tex_ou = s->ox, tex_ov = s->oy;
+    return slot_tex(s);
 }
 
 /* ---- primitives --------------------------------------------------------------------------------------------- */
@@ -1496,10 +1535,11 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         /* (the field's windows, and anything under a drawing area smaller than a frame (a window's clip, a draw off
          * screen), stay at the screen plane: else text shifts per eye inside a box or clip that doesn't, and each eye
          * cuts it in a different place) */
-        if (nterrain && terrain_packet()) v = terrain_depth(v, n, moved); /* (the world map's ground) */
+        /* (the welds are for the parallax alone: in 2D they would only cost time) */
+        if (stereo_on && nterrain && terrain_packet()) v = terrain_depth(v, n, moved); /* (the world map's ground) */
         if (gp0_state.area_x1 - gp0_state.area_x0 >= 255 && gp0_state.area_y1 - gp0_state.area_y0 >= 200 && !flat_packet())
             v = ot_depth(v, n, moved, bx1 - bx0, by1 - by0);
-        int mi = model_index();
+        int mi = stereo_on ? model_index() : 0;
         if (mi) v = model_weld(v, n, moved, mi); /* (a model's meshes meeting: one depth where their corners do) */
     }
     cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0) |
@@ -1552,6 +1592,7 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     Vtx t[6];
     int with_depth = 0;
     for (int i = 0; i < n; i++) make_vtx(&t[i], m, &v[i]), with_depth += t[i].z > 0;
+    if (tex) for (int i = 0; i < n; i++) t[i].u += tex_ou, t[i].v += tex_ov; /* (its slot's place in the atlas) */
     /* depth for all its vertices or none: a vertex the GTE clamped (near the camera, or far off screen) has none, and
      * mixing w = 1 with w ~ Z would warp the texture across the polygon */
     if (with_depth && with_depth < n)
@@ -1776,9 +1817,23 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         if (h >= 256) v0 = 0, v1 = 255;
         tex = texture_for(m, u0, v0, u1, v1, &tflags);
     }
-    Vtx t[6];
-    quad(t, v->x, v->y, v->x + w, v->y + h, v->u, v->v, v->u + w, v->v + h, vcolor(m, v));
-    emit(m, t, 6, v->x, v->y, v->x + w, v->y + h, tex, tflags);
+    /* a sprite whose texels run past its page's edge wraps to its start (the PS1's 8-bit u, v): drawn in pieces, cut
+     * where it wraps (its slot is one cell of an atlas: no wrapping texture to lean on) */
+    int ou = tex ? tex_ou : 0, ov = tex ? tex_ov : 0;
+    for (int py = 0; py < h;) {
+        int sv = (v->v + py) & 255, ph = h - py < 256 - sv ? h - py : 256 - sv;
+        if (!tex) sv = v->v + py, ph = h - py;
+        for (int px = 0; px < w;) {
+            int su = (v->u + px) & 255, pw = w - px < 256 - su ? w - px : 256 - su;
+            if (!tex) su = v->u + px, pw = w - px;
+            Vtx t[6];
+            quad(t, v->x + px, v->y + py, v->x + px + pw, v->y + py + ph, ou + su, ov + sv, ou + su + pw, ov + sv + ph,
+                 vcolor(m, v));
+            emit(m, t, 6, v->x + px, v->y + py, v->x + px + pw, v->y + py + ph, tex, tflags);
+            px += pw;
+        }
+        py += ph;
+    }
 }
 
 static void r_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
@@ -2634,12 +2689,6 @@ static u32 px_shadow(int x, int y, const void *ctx) {
     unsigned r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
     return (r << 3) << 16 | (g << 3) << 8 | b << 3;
 }
-static u32 px_slot(int x, int y, const void *ctx) {
-    u32 c = ((const u32 *)ctx)[tiled(x, y, 256)];
-    unsigned a = c & 0xFF;
-    if (!a) return ((x ^ y) & 8) ? 0xFF00FF : 0x800080; /* transparent: magenta checks */
-    return c >> 8;
-}
 /* DUMP_EVERY=N: the displayed buffer every N frames, as dump/f<frame>.ppm (a timeline of one run) */
 void ctr_render_dump_display(long frame) {
     PsxDisplayInfo d;
@@ -2688,7 +2737,7 @@ void ctr_render_dump(void) {
     for (int i = 0; i < nslots && i < 24; i++) {
         char name[48];
         snprintf(name, sizeof name, "slot%02d_%08lx", i, (unsigned long)slots[i].key);
-        write_ppm(name, 256, 256, px_slot, slots[i].tex.data);
+        (void)name; /* (slots are atlas cells now: dumped with their atlas) */
     }
     FILE *f = fopen("sdmc:/3ds/ff9/dump/cells.txt", "w");
     if (f) {
