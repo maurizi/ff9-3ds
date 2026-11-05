@@ -101,7 +101,8 @@ static void cards_step(void) {
     cards_pending = 0;
 }
 static int n_choices, choice_first; /* the question's choices shown this frame */
-static RECT r_choice[8];
+#define MAX_CHOICES 12
+static RECT r_choice[MAX_CHOICES];
 
 /* A choice the script answers itself (the Moogle's menus, ff9-decomp R34: it polls msg_getPadPressed): the tap's
  * Cross goes into g_msgPadPressed after msg_update and before the objects run (evt_updateObjects, wrapped:
@@ -556,6 +557,7 @@ static void draw_log(void) {
     win_drawBox(&box, 3, 2);
 }
 
+static int choices_only;
 /* the open question's choices (its window's current page, from g_msgChoiceLine on), as buttons in the middle area */
 static int draw_choices(void) {
     n_choices = 0;
@@ -570,9 +572,14 @@ static int draw_choices(void) {
         if (*t == TEXT_NEWLINE) line++;
         else if (*t == TEXT_ESC) t += t[1] == 0x43 || t[1] == 0x44 || t[1] == 0x49 || t[1] == 0x4A || (t[1] >= 0x4B && t[1] <= 0x4E) || (t[1] >= 0x68 && t[1] <= 0x6F) ? 2 : 1;
     }
-    int n = g_msgChoiceCount > 8 ? 8 : g_msgChoiceCount;
-    int h = n > 4 ? 24 : 32, gap = n > 4 ? 3 : 6, y0 = 34 + (152 - (n * h + (n - 1) * gap)) / 2;
-    static u8 lines[8][96];
+    int n = g_msgChoiceCount > MAX_CHOICES ? MAX_CHOICES : g_msgChoiceCount;
+    /* (between the header and the buttons; the whole screen when the choices are alone there: a cutscene's, or more
+     * than 8, which the middle can't hold (the Moogle's tutorial: 11)) */
+    int full = choices_only || n > 8, top = full ? 4 : 34, avail = full ? 216 : 152; /* (the frame is 224 lines) */
+    int h = n > 4 ? 24 : 32, gap = n > 4 ? 3 : 6;
+    if (n * h + (n - 1) * gap > avail) gap = 2, h = (avail - (n - 1) * gap) / n;
+    int y0 = top + (avail - (n * h + (n - 1) * gap)) / 2;
+    static u8 lines[MAX_CHOICES][96];
     /* (logical rows the game hides, g_msgChoiceEnabled bit k clear, get no button: the Moogle's Mogshop where there
      * is none) */
     u32 shown = g_msgChoiceEnabled ? g_msgChoiceEnabled : ~0u;
@@ -590,7 +597,7 @@ static int draw_choices(void) {
         RECT *r = &r_choice[i];
         r->x = 24; r->w = 272; r->h = h; r->y = y0 + i * (h + gap);
         int sel = i == g_msgChoice - 0;
-        text_drawBlock(r->x + 12, r->y + (h - 12) / 2, 2, lines[i], sel ? 0 : 2);
+        text_drawBlock(r->x + 12, r->y + (h - 12) / 2 - (h < 24), 2, lines[i], sel ? 0 : 2);
         win_drawBox(r, 3, 2);
         i++;
     }
@@ -660,7 +667,7 @@ unsigned port_field_serial(int *frames) {
     return field_serial;
 }
 
-static int choices_only; /* no player control (a cutscene) but a question open: its choices alone */
+/* choices_only: no player control (a cutscene) but a question open: its choices alone */
 int port_disc_prompt_live(void), port_disc_prompt_cursor(void);
 u8 *port_disc_prompt_text(int i);
 void port_disc_prompt_set(int c);
@@ -712,7 +719,7 @@ static void draw(void) {
         return;
     }
     { int b = canary_prompt(); if (b >= 0) { draw_canary(b); return; } }
-    if (choices_only) {
+    if (choices_only || (choice_open() && g_msgChoiceCount > 8)) { /* (choices alone: draw_choices) */
         draw_choices();
         return;
     }
