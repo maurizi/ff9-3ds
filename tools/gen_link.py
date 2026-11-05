@@ -27,6 +27,42 @@ import ff9sym  # noqa: E402
 GEN = Path("build/gen")
 XREFS = Path("config/xrefs.txt")
 ZERO_RUN = 0x1000
+RAW_DATA = Path("config/raw_data.txt")
+
+
+def raw_ranges(b):
+    """[lo, hi) of the data blocks config/raw_data.txt names for binary b: from their dlabel .. enddlabel in the
+    decomp's split data (the vram of each word in its comment)"""
+    names = set()
+    if RAW_DATA.exists():
+        for line in RAW_DATA.read_text().splitlines():
+            f = line.split("#")[0].split()
+            if len(f) == 2 and f[0] == b:
+                names.add(f[1])
+    out = []
+    for name in names:
+        lo = hi = None
+        for path in sorted((ff9sym.DECOMP / "asm").glob(f"*/{b}/data/*.s")):
+            inside = False
+            for line in path.read_text().splitlines():
+                if line.startswith(f"dlabel {name}"):
+                    inside = True
+                elif line.startswith(f"enddlabel {name}"):
+                    break
+                elif inside:
+                    m = re.match(r"\s*/\* [0-9A-F]+ ([0-9A-F]{8}) ", line)
+                    if m:
+                        v = int(m.group(1), 16)
+                        lo = v if lo is None else lo
+                        hi = v + 4
+            if lo is not None:
+                break
+        if lo is None:
+            sys.exit(f"gen_link.py: config/raw_data.txt names {b} {name}, not in the decomp's data")
+        out.append((lo, hi))
+    return out
+
+
 SLOTS = {0x800A7000: 0, 0x801EDF00: 1, 0x80198700: 2}  # overlay load address -> psx_ovl_resident index  # zero runs at least this long are left out of the images
 
 
@@ -220,8 +256,9 @@ def main():
         in_region = lambda v: any(bi.vram_of(lo) <= v < bi.vram_of(hi) for lo, hi in regions)
 
         relocs = {}
+        raw = raw_ranges(b)
         for vram, value, operand in ff9sym.data_words(b):
-            if not in_region(vram) or vram % 4 or operand.startswith(".L"):
+            if not in_region(vram) or vram % 4 or operand.startswith(".L") or any(lo <= vram < hi for lo, hi in raw):
                 continue
             name = re.match(r"[A-Za-z_]\w*", operand)
             name = name.group(0) if name and not operand.startswith("0x") else None
@@ -270,7 +307,7 @@ def main():
         for lo, hi in regions:
             for off in range(lo, hi - 3, 4):
                 vram = bi.vram_of(off)
-                if vram in relocs or vram in typed:
+                if vram in relocs or vram in typed or any(lo <= vram < hi for lo, hi in raw):
                     continue
                 value = int.from_bytes(bi.bytes[off:off + 4], "little")
                 if not ff9sym.RAM_LO <= value < ff9sym.RAM_HI:

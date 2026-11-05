@@ -968,6 +968,13 @@ win into a defeat that waits forever for a KO pose. btl_initState zeroes it at b
 flag and its argument, a comment at Battle.subPhase that camera scripts can increment it, and which scenes or
 effect cameras use it with arg != 1 (any that play in BTL_PHASE_COMBAT). Sent to the decomp session.
 
+Found (2026-11-04): the port's, not the camera interpreter's. tools/gen_link.py relocated every data word whose value
+fell in PS1 RAM, and g_btlfxCommonData's camera bytes hold 20 such words (camera 0x0E's `0a 00 01 80` at 0x800F84AC
+among them): on the 3DS they became native addresses, the trance command camera (g_btlfxCmdCameras[1]) read a
+command with 0x4000 and an argument != 1 (3DS log: pc 0x800F84B0, frame 15, Dyne and Double Black). The block is
+now kept raw (config/raw_data.txt). The decomp could help by marking pointer-free data blocks as such in its split
+(byte/halfword data instead of `.word`), so a port's relocation pass can't mistake them.
+
 ### F38 (2026-11-04). evt_moveObjectTo's object mode is the sign of a pointer
 `src/main/event.c`: EVT_OP_MOVE_TO_OBJ calls `evt_moveObjectTo(x, y, z, (s32)po)`; the callee tells the object mode
 by `flags < 0` (a KSEG0 pointer) and stops when the mover touches that object (`hit != flags`). A native pointer is

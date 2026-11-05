@@ -1,0 +1,6 @@
+# Data blocks that hold no pointers (tools/gen_link.py): their words stay as the disc has them, however much a word
+# looks like a PS1 address. <bin> <symbol>
+#   g_btlfxCommonData: the battle effects' common data (offset table, command cameras, ...). Camera 0x0E's bytes
+#   0a 00 01 80 read as 0x8001000A: relocated, the trance command camera's flags gained 0x4000 (a subPhase cue in
+#   combat: a won battle taken for a defeat; decomp-requests F37) [code + 3DS log]
+ovl_0b g_btlfxCommonData
