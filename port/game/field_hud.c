@@ -84,8 +84,12 @@ static EvtObject *moogle_near(void) {
     return ram_ok(o, sizeof *o) && o->kind == 4 && (o->modelId == 220 || o->modelId == 129) ? o : NULL;
 }
 
+/* the PS1's "PRESS [SELECT] TO SEE ATE" prompt is up (the field's init sets it; a field change turns it off) and the
+ * Select handler is armed. Gs8[0xEE] alone outlives the field: a field with no ATE menu (611 L. Castle/Guest Room)
+ * keeps the town's 1 and no handler */
 static int ate_available(void) {
-    return g_evtGlobalVars.b[0xEE] == 1;
+    return g_atePromptMode != ATE_PROMPT_OFF && (g_atePromptMode & ATE_PROMPT_STYLE_MASK) != ATE_PROMPT_BLINK &&
+           g_evtGlobalVars.b[0xEE] == 1;
 }
 
 /* CARDS: the main menu, then its card screen (once the menu runs: the cursor on Card, the slide-in over, the screen

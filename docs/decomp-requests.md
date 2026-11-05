@@ -982,3 +982,10 @@ positive: the walk never ended against its target. Field 312 (leaving the Ice Ca
 stands against him, the cutscene waits for good (3DS hardware and the host). The port treats any value past
 EVT_MOVETO_NO_TURN|EVT_MOVETO_3D as an object (counted patch). Asked: the object passed separately (or a named
 predicate the port can redefine), or at least a comment that the mode is the pointer's sign. Sent to the decomp session.
+
+### F39 (2026-11-05). docs/wip/ates.md: 611 L. Castle/Guest Room has no ATE menu
+The table lists Lindblum disc 1's menu fields as "550-573, 609, 611, 850". 611's init (entry 0 tag 0) has no `D7`
+and no Select handler (its two `NEW_CODE` objects animate BG layers 0xC and 0xD), so `Gs8[0xEE]` keeps the previous
+field's 1 there while the prompt is off. A player's save at story 3120 with Baku and His Crew available (mask 8)
+gets no menu in 611. The port's ATE button now follows `g_atePromptMode` as well. Asked: drop 611 from the menu
+field lists (or name the story range where it has one) and note that `Gs8[0xEE]` outlives the field.
