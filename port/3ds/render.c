@@ -929,16 +929,34 @@ static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
     extern volatile const char *ctr_where;
     ctr_where = "readback";
     gpu_sync();
+    /* (not read from VRAM by the CPU: through its data cache it can see what the GPU wrote there a frame before, on
+     * hardware (an emulator has no cache): the models over a 24-bit movie, read back each frame, flickered. Each row
+     * of cells (CELL rows of the tiled mirror: one contiguous block) is copied by the GPU's transfer engine into linear
+     * memory, the CPU's cache dropped there, and read from that) */
+    static u16 *band;
+    const unsigned band_bytes = VW * CELL * 2;
+    if (!band) band = linearAlloc(band_bytes);
     const u16 *m = mirror_tex[0].data;
-    for (int cy = cy0; cy < cy1; cy++)
+    for (int cy = cy0; cy < cy1; cy++) {
+        int any = 0;
+        for (int cx = cx0; cx < cx1; cx++) any |= !shadow_ok[cy][cx];
+        if (!any) continue;
+        const u16 *src = m + tiled(0, cy * CELL, VW), *rd = src;
+        if (band) {
+            C3D_SyncTextureCopy((u32 *)src, 0, (u32 *)band, 0, band_bytes, GX_TRANSFER_RAW_COPY(1));
+            GSPGPU_InvalidateDataCache(band, band_bytes);
+            rd = band;
+        }
         for (int cx = cx0; cx < cx1; cx++) {
             if (shadow_ok[cy][cx]) continue;
             for (int y = cy * CELL; y < (cy + 1) * CELL; y++) {
                 u16 *dst = psx_vram + y * VW;
-                for (int x = cx * CELL; x < (cx + 1) * CELL; x++) dst[x] = rgba5551_to_bgr555(m[tiled(x, y, VW)]);
+                for (int x = cx * CELL; x < (cx + 1) * CELL; x++)
+                    dst[x] = rgba5551_to_bgr555(rd[tiled(x, y, VW) - tiled(0, cy * CELL, VW)]);
             }
             shadow_ok[cy][cx] = 1;
         }
+    }
     ctr_render_stats[3]++;
 }
 
