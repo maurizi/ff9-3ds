@@ -838,8 +838,10 @@ void gte_store_sxy(int reg, void *p) {
     psx_depth_record(p, w, e->word == w ? e->info : 0);
 }
 
+int psx_depth_by_value; /* (psx_depth_lookup: the last info came from the value table) */
 gte_u32 psx_depth_lookup(const gte_u32 *p) {
     u32 w = *p;
+    psx_depth_by_value = 0;
     uintptr_t off = (const unsigned char *)p - psx_ram;
     if (off < PSX_RAM_SIZE) {
         if (depth_word[off >> 2] == w && depth_inf[off >> 2]) return depth_inf[off >> 2];
@@ -847,6 +849,8 @@ gte_u32 psx_depth_lookup(const gte_u32 *p) {
         if (sp_word[off >> 2] == w) return sp_inf[off >> 2];
     }
     unsigned k = value_slot(w);
-    return val_word[k] == w && psx_depth_frame - val_frame[k] <= 8 ? val_inf[k] : 0;
+    if (val_word[k] != w || psx_depth_frame - val_frame[k] > 8) return 0;
+    psx_depth_by_value = 1;
+    return val_inf[k];
 }
 #endif

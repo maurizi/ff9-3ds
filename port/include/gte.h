@@ -119,6 +119,9 @@ extern GteDepth psx_gte_depth[3];
 void gte_store_sxy(int reg, void *p);
 /* the depth info recorded for the vertex word at p (in psx_ram or the scratchpad), 0 if none or stale */
 gte_u32 psx_depth_lookup(const gte_u32 *p);
+/* set by psx_depth_lookup: its info was found by value (a copy of a projected vertex), not at the word's address: it
+ * may be another vertex's that projected to the same place, or an older frame's */
+extern int psx_depth_by_value;
 /* port code that projects vertices itself (gte_rtpt_batch, psx_gte_project) records them like a store */
 void psx_depth_record(const void *p, gte_u32 word, gte_u32 info);
 #define GTE_SWC2(reg, base, off) ((reg) >= 12 && (reg) <= 14 ? gte_store_sxy((reg), (unsigned char *)(base) + (off)) \

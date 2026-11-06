@@ -1456,7 +1456,10 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
     if (info) {
         o->x += (info & 0xFF) * (1.0f / 256);
         o->y += ((info >> 8) & 0xFF) * (1.0f / 256);
-        o->z = (float)(info >> 16);
+        /* (found by value, the depth may be another vertex's that projected to the same pixel or an older frame's: for
+         * the parallax alone (negative), the texture mapped flat as the PS1 did. As a perspective, a wrong one warped
+         * the face's texture past its edge onto transparent texels: black gaps along the world map's ground) */
+        o->z = psx_depth_by_value ? -(float)(info >> 16) : (float)(info >> 16);
     }
     o->u = (float)v->u;
     o->v = (float)v->v;
@@ -1527,8 +1530,8 @@ static struct { unsigned frame; short x, y; float z; } weld[WELD_N];
 static const Vtx *terrain_depth(const Vtx *v, unsigned n, Vtx *out) {
     int bare = 0;
     for (unsigned i = 0; i < n; i++) {
-        if (v[i].z <= 0) { bare++; continue; } /* (a corner whose word the GTE didn't store: no depth of its own) */
-        float w = 1.0f / v[i].z, y = v[i].y - (float)gp0_state.area_y0; /* (from the frame's top: either buffer) */
+        if (v[i].z == 0) { bare++; continue; } /* (a corner whose word the GTE didn't store: no depth of its own) */
+        float w = 1.0f / fabsf(v[i].z), y = v[i].y - (float)gp0_state.area_y0; /* (from the frame's top: either buffer) */
         tf_n += 1; tf_y += y; tf_w += w; tf_yy += y * y; tf_yw += y * w;
         if (w < tf_wmin) tf_wmin = w;
         if (w > tf_wmax) tf_wmax = w;
@@ -1541,7 +1544,7 @@ static const Vtx *terrain_depth(const Vtx *v, unsigned n, Vtx *out) {
      * the blocks' depths differ there (and a bare corner's fit from a real one's), pinholes in stereo.) */
     for (unsigned i = 0; i < n; i++) {
         out[i] = v[i];
-        float z = v[i].z;
+        float z = fabsf(v[i].z); /* (negative: a parallax depth (found by value), a depth all the same) */
         if (z <= 0) {
             if (!tf_ok) continue;
             float w = tf_a * (v[i].y - (float)gp0_state.area_y0) + tf_b;
@@ -1599,9 +1602,10 @@ static void fit_frame(void) {
 
 static const Vtx *ot_depth(const Vtx *v, unsigned n, Vtx *out, int w, int h) {
     if (psx_ot_entry < 0 || psx_ot_side) return v; /* (the UI's table: the screen plane) */
-    if (v[0].z < 0) return v; /* (a parallax depth given already: terrain_depth) */
     float s = (float)psx_ot_entry, z = 0;
-    for (unsigned i = 0; i < n; i++) z += v[i].z;
+    /* (a parallax depth (negative: terrain_depth's, or found by value) is a sample as a projected one is: the line and
+     * the convergence (zc_smooth) are fitted on them all, as before those were made parallax depths) */
+    for (unsigned i = 0; i < n; i++) z += fabsf(v[i].z);
     if (z > 0) { /* projected: a sample */
         z /= n;
         fit_n += 1; fit_s += s; fit_z += z; fit_ss += s * s; fit_sz += s * z;
@@ -1780,8 +1784,12 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (tex) for (int i = 0; i < n; i++) t[i].u += tex_ou, t[i].v += tex_ov; /* (its slot's place in the atlas) */
     /* depth for all its vertices or none: a vertex the GTE clamped (near the camera, or far off screen) has none, and
      * mixing w = 1 with w ~ Z would warp the texture across the polygon */
-    if (with_depth && with_depth < n)
-        for (int i = 0; i < n; i++) t[i].z = 0;
+    if (with_depth && with_depth < n) {
+        int bare = 0;
+        for (int i = 0; i < n; i++) bare += t[i].z == 0;
+        /* (with a corner of no depth: none at all, as before; with only parallax depths beside: the parallax kept) */
+        for (int i = 0; i < n; i++) t[i].z = bare ? 0 : -fabsf(t[i].z);
+    }
     /* The PS1 draws a quad as triangles (0,1,2) and (1,3,2), and skips a triangle 1024 or more wide or 512 or more
      * high on its own: of a quad reaching far off the screen, the half on it is still drawn. */
     static const u8 tri[2][3] = {{0, 1, 2}, {1, 3, 2}};
@@ -2142,13 +2150,13 @@ static const Vtx *model_weld(const Vtx *v, unsigned n, Vtx *out, int m) {
     float zs = 0, mz;
     int zc = 0;
     for (unsigned i = 0; i < n; i++)
-        if (v[i].z > 0) zs += v[i].z, zc++;
+        if (v[i].z != 0) zs += fabsf(v[i].z), zc++; /* (negative: for the parallax alone, a depth all the same) */
     if (zc) models[m - 1].zsum += zs / zc, models[m - 1].zn++;
     mz = zc ? zs / zc : models[m - 1].zn ? models[m - 1].zsum / models[m - 1].zn : models[m - 1].zlast;
     for (unsigned i = 0; i < n; i++) {
         out[i] = v[i];
-        if (out[i].z <= 0 && mz > 0) out[i].z = mz;
-        float z = out[i].z;
+        if (out[i].z == 0 && mz > 0) out[i].z = mz;
+        float z = fabsf(out[i].z), sign = out[i].z < 0 ? -1.0f : 1.0f;
         if (z <= 0) continue;
         int px = (int)floorf(v[i].x + 0.5f), py = (int)floorf(v[i].y + 0.5f);
         unsigned h = ((unsigned)px * 73856093u ^ (unsigned)py * 19349663u ^ (unsigned)m * 83492791u) & (MWELD_N - 1);
@@ -2161,7 +2169,7 @@ static const Vtx *model_weld(const Vtx *v, unsigned n, Vtx *out, int m) {
             if (mweld[h].x == px && mweld[h].y == py && mweld[h].m == m) {
                 float d = mweld[h].z - z;
                 if (d < 0) d = -d;
-                if (d * 20 <= z) out[i].z = mweld[h].z;
+                if (d * 20 <= z) out[i].z = sign * mweld[h].z;
                 break;
             }
         }
