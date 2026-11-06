@@ -58,11 +58,15 @@ typedef struct {
     float d;  /* a reordered run's primitive: its place in drawing order, as depth (run_flush); else 0 */
 } Vtx;
 
-#define VB_MAX (96 * 1024)
+/* (sizes from the peaks measured (Castle Station, a 24-bit movie field, Ifrit, the world map and a battle swirl, Burmecia's
+ * palace: at most 9150 vertices and 896 KB of staging a frame); past them a frame waits for the GPU and goes on. Larger,
+ * they took 8 MB of linear memory the texture cache needs: it stopped at 67 pages, and the palace's and South Gate's
+ * scenes, using more, converted pages again every frame (24-27 ms a frame on a 3DS) */
+#define VB_MAX (24 * 1024)
 static Vtx *vb;
 static unsigned vb_used, vb_flushed;
 
-#define STAGING_SIZE (3 * 1024 * 1024)
+#define STAGING_SIZE (1024 * 1024)
 static u8 *staging;
 static unsigned staging_used, staging_flushed;
 
