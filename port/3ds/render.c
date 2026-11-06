@@ -1447,6 +1447,7 @@ static inline u32 vcolor(const Gp0Mode *m, const Gp0Vtx *v) {
     return 0xFF000000u | (u32)v->b << 16 | (u32)v->g << 8 | (u32)v->r;
 }
 
+static int world_ground; /* (ctr_present: the world map is up) */
 static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
     o->x = (float)v->x;
     o->y = (float)v->y;
@@ -1456,10 +1457,12 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
     if (info) {
         o->x += (info & 0xFF) * (1.0f / 256);
         o->y += ((info >> 8) & 0xFF) * (1.0f / 256);
-        /* (found by value, the depth may be another vertex's that projected to the same pixel or an older frame's: for
-         * the parallax alone (negative), the texture mapped flat as the PS1 did. As a perspective, a wrong one warped
-         * the face's texture past its edge onto transparent texels: black gaps along the world map's ground) */
-        o->z = psx_depth_by_value ? -(float)(info >> 16) : (float)(info >> 16);
+        /* (on the world map, found by value, the depth may be another vertex's that projected to the same pixel (its
+         * ground reaches the horizon: many vertices per pixel) or an older frame's: for the parallax alone (negative),
+         * the texture mapped flat as the PS1 did. As a perspective, a wrong one warped the face's texture past its edge
+         * onto transparent texels: black gaps along the ground. Elsewhere (battles: their models' vertices staged and
+         * copied, found by value) the depth is right, and flat there broke the models: black boxes, smeared faces) */
+        o->z = psx_depth_by_value && world_ground ? -(float)(info >> 16) : (float)(info >> 16);
     }
     o->u = (float)v->u;
     o->v = (float)v->v;
@@ -2846,6 +2849,7 @@ void ctr_present(long frame) {
 #endif
     frames_drawn++;
     co_last = -1;
+    world_ground = port_game_mode() == 3;
     slot_regroup();
     extern unsigned int psx_depth_frame;
     psx_depth_frame++;
