@@ -7,6 +7,7 @@
  */
 #include "gte.h"
 #include "psyq_port.h"
+#include "psx_mem.h"
 
 #define RTPS 0x0180001
 #define RTPT 0x0280030
@@ -259,21 +260,23 @@ void PopMatrix(void) {
 
 /* ---- vector math ---------------------------------------------------------------------------------------- */
 
+/* PsyQ's own (psyq_80030824 SquareRoot0): the GTE's leading-zero count picks an even shift, the top bits index the
+ * 192-entry table at 0x8006BD34 (the main executable's data, in psx_ram), the entry shifted back: an approximation
+ * in the low bits, not the exact root. Exact, the walkmesh's slide (bgi_slide, bgi_pushOutOfEdges) gave a corner
+ * position a unit off the PS1's: an actor walking to a point past a wall stood still where the PS1's was pushed back
+ * a little, and the walk, ended by moving away from the point, never ended (Alexandria Castle, field 1207: Dagger
+ * backing away from Zorn and Thorn, the cutscene stalled) */
 long SquareRoot0(long a) {
-    unsigned long v = (unsigned long)a, r = 0, bit = 1UL << 30;
-    while (bit > v) {
-        bit >>= 2;
-    }
-    while (bit) {
-        if (v >= r + bit) {
-            v -= r + bit;
-            r = (r >> 1) + bit;
-        } else {
-            r >>= 1;
-        }
-        bit >>= 2;
-    }
-    return (long)r;
+    u32 v = (u32)a;
+    int lz = 0; /* (LZCR: leading bits equal to the sign) */
+    u32 t = (s32)v < 0 ? ~v : v;
+    while (lz < 32 && !(t & 0x80000000u)) t <<= 1, lz++;
+    if (lz == 32) return 0;
+    int even = lz & ~1, shift = (31 - even) >> 1;
+    s32 x = even - 24 >= 0 ? (s32)((u32)a << (even - 24)) : (s32)a >> (24 - even);
+    const s16 *table = (const s16 *)PSX_ADDR(0x8006BD34);
+    s32 e = table[x - 0x40];
+    return (long)((u32)(e << shift) >> 12);
 }
 
 static void normalize(const VECTOR *v0, s32 out[3], long long *len2) {
