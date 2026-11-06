@@ -2664,6 +2664,11 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
     layers[k].shown = 1;
     ctr_ui_nhands = layers[k].nhands;
     memcpy(ctr_ui_hands, layers[k].hands, sizeof ctr_ui_hands);
+    /* (the field's and the world map's bottom screen fades with the top: leaving a room it stayed lit as the scene
+     * went to black, and the next room's map showed before the scene faded in) */
+    int port_bottom_fade(void);
+    int dark = menu_state ? 0 : port_bottom_fade();
+    if (dark > 0) screen_dim(bottom_rt, 256 - (unsigned)dark);
 }
 
 static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy) {

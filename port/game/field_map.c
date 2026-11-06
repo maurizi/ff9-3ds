@@ -516,9 +516,7 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     }
     if (!bk.areas) return pkt;
     int pt = player_triangle(pl);
-    /* (the area changes when the player walks into another one, not onto an exit's triangles past the area: leaving,
-     * the map showed only the exit's own shading, a green patch flashing in as the screen faded) */
-    if (pt >= 0 && pt < bk.n && bk.in[pt] && !(bk.in[pt] >> bk.cur & 1) && !bk.exit[pt]) bk.cur = __builtin_ctz(bk.in[pt]);
+    if (pt >= 0 && pt < bk.n && bk.in[pt] && !(bk.in[pt] >> bk.cur & 1)) bk.cur = __builtin_ctz(bk.in[pt]);
     const int a = bk.cur;
     const u32 bit = 1u << a;
     int x0 = bk.x0[a], z0 = bk.z0[a], x1 = bk.x1[a], z1 = bk.z1[a];
