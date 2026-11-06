@@ -1167,7 +1167,10 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
         s->epoch[b] = tex_epoch;
         return;
     }
-    if (s->serial == frame_serial) gpu_sync(); /* drawn with earlier in this frame: those draws keep the old texels */
+    /* (drawn with earlier in this frame: those draws keep the old texels. Only a block already converted for this page:
+     * one converted for the first time was read by none of them, as a page met for the first time mid-frame (models
+     * walking in: on a 3DS with the cache full, each such block waited for the GPU, 10-15 waits a frame in Burmecia) */
+    if (s->serial == frame_serial && s->stamp[b]) gpu_sync();
     else if (gpu_busy && s->serial + 1 == frame_serial) frame_begin(); /* (the frame in flight's: it finishes first) */
     s->hash[b] = hsh;
     u32 clut[256];

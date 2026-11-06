@@ -266,11 +266,11 @@ maps: $(BUILD)/maps.bin
 $(BUILD)/discs.bin: tools/pack_discs.py
 	@echo "PACK $@"
 	@$(PYTHON) tools/pack_discs.py --img disks/us --out $@
-$(BUILD)/ff9-full.3dsx: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/discs.bin $(BUILD)/maps.bin
+$(BUILD)/ff9-full.3dsx: $(BUILD)/3ds/ff9ds.elf $(OUT_SMDH) $(BUILD)/discs.bin $(BUILD)/maps.bin
 	@echo "3DSX $@ (with the disc pack)"
 	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin \
 		&& ln -f $(BUILD)/maps.bin $(BUILD)/romfs/maps.bin
-	@3dsxtool $< $@ --smdh=$(BUILD)/ff9.smdh --romfs=$(BUILD)/romfs
+	@3dsxtool $< $@ --smdh=$(OUT_SMDH) --romfs=$(BUILD)/romfs # (a test build's name too: TEST_NAME)
 3ds-full: $(BUILD)/ff9-full.3dsx
 
 # --- PC host build -----------------------------------------------------------------------------------------
