@@ -1646,8 +1646,10 @@ static int zoom_factor;
 /* packets [shift_lo, shift_hi) of this frame moved by (shift_dx, shift_dy) on the bottom screen (port_bottom_shift) */
 static const u8 *shift_lo, *shift_hi;
 static int shift_dx, shift_dy;
+static unsigned shift_frame; /* (frames_drawn when set: the frame's packets are drawn then or at the next) */
 void port_bottom_shift(const void *lo, const void *hi, int dx, int dy) {
     shift_lo = lo, shift_hi = hi, shift_dx = dx, shift_dy = dy;
+    shift_frame = frames_drawn;
 }
 extern const u32 *psx_gpu_packet;
 static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, int bx1, int by1, C3D_Tex *tex,
@@ -1710,7 +1712,10 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
                 moved[i].x = 160 + (moved[i].x - zoom_cx) * zoom_factor,
                 moved[i].y = 112 + (moved[i].y - zoom_cy) * zoom_factor;
         int sdx = 0, sdy = 0; /* (a moved block: its vertices and its clip together) */
-        if ((const u8 *)psx_gpu_packet >= shift_lo && (const u8 *)psx_gpu_packet < shift_hi) sdx = shift_dx, sdy = shift_dy;
+        /* (only the frame's it was set for: left in force, a later frame's packets built there moved too, as a menu opened
+         * in Chocobo's Forest after its dialogue panels, its command list drawn shifted up) */
+        if ((const u8 *)psx_gpu_packet >= shift_lo && (const u8 *)psx_gpu_packet < shift_hi && frames_drawn - shift_frame <= 1)
+            sdx = shift_dx, sdy = shift_dy;
         for (unsigned i = 0; sdx | sdy ? i < n : 0; i++) moved[i].x += sdx, moved[i].y += sdy;
         v = moved;
         sc[0] = (u16)clampi(sc[0] - ox + sdx, 0, UI_W); sc[2] = (u16)clampi(sc[2] - ox + sdx, 0, UI_W);
