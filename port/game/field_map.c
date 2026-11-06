@@ -516,7 +516,9 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     }
     if (!bk.areas) return pkt;
     int pt = player_triangle(pl);
-    if (pt >= 0 && pt < bk.n && bk.in[pt] && !(bk.in[pt] >> bk.cur & 1)) bk.cur = __builtin_ctz(bk.in[pt]);
+    /* (the area changes when the player walks into another one, not onto an exit's triangles past the area: leaving,
+     * the map showed only the exit's own shading, a green patch flashing in as the screen faded) */
+    if (pt >= 0 && pt < bk.n && bk.in[pt] && !(bk.in[pt] >> bk.cur & 1) && !bk.exit[pt]) bk.cur = __builtin_ctz(bk.in[pt]);
     const int a = bk.cur;
     const u32 bit = 1u << a;
     int x0 = bk.x0[a], z0 = bk.z0[a], x1 = bk.x1[a], z1 = bk.z1[a];
@@ -640,6 +642,11 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     /* the player: an arrow from where he stands, the way he faces (rotY: 0 toward the camera, 1024 a quarter turn) */
     if (pl && (u8 *)(p + 5) <= pkt_end) {
         int px = MX(pl->pos.vx, pl->pos.vz), py = MY(pl->pos.vx, pl->pos.vz);
+        /* (inside the box: walking out past the area's edge, the arrow was drawn over the box's frame and below it) */
+        if (px < bx + 8) px = bx + 8;
+        if (px > bx + bw - 8) px = bx + bw - 8;
+        if (py < by + 8) py = by + 8;
+        if (py > by + bh - 8) py = by + bh - 8;
         int a = pl->pos.rotY & 0xFFF;
         int fx = -math_sin(a), fz = -math_cos(a); /* (the way he faces in the field, 4096 = 1; turned as the map) */
         int dx = RU(fx, fz), dy = -RV(fx, fz);
