@@ -231,7 +231,9 @@ static void draw_commands(void) {
     win_drawBox(&r_change, 4, 2);
 }
 
-static RECT r_list[5], r_desc = {6, 174, 232, 46}, r_back = {242, 174, 74, 46};
+/* (the description three lines high: some take three, "Amount of damage depends / on the number of frogs / you have
+ * caught", Frog Drop's; the screen ends at 240) */
+static RECT r_list[5], r_desc = {6, 174, 232, 62}, r_back = {242, 174, 74, 62};
 static int list_shown, list_n, list_entry[5]; /* (the list entry each row shows) */
 s32 o0b_btlui_getListHelpText(void);
 s32 o0b_btlui_getAbilityState(s32);

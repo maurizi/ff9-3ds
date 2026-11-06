@@ -189,9 +189,13 @@ static int item_view(int id, u8 *help) {
         }
         int same = 0;
         for (int s = 0; s < 5; s++) same |= c->equip[s] == id;
-        if (same) ui_drawLabel(70, y + 18, 2, (s32)"EQUIPPED", 1);
-        else if (!changes(70, y + 18, c, slot, id, 4)) ui_drawLabel(70, y + 18, 2, (s32)"NO CHANGE", 2);
-        teaches(70, y + 29, 380, c, id);
+        /* (rows closer than three lines (a long description: Cachusha's four): the abilities beside the name, the
+         * changes under it; else under each other, the abilities ran into the next member's row) */
+        int compact = step < 42, ly = compact ? y + 15 : y + 18;
+        if (same) ui_drawLabel(70, ly, 2, (s32)"EQUIPPED", 1);
+        else if (!changes(70, ly, c, slot, id, 4)) ui_drawLabel(70, ly, 2, (s32)"NO CHANGE", 2);
+        if (compact) teaches(70 + text_measure(c->name).w + 16, y, 380, c, id);
+        else teaches(70, y + 29, 380, c, id);
     }
     win_drawBox(&box, 5, 2);
     return 1;

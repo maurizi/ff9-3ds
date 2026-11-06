@@ -735,12 +735,18 @@ static void draw(void) {
     /* the header: where, and since when and with what */
     if ((field_ready || g_gameState->mode != 1) && ram_ok(g->locationName, 1) && *g->locationName != 0xFF)
         text_drawBlock(r_head.x + 8, r_head.y + 6, 2, g->locationName, 0);
-    ui_drawSprite(r_head.x + 178, r_head.y + 8, 2, 0xB1, 0);
-    ui_drawSmallDigits(r_head.x + 191, r_head.y + 9, 2, buf, text_formatTime(game_getPlayTime(), buf, 1));
-    ui_drawSprite(r_head.x + 236, r_head.y + 8, 2, 0xB2, 0);
-    text_formatNumber(g->gil, buf, 7, 1);
+    /* (placed from the right by their widths: the gil against the box's edge, its icon, the time before it. At fixed
+     * places the gil icon was drawn over the seconds) */
+    text_formatNumber(g->gil, buf, -1, 1);
     strcat((char *)buf, (const char *)gil_suffix);
-    ui_drawSmallDigits(r_head.x + 249, r_head.y + 9, 2, buf, 0);
+    int gx = r_head.x + r_head.w - 8 - text_measureDigits(buf);
+    ui_drawSmallDigits(gx, r_head.y + 9, 2, buf, 0);
+    ui_drawSprite(gx - 13, r_head.y + 8, 2, 0xB2, 0);
+    int tcol = text_formatTime(game_getPlayTime(), buf, 1);
+    int tx = gx - 13 - 10 - text_measureDigits(buf);
+    if (tx > r_head.x + 191) tx = r_head.x + 191; /* (where it always was, with the gil short) */
+    ui_drawSmallDigits(tx, r_head.y + 9, 2, buf, tcol);
+    ui_drawSprite(tx - 13, r_head.y + 8, 2, 0xB1, 0);
     win_drawBox(&r_head, 3, 2);
 
     if (!draw_choices() && log_on) opts_on ? draw_options() : draw_log();
