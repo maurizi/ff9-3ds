@@ -2752,7 +2752,9 @@ void ctr_present(long frame) {
         static int settled; /* (presents since the fade was done: the displayed buffer was drawn a frame or two before) */
         settled = closing && !port_fade_busy() ? settled + 1 : 0;
         if (closing && (menu_state || (closing > UNDIM_FRAMES && settled > 3) || closing > 180)) closing = 0;
-        if (!menu_state && w >= 256 && !ctr_freeze_held && !closing) { /* (held: the battle's exit fade, battle_ui.c) */
+        int port_window_closing(void);
+        if (!menu_state && w >= 256 && !ctr_freeze_held && !closing && !(have_freeze && port_window_closing())) {
+            /* (held: the battle's exit fade, battle_ui.c; a window shrinking: ui_split.c) */
             for (int eye = 0; eye < 2; eye++) {
                 C3D_FrameDrawOn(freeze_rt[eye]);
                 set_proj_ortho(UI_W, UI_H, 0.0f);

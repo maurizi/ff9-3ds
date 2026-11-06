@@ -121,6 +121,14 @@ int port_menu_state(void) {
     return (g->flags & GD_HIDE_ALL) == GD_HIDE_ALL ? 2 : 1; /* (events hide parts of the scene by these flags too) */
 }
 
+/* a window is closing (a speech bubble shrinking away): render.c keeps the scene it holds for a menu's top screen as it
+ * was before, the bubble whole (a menu opened by a talk showed the bubble half shrunk, its text cut: "der.") */
+int port_window_closing(void) {
+    for (int i = 0; i < 10; i++)
+        if (g_windows[i].state == WIN_STATE_CLOSING) return 1;
+    return 0;
+}
+
 /* the game's screen fade is running (render.c: a closed menu's paused scene kept on the top meanwhile) */
 int port_fade_busy(void) {
     return fade_isActive();

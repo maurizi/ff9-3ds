@@ -500,6 +500,10 @@ int port_menu_top_draw(void) {
         const u8 *help = s_shopItemHelp;
         int id = -1;
         if (!sh[3]) return 0; /* (the shop's own menu, no mode running) */
+        /* (only once the shop is up: while its menu fades in, s_shop is still the previous shop's (a mode running, its
+         * item lists), and the panel showed a stale item with garbage for its description, the first time a shopkeeper
+         * is talked to: South Gate's rest stop) */
+        if (g_menu.state != 3 || fade_isBusy()) return 0;
         if (sh[0] == 2) { /* synthesis: inline 6-byte recipes, the product at +4 */
             const u8 *sy = s_shopSynth;
             MenuList *L = (MenuList *)(sy + 0x28);
@@ -536,7 +540,8 @@ void help_onDraw(void);
 int port_item_top_describes(void);
 static int top_describes(void) {
     if (port_menu_state() != 2) return 0;
-    if (g_menu.type == 2) return s_shop[3] != 0; /* (a shop's buy / sell / synthesis list: port_menu_top_draw's item panel) */
+    if (g_menu.type == 2) return s_shop[3] != 0 && g_menu.state == 3 && !fade_isBusy(); /* (a shop's buy / sell / synthesis list:
+                                                                                      * port_menu_top_draw's item panel) */
     if (g_menu.type != 0 || !g_menuScreen.active) return 0;
     if (g_menuScreen.screen == 1) return port_item_top_describes();
     if (g_menuScreen.screen == 2) return s_menuAbility[1] == 2; /* (ABILITY_STATE_LIST) */
