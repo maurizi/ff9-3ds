@@ -945,7 +945,7 @@ __attribute__((weak)) void ctr_top_ui(unsigned *head, const void *buf, unsigned 
 __attribute__((weak)) void ctr_hud_draw_top(int slot, int x, int y, int w, int h, int dw, int dh) {
     (void)slot; (void)x; (void)y; (void)w; (void)h; (void)dw; (void)dh;
 }
-#define TOP_WORDS 0x2000
+#define TOP_WORDS 0x8000 /* (a shop's top view takes 37 KB: South Gate's rest stop, disc 2, overran 0x2000 words) */
 static u32 top_mem[OTN + TOP_WORDS];
 
 static void big_portrait(int slot, Character *c, int x, int y, int size) {
