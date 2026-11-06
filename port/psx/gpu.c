@@ -126,6 +126,18 @@ static void vram_fill(int x, int y, int w, int h, u16 c) {
     }
 }
 
+/* psx_vram_read / psx_vram_touch over a rectangle that may wrap past VRAM's right or bottom edge (a copy's coordinates
+ * wrap as the PS1's do): in up to four pieces. The renderer's cells clamp instead: Silent Voice copies a square from
+ * y -24 (488 and on, then 0 and on), and only its 24 rows at the bottom were read back from the GPU's frame: the rest
+ * of the copy was stale, a black disc */
+static void vram_wrapped(void (*fn)(int, int, int, int), int x, int y, int w, int h) {
+    x &= VRAM_W - 1, y &= VRAM_H - 1;
+    int w0 = x + w > VRAM_W ? VRAM_W - x : w, h0 = y + h > VRAM_H ? VRAM_H - y : h;
+    fn(x, y, w0, h0);
+    if (w0 < w) fn(0, y, w - w0, h0);
+    if (h0 < h) fn(x, 0, w0, h - h0);
+    if (w0 < w && h0 < h) fn(0, 0, w - w0, h - h0);
+}
 static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
     if (!psx_vram || w <= 0 || h <= 0) {
         return;
@@ -137,10 +149,10 @@ static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
     if (!gp0_state.set_mask && !((sx ^ dx) & 1023) && !((sy ^ dy) & 511)) return;
     const int check_mask=gp0_state.check_mask;
     const u16 set_mask=gp0_state.set_mask?0x8000:0;
-    psx_vram_read(sx, sy, w, h);
+    vram_wrapped(psx_vram_read, sx, sy, w, h);
     if (check_mask && (((sx ^ dx) & 1023) || ((sy ^ dy) & 511)))
-        psx_vram_read(dx, dy, w, h);
-    psx_vram_touch(dx, dy, w, h);
+        vram_wrapped(psx_vram_read, dx, dy, w, h);
+    vram_wrapped(psx_vram_touch, dx, dy, w, h);
     psx_vram_generation++;
     psx_raster_rows_written(dy, h);
     psx_display_written(dx, dy, w, h);
