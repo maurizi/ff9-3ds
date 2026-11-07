@@ -208,8 +208,14 @@ int port_rewards_live_step(void) {
     prev = held;
     s_rewards.primBufs[0] = s_rewards.primBufs[1] = live_text[cur]; /* (its text in the buffer paired with this table:
        * picked by the battle UI's buffer index, a later step could rewrite packets an earlier table still links) */
+    /* (with the UI mode the rewards screen has on the PS1 (rewards_init's gfx_setUiMode(0)), not the battle's: in the
+     * battle UI's mode 2 a closing window waits for the battle UI to reap it, which no longer runs, and a learned
+     * ability's box stayed up showing the next, empty, slot: "Void" (a 3DS photo)) */
+    u8 saved_mode = g_drawBufs.uiMode;
+    g_drawBufs.uiMode = 0;
     int more = o65_rewards_update_game();
     game_updateWindows();
+    g_drawBufs.uiMode = saved_mode;
     u32 *env = (u32 *)g_primPtr; /* (added last at OT_LAST: drawn first) */
     env[0] = 6u << 24;
     env[1] = 0xE3000000u;
