@@ -2758,7 +2758,11 @@ void ctr_present(long frame) {
         settled = closing && !port_fade_busy() ? settled + 1 : 0;
         if (closing && (menu_state || (closing > UNDIM_FRAMES && settled > 3) || closing > 180)) closing = 0;
         int port_window_closing(void);
-        if (!menu_state && w >= 256 && !ctr_freeze_held && !closing && !(have_freeze && port_window_closing())) {
+        static int unsettled; /* (frames the snapshot was held for a window animating: at most 30, a window kept small
+                                * for good would otherwise hold an old scene) */
+        int hold = have_freeze && port_window_closing() && unsettled < 30;
+        unsettled = hold ? unsettled + 1 : 0;
+        if (!menu_state && w >= 256 && !ctr_freeze_held && !closing && !hold) {
             /* (held: the battle's exit fade, battle_ui.c; a window shrinking: ui_split.c) */
             for (int eye = 0; eye < 2; eye++) {
                 C3D_FrameDrawOn(freeze_rt[eye]);

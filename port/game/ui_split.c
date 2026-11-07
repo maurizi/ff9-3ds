@@ -124,8 +124,13 @@ int port_menu_state(void) {
 /* a window is closing (a speech bubble shrinking away): render.c keeps the scene it holds for a menu's top screen as it
  * was before, the bubble whole (a menu opened by a talk showed the bubble half shrunk, its text cut: "der.") */
 int port_window_closing(void) {
-    for (int i = 0; i < 10; i++)
-        if (g_windows[i].state == WIN_STATE_CLOSING) return 1;
+    for (int i = 0; i < 10; i++) {
+        const Window *w = &g_windows[i];
+        if (w->state == WIN_STATE_CLOSING || w->state == WIN_STATE_OPENING) return 1;
+        /* (any not yet at its size: a question's box shrinking as its answer is taken ("on't buy") before its state
+         * says so) */
+        if (w->state != WIN_STATE_CLOSED && w->visible && (w->cur.w < w->w || w->cur.h < w->h)) return 1;
+    }
     return 0;
 }
 
