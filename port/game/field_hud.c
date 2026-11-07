@@ -71,19 +71,6 @@ static int cards_pending; /* frames left to wait for the main menu to open onto 
 
 /* an Active Time Event can be watched now (the field script's byte b[0xEE]: decomp-requests R30). (By symbol: a PS1
  * address isn't one in port code; an emulator reads unmapped memory as 0, a 3DS faults.) */
-/* the Moogle the player would talk to (evt_findNearestObject's talk search, as Cross: ff9-decomp R34), NULL none */
-static EvtObject *mognet;
-static EvtObject *moogle_near(void) {
-    if (!ram_ok(g_evtState, 0x20) || !g_evtState->controlEnabled) return NULL;
-    EvtObject *pl = NULL;
-    int guard = 0;
-    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next)
-        if (ram_ok(nd->obj, sizeof(EvtObject)) && nd->obj->kind == 4 && nd->obj->uid == g_evtState->playerUid) pl = nd->obj;
-    if (!pl) return NULL;
-    EvtObject *o = evt_findNearestObject(pl, 4, NULL);
-    return ram_ok(o, sizeof *o) && o->kind == 4 && (o->modelId == 220 || o->modelId == 129) ? o : NULL;
-}
-
 /* the PS1's "PRESS [SELECT] TO SEE ATE" prompt is up (the field's init sets it; a field change turns it off) and the
  * Select handler is armed. Gs8[0xEE] alone outlives the field: a field with no ATE menu (611 L. Castle/Guest Room)
  * keeps the town's 1 and no handler */
@@ -246,7 +233,6 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         if (field_open_menu()) cards_pending = 90; /* (the menu, then the card screen: cards_step) */
         return -1;
     }
-    if (mognet && !ate_shown && inside(&r_ate, x, y)) { evt_callObjectFunc(mognet, 1, 3, 0); return -1; } /* (talk) */
     if (ate_shown && inside(&r_ate, x, y) && max > 0) { seq[0] = 0x0001; return 1; } /* select */
     if (inside(&r_log, x, y)) { log_on = !log_on; log_scroll = 0; opts_on = 0; return -1; }
     if (log_on && !opts_on && inside(&r_optbtn, x, y)) { opts_on = 1; return -1; }
@@ -774,15 +760,6 @@ static void draw(void) {
         button(&r_log, log_on ? mapl : logl, NULL);
     }
     ate_shown = ate_available();
-    mognet = ate_shown ? NULL : moogle_near();
-    if (mognet) { /* (at a Moogle: its menu, as talking to it; the letters carried) */
-        u8 n[4] = {0};
-        int carried = 0;
-        for (int k = 0; k < 3; k++) carried += g_evtGlobalVars.b[0x40A + 4 * k] != 0;
-        if (carried) text_formatNumber(carried, n, 1, 1);
-        static const u8 mognetl[] = "MOGNET";
-        button(&r_ate, mognetl, carried ? n : NULL);
-    }
     if (ate_shown) { /* (pulsing, as the PS1's prompt) */
         static const u8 ate[] = "ATE";
         static int t;
