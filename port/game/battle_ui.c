@@ -233,7 +233,9 @@ static void draw_commands(void) {
 
 /* (the description three lines high: some take three, "Amount of damage depends / on the number of frogs / you have
  * caught", Frog Drop's; the screen ends at 240) */
-static RECT r_list[5], r_desc = {6, 174, 232, 62}, r_back = {242, 174, 74, 62};
+/* (the list screen within the frame's lines, which is all the bottom screen shows of the layer (218 in a battle): the help
+ * box at 174..236 had its third line and lower edge cut off. Rows and the party from 24, the help box 154..215) */
+static RECT r_list[5], r_desc = {6, 154, 232, 62}, r_back = {242, 154, 74, 62};
 static int list_shown, list_n, list_entry[5]; /* (the list entry each row shows) */
 s32 o0b_btlui_getListHelpText(void);
 s32 o0b_btlui_getAbilityState(s32);
@@ -278,7 +280,7 @@ static int draw_list(void) {
     for (int i = 0; i < vis && first + i < n; i++) {
         RECT *r = &r_list[i];
         int e = list_entry[i] = idx[first + i];
-        r->x = 6; r->y = 40 + i * 26; r->w = 202; r->h = 24;
+        r->x = 6; r->y = 24 + i * 26; r->w = 202; r->h = 24;
         list_n = i + 1;
         w->cur.x = r->x + 4;
         w->cur.y = r->y + 5;
@@ -288,13 +290,13 @@ static int draw_list(void) {
     }
     w->cur = saved;
     u8 *help = (u8 *)o0b_btlui_getListHelpText();
-    if (help) text_drawBlock(r_desc.x + 8, r_desc.y + 5, 2, help, 0);
+    if (help) text_drawBlock(r_desc.x + 8, r_desc.y + 5, 2, help, TEXT_PAL_HELP); /* (the PS1's: its keywords' codes go back to it) */
     win_drawBox(&r_desc, 4, 2);
     int bw = ui_measureLabel((u8 *)back);
     ui_drawLabel(r_back.x + (r_back.w - bw) / 2, r_back.y + 9, 2, (s32)back, 0);
     win_drawBox(&r_back, 4, 2);
     /* the party, compact */
-    RECT rp = {212, 40, 104, 128};
+    RECT rp = {212, 24, 104, 128};
     u8 a[8];
     for (int i = 0; i < 4; i++) {
         BtlUnit *u = card_unit[i] = party_unit(i);
