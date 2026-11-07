@@ -3026,7 +3026,10 @@ static int top_queue(int stereo) {
     int b = 0;
     while (b == top_shown || b == top_presented) b++;
     /* (the drawing first: its command list flushed from the CPU's data cache, as frame_end's is. Without the flag the
-     * 3DS's GPU read stale memory as commands and hung at the third frame; Azahar has no cache, so it ran there) */
+     * 3DS's GPU read stale memory as commands and hung at the third frame; Azahar has no cache, so it ran there). And what
+     * the frame drew with, flushed before it starts as frame_end's flush would: else the GPU read vertices and texture
+     * blocks written this frame from stale memory (a menu's top panels on the world map without their body) */
+    flush_pending();
     C3D_FrameSplit(GX_CMDLIST_FLUSH);
     for (int eye = 0; eye < (stereo ? 2 : 1); eye++)
         GX_DisplayTransfer((u32 *)top_rt[eye]->frameBuf.colorBuf, GX_BUFFER_DIM(240, 400),
