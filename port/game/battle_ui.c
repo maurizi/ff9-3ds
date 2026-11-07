@@ -343,14 +343,19 @@ static int draw_targets(void) {
             static const u8 hpl[] = "HP", mpl[] = "MP";
             u8 a[8];
             text_drawBlock(r->x + 12, r->y + 4, 2, (u8 *)o0b_btl_getUnitName(u), ko ? 2 : 0);
+            /* (the game's two status icon tables, the ailments (Petrify, Poison, ...) and the boons (Protect, Shell,
+             * Haste, Regen, Reflect, ...), as many as fit after the name. The PS1's window beside a target shows the
+             * list the ability names (g_btlTarget.listKind: 1 HP, 2 MP, 3 ailments, 4 boons): Esuna or a Soft by the
+             * ailments, Protect by the boons first) */
             u32 st = u->status | u->autoStatus;
-            int ix = r->x + 84;
-            for (int k = 0, n = 0; k < 16 && n < 5; k++)
-                if (st & g_btluiStatusIcons[k].status) {
-                    ui_drawSprite(ix, r->y + 5, 2, g_btluiStatusIcons[k].icon, 0);
-                    ix += 12;
-                    n++;
-                }
+            int ix = r->x + 12 + text_measure((u8 *)o0b_btl_getUnitName(u)).w + 6, boons_first = g_btlTarget.listKind == 4;
+            for (int j = 0; j < 24 && ix + 12 <= r->x + r->w - 4; j++) {
+                int k = boons_first ? (j + 16) % 24 : j;
+                const Unk800F8F98 *e = k < 16 ? &g_btluiStatusIcons[k] : &g_btluiStatusIcons2[k - 16];
+                if (!(st & e->status)) continue;
+                ui_drawSprite(ix, r->y + 5, 2, e->icon, 0);
+                ix += 12;
+            }
             ui_drawLabel(r->x + 12, r->y + 19, 2, (s32)hpl, 0);
             text_formatNumber(u->hp, a, 4, 1);
             ui_drawSmallDigits(r->x + 26, r->y + 20, 2, a, ko || u->max->maxHp / 6 >= u->hp ? 2 : 0);
