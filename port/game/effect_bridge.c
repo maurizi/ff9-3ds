@@ -41,3 +41,19 @@ u32 port_effect_call(u32 target,u32 a0,u32 a1,u32 a2,u32 a3,u32 a4) {
     u32 arguments[5]={a0,a1,a2,a3,a4};
     return port_effect_call_words(target,arguments,5);
 }
+
+/* btlfx_drawBgOffscreen's saved environment (decomp F41): the game copies a DRAWENV from &g_btlfxEnv->drawEnv, the
+ * pointer itself and what follows it, not the environment it points to. On the PS1 those words are PS1 addresses
+ * (0x80xxxxxx: a negative clip y and height, so PutDrawEnv's background TILE draws nothing); here they are native
+ * addresses into psx_ram, which made a valid rectangle: Demi's (Kuja's) restore filled VRAM x 200-1023, y 145-290
+ * yellow, over the models' textures, and left a blue disc. The same bytes, each word that points into psx_ram given
+ * as its PS1 address. */
+void port_btlfx_prev_env(void *dst, const void *src) {
+    _Static_assert(sizeof(DRAWENV) == 0x5C, "DRAWENV");
+    u32 w[sizeof(DRAWENV) / 4];
+    __builtin_memcpy(w, src, sizeof w);
+    for (unsigned i = 0; i < sizeof w / 4; i++)
+        if (w[i] >= (u32)(uintptr_t)psx_ram && w[i] < (u32)(uintptr_t)psx_ram + PSX_RAM_SIZE)
+            w[i] = 0x80000000u | (w[i] - (u32)(uintptr_t)psx_ram);
+    __builtin_memcpy(dst, w, sizeof w);
+}

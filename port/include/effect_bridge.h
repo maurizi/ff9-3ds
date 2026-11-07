@@ -5,4 +5,5 @@ unsigned int port_effect_call(unsigned int target, unsigned int a0, unsigned int
 unsigned int port_effect_data(unsigned int address);
 unsigned int port_effect_call_words(unsigned int target, const unsigned int *arguments,
                                     unsigned int count);
+void port_btlfx_prev_env(void *dst, const void *src);
 #endif

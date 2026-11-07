@@ -989,3 +989,13 @@ and no Select handler (its two `NEW_CODE` objects animate BG layers 0xC and 0xD)
 field's 1 there while the prompt is off. A player's save at story 3120 with Baku and His Crew available (mask 8)
 gets no menu in 611. The port's ATE button now follows `g_atePromptMode` as well. Asked: drop 611 from the menu
 field lists (or name the story range where it has one) and note that `Gs8[0xEE]` outlives the field.
+
+### F41 (2026-11-07). btlfx_drawBgOffscreen saves the pointer's bytes as its DRAWENV
+`envs->prev = *(DRAWENV *)&g_btlfxEnv->drawEnv;` (src/ovl_0b/btlfx_op.c) copies 0x5C bytes from the pointer field
+itself (drawEnv, ot, prim, otZ, camera, workBuf, then what follows the struct), not the environment it points to, and
+`PutDrawEnv(&envs->prev)` restores that. On the PS1 the words are 0x80xxxxxx addresses (clip y and height negative:
+the background TILE draws nothing); in a native build they are host addresses and the garbage can be a valid
+rectangle (the 3DS: Kuja's Demi filled VRAM x 200-1023, y 145-290 with 168,152,0 over the battle's model textures).
+The port rebuilds the PS1 bytes (config/patches.txt, port_btlfx_prev_env). Asked: say in the source that the copy is
+the original's (as the MIPS has it) and what the PS1's words make of it, ideally as an explicit expression of those
+words, so a port need not rely on the layout around the pointer.
