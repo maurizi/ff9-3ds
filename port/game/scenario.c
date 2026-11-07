@@ -15,6 +15,7 @@ s32 chr_resetToLevel(s32,s32,u8);
 static struct {
     int blackjack; /* blackjack=1 with field_exit=4: the ending's movie skipped and The End's code taken (blackjack_ui.c) */
     int talk_uid,talk_after,talk_auction; /* talk=UID[,FRAMES]: talk to that object once the player has control (decomp R40) */
+    int talk_tag; /* talk=UID,FRAMES,TAG: its function TAG instead of its talk (3), e.g. a menu the talk reaches only on foot */
     int place_uid,place_x,place_z,place_dir,place_set; /* place=UID,X,Z,DIR8: the object put there first (as op 1D) */
     int quina; /* quina=1: character record 5 joins as Quina (the game's PARTY_JOIN 05 01 05 05 05, decomp R40) */
     int chocograph; /* GameData.chocograph (1-24, 0 none): the one the chocobo digs for (not an event byte, decomp R37) */
@@ -61,7 +62,7 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"world")) {scenario.world=number(eq,0,65535);scenario.world_explicit=1;}
         else if(!__builtin_strcmp(s,"chocograph")) scenario.chocograph=number(eq,0,24);
         else if(!__builtin_strcmp(s,"blackjack")) scenario.blackjack=number(eq,0,1);
-        else if(!__builtin_strcmp(s,"talk")) { char *c=__builtin_strchr(eq,','); if(c) *c=0,scenario.talk_after=number(c+1,0,100000); scenario.talk_uid=number(eq,1,255); }
+        else if(!__builtin_strcmp(s,"talk")) { char *c=__builtin_strchr(eq,','); if(c) { char *t=__builtin_strchr(c+1,','); if(t) *t=0,scenario.talk_tag=number(t+1,0,255); *c=0,scenario.talk_after=number(c+1,0,100000); } scenario.talk_uid=number(eq,1,255); }
         else if(!__builtin_strcmp(s,"talk_auction")) scenario.talk_auction=number(eq,0,1);
         else if(!__builtin_strcmp(s,"quina")) scenario.quina=number(eq,0,1);
         else if(!__builtin_strcmp(s,"place")) {
@@ -407,7 +408,7 @@ void port_scenario_object_step(void) {
     }
     EvtObject *o=evt_getObject(scenario.talk_uid);
     if(!o) return;
-    evt_callObjectFunc(o,1,3,0);
+    evt_callObjectFunc(o,1,scenario.talk_tag?scenario.talk_tag:3,0);
     done_talk=1;
     port_log("scenario: talked to uid %d\n",scenario.talk_uid);
 }
