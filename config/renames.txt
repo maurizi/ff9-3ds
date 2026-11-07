@@ -69,3 +69,5 @@ src/main/menu game_updateFade game_updateFade_game
 src/ovl_65/battle_end o65_battleEnd_unloadDb o65_battleEnd_unloadDb_game
 src/ovl_0b/btlcam_o1 o0b_btlcam_update o0b_btlcam_update_game
 src/ovl_0b/btlui o0b_btlui_isPauseRequested o0b_btlui_isPauseRequested_game
+# The event timer: drawn on the top screen, over the paused scene, while a menu is up (port/game/field_hud.c).
+src/main/tu_800236C4 game_updateTimer game_updateTimer_game

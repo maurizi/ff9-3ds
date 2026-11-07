@@ -1057,6 +1057,50 @@ static int top_draw(void) {
     return port_help_top_draw() | views; /* (drawn after: in front) */
 }
 
+/* The event timer (an escape's countdown): the game draws it into its frame each VBlank (timer_draw, wrapped:
+ * config/renames.txt). While a menu is up the frame is the menu, on the bottom screen, and the top keeps the scene as
+ * it was, dimmed, its timer stopped in it: then it is drawn on the top instead, over the scene where the scene shows
+ * it (the display's offset on the top screen), counting and undimmed, and not on the bottom (game_updateTimer, its
+ * entry from outside, wrapped: timer_update's own call to timer_draw is inside their object). */
+void game_updateTimer_game(void);
+void game_updateTimer(void) {
+    if (!(port_menu_state() == 1 || port_menu_state() == 2)) {
+        game_updateTimer_game();
+        return;
+    }
+    g_clock.pktPtr = &g_clock.pkt[g_gameState->gameData->drawBuf << 9]; /* (timer_update's, less the drawing) */
+    game_tickClock();
+}
+static int top_timer(u32 *ot) {
+    if (!(port_menu_state() == 1 || port_menu_state() == 2) || !timer_isEnabled()) return 0;
+    PsxDisplayInfo d;
+    psx_gpu_display_info(&d);
+    int ox = (400 - (d.w > 400 ? 400 : d.w)) / 2, oy = (240 - (d.h > 240 ? 240 : d.h)) / 2;
+    GameData *g = g_gameState->gameData;
+    u32 *saved_ot = g->ot[g->drawBuf];
+    u8 *saved_pkt = g_clock.pktPtr;
+    u32 *p = (u32 *)g_primPtr;
+    p[0] = 1u << 24; p[1] = 0xE5000000u; /* (offset back to 0 after it: drawn last, so linked first) */
+    addPrim(&ot[1], p);
+    p += 2;
+    g->ot[g->drawBuf] = ot; /* (timer_draw links at ot[drawBuf] + 1) */
+    g_clock.pktPtr = (u8 *)p;
+    timer_draw();
+    p += 0x200 / 4; /* (its packets: within the 0x200 bytes the game gives it a frame; it keeps its cursor local) */
+    g->ot[g->drawBuf] = saved_ot;
+    g_clock.pktPtr = saved_pkt;
+    /* an opaque box under it: the scene's own timer, stopped and dimmed, doesn't show through its translucent one */
+    p[0] = 3u << 24; p[1] = 0x60000000u; p[2] = (u32)(g_timerRect.x + 2) | (u32)(g_timerRect.y + 2) << 16;
+    p[3] = (u32)(g_timerRect.w - 4) | (u32)(g_timerRect.h - 4) << 16;
+    addPrim(&ot[1], p);
+    p += 4;
+    p[0] = 1u << 24; p[1] = 0xE5000000u | ((u32)ox & 0x7FF) | ((u32)oy & 0x7FF) << 11; /* (drawn first) */
+    addPrim(&ot[1], p);
+    p += 2;
+    g_primPtr = (u8 *)p;
+    return 1;
+}
+
 static void top_hud(void) {
     u32 *ot = top_mem;
     ClearOTagR(ot, OTN);
@@ -1071,6 +1115,7 @@ static void top_hud(void) {
     g_ot = ot;
     g_primPtr = (u8 *)(p + 4);
     int drew = top_draw();
+    drew |= top_timer(ot);
     unsigned used = (unsigned)(g_primPtr - (u8 *)top_mem);
     g_ot = saved_ot;
     g_primPtr = saved_prim;
