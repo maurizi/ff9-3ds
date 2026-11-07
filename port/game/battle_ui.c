@@ -233,6 +233,24 @@ static void draw_commands(void) {
 
 /* (the description three lines high: some take three, "Amount of damage depends / on the number of frogs / you have
  * caught", Frog Drop's; the screen ends at 240) */
+/* The help text in white, its keywords red: the PS1's pale blue help palette (TEXT_PAL_HELP), which its keywords' codes
+ * go back to, is hard to read on the bottom screen's boxes. A copy with those codes made white */
+static u8 *help_white(u8 *text) {
+    static u8 buf[512];
+    unsigned n = 0;
+    while (n < sizeof buf - 1 && text[n] != TEXT_END) {
+        buf[n] = text[n];
+        if (text[n] == TEXT_ESC && n + 1 < sizeof buf - 1 && text[n + 1] != TEXT_END) {
+            u8 c = text[++n];
+            buf[n] = c == TEXT_COLOR + TEXT_PAL_HELP ? TEXT_COLOR + TEXT_PAL_WHITE : c;
+            if ((c == TEXT_ARG_SPRITE || c == TEXT_ARG_ITEM_ICON) && n + 1 < sizeof buf - 1 && text[n + 1] != TEXT_END)
+                n++, buf[n] = text[n];
+        }
+        n++;
+    }
+    buf[n] = TEXT_END;
+    return buf;
+}
 /* (the list screen within the frame's lines, which is all the bottom screen shows of the layer (218 in a battle): the help
  * box at 174..236 had its third line and lower edge cut off. Rows and the party from 24, the help box 154..215) */
 static RECT r_list[5], r_desc = {6, 154, 232, 62}, r_back = {242, 154, 74, 62};
@@ -290,7 +308,7 @@ static int draw_list(void) {
     }
     w->cur = saved;
     u8 *help = (u8 *)o0b_btlui_getListHelpText();
-    if (help) text_drawBlock(r_desc.x + 8, r_desc.y + 5, 2, help, TEXT_PAL_HELP); /* (the PS1's: its keywords' codes go back to it) */
+    if (help) text_drawBlock(r_desc.x + 8, r_desc.y + 5, 2, help_white(help), TEXT_PAL_WHITE);
     win_drawBox(&r_desc, 4, 2);
     int bw = ui_measureLabel((u8 *)back);
     ui_drawLabel(r_back.x + (r_back.w - bw) / 2, r_back.y + 9, 2, (s32)back, 0);
