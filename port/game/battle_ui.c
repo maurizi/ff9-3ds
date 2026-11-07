@@ -328,21 +328,36 @@ static int draw_targets(void) {
     int ne = 0, np = 0;
     n_tgt = 0;
     ui_drawLabel(8, 37, 2, (s32)enemy, 0);
-    ui_drawLabel(214, 37, 2, (s32)party, 0);
+    ui_drawLabel(154, 37, 2, (s32)party, 0);
     for (BtlUnit *u = g_gameState->gameData->ctx.battle->unitList; u && n_tgt < 12; u = u->next) {
         if (!(u->flags >> 28 & 1)) continue;
         int is_party = u->flags & 1;
         RECT *r = &r_tgt[n_tgt];
-        if (is_party) { if (np == 5) continue; r->x = 212; r->y = 42 + np * 30; r->w = 104; r->h = 26; np++; }
-        else { if (ne == 5) continue; r->x = 6; r->y = 42 + ne * 30; r->w = 200; r->h = 26; ne++; }
+        /* (party rows as the PS1's party window, which stays up while one targets: name and status icons, HP and MP
+         * under them (an Ether's target by its MP, a Remedy's by its statuses); enemies by name, as the PS1) */
+        if (is_party) { if (np == 4) continue; r->x = 152; r->y = 42 + np * 36; r->w = 164; r->h = 34; np++; }
+        else { if (ne == 5) continue; r->x = 6; r->y = 42 + ne * 30; r->w = 142; r->h = 26; ne++; }
         tgt_unit[n_tgt++] = u;
         int ko = u->hp == 0;
-        text_drawBlock(r->x + 12, r->y + 7, 2, (u8 *)o0b_btl_getUnitName(u), ko ? 2 : is_party && u->max->maxHp / 6 >= u->hp ? 4 : 0);
-        if (is_party) { /* (its HP: whom to heal, as the game's target window showed) */
-            u8 hp[8];
-            text_formatNumber(u->hp, hp, 4, 1);
-            ui_drawSmallDigits(r->x + r->w - 36, r->y + 10, 2, hp, ko ? 2 : 0);
-        }
+        if (is_party) {
+            static const u8 hpl[] = "HP", mpl[] = "MP";
+            u8 a[8];
+            text_drawBlock(r->x + 12, r->y + 4, 2, (u8 *)o0b_btl_getUnitName(u), ko ? 2 : 0);
+            u32 st = u->status | u->autoStatus;
+            int ix = r->x + 84;
+            for (int k = 0, n = 0; k < 16 && n < 5; k++)
+                if (st & g_btluiStatusIcons[k].status) {
+                    ui_drawSprite(ix, r->y + 5, 2, g_btluiStatusIcons[k].icon, 0);
+                    ix += 12;
+                    n++;
+                }
+            ui_drawLabel(r->x + 12, r->y + 19, 2, (s32)hpl, 0);
+            text_formatNumber(u->hp, a, 4, 1);
+            ui_drawSmallDigits(r->x + 26, r->y + 20, 2, a, ko || u->max->maxHp / 6 >= u->hp ? 2 : 0);
+            ui_drawLabel(r->x + 92, r->y + 19, 2, (s32)mpl, 0);
+            text_formatNumber(u->mp, a, 3, 1);
+            ui_drawSmallDigits(r->x + 106, r->y + 20, 2, a, u->max->maxMp / 6 >= u->mp ? 2 : 0);
+        } else text_drawBlock(r->x + 12, r->y + 7, 2, (u8 *)o0b_btl_getUnitName(u), ko ? 2 : 0);
         if (u->flags >> 29 & 1) bar(&g_ot[2], r->x + 3, r->y + 6, 3, r->h - 12, 0x40E0F8);
         win_drawBox(r, 4, 2);
     }
