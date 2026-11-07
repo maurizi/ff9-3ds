@@ -132,7 +132,11 @@ int port_window_closing(void) {
 /* how dark the game's screen fade has the scene now, 0 (clear) to 256 (black), for the bottom screen to follow: the
  * darkening fade (subtract) of a field or the world map, by its frame (covered: towards black, else from it) */
 int port_bottom_fade(void) {
-    if (!g_gameState || (g_gameState->mode != 1 && g_gameState->mode != 3) || !g_fade.subtract) return 0;
+    if (!g_gameState || (g_gameState->mode != 1 && g_gameState->mode != 3)) return 0;
+    int port_field_current(void);
+    /* (a field still loading: the top is black without the fade (after a battle, a disc's load), the bottom too) */
+    if (g_gameState->mode == 1 && !port_field_current()) return 256;
+    if (!g_fade.subtract) return 0;
     if (!g_fade.active) return g_fade.covered ? 256 : 0;
     int f = g_fade.frames > 0 ? g_fade.frame * 256 / g_fade.frames : 256;
     if (f < 0) f = 0;
