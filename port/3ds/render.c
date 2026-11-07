@@ -1793,6 +1793,11 @@ static C3D_Tex *prim_texture(const Gp0Mode *m, const Gp0Vtx *v, int n, unsigned 
     return texture_for(m, u0, v0, u1, v1, tflags);
 }
 
+static int small_poly(const Gp0Vtx *v, int n) { /* (under 64 pixels across and high) */
+    int x0 = v[0].x, x1 = v[0].x, y0 = v[0].y, y1 = v[0].y;
+    for (int i = 1; i < n; i++) x0 = imin(x0, v[i].x), x1 = imax(x1, v[i].x), y0 = imin(y0, v[i].y), y1 = imax(y1, v[i].y);
+    return x1 - x0 < 64 && y1 - y0 < 64;
+}
 static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     unsigned tflags = 0;
     C3D_Tex *tex = prim_texture(m, v, n, &tflags);
@@ -1807,6 +1812,19 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         for (int i = 0; i < n; i++) bare += t[i].z == 0;
         /* (with a corner of no depth: none at all, as before; with only parallax depths beside: the parallax kept) */
         for (int i = 0; i < n; i++) t[i].z = bare ? 0 : -fabsf(t[i].z);
+    } else if (with_depth == n && small_poly(v, n)) {
+        /* a small polygon (a model's: a large one, as a battle's ground, may span that much) with a corner's depth more
+         * than twice or under half its median: another vertex's at the same screen position (found by value), given
+         * the median (texture and parallax both). In perspective a 3:1 spread across a small triangle on Brahne's chest
+         * (field 1250) pulled the fur's texels beside the strap's across it, a pale line in some frames; its parallax
+         * alone opened gaps in one eye */
+        float z[4];
+        for (int i = 0; i < n; i++) z[i] = t[i].z;
+        for (int i = 1; i < n; i++)
+            for (int j = i; j > 0 && z[j] < z[j - 1]; j--) { float w = z[j]; z[j] = z[j - 1]; z[j - 1] = w; }
+        float med = n == 4 ? (z[1] + z[2]) * 0.5f : z[1];
+        for (int i = 0; i < n; i++)
+            if (t[i].z > 2 * med || 2 * t[i].z < med) t[i].z = med;
     }
     /* The PS1 draws a quad as triangles (0,1,2) and (1,3,2), and skips a triangle 1024 or more wide or 512 or more
      * high on its own: of a quad reaching far off the screen, the half on it is still drawn. */
