@@ -1395,7 +1395,8 @@ static C3D_Tex *mirror_page(int tx, int ty) {
     frame_begin();
     C3D_FrameDrawOn(page_rt);
     set_proj_ortho(256, 256, 0.0f);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, -0.5f); /* (in the clip volume, as the mirror's passes: at +0.5 the
+                                                                * copy was clipped away, the page left its clear 0x00FF) */
     set_tev(K_BLIT);
     set_blend(NO_BLEND, 0);
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_RED | GPU_WRITE_GREEN | GPU_WRITE_BLUE); /* (alpha stays 1) */
@@ -1411,7 +1412,9 @@ static C3D_Tex *mirror_page(int tx, int ty) {
 }
 
 static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
-    if (m->depth == 2 && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
+    /* (a translucent primitive's texels by their bit 15, as the slots hold it (alpha 0xFF / 0x80, flags): the copied
+     * page has the mirror's one alpha bit, and with no flags it drew nothing, Demi's sphere and its glow on the ground) */
+    if (m->depth == 2 && !m->semi && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
         gpu_owned(m->tx + u0, m->ty + v0, m->tx + u1 + 1, m->ty + v1 + 1)) {
         C3D_Tex *t = mirror_page(m->tx, m->ty);
         if (t) { *flags = 0; tex_ou = tex_ov = 0; return t; }
