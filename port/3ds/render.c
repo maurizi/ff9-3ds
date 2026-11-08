@@ -190,6 +190,7 @@ static C3D_RenderTarget *mirror_rt[2];
 static C3D_RenderTarget *top_rt[2];
 static int top_queue(int stereo); /* (the top screen's copy: three buffers, ctr_video_init) */
 int port_rewards_skipped(void); /* (rewards_top.c) */
+int port_field_current(void); /* (field_hud.c: the field's data loaded) */
 /* the bottom screen's UI layer: PS1 screen coordinates at 1:1 (the bottom screen is the PS1's 320 wide) */
 #define UI_W 512
 #define UI_H 256
@@ -2818,12 +2819,20 @@ void ctr_present(long frame) {
             mag_rx = clampi((int)mag_x - MAG_W / 2, 0, w - MAG_W);
             mag_ry = clampi((int)mag_y - MAG_H / 2, 0, h - MAG_H);
         } else mag_x = -1;
+        static int field_after_battle;
+        if (port_game_mode() == 2 || port_game_mode() == 8) field_after_battle = 1;
+        else if (port_game_mode() != 1 || port_field_current()) field_after_battle = 0;
         for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) {
             if (menu_state == 3) { /* (the card game: its own top view, port/game/tm_ui.c, over black) */
                 C3D_RenderTargetClear(top_rt[eye], C3D_CLEAR_ALL, 0x000000FF, 0);
                 C3D_FrameDrawOn(top_rt[eye]);
                 (void)mag_rx;
                 (void)mag_ry;
+            } else if (field_after_battle && port_game_mode() == 1) { /* (a field loading after a battle: black, as the battle left it. Its display
+                * is 224 lines of buffers the battle drew 218 of: the rows below showed, scaled to the top's 240, as a dim
+                * grey bar along its foot after the rewards; field_hud.c clears them once the field is in) */
+                C3D_RenderTargetClear(top_rt[eye], C3D_CLEAR_ALL, 0x000000FF, 0);
+                C3D_FrameDrawOn(top_rt[eye]);
             } else if (frozen && !port_rewards_skipped()) { /* a menu is up: the paused scene, dimmed to half (its panels
                                                               * are drawn over it after) */
                 draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, freeze_h, freeze_w, freeze_h, edge);

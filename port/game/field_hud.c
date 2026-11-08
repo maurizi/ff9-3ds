@@ -643,13 +643,18 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
  * another. Outside it the location name points into event data being replaced and the walkmesh is half-loaded. */
 void port_scenario_field_entering(int field);
 void port_scenario_field_ready(int field);
-static int field_ready;
+static int field_ready, after_battle; /* (after_battle: the field now loading follows a battle) */
 static unsigned field_serial, field_frames; /* loads so far; frames since the last */
 void port_field_entering(int field) {
     field_ready = 0;
     port_scenario_field_entering(field);
 }
 void port_field_ready(int field) {
+    /* (after a battle, its framebuffers black before its first frame: the battle drew 218 of their 224 lines, and the
+     * rows below showed on the top screen, scaled to its 240, as a dim grey bar until the field had drawn over them) */
+    if (after_battle)
+        for (int i = 0; i < 2; i++) ClearImage(&g_gameState->drawEnv[i].clip, 0, 0, 0);
+    after_battle = 0;
     field_ready = 1;
     field_serial++;
     field_frames = 0;
@@ -834,6 +839,7 @@ void port_bottom_hud(void) {
     int battle = g_gameState->mode == 2, world = g_gameState->mode == 3;
     if (!battle) port_battle_hud_on = 0;
     if (battle || world) field_ready = 0; /* (the field is reloaded after) */
+    if (battle || g_gameState->mode == 8) after_battle = 1;
     if (g_gameState->mode == 1 && field_ready) field_frames++;
     int title = g_gameState->mode == 0 && port_title_live();
     int port_opening_takes_start(void);
