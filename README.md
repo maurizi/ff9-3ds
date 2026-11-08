@@ -5,6 +5,8 @@ A native Nintendo 3DS port of Final Fantasy IX (PS1, NTSC-U), built from the C s
 
 The game runs natively on the 3DS's ARM11 without emulation, and features stereoscopic 3D and a full dual-screen redesign of the UI.
 
+[![ff9-3ds demo reel](https://img.youtube.com/vi/hRjhjAkbp20/maxresdefault.jpg)](https://www.youtube.com/watch?v=hRjhjAkbp20)
+
 This repository contains no game data. Building and running it both require your own copy of the four NTSC-U
 discs (SLUS-01251/01295/01296/01297).
 
