@@ -17,6 +17,7 @@ Model (docs/design.md §3.3-3.5): PS1 data lives in psx_ram[], a 2 MB image of P
                  them, decomp-requests.md R3), conflicting data names, pointers into the middle of code.
 """
 import re
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import ff9sym  # noqa: E402
 
-GEN = Path("build/gen")
+GEN = Path(os.environ.get("GEN", "build/gen"))  # (make passes its $(GEN): BUILD=dir builds)
 XREFS = Path("config/xrefs.txt")
 ZERO_RUN = 0x1000
 RAW_DATA = Path("config/raw_data.txt")

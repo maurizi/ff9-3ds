@@ -91,7 +91,7 @@ FORCE:
 $(GEN)/stamp: $(addprefix $(BUILD)/3ds/obj/,$(addsuffix .o,$(DECOMP_SRCS))) tools/gen_link.py tools/ff9sym.py \
               $(wildcard config/xrefs.txt config/raw_data.txt) $(GEN)/fxmods.list
 	@mkdir -p $(GEN)
-	@$(PYTHON) tools/gen_link.py $(BUILD)/3ds/obj
+	@GEN=$(GEN) $(PYTHON) tools/gen_link.py $(BUILD)/3ds/obj
 	@touch $@
 $(GEN)/%.s: $(GEN)/stamp ;
 
