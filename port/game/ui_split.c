@@ -10,7 +10,8 @@ void win_drawAll_game(void);
 __attribute__((weak)) void port_ui_packets(const void *lo, const void *hi) { (void)lo; (void)hi; }
 
 /* A field minigame's own panels (its how-to-play box, its score) belong on the bottom screen with the touch controls,
- * not over the scene; its speech balloons stay with the speakers. 1: window w goes to the bottom screen. */
+ * not over the scene; its speech balloons stay with the speakers. 1: window w goes to the bottom screen; 2 and 3: not
+ * drawn (2: a panel the port draws itself, 3: field dialogue under a menu). */
 void port_bottom_packets(const void *lo, const void *hi);
 __attribute__((weak)) void port_bottom_shift(const void *lo, const void *hi, int dx, int dy) { (void)lo, (void)hi, (void)dx, (void)dy; }
 /* (the minigames' panels by field and message id, decomp R38: ff9-decomp docs/r32/3ds-requests-8.md) */
@@ -21,9 +22,18 @@ static const struct { u16 field, lo, hi; } panels[] = {
     {64, 0x6F, 0x6F},    /* the Prima Vista play's sword fight: its instructions */
     {64, 0x78, 0x80},    /* ... the nobles' verdict, the gil */
 };
+int port_menu_state(void);
 static int to_bottom(const Window *w) {
     if (g_gameState->mode != 1) return 0;
     int field = g_gameState->gameData->fieldId;
+    /* (a menu over the field: the field's dialogue (its speech balloons, its message windows) stays with the frozen scene
+     * on the top screen; while the menu opened, the scene hidden and the menu not yet drawn, a bubble showed on the
+     * bottom screen alone for some 20 frames ("You wanna try?", Alexandria's jump rope)) */
+    if (port_menu_state() == 1 || port_menu_state() == 2) {
+        if (w->style == WIN_STYLE_BALLOON) return 3;
+        for (int k = 0; k < 10; k++)
+            if (g_msgWindows[k].open && g_msgWindows[k].window == w) return 3;
+    }
     if (field == 909) { /* (the Treno auction: its bid windows replaced by auction_ui.c's panel: off the top screen) */
         for (int k = 0; k < 10; k++)
             if (g_msgWindows[k].open && g_msgWindows[k].window == w && g_msgWindows[k].msgId >= 0xC9 && g_msgWindows[k].msgId <= 0xCE)
@@ -52,7 +62,7 @@ void win_drawAll(void) {
         Window *w = &g_windows[i];
         int b = w->state != WIN_STATE_CLOSED && w->visible ? to_bottom(w) : 0;
         down[i] = b == 1;
-        hide[i] = b == 2;
+        hide[i] = b == 2 || b == 3; /* (3: hidden only, not a minigame's panel) */
         if (b) w->visible = 0, any |= b == 1;
         if (b == 2) panel_frame = VSync(-1);
     }
