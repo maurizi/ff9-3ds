@@ -28,7 +28,8 @@
 extern unsigned char psx_ram[];
 static int ram_ok(const void *p, unsigned size) {
     const unsigned char *b = (const unsigned char *)p;
-    return b >= psx_ram + 0x10000 && b + size <= psx_ram + 0x200000;
+    return b >= psx_ram + 0x10000 && b <= psx_ram + 0x200000 && size <= (unsigned)(psx_ram + 0x200000 - b); /* (b + size
+     * could wrap: a pointer of -1 (field 1756's battle UI pointer, outside a battle) passed, and faulted at 0x12B4) */
 }
 
 static int bound_tri(const BgiTriangle *t) {

@@ -30,7 +30,8 @@ void ui_drawItemIcon(s32, s32, s32, s32, s32);
 extern unsigned char psx_ram[];
 static int ram_ok(const void *p, unsigned size) { /* (PS1 RAM and the overlays' data after it) */
     const unsigned char *b = (const unsigned char *)p;
-    return b >= psx_ram + 0x10000 && b + size <= psx_ram + 0x1000000;
+    return b >= psx_ram + 0x10000 && b <= psx_ram + 0x1000000 && size <= (unsigned)(psx_ram + 0x1000000 - b); /* (b + size
+     * could wrap: a pointer of -1 (field 1756's battle UI pointer, outside a battle) passed, and faulted at 0x12B4) */
 }
 /* the overlays' statics (their layouts: the decomp session's offsets) */
 extern u8 s_menuItem[], s_menuItemHelp[], s_menuEquip[], s_menuEquipItemHelp[], s_menuAbility[], s_menuSave[];
