@@ -1712,7 +1712,10 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     if (ui_mode && !(psx_ui_list_battle && 0x17 - psx_ot_entry == 17)) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
     /* (a 15-bit texture is a frame copied from VRAM, as the field-to-battle swirl draws: the scene, never a window,
      * whose art is CLUT-based, even when the game builds it in its window packets) */
-    else if ((menu_state == 2 || ui_packet()) && !(m && m->textured && m->depth == 2)) { /* (a menu: the whole frame) */
+    /* (the card game's bottom screen is its frame itself (present_bottom): its windows, the "Start the game?" Yes/No
+     * over the stock, are drawn into it in their place. In a UI layer, which that screen doesn't show, the question
+     * was missing behind the card selection board) */
+    else if (menu_state != 3 && (menu_state == 2 || ui_packet()) && !(m && m->textured && m->depth == 2)) { /* (a menu: the whole frame) */
         int x, y, w, h;
         psx_gpu_draw_area(&x, &y, &w, &h);
         layer = ui_layer_for(x, y, 0);
