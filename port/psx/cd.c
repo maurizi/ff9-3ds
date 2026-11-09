@@ -533,6 +533,21 @@ static int iso_lookup(const char *name, unsigned int *lba, unsigned int *size) {
     return 1;
 }
 
+int psx_cd_boot_exe(unsigned int *lba, unsigned int *size) {
+    unsigned int at, n;
+    char cnf[2048 + 1], name[64];
+    if (!iso_lookup("\\SYSTEM.CNF;1", &at, &n)) return 0;
+    read_user(at, (u8 *)cnf);
+    cnf[n < 2048 ? n : 2048] = 0;
+    const char *p = __builtin_strstr(cnf, "cdrom:");
+    if (!p) return 0;
+    p += 6;
+    unsigned int k = 0;
+    while (*p && *p != '\r' && *p != '\n' && *p != ' ' && k < sizeof name - 1) name[k++] = *p++;
+    name[k] = 0;
+    return iso_lookup(name, lba, size);
+}
+
 CdlFILE *CdSearchFile(CdlFILE *fp, char *name) {
     unsigned int lba, size;
     if (!iso_lookup(name, &lba, &size)) {

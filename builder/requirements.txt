@@ -1,0 +1,7 @@
+# The builder's packaging (builder/package.py) and what it runs on the user's discs. splat, spimdisasm and rabbitizer
+# are pinned to the decomp's build container's versions (decomp/tools/docker/Dockerfile): the builder's split must
+# be the decomp's, file for file, for the relocation tables to be the developer's.
+pyinstaller==6.22.3
+splat64[mips]==0.50.1
+spimdisasm==1.42.4
+rabbitizer==1.16.2

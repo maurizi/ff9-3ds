@@ -1,6 +1,6 @@
 /* Battle effect modules, compiled from the decomp's C (all 380: FXNATIVE in the Makefile), run natively. A module's
  * image reaches 0x801E7700 as raw disc bytes. The first call into it (an op through port_effect_call, its address
- * read from the raw header) identifies it by a hash of its code bytes (tools/gen_link.py psx_fxmods), applies its
+ * read from the raw header) identifies it by a hash of its code bytes (psxrel.bin, tools/gen_relocs.py), applies its
  * relocations as an overlay's (data pointers to psx_ram, code pointers to the native functions: the header's ops
  * become native, so later calls go straight there), and answers that call with the native function at the same
  * PS1 address. effect_bridge.c stops on a call it can't map.
@@ -29,11 +29,10 @@ typedef struct {
 const void *port_fx_pack_load(unsigned int index, int slot); /* port/ds/fx_pack.c */
 #else
 typedef struct {
-    u32 vram, text_lo, text_hi, hash; /* code range [text_lo, text_hi), FNV-1a of its bytes */
-    const u32 *relocs;                /* as an overlay's (port/psx/mem.c psx_overlay_patch) */
+    u32 vram, text_lo, text_hi;       /* code range [text_lo, text_hi) */
     u32 nfuncs;
     const u32 *funcs;                 /* (PS1 address, native address) pairs */
-} PsxFxmod;
+} PsxFxmod;                           /* its code hash and relocations: psxrel.bin's section PSXREL_FXMOD + index */
 #endif
 extern const PsxFxmod psx_fxmods[];
 
@@ -53,13 +52,22 @@ void port_fxmod_forget(void) {
     for (int k = 0; k < 2; ++k) { current_funcs[k] = NULL; seen[k][0] = ~at(slot_vram[k]); }
 }
 
+#ifndef PORT_NDS
+/* psxrel.bin's section for a module: its code hash, then its relocations */
+static const u32 *fxrel(const PsxFxmod *m) { return psx_relocs(PSXREL_FXMOD + (u32)(m - psx_fxmods)); }
+#define HASH_OF(m) (fxrel(m) ? fxrel(m)[0] : 0)
+#else
+#define HASH_OF(m) ((m)->hash)
+#endif
+
 static int matches(const PsxFxmod *m) {
     u32 h = 0x811C9DC5u;
     for (const u8 *p = (const u8 *)PSX_ADDR(m->text_lo), *end = (const u8 *)PSX_ADDR(m->text_hi); p < end; ++p)
         h = (h ^ *p) * 0x01000193u;
-    return h == m->hash;
+    return h == HASH_OF(m);
 }
 
+#ifdef PORT_NDS
 static void relocate(const u32 *relocs) {
     for (const u32 *r = relocs; *r != 0xFFFFFFFFu; r += (*r >> 29) == 2 ? 2 : 1) {
         u32 *word = (u32 *)(psx_ram + (*r & 0x1FFFFF)), kind = *r >> 29;
@@ -68,6 +76,7 @@ static void relocate(const u32 *relocs) {
         else if (kind == 2) *word = r[1];
     }
 }
+#endif
 
 /* slot k's module identified (relocated, its native code loaded) if it changed since */
 static void identify(int k) {
@@ -81,7 +90,7 @@ static void identify(int k) {
             const FxHead *h = port_fx_pack_load(m->index, k);
             if (h) { relocate(h->relocs); current_funcs[k] = h->funcs; current_nfuncs[k] = h->nfuncs; }
 #else
-            relocate(m->relocs); current_funcs[k] = m->funcs; current_nfuncs[k] = m->nfuncs;
+            psx_relocate(fxrel(m) + 1, 0, 0x200000); current_funcs[k] = m->funcs; current_nfuncs[k] = m->nfuncs;
 #endif
             break;
         }

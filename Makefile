@@ -28,10 +28,10 @@ PYTHON   := python3
 # The decomp's binaries: main + the FF9.IMG dir-0 code overlays.
 OVLS     := $(shell awk '/^[0-9a-f]/ {print $$1}' $(DECOMP)/config/overlays.$(VERSION).txt)
 # Battle effect modules (FF9.IMG dir 13) built natively; the rest run in the effect VM (port/game/effect_bridge.c).
-# Only complete C (no INCLUDE_ASM) with an extracted image is used (tools/ff9sym.py native_fxmods).
+# Only complete C (no INCLUDE_ASM) is used (tools/ff9sym.py native_fxmods); the build needs no disc.
 FXNATIVE ?= $(notdir $(wildcard $(DECOMP)/src/fxmod/fx_*))
 export FXNATIVE
-FXMODS   := $(foreach m,$(FXNATIVE),$(if $(and $(wildcard $(DECOMP)/src/fxmod/$(m)/*.c),$(wildcard $(DECOMP)/disks/us/fxmod/$(m).bin)),\
+FXMODS   := $(foreach m,$(FXNATIVE),$(if $(wildcard $(DECOMP)/src/fxmod/$(m)/*.c),\
               $(if $(shell grep -l INCLUDE_ASM $(DECOMP)/src/fxmod/$(m)/*.c),,$(m))))
 BINS     := main $(addprefix ovl_,$(OVLS)) $(FXMODS)
 
@@ -80,9 +80,9 @@ $(BUILD)/portified/%.c: $(DECOMP)/%.c tools/portify.py config/addr_plain.txt con
 	@mkdir -p $(dir $@)
 	@$(PYTHON) tools/portify.py $< $@ --report $@.addr.txt
 
-# gen_link.py writes the data images, the PS1 data symbol addresses, the overlay namespace maps, the
-# resident-overlay trampolines (ARM and x86) and the overlay table, from the decomp's splat output (the user's
-# disc) and the ARM objects. Both targets share them.
+# gen_link.py writes the PS1 data symbol addresses, the overlay namespace maps, the resident-overlay trampolines
+# (ARM and x86), the overlay and effect module tables, the native index and linkinfo.json, from the decomp's
+# committed configs and the ARM objects: no disc. Both targets share them.
 # The native effect module list: rewritten only when it changes, so gen_link reruns exactly then.
 $(GEN)/fxmods.list: FORCE
 	@mkdir -p $(GEN)
@@ -94,6 +94,21 @@ $(GEN)/stamp: $(addprefix $(BUILD)/3ds/obj/,$(addsuffix .o,$(DECOMP_SRCS))) tool
 	@GEN=$(GEN) $(PYTHON) tools/gen_link.py $(BUILD)/3ds/obj
 	@touch $@
 $(GEN)/%.s: $(GEN)/stamp ;
+$(GEN)/psx_syms_port.ld: $(wildcard port/*/*.c port/*/*.h) tools/gen_link.py
+	@mkdir -p $(GEN)
+	@$(PYTHON) tools/gen_link.py --port-syms $@
+$(GEN)/linkinfo.json: $(GEN)/stamp ;
+
+# The relocation tables (tools/gen_relocs.py): the half of the link that needs the disc, from the decomp's split of
+# it. The builder (builder/) makes them on a player's machine; here they go beside the disc pack: in the full
+# builds' romfs, and build/psxrel.bin for the PC (sdmc:/3ds/ff9/psxrel.bin for a 3DS without a full build). Made
+# when the decomp has been split (make extract), as both targets need them to run.
+HAVE_SPLIT := $(wildcard $(DECOMP)/asm/$(VERSION)/main)
+$(BUILD)/psxrel.bin: $(GEN)/stamp tools/gen_relocs.py tools/psxlink.py tools/ff9sym.py
+	@echo "RELS $@"
+	@DECOMP=$(DECOMP) $(PYTHON) tools/gen_relocs.py $(GEN)/linkinfo.json $@ $(GEN)/relocs_report.txt
+relocs: $(BUILD)/psxrel.bin
+.PHONY: relocs
 
 # --- per-target back half ------------------------------------------------------------------------------------
 # $(1) target, $(2) compiler, $(3) objcopy, $(4) arch flags, $(5) port platform dir, $(6) trampoline flavour,
@@ -102,12 +117,11 @@ define target_rules
 $(1)_DIR      := $(BUILD)/$(1)
 $(1)_DOBJS    := $$(addprefix $$($(1)_DIR)/obj/,$$(addsuffix .o,$(DECOMP_SRCS)))
 $(1)_NSOBJS   := $$(patsubst $$($(1)_DIR)/obj/%,$$($(1)_DIR)/nsobj/%,$$($(1)_DOBJS))
-$(1)_GENOBJS  := $$(addprefix $$($(1)_DIR)/gen/,$$(addsuffix .o,$$(addprefix img_,$(BINS)) tramp_$(6)))
+$(1)_GENOBJS  := $$($(1)_DIR)/gen/tramp_$(6).o
 $(1)_PORTOBJS := $$(patsubst port/%.c,$$($(1)_DIR)/port/%.o,$(PSX_SRCS) $$(wildcard port/$(5)/*.c))
 $(1)_LINK     := $$($(1)_NSOBJS) $$($(1)_GENOBJS) $$($(1)_PORTOBJS) $$($(1)_EXTRAOBJS)
 # With $(1)_FXOVL the effect modules' code stays out of the executable (loaded from SD: effect_native.c)
-$(1)_FXOBJS   := $$(if $$($(1)_FXOVL),$$(addprefix $$($(1)_DIR)/nsobj/,$$(addsuffix .o,$(FX_SRCS))) \
-                   $$(addprefix $$($(1)_DIR)/gen/img_,$$(addsuffix .o,$(FXMODS))))
+$(1)_FXOBJS   := $$(if $$($(1)_FXOVL),$$(addprefix $$($(1)_DIR)/nsobj/,$$(addsuffix .o,$(FX_SRCS))))
 $(1)_MAINLINK := $$(filter-out $$($(1)_FXOBJS),$$($(1)_LINK))
 
 $$($(1)_DIR)/obj/%.o: $(BUILD)/portified/%.c $(PORT_HDRS)
@@ -143,8 +157,8 @@ $$($(1)_DIR)/port/%.o: port/%.c $(PORT_HDRS) $(DECOMP_HDRS)
 
 # Two-phase link: the first pass lists what is still undefined; gen_stubs.py turns those into stubs that stop
 # with their name (the to-do list is $$($(1)_DIR)/stubs.txt).
-$$($(1)_DIR)/stubs.c: $$($(1)_LINK) tools/gen_stubs.py
-	@$(2) $(4) -o $$($(1)_DIR)/scan.elf $$($(1)_LINK) $(GEN)/psx_syms.ld $(7) -Wl,--warn-unresolved-symbols \
+$$($(1)_DIR)/stubs.c: $$($(1)_LINK) tools/gen_stubs.py $(GEN)/psx_syms_port.ld
+	@$(2) $(4) -o $$($(1)_DIR)/scan.elf $$($(1)_LINK) $(GEN)/psx_syms.ld $(GEN)/psx_syms_port.ld $(7) -Wl,--warn-unresolved-symbols \
 		-Wl,--start-group $(8) -Wl,--end-group 2> $$($(1)_DIR)/scan.log || true
 	@$(PYTHON) tools/gen_stubs.py $$($(1)_DIR)/scan.log $$@
 
@@ -156,11 +170,11 @@ $$($(1)_DIR)/stubs.o: $$($(1)_DIR)/stubs.c
 $$($(1)_DIR)/fx_extern.ld: $$($(1)_FXOBJS) tools/fx_extern.py port/include/ovl0b_layout.h
 	@$(PYTHON) tools/fx_extern.py $$(subst gcc,nm,$(2)) $$@ $$($(1)_FXOBJS)
 
-$$($(1)_DIR)/ff9ds.elf: $$($(1)_LINK) $$($(1)_DIR)/stubs.o $$(if $$($(1)_FXOVL),$$($(1)_DIR)/fx_extern.ld)
+$$($(1)_DIR)/ff9ds.elf: $$($(1)_LINK) $$($(1)_DIR)/stubs.o $(GEN)/psx_syms_port.ld $$(if $$($(1)_FXOVL),$$($(1)_DIR)/fx_extern.ld)
 	@echo "LD   $$@"
 	$$(if $$($(1)_FXOVL),@$(PYTHON) tools/fx_extern.py --build-id $$($(1)_DIR)/fxid.s && $(2) $(4) -c $$($(1)_DIR)/fxid.s -o $$($(1)_DIR)/fxid.o)
 	@$(2) $(4) -o $$@ $$($(1)_MAINLINK) $$($(1)_DIR)/stubs.o $$(if $$($(1)_FXOVL),$$($(1)_DIR)/fxid.o $$($(1)_DIR)/fx_extern.ld) \
-		$(GEN)/psx_syms.ld $(7) -Wl,-Map,$$($(1)_DIR)/ff9ds.map -Wl,--start-group $(8) -Wl,--end-group \
+		$(GEN)/psx_syms.ld $(GEN)/psx_syms_port.ld $(7) -Wl,-Map,$$($(1)_DIR)/ff9ds.map -Wl,--start-group $(8) -Wl,--end-group \
 		2> $$($(1)_DIR)/link.log; status=$$$$?; grep -v "allocated section .\.\(psx\|itcm\)ovl_.* not in segment" $$($(1)_DIR)/link.log >&2; \
 		exit $$$$status
 endef
@@ -217,7 +231,7 @@ $(OUT_3DSX): $(BUILD)/3ds/ff9ds.elf $(OUT_SMDH)
 	@echo "3DSX $@"
 	@3dsxtool $< $@ --smdh=$(OUT_SMDH)
 
-3ds: $(OUT_3DSX)
+3ds: $(OUT_3DSX) $(if $(HAVE_SPLIT),$(BUILD)/psxrel.bin)
 
 # One file with the game's data inside (build/ff9-full.3dsx: your discs packed into its romfs, read before the SD
 # card's). For your own console only: it holds Square Enix's data; never distribute it or commit it.
@@ -241,17 +255,24 @@ $(BUILD)/ff9.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr conf
 	@mkdir -p $(BUILD)/romfs-none
 	@$(MAKEROM) -f cia -o $@ -elf $< -rsf config/ff9.rsf -icon $(BUILD)/ff9.smdh -banner $(BUILD)/ff9.bnr -target t \
 		-DAPP_ROMFS=$(BUILD)/romfs-none
-$(BUILD)/ff9-full.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr config/ff9.rsf $(BUILD)/discs.bin $(BUILD)/maps.bin
+$(BUILD)/ff9-full.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr config/ff9.rsf $(BUILD)/discs.bin $(BUILD)/maps.bin $(BUILD)/psxrel.bin
 	@echo "CIA  $@ (with the disc pack)"
 	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin \
-		&& ln -f $(BUILD)/maps.bin $(BUILD)/romfs/maps.bin
+		&& ln -f $(BUILD)/maps.bin $(BUILD)/romfs/maps.bin && cp $(BUILD)/psxrel.bin $(BUILD)/romfs/psxrel.bin
 	@$(MAKEROM) -f cia -o $@ -elf $< -rsf config/ff9.rsf -icon $(BUILD)/ff9.smdh -banner $(BUILD)/ff9.bnr -target t \
 		-DAPP_ROMFS=$(BUILD)/romfs
 cia: $(BUILD)/ff9.cia
+
+# What the builder (builder/) bundles: the program as a .3dsx and a .cia, and linkinfo.json (what its relocation tables
+# are made from). None of it needs or holds the game's data: CI builds it from a clean checkout (.github/workflows).
+payload: $(BUILD)/ff9.3dsx $(BUILD)/ff9.cia $(GEN)/linkinfo.json
+	@mkdir -p $(BUILD)/payload && cp $^ $(BUILD)/payload/
+	@echo "PAYLOAD $(BUILD)/payload"
+.PHONY: payload
 cia-full: $(BUILD)/ff9-full.cia
 # an installable title is always the player build
-$(if $(and $(TEST_OPTS),$(filter cia cia-full $(BUILD)/ff9.cia $(BUILD)/ff9-full.cia,$(MAKECMDGOALS))),\
-  $(error make cia / cia-full take no test options (they build the game as a player gets it)))
+$(if $(and $(TEST_OPTS),$(filter cia cia-full payload $(BUILD)/ff9.cia $(BUILD)/ff9-full.cia,$(MAKECMDGOALS))),\
+  $(error make cia / cia-full / payload take no test options (they build the game as a player gets it)))
 .PHONY: cia cia-full 3ds-full
 
 # The bottom screen's field maps, baked from your discs (tools/bake_maps.py over the decomp's offline field reader,
@@ -266,10 +287,10 @@ maps: $(BUILD)/maps.bin
 $(BUILD)/discs.bin: tools/pack_discs.py
 	@echo "PACK $@"
 	@$(PYTHON) tools/pack_discs.py --img disks/us --out $@
-$(BUILD)/ff9-full.3dsx: $(BUILD)/3ds/ff9ds.elf $(OUT_SMDH) $(BUILD)/discs.bin $(BUILD)/maps.bin
+$(BUILD)/ff9-full.3dsx: $(BUILD)/3ds/ff9ds.elf $(OUT_SMDH) $(BUILD)/discs.bin $(BUILD)/maps.bin $(BUILD)/psxrel.bin
 	@echo "3DSX $@ (with the disc pack)"
 	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin \
-		&& ln -f $(BUILD)/maps.bin $(BUILD)/romfs/maps.bin
+		&& ln -f $(BUILD)/maps.bin $(BUILD)/romfs/maps.bin && cp $(BUILD)/psxrel.bin $(BUILD)/romfs/psxrel.bin
 	@3dsxtool $< $@ --smdh=$(OUT_SMDH) --romfs=$(BUILD)/romfs # (a test build's name too: TEST_NAME)
 3ds-full: $(BUILD)/ff9-full.3dsx
 
@@ -279,7 +300,7 @@ PC_ARCH  := -m32 -malign-double -fno-pie
 PORT_EXTRA_pc := -DPORT_DISC_PACK -DNUI_DEBUG -DPORT_GP0_PROBE
 PORT_ARCH_pc_psx/softgpu := $(if $(filter 1,$(RASTER_REFERENCE)),-DPORT_SOFTGPU_REFERENCE)
 $(eval $(call target_rules,pc,gcc,objcopy,$(PC_ARCH),pc,x86,-no-pie -Wl$(,)-z$(,)noexecstack -Wl$(,)--defsym=psx_ram=0x02000000,-lm))
-pc: $(BUILD)/pc/ff9ds
+pc: $(BUILD)/pc/ff9ds $(if $(HAVE_SPLIT),$(BUILD)/psxrel.bin)
 $(BUILD)/pc/ff9ds: $(BUILD)/pc/ff9ds.elf
 	@cp $< $@
 

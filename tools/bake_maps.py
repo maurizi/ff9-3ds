@@ -128,6 +128,29 @@ def bake(dump):
     return out
 
 
+def bake_all(fm, discs, progress=None):
+    """maps.bin's bytes from [(disc number, FF9.IMG reader)] (the field_maps module's Img, or anything with its
+    read/files); progress(done, total) after each field file"""
+    records = {}
+    ents = [(disc, img, ent) for disc, img in discs for ent in fm.field_files(img)]
+    for i, (disc, img, ent) in enumerate(ents):
+        if ent[0] not in records:
+            r = bake(fm.dump_field(img, disc, ent, True))
+            if r is not None:
+                records[ent[0]] = r
+        if progress:
+            progress(i + 1, len(ents))
+    fields = sorted(records)
+    head = b'FF9M' + struct.pack('<III', 1, len(fields), 0)
+    at = len(head) + 8 * len(fields)
+    index, body = b'', b''
+    for f in fields:
+        r = records[f]
+        index += struct.pack('<HHI', f, struct.unpack_from('<H', r)[0], at + len(body))
+        body += r
+    return head + index + body, len(fields)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--decomp', default=os.environ.get('FF9_DECOMP', '../ff9-decomp'), help='ff9-decomp checkout')
@@ -139,27 +162,11 @@ def main():
     discs = fm.open_discs([1, 2, 3, 4], a.img)
     if not discs:
         sys.exit('no disc image found')
-    records = {}
-    for disc, img in discs:
-        for ent in fm.field_files(img):
-            if ent[0] in records:
-                continue
-            d = fm.dump_field(img, disc, ent, True)
-            r = bake(d)
-            if r is not None:
-                records[ent[0]] = r
-    fields = sorted(records)
-    head = b'FF9M' + struct.pack('<III', 1, len(fields), 0)
-    at = len(head) + 8 * len(fields)
-    index, body = b'', b''
-    for f in fields:
-        r = records[f]
-        index += struct.pack('<HHI', f, struct.unpack_from('<H', r)[0], at + len(body))
-        body += r
+    data, fields = bake_all(fm, discs)
     os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
     with open(a.out, 'wb') as fp:
-        fp.write(head + index + body)
-    print(f'{a.out}: {len(fields)} fields, {len(head) + len(index) + len(body)} bytes')
+        fp.write(data)
+    print(f'{a.out}: {fields} fields, {len(data)} bytes')
 
 
 if __name__ == '__main__':

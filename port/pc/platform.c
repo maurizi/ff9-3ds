@@ -270,6 +270,11 @@ const char *plat_data_dir(void) {
     return data_dir;
 }
 
+/* port/psx/psxrel.c: where make writes the relocation tables, when the data folder has none */
+const char *plat_psxrel_fallback(void) {
+    return "build/psxrel.bin";
+}
+
 int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--data") && i + 1 < argc) {

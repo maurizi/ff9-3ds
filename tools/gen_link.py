@@ -1,21 +1,28 @@
 #!/usr/bin/env python3
-"""Generate everything that links the decomp's 20 binaries into one ARM image. Outputs go to build/gen/.
+"""Generate everything that links the decomp's binaries into one ARM image, from the decomp's committed configs and
+the ARM objects: no disc (the half of the link that needs one is tools/gen_relocs.py, which the builder runs on the
+user's discs). Outputs go to build/gen/.
 
 Usage: gen_link.py OBJ_DIR      (run in the build container: it calls arm-none-eabi-nm on OBJ_DIR/src*/<bin>/*.o)
 
-Model (docs/design.md §3.3-3.5): PS1 data lives in psx_ram[], a 2 MB image of PS1 RAM. Code is native.
-- img_<bin>.s    the binary's initialised data (.rodata, .data, data inside .text) as chunks of the user's own
-                 bytes, with every pointer word relocated: data pointers to psx_ram + offset, function pointers
-                 to the native function. The runtime copies main's chunks into psx_ram at boot and an overlay's
-                 when it is "loaded". Zero runs aren't stored (psx_ram starts zeroed).
-- psx_syms.ld    PROVIDE(name = psx_ram + offset) for every data symbol the decomp knows, so C that names a PS1
-                 global gets the same memory as code that uses its literal address.
+Model (docs/design.md §3.3-3.5): PS1 data lives in psx_ram[], a 2 MB image of PS1 RAM. Code is native. The game's
+data reaches psx_ram from the disc (main's at boot, an overlay's when the game loads it), and psxrel.bin
+(tools/gen_relocs.py) says which words are pointers and what they become.
+- psx_syms.ld    PROVIDE(name = psx_ram + offset) for every data symbol the decomp's symbol files know, so C that
+                 names a PS1 global gets the same memory as code that uses its literal address.
 - redefine_<bin>.txt  objcopy --redefine-syms maps. Overlay functions get the overlay's prefix (ovl_0b ->
                  o0b_func_...), since six overlays share 0x800A7000 and their names collide; references from one
                  binary to another binary's function are pointed at the right prefixed name.
+- tramp_<arch>.s the trampolines (calls whose target is whichever overlay is resident: every one a data word could
+                 need), the overlay and effect module tables, and psx_native_index: every function a data word may
+                 point to, which psxrel.bin names by position.
+- linkinfo.json  what gen_relocs.py needs from the link (functions, the objects' definitions, the index, xrefs);
+                 its hash is the build's link id (psx_linkinfo_id), which psxrel.bin must carry.
 - report.txt     everything that needs a decision: ambiguous cross-binary references (config/xrefs.txt resolves
-                 them, decomp-requests.md R3), conflicting data names, pointers into the middle of code.
+                 them, decomp-requests.md R3), conflicting data names.
 """
+import hashlib
+import json
 import re
 import os
 import subprocess
@@ -24,47 +31,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import ff9sym  # noqa: E402
+import psxlink  # noqa: E402
+from psxlink import SLOTS, TRAMP  # noqa: E402
 
 GEN = Path(os.environ.get("GEN", "build/gen"))  # (make passes its $(GEN): BUILD=dir builds)
-XREFS = Path("config/xrefs.txt")
-ZERO_RUN = 0x1000
-RAW_DATA = Path("config/raw_data.txt")
-
-
-def raw_ranges(b):
-    """[lo, hi) of the data blocks config/raw_data.txt names for binary b: from their dlabel .. enddlabel in the
-    decomp's split data (the vram of each word in its comment)"""
-    names = set()
-    if RAW_DATA.exists():
-        for line in RAW_DATA.read_text().splitlines():
-            f = line.split("#")[0].split()
-            if len(f) == 2 and f[0] == b:
-                names.add(f[1])
-    out = []
-    for name in names:
-        lo = hi = None
-        for path in sorted((ff9sym.DECOMP / "asm").glob(f"*/{b}/data/*.s")):
-            inside = False
-            for line in path.read_text().splitlines():
-                if line.startswith(f"dlabel {name}"):
-                    inside = True
-                elif line.startswith(f"enddlabel {name}"):
-                    break
-                elif inside:
-                    m = re.match(r"\s*/\* [0-9A-F]+ ([0-9A-F]{8}) ", line)
-                    if m:
-                        v = int(m.group(1), 16)
-                        lo = v if lo is None else lo
-                        hi = v + 4
-            if lo is not None:
-                break
-        if lo is None:
-            sys.exit(f"gen_link.py: config/raw_data.txt names {b} {name}, not in the decomp's data")
-        out.append((lo, hi))
-    return out
-
-
-SLOTS = {0x800A7000: 0, 0x801EDF00: 1, 0x80198700: 2}  # overlay load address -> psx_ovl_resident index  # zero runs at least this long are left out of the images
 
 
 def nm(paths, *flags):
@@ -87,28 +57,31 @@ def undefined(paths):
     return {line.split()[-1] for line in nm(paths, "-u") if line.strip() and not line.endswith(":")}
 
 
-def load_xrefs():
-    """config/xrefs.txt: `<bin> <name> <target_bin>` for a named reference, `<bin>:<vram> <target_bin>` for a
-    raw word in <bin>'s data."""
-    named, raw = {}, {}
-    if XREFS.exists():
-        for line in XREFS.read_text().splitlines():
-            f = line.split("#")[0].split()
-            if len(f) == 3:
-                named[(f[0], f[1])] = f[2]
-            elif len(f) == 2 and ":" in f[0]:
-                b, v = f[0].split(":")
-                raw[(b, int(v, 16))] = f[1]
-    return named, raw
+def port_syms(out):
+    """psx_syms_port.ld: the D_XXXXXXXX names the port's own source uses that the decomp's symbol files don't list,
+    placed by the address in their name (a separate script, so a port edit doesn't rerun the whole link step)"""
+    known = set()
+    for b in ff9sym.binaries():
+        for f in ff9sym.symbol_files(b):
+            known.update(ff9sym.read_symbols(f))
+    names = set()
+    for f in sorted(Path("port").rglob("*.[ch]")):
+        names.update(re.findall(r"\bD_[0-9A-F]{8}\b", f.read_text(errors="replace")))
+    lines = ["/* Generated by tools/gen_link.py --port-syms: PS1 data the port names by address. */"]
+    for name in sorted(names - known):
+        a = int(name[2:], 16)
+        if ff9sym.RAM_LO <= a < ff9sym.RAM_HI:
+            lines.append(f"PROVIDE({name} = psx_ram + 0x{a & 0x1FFFFF:X});")
+    Path(out).write_text("\n".join(lines) + "\n")
 
 
 def main():
+    if sys.argv[1] == "--port-syms":
+        return port_syms(sys.argv[2])
     obj_dir = Path(sys.argv[1])
     GEN.mkdir(parents=True, exist_ok=True)
     bins = ff9sym.binaries()
     funcs = ff9sym.functions()
-    starts = {b: {a: n for n, a in fs.items() if a is not None} for b, fs in funcs.items()}
-    xref_named, xref_raw = load_xrefs()
     report = []
 
     objs = {b: sorted(obj_dir.glob(f"src/{b}/*.o")) + sorted(obj_dir.glob(f"src_equiv/{b}/*.o"))
@@ -118,47 +91,9 @@ def main():
     defined_in_src = set().union(*(defined_globals(sorted(obj_dir.glob(f"src/{b}/*.o"))) for b in bins))
     defined_in_equiv = set().union(*(defined_globals(sorted(obj_dir.glob(f"src_equiv/{b}/*.o"))) for b in bins))
 
-    def owner_of_name(src, name):
-        """Which binary's `name` a reference from `src` means: its own, else main's, else a unique overlay's."""
-        if name in defined[src] or name in funcs.get(src, {}):
-            return src
-        if name in defined["main"] or name in funcs.get("main", {}):
-            return "main"
-        if (src, name) in xref_named:
-            return xref_named[(src, name)]
-        cands = [b for b in bins if b not in (src, "main") and (name in defined[b] or name in funcs.get(b, {}))]
-        if len(cands) == 1:
-            return cands[0]
-        if cands:
-            tramps[f"xt_{name}"] = [(c, qualified(c, name)) for c in cands]
-            report.append(f"trampoline: {src} references {name}, defined in {', '.join(cands)}: dispatched on the "
-                          f"resident overlay (config/xrefs.txt can pin it)")
-            return TRAMP
-        return None
-
-    def owner_of_addr(src, vram):
-        """Which binary's function a raw code address in `src`'s data means (None: not a function start)."""
-        if (src, vram) in xref_raw:
-            return xref_raw[(src, vram)]
-        if vram in starts.get(src, {}):
-            return src
-        if vram in starts.get("main", {}):
-            return "main"
-        cands = [b for b in bins if b not in (src, "main") and vram in starts.get(b, {})]
-        if len(cands) == 1:
-            return cands[0]
-        if cands:
-            tramps[f"xt_{vram:08X}"] = [(c, qualified(c, starts[c][vram])) for c in cands]
-            report.append(f"trampoline: {src} data word 0x{vram:08X} is a function in {', '.join(cands)}: dispatched "
-                          f"on the resident overlay (config/xrefs.txt `{src}:{vram:08X} <bin>` can pin it)")
-            return TRAMP
-        return None
-
-    def qualified(target, name):
-        return bins[target].ns + name
-
-    TRAMP = "<trampoline>"
-    tramps = {}  # trampoline symbol -> [(binary, target symbol)]
+    res = psxlink.Resolver(bins, funcs, defined, *psxlink.load_xrefs())
+    starts, owner_of_name, owner_of_addr, qualified = res.starts, res.owner_of_name, res.owner_of_addr, res.qualified
+    tramps = res.tramps  # trampoline symbol -> [(binary, target symbol)]
 
     def d_is_function(src, vram):
         """A D_XXXXXXXX that `src`'s C uses is another binary's function: it starts one there, outside `src`'s own
@@ -178,7 +113,7 @@ def main():
             decomp_xrefs[m.group(1)] = (int(m.group(2), 16), m.group(3))
     # Data names two binaries define at different addresses (the opening's and the ending's g_movieState): each
     # binary's references are qualified like its functions, and each gets its own PROVIDE (psx_syms.ld).
-    data_of = {b: ff9sym.data_symbols_of(b) for b in bins}
+    data_of = {b: ff9sym.data_symbols_of(b, splat=False) for b in bins}
     data_owners = {}
     for b, names in data_of.items():
         for n, a in names.items():
@@ -236,149 +171,8 @@ def main():
                         del mapping[k]
         (GEN / f"redefine_{b}.txt").write_text("".join(f"{k} {v}\n" for k, v in sorted(mapping.items())))
 
-    # --- data images ----------------------------------------------------------------------------------------
-    for b, bi in bins.items():
-        regions = [(bi.rodata, bi.text), (bi.data, bi.end)]
-        for s in (ff9sym.DECOMP / f"asm/{ff9sym.VERSION}/{b}/data").glob("*.s"):
-            t = s.read_text()
-            m = re.search(r"\.section \.text.*?nonmatching (\w+), (0x[0-9A-Fa-f]+)", t, re.S)
-            if m and ".incbin" in t:  # data embedded in .text (ovl_0b's textbin table)
-                named = ff9sym.ADDR_NAME.match(m.group(1))
-                if named:
-                    vram = int(named.group(1), 16)
-                else:  # a name from the symbol files
-                    syms = {}
-                    for f in ff9sym.symbol_files(b):
-                        syms.update(ff9sym.read_symbols(f))
-                    if m.group(1) not in syms:
-                        sys.exit(f"gen_link.py: no address for {b}'s {m.group(1)} in .text")
-                    vram = syms[m.group(1)][0]
-                regions.append((bi.off_of(vram), bi.off_of(vram) + int(m.group(2), 16)))
-        in_region = lambda v: any(bi.vram_of(lo) <= v < bi.vram_of(hi) for lo, hi in regions)
-
-        relocs = {}
-        raw = raw_ranges(b)
-        for vram, value, operand in ff9sym.data_words(b):
-            if not in_region(vram) or vram % 4 or operand.startswith(".L") or any(lo <= vram < hi for lo, hi in raw):
-                continue
-            name = re.match(r"[A-Za-z_]\w*", operand)
-            name = name.group(0) if name and not operand.startswith("0x") else None
-            is_func = name is not None and any(name in funcs.get(x, {}) for x in bins)
-            if not is_func and name is None and ff9sym.RAM_LO <= value < ff9sym.RAM_HI:
-                own_lo, own_hi = bi.vram_of(0 if b != "main" else bi.header), bi.vram_of(bi.end)
-                own_text = bi.text_range()
-                if own_lo <= value < own_hi and not own_text[0] <= value < own_text[1] and b != "main":
-                    pass  # into the overlay's own rodata/data: a data pointer
-                else:
-                    target = owner_of_addr(b, value)
-                    if target == TRAMP:
-                        relocs[vram] = f"xt_{value:08X}"
-                        continue
-                    if target:
-                        name, is_func = starts[target][value], True
-                    elif own_text[0] <= value < own_text[1] or (b != "main" and bins["main"].text_range()[0] <= value
-                                                                 < bins["main"].text_range()[1]):
-                        report.append(f"mid-code: {b} data word at 0x{vram:08X} = 0x{value:08X} (kept raw)")
-                        continue
-            if is_func:
-                target = owner_of_name(b, name)
-                if target == TRAMP:
-                    relocs[vram] = f"xt_{name}"
-                    continue
-                if target is None:
-                    report.append(f"unresolved function pointer: {b} 0x{vram:08X} -> {name} (kept raw)")
-                    continue
-                addend = value - funcs[target][name] if funcs[target].get(name) is not None else 0
-                relocs[vram] = qualified(target, name) + (f" + {addend}" if addend else "")
-            elif ff9sym.RAM_LO <= value < ff9sym.RAM_HI:
-                relocs[vram] = f"psx_ram + 0x{value & 0x1FFFFF:X}"
-            elif ff9sym.SPAD_LO <= value < ff9sym.SPAD_HI:
-                relocs[vram] = f"psx_scratchpad + 0x{value & 0x3FF:X}"
-
-        # Second pass: pointers splat typed as .short/.byte (inside struct-like data). Any aligned word not yet
-        # classified whose value is a function start, or an address inside this binary's or main's data/rodata,
-        # is relocated too, and listed in the report.
-        typed = {vram for vram, _, _ in ff9sym.data_words(b)}
-        def data_ranges(x):
-            xb = bins[x]
-            return [(xb.vram_of(xb.rodata if x != "main" else xb.header), xb.vram_of(xb.text)),
-                    (xb.vram_of(xb.data), xb.vram_of(xb.end))]
-        known_data = data_ranges(b) + (data_ranges("main") if b != "main" else [])
-        main_zero = 0x800A7000  # main's .data range continues into the zero region/overlay slots: not "data"
-        for lo, hi in regions:
-            for off in range(lo, hi - 3, 4):
-                vram = bi.vram_of(off)
-                if vram in relocs or vram in typed or any(lo <= vram < hi for lo, hi in raw):
-                    continue
-                value = int.from_bytes(bi.bytes[off:off + 4], "little")
-                if not ff9sym.RAM_LO <= value < ff9sym.RAM_HI:
-                    continue
-                target = owner_of_addr(b, value) if (value in starts.get(b, {}) or value in starts.get("main", {})) else None
-                if target and target != TRAMP:
-                    relocs[vram] = qualified(target, starts[target][value])
-                    report.append(f"untyped pointer: {b} 0x{vram:08X} -> function {relocs[vram]}")
-                elif any(rl <= value < rh for rl, rh in known_data) and not (
-                        main_zero <= value < bins["main"].vram_of(bins["main"].end)
-                        and not any(rl <= value < rh for rl, rh in data_ranges(b)) or (b == "main" and value >= main_zero)):
-                    relocs[vram] = f"psx_ram + 0x{value & 0x1FFFFF:X}"
-                    report.append(f"untyped pointer: {b} 0x{vram:08X} -> data 0x{value:08X}")
-
-        if b != "main":
-            # An overlay's bytes reach psx_ram from the disc (the game's own CD loads); only its pointer words
-            # change. Entries, sorted by offset: (psx_ram offset | kind << 29), and for code pointers the native
-            # address after it. Kind 0: a PS1 data address in that word -> psx_ram; 1: scratchpad; 2: code.
-            out = [f"/* Generated by tools/gen_link.py from {bi.path}: derived from game data, never commit. */",
-                   f'    .section .rodata.psxrel.{b},"a"', "    .balign 4", f"    .global psxrel_{b}", f"psxrel_{b}:"]
-            for v in sorted(relocs):
-                target = relocs[v]
-                off = v & 0x1FFFFF
-                if target.startswith("psx_ram + "):
-                    out.append(f"    .4byte 0x{off:X}")
-                elif target.startswith("psx_scratchpad + "):
-                    out.append(f"    .4byte 0x{off | 1 << 29:X}")
-                else:
-                    out.append(f"    .4byte 0x{off | 2 << 29:X}, {target}")
-            out += ["    .4byte 0xFFFFFFFF", ""]
-            (GEN / f"img_{b}.s").write_text("\n".join(out))
-            continue
-        # main's image is read once, at boot: on the DS it is overlay 0xFF of slot 0 (psx_ovl_areas.ld), loaded from
-        # ovls.bin into that place and copied to psx_ram before any overlay is (port/psx/mem.c psx_run_game)
-        out = [f"/* Generated by tools/gen_link.py from {bi.path}: game data, never commit. */",
-               f'    .section {".psxovl_ff.image" if b == "main" else ".rodata.psximg." + b},"a"', "    .balign 4"]
-        table = []
-        for lo, hi in sorted(regions):
-            off = lo
-            while off < hi:
-                # skip a long zero run that carries no relocation
-                run = off
-                while run < hi and bi.bytes[run:run + 4] == b"\0\0\0\0" and bi.vram_of(run) not in relocs:
-                    run += 4
-                if run - off >= ZERO_RUN or run >= hi:
-                    off = run
-                    continue
-                label = f"psximg_{b}_{len(table)}"
-                start = off
-                out.append(f"{label}:")
-                words = []
-                while off < hi:
-                    run = off
-                    while run < hi and bi.bytes[run:run + 4] == b"\0\0\0\0" and bi.vram_of(run) not in relocs:
-                        run += 4
-                    if run - off >= ZERO_RUN:
-                        break
-                    v = bi.vram_of(off)
-                    words.append(relocs.get(v) or f"0x{int.from_bytes(bi.bytes[off:off + 4], 'little'):08X}")
-                    off += 4
-                for i in range(0, len(words), 8):
-                    out.append("    .4byte " + ", ".join(words[i:i + 8]))
-                table.append((bi.vram_of(start) & 0x1FFFFF, off - start, label))
-        out += ["", f'    .section .rodata.psximg.{b},"a"', "    .balign 4", f"    .global psximg_{b}", f"psximg_{b}:"]
-        out += [f"    .4byte 0x{o:X}, 0x{n:X}, {lbl}" for o, n, lbl in table]
-        out += ["    .4byte 0, 0, 0", ""]
-        (GEN / f"img_{b}.s").write_text("\n".join(out))
-
     # --- data symbol addresses -------------------------------------------------------------------------------
-    syms = ff9sym.data_symbols(bins)
+    syms = ff9sym.data_symbols(bins, splat=False)
     lines = ["/* Generated by tools/gen_link.py: PS1 data symbols -> psx_ram. */"]
     for name in sorted(syms):
         if name.startswith("func_"):
@@ -396,7 +190,7 @@ def main():
             lines.append(f"PROVIDE({name} = psx_ram + 0x{a & 0x1FFFFF:X});")
         elif ff9sym.SPAD_LO <= a < ff9sym.SPAD_HI:
             lines.append(f"PROVIDE({name} = psx_scratchpad + 0x{a & 0x3FF:X});")
-    # D_XXXXXXXX names the symbol files don't list yet: the name is the address
+    # D_XXXXXXXX names the symbol files don't list yet: the name is the address (the port's own: port_syms below)
     for name in sorted(set().union(*(undefined(objs[b]) for b in bins)) - set(syms)):
         m = re.match(r"^D_([0-9A-F]{8})$", name)
         if m and ff9sym.RAM_LO <= int(m.group(1), 16) < ff9sym.RAM_HI:
@@ -414,43 +208,52 @@ def main():
     # --- trampolines for references whose target depends on the resident overlay ---------------------------
     # psx_ovl_resident[slot] holds the file id of the overlay loaded in that slot (port/psx/mem.c). The veneers
     # only use a scratch register (ARM ip, x86 eax), so arguments reach the target untouched, as on the PS1.
+    # every trampoline a data word could need: psxrel.bin is made without the link (tools/gen_relocs.py)
+    for sym, targets in res.possible_trampolines().items():
+        tramps.setdefault(sym, targets)
+    index = psxlink.native_index(bins, funcs, tramps)
+    fx = [b for b in sorted(bins) if b.startswith("fx_")]
+    info = json.dumps({
+        "version": 1,
+        "bins": sorted(bins), "fxmods": fx,
+        "funcs": {b: dict(sorted(fs.items())) for b, fs in sorted(funcs.items()) if b in bins},
+        "defined": {b: sorted(defined[b]) for b in sorted(bins)},
+        "xref_named": {f"{k[0]} {k[1]}": v for k, v in sorted(res.xref_named.items())},
+        "xref_raw": {f"{k[0]} {k[1]:08X}": v for k, v in sorted(res.xref_raw.items())},
+        "raw_data": {b: sorted(v) for b, v in sorted(psxlink.raw_data_names().items())},
+        "index": index,
+    }, indent=0, sort_keys=True)
+    (GEN / "linkinfo.json").write_text(info)
+    link_id = int.from_bytes(hashlib.sha256(info.encode()).digest()[:4], "little")
+
     def table(directive):
+        # the code overlays: file id, slot (their relocations are psxrel.bin's)
         out = ["", '    .section .rodata.psx_overlays,"a"', "    .balign 4", "    .global psx_overlays",
                "psx_overlays:"]
         for b, bi in sorted(bins.items()):
             if b != "main" and not b.startswith("fx_"):
-                out.append(f"    {directive} 0x{int(b[4:], 16):X}, {SLOTS[bi.vram]}, psxrel_{b}")
-        out += [f"    {directive} 0, 0, 0"]
-        # Native battle effect modules (port/game/effect_native.c): load address, code range, an FNV-1a hash of
-        # the code bytes that identifies the image once it has landed, the relocations, and the module's functions
-        # as (PS1 address, native address) pairs. Code bytes are never relocated, so the hash stays valid.
-        # Both the 3DS and the PC link every module's code in (the DS loaded each from an SD pack instead).
-        overlay = False
-        fx = [b for b in sorted(bins) if b.startswith("fx_")]
+                out.append(f"    {directive} 0x{int(b[4:], 16):X}, {SLOTS[bi.vram]}")
+        out += [f"    {directive} 0, 0"]
+        # Native battle effect modules (port/game/effect_native.c): load address, code range, and the module's
+        # functions as (PS1 address, native address) pairs; psxrel.bin has, in this order, each one's code hash
+        # (which identifies the image once it has landed) and relocations.
         out += ["", '    .section .rodata.psx_fxmods,"a"', "    .balign 4", "    .global psx_fxmods", "psx_fxmods:"]
-        for index, b in enumerate(fx):
+        for b in fx:
             bi = bins[b]
             lo, hi = bi.text_range()
-            h = 0x811C9DC5
-            for byte in bi.bytes[bi.text:bi.data]:
-                h = ((h ^ byte) * 0x01000193) & 0xFFFFFFFF
             fs = sorted((a, n) for n, a in funcs.get(b, {}).items() if a is not None)
-            if overlay:
-                out.append(f"    {directive} 0x{bi.vram:X}, 0x{lo:X}, 0x{hi:X}, 0x{h:X}, {index}")
-            else:
-                out.append(f"    {directive} 0x{bi.vram:X}, 0x{lo:X}, 0x{hi:X}, 0x{h:X}, psxrel_{b}, {len(fs)}, psxfx_{b}")
-        out += [f"    {directive} 0, 0, 0, 0, 0" if overlay else f"    {directive} 0, 0, 0, 0, 0, 0, 0"]
+            out.append(f"    {directive} 0x{bi.vram:X}, 0x{lo:X}, 0x{hi:X}, {len(fs)}, psxfx_{b}")
+        out += [f"    {directive} 0, 0, 0, 0, 0"]
         for b in fx:
             fs = sorted((a, n) for n, a in funcs.get(b, {}).items() if a is not None)
-            pairs = [f"    {directive} 0x{a:X}, {qualified(b, n)}" for a, n in fs]
-            if not overlay:
-                out += [f"psxfx_{b}:"] + pairs
-                continue
-            # the module's header, first in its image: magic, its zero-filled range, relocations, functions
-            (GEN / f"fxhead_{b}.s").write_text("\n".join([
-                "/* Generated by tools/gen_link.py: an effect module's header (port/game/effect_native.c). */",
-                '    .section .fxhead,"a"', "    .balign 4", "    .global psx_fxhead", "psx_fxhead:",
-                f"    .4byte 0x314D5846, __fx_bss_start, __fx_bss_end, psxrel_{b}, {len(fs)}"] + pairs) + "\n")
+            out += [f"psxfx_{b}:"] + [f"    {directive} 0x{a:X}, {qualified(b, n)}" for a, n in fs]
+        # the native index (weak: a function the port doesn't have is 0, and pulls nothing into the link) and the
+        # link id
+        out += ["", '    .section .rodata.psx_native_index,"a"', "    .balign 4", "    .global psx_native_index",
+                "psx_native_index:"]
+        out += [f"    .weak {n}\n    {directive} {n}" for n in index]
+        out += ["    .global psx_native_count", "psx_native_count:", f"    {directive} {len(index)}",
+                "    .global psx_linkinfo_id", "psx_linkinfo_id:", f"    {directive} 0x{link_id:X}"]
         return out
 
     arm = ["/* Generated by tools/gen_link.py: calls whose target is whichever overlay is resident. */",
@@ -532,6 +335,7 @@ def main():
     x86 += table(".long")
     (GEN / "tramp_x86.s").write_text("\n".join(x86) + "\n")
 
+    report += res.report
     (GEN / "report.txt").write_text("".join(r + "\n" for r in sorted(set(report))))
     kinds = {}
     for r in set(report):

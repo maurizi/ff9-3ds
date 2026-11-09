@@ -37,10 +37,30 @@ void *psx_spare_alloc(unsigned int size) {
     return p;
 }
 
-void psx_load_image(const PsxImageChunk *img) {
-    for (; img->size != 0; img++) {
-        memcpy(psx_ram + img->offset, img->data, img->size);
+/* main's data, from the disc's own executable (the same on all four discs): psxrel.bin says where its bytes go,
+ * their hash (a disc whose executable isn't the one it was made from stops here, not later on wrong data) and which
+ * words are pointers */
+void psx_load_image(void) {
+    const unsigned int *m = psx_relocs(PSXREL_MAIN);
+    if (!m) port_fatal("psxrel.bin has no section for the executable");
+    const unsigned int want_size = m[0], want_hash = m[1], nchunks = m[2];
+    const unsigned int *chunks = m + 3, *relocs = chunks + 3 * nchunks;
+    unsigned int lba, size;
+    if (!psx_cd_boot_exe(&lba, &size)) port_fatal("the disc has no boot executable (SYSTEM.CNF)");
+    if (size != want_size) port_fatal("the disc's executable is %u bytes, not %u: not FF9 (NTSC-U)", size, want_size);
+    const unsigned int sectors = (size + 2047) / 2048;
+    unsigned char *exe = malloc(sectors * 2048);
+    if (!exe) port_fatal("no room to read the executable (%u bytes)", size);
+    psx_cd_read_data(lba, exe, sectors);
+    unsigned int h = 0x811C9DC5u;
+    for (unsigned int c = 0; c < nchunks; c++)
+        for (unsigned int i = 0; i < chunks[3 * c + 1]; i++) h = (h ^ exe[chunks[3 * c + 2] + i]) * 0x01000193u;
+    if (h != want_hash) port_fatal("the disc's executable isn't the one psxrel.bin was made from (FF9 NTSC-U)");
+    for (unsigned int c = 0; c < nchunks; c++) {
+        memcpy(psx_ram + chunks[3 * c], exe + chunks[3 * c + 2], chunks[3 * c + 1]);
+        psx_relocate(relocs, chunks[3 * c], chunks[3 * c + 1]);
     }
+    free(exe);
 }
 
 void game_main(void); /* the game's main loop (decomp src/main/main.c) */
@@ -135,7 +155,8 @@ void psx_run_game(void) {
     psx_mem_init();
     plat_video_init();
     port_ovl_native_load(0xFF); /* the DS reads main's image into an overlay slot first (gen_link.py) */
-    psx_load_image(psximg_main);
+    psx_relocs_load();
+    psx_load_image();
     plat_guard_unused_ram(1);
     game_main();
     port_fatal("the game's main loop returned");
@@ -164,7 +185,7 @@ __attribute__((weak)) void port_ovl_native_sector(unsigned int id, unsigned int 
 __attribute__((weak)) void port_fx_area_overwritten(unsigned int off, unsigned int len) { (void)off; (void)len; }
 
 void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len) {
-    for (const PsxOverlay *o = psx_overlays; o->relocs != NULL; o++) {
+    for (const PsxOverlay *o = psx_overlays; o->id != 0; o++) {
         if (o->id != id) {
             continue;
         }
@@ -173,17 +194,11 @@ void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len) {
         port_ovl_native_sector(id, off, len);
         gxh_ram_overwritten(off, len);
         port_fx_area_overwritten(off, len);
-        /* The disc bytes are in place; convert the pointer words in [off, off + len). A word that no longer holds a
-         * PS1 address (a sector read again after its conversion) is left alone. */
-        for (const unsigned int *r = o->relocs; *r != 0xFFFFFFFFu; r += (*r >> 29) == 2 ? 2 : 1) {
-            unsigned int at = *r & 0x1FFFFF, kind = *r >> 29;
-            if (at < off) continue;
-            if (at >= off + len) break;
-            unsigned int *word = (unsigned int *)(psx_ram + at);
-            if (kind == 0 && (*word >> 24) == 0x80) *word = (unsigned int)(psx_ram + (*word & 0x1FFFFF));
-            else if (kind == 1 && (*word >> 16) == 0x1F80) *word = (unsigned int)(psx_scratchpad + (*word & 0x3FF));
-            else if (kind == 2) *word = r[1];
-        }
+        /* The disc bytes are in place; convert the pointer words in [off, off + len) (a sector read again after its
+         * conversion is left alone) */
+        const unsigned int *relocs = psx_relocs(id);
+        if (!relocs) port_fatal("psxrel.bin has no section for overlay %02X", id);
+        psx_relocate(relocs, off, len);
         port_overlay_relocated(id, off, len);
         return;
     }
