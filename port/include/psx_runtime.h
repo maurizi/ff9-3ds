@@ -2,22 +2,21 @@
 #ifndef PSX_RUNTIME_H
 #define PSX_RUNTIME_H
 
-/* One chunk of a binary's initialised data (generated img_<bin>.s): copy `size` bytes to psx_ram + offset. */
-typedef struct {
-    unsigned int offset;
-    unsigned int size;
-    const void *data;
-} PsxImageChunk;
+/* psxrel.bin (port/psx/psxrel.c, tools/gen_relocs.py): the relocations of the game's data, made from the user's
+ * discs; the program carries none of the game's bytes. Sections: 0x100 main, an overlay's FF9.IMG file id, 0x1000 +
+ * an effect module's index in psx_fxmods. */
+void psx_relocs_load(void);
+const unsigned int *psx_relocs(unsigned int section); /* NULL: no such section */
+/* convert the pointer words of a relocation list that fall in psx_ram [off, off + len) (a word that no longer holds
+ * a PS1 address, converted already, is left alone) */
+void psx_relocate(const unsigned int *relocs, unsigned int off, unsigned int len);
+#define PSXREL_MAIN 0x100u
+#define PSXREL_FXMOD 0x1000u
 
-extern const PsxImageChunk psximg_main[];
-
-/* Code overlays (generated): FF9.IMG dir-0 file id, slot (0x800A7000, 0x801EDF00, 0x80198700), and the pointer
- * words to convert once the disc bytes are in (tools/gen_link.py: offset | kind << 29, code pointers followed by
- * the native address; 0xFFFFFFFF ends). */
+/* Code overlays (generated): FF9.IMG dir-0 file id and slot (0x800A7000, 0x801EDF00, 0x80198700); id 0 ends. */
 typedef struct {
     unsigned int id;
     unsigned int slot;
-    const unsigned int *relocs;
 } PsxOverlay;
 
 extern const PsxOverlay psx_overlays[];
@@ -28,7 +27,12 @@ void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len);
 #define PSX_OVL_SLOT_ADDRS {0x800A7000, 0x801EDF00, 0x80198700}
 extern unsigned char psx_ovl_resident[3];
 
-void psx_load_image(const PsxImageChunk *img);
+/* main's data from the disc's executable (psxrel.bin's main section: its byte ranges, their hash, relocations) */
+void psx_load_image(void);
+/* The disc's boot executable (SYSTEM.CNF's BOOT line): its first sector and size; 0 if the disc has none
+ * (port/psx/cd.c) */
+int psx_cd_boot_exe(unsigned int *lba, unsigned int *size);
+void psx_cd_read_data(unsigned int lba, void *buf, unsigned int n);
 /* Port buffers in PS1 RAM the port never uses (main's MIPS code range, ~335 KB); fatal when it runs out. */
 void *psx_spare_alloc(unsigned int size);
 void psx_mem_init(void); /* the VRAM and SPU RAM shadows (port/psx/mem.c) */

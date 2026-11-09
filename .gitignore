@@ -1,5 +1,6 @@
 # Generated builds and extracted game data
 /build/
+/dist/
 /ff9ds/
 /disks
 /assets/

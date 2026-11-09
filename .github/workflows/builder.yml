@@ -1,0 +1,101 @@
+# The program and the builder, from a clean checkout with no game data: the program is compiled from the decomp's C
+# in the devkitARM container (it needs no disc: tools/gen_link.py), and the builder bundles it into one executable per
+# OS that a player points at their own discs (builder/). A tag v* publishes them as a release, with build
+# provenance attestations (`gh attestation verify FILE --repo OWNER/REPO` shows the workflow run and commit).
+name: Builder
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  program:
+    name: Program (no disc)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: The checkout holds no game data
+        run: |
+          for p in disks decomp/disks decomp/asm build; do
+            if [ -e "$p" ]; then echo "::error::$p exists in a clean checkout"; exit 1; fi
+          done
+      - name: Build the program (.3dsx, .cia, linkinfo.json)
+        run: tools/docker.sh make -j"$(nproc)" payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: payload
+          path: build/payload/
+          if-no-files-found: error
+
+  package:
+    name: Builder (${{ matrix.os }})
+    needs: program
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-22.04: an older glibc, so the Linux build runs on more distributions
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Tk (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tk-dev
+      - run: pip install -r builder/requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: payload
+          path: payload
+      - name: Test the RomFS / 3DSX / CIA writers' parsing of the payload
+        run: python -m unittest discover -s builder -p "test_*.py" -v
+      - name: Package
+        run: python builder/package.py --payload payload
+      - name: Self-test
+        shell: bash
+        run: |
+          exe=$(ls dist/ff9-3ds-builder-*)
+          "./$exe" --self-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: builder-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: builder-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist && sha256sum * > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" * --repo "$GITHUB_REPOSITORY" --title "FF9 3DS builder $GITHUB_REF_NAME" \
+            --notes "Run the builder for your OS and point it at your own four Final Fantasy IX (NTSC-U) discs (BIN/CUE, IMG/CCD or raw ISO): it writes ff9-full.3dsx and ff9-full.cia. These files contain no game data; built from $GITHUB_SHA by this repository's workflow (see the attestations)."

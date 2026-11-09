@@ -87,14 +87,11 @@ def image_path(disks, n):
     raise SystemExit(f'no image for disc {n} under {disks}')
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--img', type=Path, required=True, help='folder holding raw/FF9 CDn.img (or us/raw/)')
-    ap.add_argument('--out', type=Path, required=True)
-    ap.add_argument('--discs', default='1234', help='the discs to pack (others: empty), e.g. 1 or 13')
-    a = ap.parse_args()
-
-    tmpdir = a.out.parent
+def pack(images, out, log=print, progress=None):
+    """Pack {disc number: raw image path} (discs left out are empty in the pack) into `out`; progress(sectors done,
+    sectors in all) every few thousand sectors. Returns the pack's size."""
+    out = Path(out)
+    tmpdir = out.parent
     tmpdir.mkdir(parents=True, exist_ok=True)
     data_pool = tempfile.TemporaryFile(dir=tmpdir)
     raw_pool = tempfile.TemporaryFile(dir=tmpdir)
@@ -102,11 +99,12 @@ def main():
     counts = [0, 0]  # raw, data records
     discs = []
     total = 0
+    everything = sum(os.path.getsize(p) // RAW for p in images.values())
     for n in range(1, 5):
-        if str(n) not in a.discs:
+        if n not in images:
             discs.append(([], 0))
             continue
-        path = image_path(a.img, n)
+        path = images[n]
         sectors = os.path.getsize(path) // RAW
         runs = []
         with open(path, 'rb') as img:
@@ -116,6 +114,8 @@ def main():
                 in_movie[lo:min(hi, sectors)] = b'\1' * (min(hi, sectors) - lo)
             img.seek(0)
             for lba in range(sectors):
+                if progress and lba % 4096 == 0:
+                    progress(total + lba, everything)
                 s = img.read(RAW)
                 if s[:12] != SYNC or s[12:15] != msf(lba):
                     raise SystemExit(f'disc {n} sector {lba}: not a raw sector at its own address')
@@ -139,8 +139,8 @@ def main():
                 runs.append([lba, 1, rec, flags])
         total += sectors
         discs.append((runs, sectors))
-        print(f'disc {n}: {sectors} sectors, {len(runs)} runs, {len(movies)} movies; '
-              f'pool now {counts[1]} data + {counts[0]} raw records')
+        log(f'disc {n}: {sectors} sectors, {len(runs)} runs, {len(movies)} movies; '
+            f'pool now {counts[1]} data + {counts[0]} raw records')
 
     head = 32 + 12 * len(discs)
     tables = []
@@ -150,26 +150,38 @@ def main():
         off += 16 * len(runs)
     data_base = (off + USER - 1) // USER * USER
     raw_base = data_base + counts[1] * USER
-    tmp = a.out.with_suffix('.tmp')
-    with open(tmp, 'wb') as out:
-        out.write(b'FF9D' + struct.pack('<IIII', 1, len(discs), data_base, raw_base) + bytes(12))
+    tmp = out.with_suffix('.tmp')
+    with open(tmp, 'wb') as f:
+        f.write(b'FF9D' + struct.pack('<IIII', 1, len(discs), data_base, raw_base) + bytes(12))
         for (runs, sectors), t in zip(discs, tables):
-            out.write(struct.pack('<III', t, len(runs), sectors))
+            f.write(struct.pack('<III', t, len(runs), sectors))
         for runs, _ in discs:
             for lba, count, rec, flags in runs:
                 size = USER if flags & F_DATA else RAW
-                out.write(struct.pack('<IIII', lba, count | flags << 28, rec * size, 0))
-        out.write(bytes(data_base - out.tell()))
+                f.write(struct.pack('<IIII', lba, count | flags << 28, rec * size, 0))
+        f.write(bytes(data_base - f.tell()))
         for pool in (data_pool, raw_pool):
             pool.seek(0)
             while chunk := pool.read(1 << 22):
-                out.write(chunk)
-        size = out.tell()
+                f.write(chunk)
+        size = f.tell()
     if size >= 1 << 31:  # (the reader's offsets are a 32-bit long on the DS)
         tmp.unlink()
         raise SystemExit(f'{size} bytes: over 2 GiB')
-    tmp.replace(a.out)
-    print(f'{a.out}: {size / 1e6:.0f} MB for {total * RAW / 1e6:.0f} MB of images')
+    tmp.replace(out)
+    if progress:
+        progress(everything, everything)
+    log(f'{out}: {size / 1e6:.0f} MB for {total * RAW / 1e6:.0f} MB of images')
+    return size
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--img', type=Path, required=True, help='folder holding raw/FF9 CDn.img (or us/raw/)')
+    ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--discs', default='1234', help='the discs to pack (others: empty), e.g. 1 or 13')
+    a = ap.parse_args()
+    pack({n: image_path(a.img, n) for n in range(1, 5) if str(n) in a.discs}, a.out)
 
 
 if __name__ == '__main__':

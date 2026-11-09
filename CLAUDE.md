@@ -10,6 +10,9 @@ FF9 (PS1 NTSC-U) port to Nintendo 3DS (forked from the ff9-ds DS port), built fr
   (`config/overrides.txt`), in that order (design §3.1). Non-portable decomp code goes to the decomp side as a
   request in `docs/decomp-requests.md`. Such a change must keep the PS1 `make verify` OK.
 - Anything the port needs identified in the decomp goes in `docs/decomp-requests.md` (R#), not guessed here.
+- The program is built without the disc and carries none of its bytes (CI builds it from a clean checkout, and the
+  builder ships it): nothing at build time may read the disc or the decomp's `asm/` except `tools/gen_relocs.py`,
+  whose output (`psxrel.bin`) is made on the user's machine. `tools/check_nodata.py` checks a build.
 
 ## Working
 - Build both targets before committing: `tools/docker.sh make -j16 3ds pc` (devkitARM is gcc 16, the host is

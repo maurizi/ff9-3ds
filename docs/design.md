@@ -34,12 +34,23 @@ whose backgrounds are wider than the view, and the 3D modes).
 
 ## 3. Code: decomp C → ARM (inherited)
 
-Unchanged from ff9-ds (`docs/porting-notes.md`): `tools/portify.py` copies each decomp file into
+Inherited from ff9-ds (`docs/porting-notes.md`): `tools/portify.py` copies each decomp file into
 `build/portified/` with PS1 addresses mapped; a forced-include prelude replaces the GTE macros and hardware
-access; `tools/gen_link.py` builds the data images from the user's executable, namespaces the overlays (they all
-stay linked: memory is plentiful) and writes the resident-overlay trampolines; link-time overrides
-(`config/overrides.txt`) replace game functions the port reimplements. PS1 data lives at its PS1 address in
-`psx_ram[]`, a 2 MB array inside the executable's image, so 24-bit OT links stay valid pointers.
+access; `tools/gen_link.py` namespaces the overlays (they all stay linked: memory is plentiful) and writes the
+resident-overlay trampolines; link-time overrides (`config/overrides.txt`) replace game functions the port
+reimplements. PS1 data lives at its PS1 address in `psx_ram[]`, a 2 MB array inside the executable's image, so
+24-bit OT links stay valid pointers.
+
+**The program holds none of the game's bytes, and is built without the disc.** `gen_link.py` reads only the
+decomp's committed configs and the ARM objects. The game's data reaches `psx_ram` from the disc: main's at boot
+(the disc's executable, checked by hash), an overlay's when the game loads it, an effect module's likewise. Which
+of their words are pointers, and what each becomes, is `psxrel.bin` (`tools/gen_relocs.py`): the half of the link
+that needs the disc, from the decomp's splat output of it. Code pointers are positions in the program's
+`psx_native_index`; the file carries the link id (`psx_linkinfo_id`, a hash of `linkinfo.json`) it was made for.
+`make` writes it on a developer's machine; the builder (`builder/`, a single executable built by the GitHub
+workflow) makes it on a player's, by extracting and splitting their disc 1 exactly as the decomp's `make split`
+does (splat pinned to the decomp's version), then packs the discs and writes `ff9-full.3dsx`/`.cia`.
+`tools/check_nodata.py` checks a build for game data.
 
 Build: `tools/docker.sh make 3ds` (devkitARM, libctru, citro3d; ARMv6K ARM state, hard float) →
 `build/ff9.3dsx`. `make pc` is the 32-bit host build of the same code for fast iteration and frame dumps.
@@ -130,16 +141,17 @@ ducked (`docs/voice-packs.md`).
 - Suspend/resume through the HOME menu and sleep mode (libctru's applet handling).
 
 ## 7. Data
-`sdmc:/3ds/ff9/`: `raw/FF9 CD1.img`…`CD4.img` (or a packed `discs.bin`), cards, and later optional asset packs
-(voice, high-resolution models). The executable carries only code and the relocation images built from the
-user's executable at build time.
+`sdmc:/3ds/ff9/`: `raw/FF9 CD1.img`…`CD4.img` (or a packed `discs.bin`) with `psxrel.bin` (§3), cards, and
+later optional asset packs (voice, high-resolution models). The executable carries only code.
 
-For playing, `make 3ds-full` writes `build/ff9-full.3dsx`: the same program with the user's `discs.bin`
-(`tools/pack_discs.py`) in its romfs, one file to copy to the card (personal use only: it holds the game's data;
-never distributed or committed). Any other build, such as a netloaded test build, reads the pack inside
-`sdmc:/3ds/ff9-full.3dsx` (or `/3ds/ff9/ff9-full.3dsx`) when it's there, so the card holds one copy of the discs.
-Order: own romfs, ff9-full.3dsx on the card, `sdmc:/3ds/ff9/discs.bin`, then the images. A pack is sampled at
-start-up (each raw record must begin with the CD sync pattern), so an incomplete copy stops with its offset.
+Players get `ff9-full.3dsx` / `ff9-full.cia` from the builder: the program with `discs.bin` (`tools/pack_discs.py`),
+`maps.bin` and `psxrel.bin` in its RomFS, one file to copy to the card (personal use only: it holds the game's data;
+never distributed or committed). `make 3ds-full` / `cia-full` write the same from a checkout. Any other build, such
+as a netloaded test build, reads the pack inside `sdmc:/3ds/ff9-full.3dsx` (or `/3ds/ff9/ff9-full.3dsx`) when it's
+there, so the card holds one copy of the discs; `psxrel.bin` is read beside whichever pack is used (it must match
+the program's link: a test build of the same tree shares it). Order: own romfs, ff9-full.3dsx on the card,
+`sdmc:/3ds/ff9/discs.bin`, then the images. A pack is sampled at start-up (each raw record must begin with the CD
+sync pattern), so an incomplete copy stops with its offset.
 
 ## 8. Old and New 3DS
 Everything in §1–7 must run at full speed on an Old 3DS. The New 3DS's 804 MHz, L2 and extra cores pay for
