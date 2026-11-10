@@ -3,7 +3,7 @@
 # OS that a player points at their own discs (builder/), and into a web page that does the same in the browser
 # (builder/web/: Pyodide; the discs never leave the player's computer). A tag v* publishes the executables as a
 # release, with build provenance attestations (`gh attestation verify FILE --repo OWNER/REPO` shows the workflow run
-# and commit), and the page on GitHub Pages.
+# and commit); every push to master publishes the page on GitHub Pages.
 name: Builder
 
 on:
@@ -109,7 +109,8 @@ jobs:
 
   pages:
     name: Publish the web builder
-    if: startsWith(github.ref, 'refs/tags/v')
+    # from master (the github-pages environment's deployment rule): the page follows master, the executables the tags
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
     needs: web
     runs-on: ubuntu-latest
     permissions:
