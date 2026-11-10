@@ -50,13 +50,16 @@ AccessControlInfo:
   CanShareDeviceMemory          : true
   RunnableOnSleep               : false
   SpecialMemoryArrange          : true
+  # DSP RAM as I/O (uncached): NDSP writes its state there and reads the DSP's back. As cached memory (MemoryMapping)
+  # the CPU and the DSP never see each other's writes: no sound, every buffer stays queued; read-only, ndspInit
+  # faults in ndspSetCounter. (The 3DSX runs with the Homebrew Launcher's mappings, so only the CIA had either.)
+  IORegisterMapping:
+   - 1ff50000-1ff57fff
+   - 1ff70000-1ff77fff
+  # VRAM: the renderer reads its render target back with the CPU (render.c readback_cells; unmapped, the first frame
+  # faults there)
   MemoryMapping:
-   # DSP RAM, read/write: NDSP writes its shared state there (read-only, ndspInit faults in ndspSetCounter on a
-   # console; the 3DSX never sees this, it runs with the Homebrew Launcher's mappings)
-   - 0x1FF00000-0x1FF7FFFF
-   # VRAM, read/write: the renderer reads its render target back with the CPU (render.c readback_cells; unmapped,
-   # the first frame faults there on a console; the Homebrew Launcher maps it for a 3DSX)
-   - 0x1F000000-0x1F5FFFFF
+   - 1f000000-1f5fffff:r
   SystemCallAccess:
     ArbitrateAddress: 34
     Break: 60
