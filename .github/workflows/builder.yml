@@ -98,4 +98,4 @@ jobs:
         run: |
           cd dist && sha256sum * > SHA256SUMS
           gh release create "$GITHUB_REF_NAME" * --repo "$GITHUB_REPOSITORY" --title "FF9 3DS builder $GITHUB_REF_NAME" \
-            --notes "Run the builder for your OS and point it at your own four Final Fantasy IX (NTSC-U) discs (BIN/CUE, IMG/CCD or raw ISO): it writes ff9-full.3dsx and ff9-full.cia. These files contain no game data; built from $GITHUB_SHA by this repository's workflow (see the attestations)."
+            --notes "Run the builder for your OS and point it at your own four Final Fantasy IX (NTSC-U) discs (BIN/CUE, IMG/CCD or raw ISO): it writes ff9-full.cia (install with FBI) or ff9-full.3dsx (Homebrew Launcher). These files contain no game data; built from $GITHUB_SHA by this repository's workflow (see the attestations)."

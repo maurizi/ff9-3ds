@@ -14,7 +14,7 @@ Final Fantasy IX © is owned by Square Enix; this project is not affiliated with
 
 ## Playing
 
-Download the builder for your computer from [Releases](https://github.com/maurizi/ff9-3ds/releases), run it, and point it at your four discs: BIN/CUE, IMG/CCD or raw ISO. It checks they are the NTSC-U release, unmodified, and writes:
+Download the builder for your computer from [Releases](https://github.com/maurizi/ff9-3ds/releases), run it, and point it at your four discs: BIN/CUE, IMG/CCD or raw ISO. It checks they are the NTSC-U release, unmodified, and writes the one you choose:
 
 - `ff9-full.cia` (about 1.7 GB): install it with a CIA installer such as FBI, then start Final Fantasy IX from the
   HOME Menu.

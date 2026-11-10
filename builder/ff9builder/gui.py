@@ -43,10 +43,10 @@ class App:
         ttk.Button(f, text='Browse…', command=self.pick_out).grid(row=7, column=2)
         opts = ttk.Frame(f)
         opts.grid(row=8, column=0, columnspan=3, sticky='w', pady=6)
-        self.want_3dsx = tk.BooleanVar(value=True)
-        self.want_cia = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opts, text='ff9-full.3dsx (Homebrew Launcher)', variable=self.want_3dsx).pack(side='left')
-        ttk.Checkbutton(opts, text='ff9-full.cia (install with FBI)', variable=self.want_cia).pack(side='left', padx=12)
+        self.format = tk.StringVar(value='cia')
+        ttk.Radiobutton(opts, text='ff9-full.cia (install with FBI)', value='cia', variable=self.format).pack(side='left')
+        ttk.Radiobutton(opts, text='ff9-full.3dsx (Homebrew Launcher)', value='3dsx',
+                        variable=self.format).pack(side='left', padx=12)
 
         self.go = ttk.Button(f, text='Build', command=self.start)
         self.go.grid(row=9, column=0, columnspan=3, sticky='we', pady=(4, 6))
@@ -114,13 +114,11 @@ class App:
         if len(self.discs) < 4:
             messagebox.showinfo('Discs', 'Add all four discs first.')
             return
-        if not (self.want_3dsx.get() or self.want_cia.get()):
-            messagebox.showinfo('Output', 'Choose .3dsx, .cia or both.')
-            return
         out = self.out.get()
         self.busy = True
         self.go.configure(state='disabled')
-        args = (dict(self.discs), out, self.want_3dsx.get(), self.want_cia.get())
+        fmt = self.format.get()
+        args = (dict(self.discs), out, fmt == '3dsx', fmt == 'cia')
         threading.Thread(target=self.run, args=args, daemon=True).start()
 
     def run(self, discs, out, a, c):
@@ -147,9 +145,10 @@ class App:
                     self.busy = False
                     self.go.configure(state='normal')
                     self.status.set('Done.')
-                    names = '\n'.join(ev[1])
-                    messagebox.showinfo('Done', f'Made:\n{names}\n\n.3dsx: copy it to /3ds/ on the SD card.\n'
-                                        f'.cia: copy it to the card and install it with FBI.')
+                    made = ev[1][0]
+                    how = ('Copy it to the SD card and install it with FBI.' if made.endswith('.cia') else
+                           'Copy it to /3ds/ on the SD card and start it from the Homebrew Launcher.')
+                    messagebox.showinfo('Done', f'Made:\n{made}\n\n{how}')
                 elif ev[0] == 'error':
                     self.busy = False
                     self.go.configure(state='normal')

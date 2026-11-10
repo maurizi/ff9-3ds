@@ -1,7 +1,7 @@
 """ff9-3ds-builder: the window, or with discs on the command line, a build without one.
 
     ff9-3ds-builder                                         the window
-    ff9-3ds-builder --out DIR [--no-3dsx] [--no-cia] DISC...   (any order; .cue, .ccd, .img, .bin, .iso)
+    ff9-3ds-builder --out DIR [--format cia|3dsx] DISC...    (any order; .cue, .ccd, .img, .bin, .iso)
     ff9-3ds-builder --self-test                              check the bundle (exit status only: CI)"""
 import argparse
 import os
@@ -45,8 +45,8 @@ def main():
     ap = argparse.ArgumentParser(prog='ff9-3ds-builder', description=__doc__.split('\n')[0])
     ap.add_argument('discs', nargs='+')
     ap.add_argument('--out', default='.')
-    ap.add_argument('--no-3dsx', action='store_true')
-    ap.add_argument('--no-cia', action='store_true')
+    ap.add_argument('--format', choices=('cia', '3dsx'), default='cia',
+                    help='ff9-full.cia (install with FBI) or ff9-full.3dsx (Homebrew Launcher); default cia')
     ap.add_argument('--version', action='version', version=__version__)
     a = ap.parse_args()
     state = {'pct': -1, 'inline': False}
@@ -66,7 +66,7 @@ def main():
         state['inline'] = False
     try:
         discs = pipeline.identify(a.discs)
-        pipeline.build(discs, a.out, not a.no_3dsx, not a.no_cia, log=log, report=report)
+        pipeline.build(discs, a.out, a.format == '3dsx', a.format == 'cia', log=log, report=report)
     except DiscError as e:
         sys.exit(f'\nerror: {e}')
     print()
