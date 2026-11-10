@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Everything stays in this page: it may load only its own files, and send nothing anywhere (connect-src 'self'
+     is for fetching those files). -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>FF9 3DS Builder</title>
+<style>
+  :root { --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #dddad3; --accent: #3557c4;
+          --ok: #23824a; --bad: #b3261e; --bar: #e6e3dc; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #16171a; --panel: #1f2125; --ink: #ececef; --muted: #9a9aa2;
+          --line: #33363c; --accent: #8aa4ff; --ok: #5cc98a; --bad: #ff8a80; --bar: #2c2f35; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  button, .file { font: inherit; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+                  padding: 8px 14px; cursor: pointer; display: inline-block; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; width: 100%; padding: 11px; font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  .file input { display: none; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  td { padding: 6px 4px; border-top: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+  td:first-child { width: 64px; font-weight: 600; white-space: nowrap; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+  .choice { display: flex; gap: 20px; flex-wrap: wrap; }
+  .choice label { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+  .bar { height: 8px; background: var(--bar); border-radius: 4px; overflow: hidden; margin: 14px 0 6px; }
+  .bar div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  #log { margin-top: 10px; max-height: 180px; overflow: auto; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace;
+         color: var(--muted); white-space: pre-wrap; }
+  #errors li { color: var(--bad); }
+  footer { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>FF9 3DS Builder</h1>
+  <p class="sub">Turns your own four Final Fantasy IX (NTSC-U) discs into the 3DS game, entirely in this page:
+     your disc images are read on your computer and never uploaded.</p>
+
+  <section>
+    <h2>1. Your discs</h2>
+    <label class="file">Choose disc files…
+      <input id="files" type="file" multiple accept=".cue,.ccd,.img,.bin,.iso,.CUE,.CCD,.IMG,.BIN,.ISO"></label>
+    <span class="muted">&nbsp;BIN/CUE, IMG/CCD or raw ISO: select the sheets and their images together.</span>
+    <table id="discs"></table>
+    <ul id="errors"></ul>
+  </section>
+
+  <section>
+    <h2>2. What to make</h2>
+    <div class="choice">
+      <label><input type="radio" name="fmt" value="cia" checked> <span><b>ff9-full.cia</b><br>
+        <span class="muted">install with FBI, start from the HOME Menu</span></span></label>
+      <label><input type="radio" name="fmt" value="3dsx"> <span><b>ff9-full.3dsx</b><br>
+        <span class="muted">copy to /3ds/, start from the Homebrew Launcher</span></span></label>
+    </div>
+  </section>
+
+  <section>
+    <button id="build" class="primary" disabled>Build</button>
+    <div class="bar"><div id="bar"></div></div>
+    <div id="status" class="muted">Add your four discs to begin.</div>
+    <div id="save" hidden><p></p><button id="saveBtn" class="primary">Save</button></div>
+    <div id="log"></div>
+  </section>
+
+  <footer>About 1.7 GB is written to the browser's storage while it builds (cleared afterwards), and the build takes
+    several minutes. The file it makes holds your copy of the game: keep it to yourself.</footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

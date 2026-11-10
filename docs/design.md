@@ -52,6 +52,13 @@ workflow) makes it on a player's, by extracting and splitting their disc 1 exact
 does (splat pinned to the decomp's version), then packs the discs and writes `ff9-full.3dsx`/`.cia`.
 `tools/check_nodata.py` checks a build for game data.
 
+The web builder (`builder/web/`, GitHub Pages) is the same Python builder in the browser: Pyodide in a Web Worker,
+the disc files mounted in place (WORKERFS: read where they are, never uploaded), the large files (pack, output) on
+the page's private storage (OPFS, through `bigfs.js`), splat run in-process. rabbitizer is built for it with one
+patch: its bindings return values through `PyLong_FromLong`, 32 bits on wasm32, which made addresses above 2^31
+negative and silently untyped symbols in the split; `long long` gives a 64-bit build's results, and the split is then
+the decomp's, file for file (`builder/web/test/smoke.mjs` checks it).
+
 Build: `tools/docker.sh make 3ds` (devkitARM, libctru, citro3d; ARMv6K ARM state, hard float) →
 `build/ff9.3dsx`. `make pc` is the 32-bit host build of the same code for fast iteration and frame dumps.
 
