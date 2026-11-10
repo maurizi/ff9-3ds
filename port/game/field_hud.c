@@ -427,6 +427,7 @@ static void title_button(RECT *r, const char *label, int on, int dim) {
     win_drawBox(r, 3, 2);
 }
 /* before the title (the boot screens, the attract images, the opening movie): a card, so the bottom screen is meant */
+__attribute__((weak)) int port_audio_missing(void) { return 0; } /* (the 3DS's audio.c) */
 static RECT r_boot = {40, 70, 240, 100};
 static void draw_boot(void) {
     static const char name[] = "FINAL FANTASY IX", go[] = "PRESS START", tap[] = "OR TOUCH THE SCREEN";
@@ -437,6 +438,16 @@ static void draw_boot(void) {
     w = ui_measureLabel((u8 *)tap);
     ui_drawLabel(r_boot.x + (r_boot.w - w) / 2, r_boot.y + 70, 2, (s32)tap, 2);
     win_drawBox(&r_boot, 3, 2);
+    /* (no DSP firmware on the SD card: the game is silent, and only the log said why) */
+    if (port_audio_missing()) {
+        static RECT r = {40, 176, 240, 44};
+        static const char a[] = "NO SOUND  DSPFIRM.CDC NOT FOUND", b[] = "DUMP IT WITH DSP1  SEE THE README";
+        w = ui_measureLabel((u8 *)a);
+        ui_drawLabel(r.x + (r.w - w) / 2, r.y + 11, 2, (s32)a, 0);
+        w = ui_measureLabel((u8 *)b);
+        ui_drawLabel(r.x + (r.w - w) / 2, r.y + 26, 2, (s32)b, 2);
+        win_drawBox(&r, 3, 2);
+    }
 }
 
 /* game over (ovl_65 gameover_main: its picture, A goes back to the title) */

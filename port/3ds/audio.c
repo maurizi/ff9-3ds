@@ -19,9 +19,13 @@ static s16 *pcm;
 static int ok, cur, fill;
 unsigned int ctr_audio_dropped, ctr_audio_underruns, ctr_audio_frames, ctr_audio_peak; /* (the heartbeat's) */
 
+static int no_dsp; /* ndspInit failed: the DSP firmware isn't on the SD card (field_hud.c tells the player at boot) */
+int port_audio_missing(void) { return no_dsp; }
+
 void ctr_audio_init(void) {
     if (R_FAILED(ndspInit())) {
         port_log("audio: ndspInit failed (no sdmc:/3ds/dspfirm.cdc? dump it with DSP1): silent\n");
+        no_dsp = 1;
         return;
     }
     pcm = linearAlloc(NBUF * BUF_FRAMES * 4);
