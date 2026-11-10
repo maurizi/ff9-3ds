@@ -44,14 +44,12 @@
 <body>
 <main>
   <h1>FF9 3DS Builder</h1>
-  <p class="sub">Turns your own four Final Fantasy IX (NTSC-U) discs into the 3DS game, entirely in this page:
-     your disc images are read on your computer and never uploaded.</p>
 
   <section>
     <h2>1. Your discs</h2>
     <label class="file">Choose disc files…
       <input id="files" type="file" multiple accept=".cue,.ccd,.img,.bin,.iso,.CUE,.CCD,.IMG,.BIN,.ISO"></label>
-    <span class="muted">&nbsp;BIN/CUE, IMG/CCD or raw ISO: select the sheets and their images together.</span>
+    <span class="muted">&nbsp;BIN/CUE, IMG/CCD or raw ISO:</span>
     <table id="discs"></table>
     <ul id="errors"></ul>
   </section>
@@ -75,7 +73,7 @@
   </section>
 
   <footer>About 1.7 GB is written to the browser's storage while it builds (cleared afterwards), and the build takes
-    several minutes. The file it makes holds your copy of the game: keep it to yourself.</footer>
+    several minutes.</footer>
 </main>
 <script src="app.js"></script>
 </body>
