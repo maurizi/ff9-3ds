@@ -1,7 +1,9 @@
 # The program and the builder, from a clean checkout with no game data: the program is compiled from the decomp's C
 # in the devkitARM container (it needs no disc: tools/gen_link.py), and the builder bundles it into one executable per
-# OS that a player points at their own discs (builder/). A tag v* publishes them as a release, with build
-# provenance attestations (`gh attestation verify FILE --repo OWNER/REPO` shows the workflow run and commit).
+# OS that a player points at their own discs (builder/), and into a web page that does the same in the browser
+# (builder/web/: Pyodide; the discs never leave the player's computer). A tag v* publishes the executables as a
+# release, with build provenance attestations (`gh attestation verify FILE --repo OWNER/REPO` shows the workflow run
+# and commit), and the page on GitHub Pages.
 name: Builder
 
 on:
@@ -73,6 +75,52 @@ jobs:
           name: builder-${{ matrix.os }}
           path: dist/*
           if-no-files-found: error
+
+  web:
+    name: Web builder
+    needs: program
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: rabbitizer for Pyodide (patched for wasm32's 32-bit long)
+        run: |
+          mkdir -p build/web-wheels
+          docker run --rm -v "$PWD/builder/web:/w" -v "$PWD/build/web-wheels:/out" -w /w python:3.14-bookworm \
+            bash build_rabbitizer.sh /out
+      - uses: actions/download-artifact@v4
+        with:
+          name: payload
+          path: payload
+      - name: Assemble the site
+        run: python builder/web/build_site.py --payload payload --rabbitizer build/web-wheels/rabbitizer-*.whl --out build/web-site
+      - name: Smoke test
+        run: node builder/web/test/smoke.mjs build/web-site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web-site
+
+  pages:
+    name: Publish the web builder
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: web
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
 
   release:
     name: Release

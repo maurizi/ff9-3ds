@@ -31,13 +31,16 @@ def splat_command(yamls):
     return [sys.executable, '-m', 'ff9builder', '--splat'] + yamls
 
 
-def run_splat(yamls):
+def run_splat(yamls, each=None):
     """the --splat entry point: `python -m splat split YAML` for each, in this process, each with a fresh splat
     (its state is module globals: they are dropped between configs). One process for many configs: a single-file
-    build unpacks itself at each start."""
+    build unpacks itself at each start. each(): after each config (default: a line the parent counts)."""
     import runpy
+    out, err = sys.stdout, sys.stderr
     for y in yamls:
-        for m in [m for m in sys.modules if m.split('.')[0] in ('splat', 'spimdisasm')]:
+        # (splat's colorama wraps the output streams each run: unwrapped, or hundreds of runs nest hundreds deep)
+        sys.stdout, sys.stderr = out, err
+        for m in [m for m in sys.modules if m.split('.')[0] in ('splat', 'spimdisasm', 'colorama')]:
             del sys.modules[m]
         sys.argv = ['splat', 'split', y]
         try:
@@ -45,7 +48,11 @@ def run_splat(yamls):
         except SystemExit as e:
             if e.code:
                 raise
-        print(f'split {y}', flush=True)
+        sys.stdout, sys.stderr = out, err
+        if each:
+            each()
+        else:
+            print(f'split {y}', flush=True)
 
 
 def _sha1_lines(path):
@@ -133,10 +140,25 @@ def build(disc1, vendor, linkinfo, tree, out, log=print, progress=None):
                     progress(done[0], total * 1.25)
         if p.wait():
             raise RuntimeError(f'splat failed in {batch[0]}..{batch[-1]}:\n{"".join(tail)}')
-    split(yamls)
-    workers = min(8, os.cpu_count() or 1)
-    with ThreadPoolExecutor(workers) as ex:
-        list(ex.map(split, [fx[i::workers] for i in range(workers)]))
+    if sys.platform == 'emscripten':  # the web builder (Pyodide): no processes, one config after another, here
+        def each():
+            done[0] += 1
+            if progress:
+                progress(done[0], total * 1.25)
+        cwd, out_, err_ = os.getcwd(), sys.stdout, sys.stderr
+        os.chdir(tree)
+        sys.stdout = sys.stderr = open(os.devnull, 'w')  # (splat's progress bars: thousands of lines)
+        try:
+            run_splat(yamls + fx, each)
+        finally:
+            sys.stdout.close()
+            sys.stdout, sys.stderr = out_, err_
+            os.chdir(cwd)
+    else:
+        split(yamls)
+        workers = min(8, os.cpu_count() or 1)
+        with ThreadPoolExecutor(workers) as ex:
+            list(ex.map(split, [fx[i::workers] for i in range(workers)]))
     log('Split the binaries (splat).')
 
     ff9sym = importlib.import_module('ff9sym')

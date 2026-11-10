@@ -20,6 +20,8 @@ Download the builder for your computer from [Releases](https://github.com/mauriz
   HOME Menu.
 - `ff9-full.3dsx`: copy it to `/3ds/` on the SD card and start it from the Homebrew Launcher.
 
+Or, with nothing to install, use the [web builder](https://maurizi.github.io/ff9-3ds/): the same builder running in
+your browser. Your disc images are read on your computer and never uploaded.
 
 ## Building
 

@@ -79,8 +79,10 @@ class Progress:
         self.report((self.at + w * (done / total if total else 1)) / self.total, message)
 
 
-def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambda f, m=None: None):
-    """discs: {number: Disc} (all four); writes out_dir/ff9-full.3dsx and/or ff9-full.cia; returns their paths"""
+def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambda f, m=None: None, scratch=None):
+    """discs: {number: Disc} (all four); writes out_dir/ff9-full.3dsx and/or ff9-full.cia; returns their paths.
+    scratch: where the split of disc 1 goes (thousands of small files: the web builder keeps them in memory, its
+    out_dir is for large ones), else out_dir's work folder"""
     missing = [n for n in range(1, 5) if n not in discs]
     if missing:
         raise DiscError('missing disc ' + ', '.join(map(str, missing)))
@@ -112,8 +114,8 @@ def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambd
 
         pr.step('relocs', 'Analysing the executable')
         rel_path = os.path.join(work, 'psxrel.bin')
-        tree = os.path.join(work, 'decomp')
-        os.makedirs(tree)
+        tree = tempfile.mkdtemp(prefix='decomp-', dir=scratch) if scratch else os.path.join(work, 'decomp')
+        os.makedirs(tree, exist_ok=True)
         relocs.build(discs[1], vendor_dir(), bases['linkinfo.json'], tree, rel_path, log=log, progress=pr.part)
         shutil.rmtree(tree, ignore_errors=True)
 
