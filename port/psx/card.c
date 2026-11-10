@@ -86,16 +86,19 @@ static void load(int slot) {
 void plat_mkdir(const char *path); /* (platform: may not exist) */
 __attribute__((weak)) void plat_mkdir(const char *path) { (void)path; }
 
-static void flush(int slot) {
-    if (!dirty[slot]) return;
+/* the card written to its file; 0 if that failed (the card stays in memory, unsaved) */
+static int flush(int slot) {
+    if (!dirty[slot]) return 1;
     char path[256];
     snprintf(path, sizeof path, "%s/cards", plat_save_dir());
     plat_mkdir(path);
     card_path(path, sizeof path, slot);
     FILE *f = fopen(path, "wb");
-    if (!f || fwrite(cards[slot], 1, CARD_SIZE, f) != CARD_SIZE) port_log("card: can't write %s\n", path);
+    int ok = f && fwrite(cards[slot], 1, CARD_SIZE, f) == CARD_SIZE;
+    if (f && fclose(f) != 0) ok = 0;
+    if (!ok) port_log("card: can't write %s\n", path);
     else dirty[slot] = 0;
-    if (f) fclose(f);
+    return ok;
 }
 
 /* "bu00:NAME" / "bu10:NAME" -> slot (0/1) and NAME; -1 if not a card path */
@@ -158,8 +161,7 @@ long _card_format(long chan) {
     int slot = (chan >> 4) & 1;
     loaded[slot] = 1;
     format(slot);
-    flush(slot);
-    return 1;
+    return flush(slot); /* (0: not written, as a failed format) */
 }
 
 /* ---- the BIOS card file system: open, lseek, read, write, close, firstfile, nextfile, erase ---------------------- */
@@ -244,6 +246,7 @@ static s32 transfer(s32 fd, s32 buf, s32 n, int writing) {
     }
     unsigned char *p = PSX_PTR((uintptr_t)buf);
     int k = fd - 2, slot = fds[k].slot;
+    unsigned start = fds[k].pos;
     if (fds[k].pos + (unsigned)n > fds[k].size) n = (s32)(fds[k].size - fds[k].pos);
     for (s32 done = 0; done < n;) { /* (block by block: a file's blocks needn't be adjacent) */
         unsigned char *c = file_byte(slot, fds[k].head, fds[k].pos);
@@ -256,12 +259,19 @@ static s32 transfer(s32 fd, s32 buf, s32 n, int writing) {
         done += run;
     }
     if (writing) dirty[slot] = 1;
+    /* a file's writing begun (from its start, as a save writes it): the card written out now, and a failure reported
+     * as the card's error (the save screen's "failed" path, ovl_39 menuSave_cardPoll). Left to the close, whose result
+     * nothing checks, the save screen said "Data saved." when the SD card couldn't be written. (The save writes 40 of
+     * its file's 64 sectors: not to its end) */
+    int failed = writing && start == 0 && !flush(slot);
+    if (failed) loaded[slot] = 0, load(slot); /* (the card as it is on the SD card: the save list shows what was saved) */
     if (fds[k].mode & FASYNC) {
         /* the BIOS's asynchronous card read leaves the file position where it was (the game seeks past each sector
          * it read: ovl_39 menuSave_cardPoll); a write moves it */
         if (!writing) fds[k].pos -= (unsigned)n;
-        DeliverEvent(SW_CARD, EV_SP_IOE);
+        DeliverEvent(SW_CARD, failed ? EV_SP_ERROR : EV_SP_IOE);
     }
+    if (failed && !(fds[k].mode & FASYNC)) return -1;
     return n;
 }
 
@@ -329,6 +339,5 @@ long psx_bios_erase(const char *name) {
         b = next == 0xFFFF ? 0 : (int)next + 1;
     }
     dirty[slot] = 1;
-    flush(slot);
-    return 1;
+    return flush(slot); /* (0: the erase not written) */
 }
