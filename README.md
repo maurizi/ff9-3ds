@@ -12,26 +12,14 @@ NTSC-U discs (SLUS-01251/01295/01296/01297).
 
 Final Fantasy IX © is owned by Square Enix; this project is not affiliated with or endorsed by Square Enix.
 
-## Playing: the builder
+## Playing
 
-Download the builder for your computer from [Releases](https://github.com/maurizi/ff9-3ds/releases) (one file:
-Windows, macOS or Linux), run it, and point it at your four discs: BIN/CUE, IMG/CCD or raw ISO (2352-byte sectors;
-a 2048-byte ISO has lost the movies). It checks they are the NTSC-U release, unmodified, and writes:
+Download the builder for your computer from [Releases](https://github.com/maurizi/ff9-3ds/releases), run it, and point it at your four discs: BIN/CUE, IMG/CCD or raw ISO. It checks they are the NTSC-U release, unmodified, and writes:
 
 - `ff9-full.cia` (about 1.7 GB): install it with a CIA installer such as FBI, then start Final Fantasy IX from the
   HOME Menu.
 - `ff9-full.3dsx`: copy it to `/3ds/` on the SD card and start it from the Homebrew Launcher.
 
-Either holds the whole game, so the SD card only needs `/3ds/dspfirm.cdc` besides it (the 3DS's DSP firmware,
-dumped with DSP1: needed for sound). Saves go to `/3ds/ff9/cards/`; to use existing ones, copy a PS1 memory card
-image (`.mcr`/`.mcd`, 128 KB) to `/3ds/ff9/cards/card1.mcr`. The files it makes contain your copy of the game:
-don't share them.
-
-The builder carries the program, compiled from the decomp's C by this repository's GitHub workflow from a clean
-checkout (no disc there), and does on your computer the part of the build that needs the game's bytes. The release
-files have build provenance attestations: `gh attestation verify FILE --repo maurizi/ff9-3ds` shows the workflow
-run and commit that made them. From a checkout, `python3 builder/ff9-3ds-builder.py` runs it too (with
-`builder/requirements.txt` installed and `make payload` built).
 
 ## Building
 
