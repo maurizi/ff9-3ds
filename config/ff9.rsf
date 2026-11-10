@@ -54,6 +54,9 @@ AccessControlInfo:
    # DSP RAM, read/write: NDSP writes its shared state there (read-only, ndspInit faults in ndspSetCounter on a
    # console; the 3DSX never sees this, it runs with the Homebrew Launcher's mappings)
    - 0x1FF00000-0x1FF7FFFF
+   # VRAM, read/write: the renderer reads its render target back with the CPU (render.c readback_cells; unmapped,
+   # the first frame faults there on a console; the Homebrew Launcher maps it for a 3DSX)
+   - 0x1F000000-0x1F5FFFFF
   SystemCallAccess:
     ArbitrateAddress: 34
     Break: 60
