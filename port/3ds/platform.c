@@ -211,8 +211,15 @@ void plat_video_init(void) {
     ctr_video_init();
 }
 
+/* path and each folder above it that isn't there: a CIA install needs nothing on the card but the DSP firmware, so
+ * /3ds/ff9 itself may be missing, and mkdir of its cards folder alone failed: the first save stayed in memory, the
+ * game said it had saved, and it was gone once the app closed (a player's report) */
 void plat_mkdir(const char *path) {
-    mkdir(path, 0777);
+    char p[256];
+    snprintf(p, sizeof p, "%s", path);
+    for (char *c = strchr(p, ':') ? strchr(p, ':') + 2 : p + 1; *c; c++)
+        if (*c == '/') { *c = 0; mkdir(p, 0777); *c = '/'; }
+    mkdir(p, 0777);
 }
 
 const char *plat_data_dir(void) {
@@ -271,6 +278,7 @@ int main(void) {
     is_new3ds = n3ds;
     if (is_new3ds) osSetSpeedupEnable(true); /* 804 MHz and the L2 cache */
     gfxInitDefault();
+    plat_mkdir(plat_data_dir()); /* (sdmc:/3ds/ff9: its log, settings and memory cards) */
     ctr_console_init();
     find_disc_pack();
     port_log("ff9-3ds (%s 3DS)\n", is_new3ds ? "New" : "Old");
