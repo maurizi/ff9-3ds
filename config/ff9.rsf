@@ -51,7 +51,9 @@ AccessControlInfo:
   RunnableOnSleep               : false
   SpecialMemoryArrange          : true
   MemoryMapping:
-   - 0x1FF00000-0x1FF7FFFF:r
+   # DSP RAM, read/write: NDSP writes its shared state there (read-only, ndspInit faults in ndspSetCounter on a
+   # console; the 3DSX never sees this, it runs with the Homebrew Launcher's mappings)
+   - 0x1FF00000-0x1FF7FFFF
   SystemCallAccess:
     ArbitrateAddress: 34
     Break: 60
