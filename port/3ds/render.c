@@ -1806,6 +1806,59 @@ static int small_poly(const Gp0Vtx *v, int n) { /* (under 64 pixels across and h
     for (int i = 1; i < n; i++) x0 = imin(x0, v[i].x), x1 = imax(x1, v[i].x), y0 = imin(y0, v[i].y), y1 = imax(y1, v[i].y);
     return x1 - x0 < 64 && y1 - y0 < 64;
 }
+/* a convex polygon (3 corners, or 4 in the PS1's order: outline 0, 1, 3, 2) grown by d pixels: each edge moved out
+ * along its normal, each corner to where its two moved edges meet (no further than 3d: a sharp corner) */
+static void grow_ring(Vtx *t, int n, const int *r, float d);
+static void grow_poly(Vtx *t, int n, float d) {
+    static const int ring3[3] = {0, 1, 2}, ring4[4] = {0, 1, 3, 2};
+    if (n == 4) { /* a quad that isn't convex (its outline turning both ways): its two triangles each on their own */
+        int pos = 0, neg = 0;
+        for (int k = 0; k < 4; k++) {
+            const Vtx *a = &t[ring4[k]], *b = &t[ring4[(k + 1) % 4]], *c = &t[ring4[(k + 2) % 4]];
+            float z = (b->x - a->x) * (c->y - b->y) - (b->y - a->y) * (c->x - b->x);
+            pos += z > 1e-4f, neg += z < -1e-4f;
+        }
+        if (pos && neg) {
+            Vtx a[3] = {t[0], t[1], t[2]}, b[3] = {t[1], t[3], t[2]};
+            grow_ring(a, 3, ring3, d);
+            grow_ring(b, 3, ring3, d);
+            t[0] = a[0], t[3] = b[1];
+            t[1].x = (a[1].x + b[0].x) * 0.5f, t[1].y = (a[1].y + b[0].y) * 0.5f;
+            t[2].x = (a[2].x + b[2].x) * 0.5f, t[2].y = (a[2].y + b[2].y) * 0.5f;
+            return;
+        }
+    }
+    grow_ring(t, n, n == 4 ? ring4 : ring3, d);
+}
+static void grow_ring(Vtx *t, int n, const int *r, float d) {
+    float area = 0;
+    for (int k = 0; k < n; k++) {
+        const Vtx *a = &t[r[k]], *b = &t[r[(k + 1) % n]];
+        area += a->x * b->y - b->x * a->y;
+    }
+    if (area == 0) return;
+    float side = area > 0 ? 1.0f : -1.0f; /* (the outward normal of edge a -> b: (dy, -dx) for a positive area) */
+    float nx[4], ny[4];
+    for (int k = 0; k < n; k++) { /* edge k: corner k to corner k + 1 */
+        const Vtx *a = &t[r[k]], *b = &t[r[(k + 1) % n]];
+        float dx = b->x - a->x, dy = b->y - a->y, l = sqrtf(dx * dx + dy * dy);
+        if (l < 1e-4f) { nx[k] = ny[k] = 0; continue; }
+        nx[k] = side * dy / l, ny[k] = -side * dx / l;
+    }
+    float ox[4], oy[4];
+    for (int k = 0; k < n; k++) { /* corner k: between edge k - 1 and edge k */
+        int p = (k + n - 1) % n;
+        float ax = nx[p], ay = ny[p], bx = nx[k], by = ny[k];
+        if (ax == 0 && ay == 0) ax = bx, ay = by;
+        if (bx == 0 && by == 0) bx = ax, by = ay;
+        float den = 1 + ax * bx + ay * by, mx = ax + bx, my = ay + by;
+        float x = den > 1e-3f ? d * mx / den : 0, y = den > 1e-3f ? d * my / den : 0, l = sqrtf(x * x + y * y);
+        if (l > 3 * d) x *= 3 * d / l, y *= 3 * d / l;
+        ox[k] = x, oy[k] = y;
+    }
+    for (int k = 0; k < n; k++) t[r[k]].x += ox[k], t[r[k]].y += oy[k];
+}
+
 static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     unsigned tflags = 0;
     C3D_Tex *tex = prim_texture(m, v, n, &tflags);
@@ -1843,28 +1896,30 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         for (int i = 0; i < n; i++)
             if (t[i].z > 2 * med || 2 * t[i].z < med) t[i].z = med;
     }
-    /* the world map's scenery (not its models: the ship, the party) grown outward by half a pixel. Its blocks meet only
-     * to the pixel, and where a block's edge and its neighbour's lie on one line a pixel on it is a tie, which the
-     * GPU gives to neither (the PS1 to one side): left uncovered, the haze drawn under the ground showed through as
-     * white dots along the horizon, and at the far ground the textures' transparent texels are reached a pixel
-     * sooner than on the PS1. Overlapping by half a pixel, the faces leave no such pixel. In stereo by a pixel and a
-     * half: each corner is shifted by its own depth's parallax, and on a mountain's face (depths far apart, some
-     * corners' found by value or fitted) neighbouring blocks' shifts differ by more, dots of the haze down the face as
-     * the camera turned (a 3DS video, on the chocobo) */
+    /* the world map's scenery (not its models: the ship, the party; not the bottom screen's UI) grown outward, each
+     * edge moved out along its normal. Its blocks meet only to the pixel, and where a block's edge and its neighbour's
+     * lie on one line a pixel on it is a tie, which the GPU gives to neither (the PS1 to one side): left uncovered,
+     * the haze drawn under the ground (which is drawn semi-transparent over it) showed through as pale dots, along the
+     * horizon, down a cliff face, at the far ground, whose faces are slivers a pixel or two tall (grown from their
+     * centre, they only got longer). By a pixel; in stereo by a pixel and a half: each corner is shifted by its own
+     * depth's parallax, and on a mountain's face neighbouring blocks' shifts differ by more. An opaque textured face is
+     * drawn twice, grown first and then as it is: grown alone its texture stretched with it, and a pixel inside could
+     * meet a transparent texel the PS1's doesn't (the haze through a cliff). Semi-transparent ones once, grown (twice
+     * they would blend twice) */
+    Vtx under[4];
+    int has_under = 0;
     if (world_ground && !ui_mode && !ui_packet() && !model_packet()) {
-        const float grow = stereo_on ? 1.5f : 0.5f;
-        float cx = 0, cy = 0;
-        for (int i = 0; i < n; i++) cx += t[i].x, cy += t[i].y;
-        cx /= (float)n, cy /= (float)n;
-        for (int i = 0; i < n; i++) {
-            float dx = t[i].x - cx, dy = t[i].y - cy, l = sqrtf(dx * dx + dy * dy);
-            if (l > 0.01f) t[i].x += dx / l * grow, t[i].y += dy / l * grow;
-        }
+        const float d = stereo_on ? 1.5f : 1.0f;
+        if (m->textured && !m->semi) {
+            for (int i = 0; i < n; i++) under[i] = t[i];
+            grow_poly(under, n, d);
+            has_under = 1;
+        } else grow_poly(t, n, d);
     }
     /* The PS1 draws a quad as triangles (0,1,2) and (1,3,2), and skips a triangle 1024 or more wide or 512 or more
      * high on its own: of a quad reaching far off the screen, the half on it is still drawn. */
     static const u8 tri[2][3] = {{0, 1, 2}, {1, 3, 2}};
-    Vtx out[6];
+    Vtx out[6], out_under[6];
     unsigned nout = 0;
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
     for (int k = 0; k < (n == 4 ? 2 : 1); k++) {
@@ -1875,7 +1930,7 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
             ty0 = imin(ty0, p->y); ty1 = imax(ty1, p->y);
         }
         if (tx1 - tx0 > 1023 || ty1 - ty0 > 511) continue;
-        for (int i = 0; i < 3; i++) out[nout++] = t[tri[k][i]];
+        for (int i = 0; i < 3; i++) out_under[nout] = under[tri[k][i]], out[nout++] = t[tri[k][i]];
         x0 = imin(x0, tx0); x1 = imax(x1, tx1);
         y0 = imin(y0, ty0); y1 = imax(y1, ty1);
     }
@@ -1898,6 +1953,7 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
                      n > 3 ? v[3].y : 0, v[0].r, v[0].g, v[0].b, v[1].r, v[1].g, v[1].b, v[2].r, v[2].g, v[2].b, nout);
     }
 #endif
+    if (has_under) emit(m, out_under, nout, x0 - 2, y0 - 2, x1 + 3, y1 + 3, tex, tflags);
     emit(m, out, nout, x0, y0, x1 + 1, y1 + 1, tex, tflags);
 }
 
