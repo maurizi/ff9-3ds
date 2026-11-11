@@ -1847,14 +1847,18 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
      * to the pixel, and where a block's edge and its neighbour's lie on one line a pixel on it is a tie, which the
      * GPU gives to neither (the PS1 to one side): left uncovered, the haze drawn under the ground showed through as
      * white dots along the horizon, and at the far ground the textures' transparent texels are reached a pixel
-     * sooner than on the PS1. Overlapping by half a pixel, the faces leave no such pixel */
+     * sooner than on the PS1. Overlapping by half a pixel, the faces leave no such pixel. In stereo by a pixel and a
+     * half: each corner is shifted by its own depth's parallax, and on a mountain's face (depths far apart, some
+     * corners' found by value or fitted) neighbouring blocks' shifts differ by more, dots of the haze down the face as
+     * the camera turned (a 3DS video, on the chocobo) */
     if (world_ground && !ui_mode && !ui_packet() && !model_packet()) {
+        const float grow = stereo_on ? 1.5f : 0.5f;
         float cx = 0, cy = 0;
         for (int i = 0; i < n; i++) cx += t[i].x, cy += t[i].y;
         cx /= (float)n, cy /= (float)n;
         for (int i = 0; i < n; i++) {
             float dx = t[i].x - cx, dy = t[i].y - cy, l = sqrtf(dx * dx + dy * dy);
-            if (l > 0.01f) t[i].x += dx / l * 0.5f, t[i].y += dy / l * 0.5f;
+            if (l > 0.01f) t[i].x += dx / l * grow, t[i].y += dy / l * grow;
         }
     }
     /* The PS1 draws a quad as triangles (0,1,2) and (1,3,2), and skips a triangle 1024 or more wide or 512 or more
