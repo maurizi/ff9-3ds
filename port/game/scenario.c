@@ -14,6 +14,7 @@ void port_scenario_set_enemy_hp(const int *values);
 s32 chr_resetToLevel(s32,s32,u8);
 static struct {
     int blackjack; /* blackjack=1 with field_exit=4: the ending's movie skipped and The End's code taken (blackjack_ui.c) */
+    int wm_set,wm_x,wm_y,wm_z,wm_rot,wm_yaw; /* wmpos=X,Y,Z,ROT,YAW: the world map's player there and its camera turned so (a 3DS capture's log line) */
     int talk_uid,talk_after,talk_auction; /* talk=UID[,FRAMES]: talk to that object once the player has control (decomp R40) */
     int talk_tag; /* talk=UID,FRAMES,TAG: its function TAG instead of its talk (3), e.g. a menu the talk reaches only on foot */
     int place_uid,place_x,place_z,place_dir,place_set; /* place=UID,X,Z,DIR8: the object put there first (as op 1D) */
@@ -63,6 +64,7 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"chocograph")) scenario.chocograph=number(eq,0,24);
         else if(!__builtin_strcmp(s,"blackjack")) scenario.blackjack=number(eq,0,1);
         else if(!__builtin_strcmp(s,"talk")) { char *c=__builtin_strchr(eq,','); if(c) { char *t=__builtin_strchr(c+1,','); if(t) *t=0,scenario.talk_tag=number(t+1,0,255); *c=0,scenario.talk_after=number(c+1,0,100000); } scenario.talk_uid=number(eq,1,255); }
+        else if(!__builtin_strcmp(s,"wmpos")) { if(sscanf(eq,"%d,%d,%d,%d,%d",&scenario.wm_x,&scenario.wm_y,&scenario.wm_z,&scenario.wm_rot,&scenario.wm_yaw)!=5) port_fatal("scenario: wmpos needs five numbers"); scenario.wm_set=1; }
         else if(!__builtin_strcmp(s,"talk_auction")) scenario.talk_auction=number(eq,0,1);
         else if(!__builtin_strcmp(s,"quina")) scenario.quina=number(eq,0,1);
         else if(!__builtin_strcmp(s,"place")) {
@@ -411,4 +413,11 @@ void port_scenario_object_step(void) {
     evt_callObjectFunc(o,1,scenario.talk_tag?scenario.talk_tag:3,0);
     done_talk=1;
     port_log("scenario: talked to uid %d\n",scenario.talk_uid);
+}
+
+/* wmpos=: (world_navi.c, each world frame) 1 with the place once, the world running */
+int port_scenario_wmpos(int *x, int *y, int *z, int *rot, int *yaw) {
+    if(!scenario.enabled || !scenario.wm_set) return 0;
+    *x=scenario.wm_x; *y=scenario.wm_y; *z=scenario.wm_z; *rot=scenario.wm_rot; *yaw=scenario.wm_yaw;
+    return 1;
 }

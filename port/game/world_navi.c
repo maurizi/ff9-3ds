@@ -74,8 +74,30 @@ static const u8 *port_world_place_name(int *x, int *y) {
     return name;
 }
 
+/* the player's world position, facing and the camera's angle (a scenario's wmpos= puts them back: port/game/scenario.c) */
+void port_world_where(void) {
+    if (!g_worldPlayer || !g_worldCamera) return;
+    port_log("world: wmpos=%d,%d,%d,%d,%d (world %d, view blend %d, move mode %d)\n", (int)g_worldPlayer->pos.vx,
+             (int)g_worldPlayer->pos.vy, (int)g_worldPlayer->pos.vz, (int)g_worldPlayer->pos.rotY, (int)g_worldCamera->yaw,
+             (int)g_gameState->gameData->worldId, (int)g_worldCamera->viewBlend, (int)(u8)g_worldMoveMode);
+}
+/* a scenario's wmpos=, once the world has run a second: the player there, facing so, the camera turned so */
+static void scenario_place(void) {
+    int port_scenario_wmpos(int *x, int *y, int *z, int *rot, int *yaw);
+    static int frames, done;
+    int x, y, z, rot, yaw;
+    if (done || !g_worldPlayer || !g_worldCamera || !port_scenario_wmpos(&x, &y, &z, &rot, &yaw) || ++frames < 60) return;
+    g_worldPlayer->pos.vx = g_worldPlayer->prevPos.vx = x;
+    g_worldPlayer->pos.vy = g_worldPlayer->prevPos.vy = y;
+    g_worldPlayer->pos.vz = g_worldPlayer->prevPos.vz = z;
+    g_worldPlayer->pos.rotY = (s16)rot;
+    g_worldCamera->yaw = (u16)yaw;
+    done = 1;
+    port_log("scenario: world player placed at %d,%d,%d\n", x, y, z);
+}
 static const u8 *port_world_place_name(int *x, int *y);
 void o0c_wm_naviDraw(void) {
+    scenario_place();
     if (g_worldTitleId >= 0) o0c_wm_drawTitle();
     if (!g_worldNaviActive) return;
     { /* a question open (the moogle's, the chocobo's menu, the airship's): its choices as buttons on the bottom screen
