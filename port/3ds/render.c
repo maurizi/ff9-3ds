@@ -1466,8 +1466,12 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
     u32 info = v->xyw && !getenv_nodepth ? psx_depth_lookup(v->xyw) : 0;
     ctr_depth_stats[info ? 0 : 1]++;
     if (info) {
-        o->x += (info & 0xFF) * (1.0f / 256);
-        o->y += ((info >> 8) & 0xFF) * (1.0f / 256);
+        /* (not on the world map: its ground's blocks are projected each on its own, and the fractions of a vertex they
+         * share differ, moving one block's edge off its neighbour's; the PS1 draws from the whole pixel) */
+        if (!world_ground) {
+            o->x += (info & 0xFF) * (1.0f / 256);
+            o->y += ((info >> 8) & 0xFF) * (1.0f / 256);
+        }
         /* (on the world map, found by value, the depth may be another vertex's that projected to the same pixel (its
          * ground reaches the horizon: many vertices per pixel) or an older frame's: for the parallax alone (negative),
          * the texture mapped flat as the PS1 did. As a perspective, a wrong one warped the face's texture past its edge
@@ -1808,6 +1812,15 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     Vtx t[6];
     int with_depth = 0;
     for (int i = 0; i < n; i++) make_vtx(&t[i], m, &v[i]), with_depth += t[i].z > 0;
+    /* The PS1 covers pixel (x, y) when the point (x, y) is inside, its top and left edges included; the 3DS's GPU
+     * tests the pixel's centre (x + 0.5, y + 0.5). Moved by (5/16, 7/16) (whole steps of the GPU's 1/16 pixel),
+     * the polygon's pixels are the PS1's: the centre is its point a little right and below, so a point on a top or
+     * left edge is inside and on a bottom or right edge outside, and none falls on a 45-degree edge. Unmoved, slivers
+     * thinner than half a pixel lost the rows the PS1 draws: the world map's far ground, where blocks meet, showed the
+     * haze under it as white dashes along the horizon (a 3DS video, the Blue Narciss at sea). A polygon whose corners
+     * are whole pixels covers what it did, and its texels are the PS1's more nearly (sampled there, not half a pixel
+     * on) */
+    for (int i = 0; i < n; i++) t[i].x += 5.0f / 16, t[i].y += 7.0f / 16;
     if (tex) for (int i = 0; i < n; i++) t[i].u += tex_ou, t[i].v += tex_ov; /* (its slot's place in the atlas) */
     /* depth for all its vertices or none: a vertex the GTE clamped (near the camera, or far off screen) has none, and
      * mixing w = 1 with w ~ Z would warp the texture across the polygon */
