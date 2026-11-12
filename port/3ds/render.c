@@ -1666,6 +1666,7 @@ static int outline_init(void);
 static const u8 *zoom_lo, *zoom_hi; /* port_bottom_zoom's */
 static float zoom_cx, zoom_cy;
 static int zoom_factor;
+static unsigned zoom_frame; /* (frames_drawn when set: as shift_frame) */
 /* packets [shift_lo, shift_hi) of this frame moved by (shift_dx, shift_dy) on the bottom screen (port_bottom_shift) */
 static const u8 *shift_lo, *shift_hi;
 static int shift_dx, shift_dy;
@@ -1733,7 +1734,10 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     }
     if (layer >= 0) { /* into a UI layer, relative to its framebuffer; the mirror isn't touched */
         for (unsigned i = 0; i < n; i++) moved[i] = v[i], moved[i].x -= ox, moved[i].y -= oy;
-        if (zoom_factor > 1 && (const u8 *)psx_gpu_packet >= zoom_lo && (const u8 *)psx_gpu_packet < zoom_hi)
+        /* (as the block move below, only the frame's it was set for: the chocobo's menu opened over the zoomed map drew its
+         * choices into the map's packets' place, and a frame's zoom left in force enlarged them, flickering) */
+        if (zoom_factor > 1 && (const u8 *)psx_gpu_packet >= zoom_lo && (const u8 *)psx_gpu_packet < zoom_hi &&
+            frames_drawn - zoom_frame <= 1)
             for (unsigned i = 0; i < n; i++) /* (the world map's navigation map, zoomed: the party in the middle) */
                 moved[i].x = 160 + (moved[i].x - zoom_cx) * zoom_factor,
                 moved[i].y = 112 + (moved[i].y - zoom_cy) * zoom_factor;
@@ -2224,6 +2228,7 @@ void port_bottom_zoom(const void *lo, const void *hi, int cx, int cy, int factor
     zoom_cx = (float)cx;
     zoom_cy = (float)cy;
     zoom_factor = factor;
+    zoom_frame = frames_drawn;
 }
 static float top_scale(int w, int h);
 /* ---- cel-shading outlines (New 3DS option: ctr_outline) ----
