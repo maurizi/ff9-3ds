@@ -146,7 +146,7 @@ with the cursor set and the game's own confirm run. port/game/battle_ui.c.)
 
 ## Field minigames
 - Their counters and prompts move to the bottom screen (by field and message id, decomp R38/R40: the jump rope's
-  count, Hippaul's "Press Square and Circle alternately!", the frog count, Chocobo Hot and Cold's how-to); speech
+  count, Hippaul's "Press Square and Circle alternately!", the frog count; Chocobo Hot and Cold stays as the PS1 has it); speech
   balloons stay with the speakers; the field's bottom screen gives way while one is up. The Prima Vista sword fight's
   current button is also shown large on the bottom (display only). **[done]**
 - The Treno auction: price, funds and who leads on the bottom; PLACE A BID opens the game's bid (its bid region's own

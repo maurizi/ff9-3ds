@@ -40,7 +40,6 @@ static int to_bottom(const Window *w) {
                 return 2;
         return 0;
     }
-    if (field == 2950) return w->style != WIN_STYLE_BALLOON; /* (Chocobo Hot and Cold: its how-to-play box, its score) */
     for (int k = 0; k < 10; k++) {
         const MsgWindow *m = &g_msgWindows[k];
         if (!m->open || m->window != w) continue;
@@ -153,10 +152,6 @@ int port_bottom_fade(void) {
     /* (a field still loading: the top is black without the fade (after a battle, a disc's load), the bottom too) */
     if (g_gameState->mode == 1 && !port_field_current()) return 256;
     if (!g_fade.subtract || (!g_fade.active && !g_fade.covered)) return 0;
-    /* (the game's windows are drawn over its fade: Hot and Cold's how-to-play pages over the scene faded out. They are
-     * on the bottom screen with the panel, so it isn't dimmed while one is up) */
-    for (int i = 0; i < 10; i++)
-        if (g_windows[i].state != WIN_STATE_CLOSED && g_windows[i].visible) return 0;
     if (g_fade.type == FADE_FLAT) { /* as dark as its colour (Hot and Cold's "Time's Up" dims the scene to 32 only) */
         int c = g_fade.color.b[0] > g_fade.color.b[1] ? g_fade.color.b[0] : g_fade.color.b[1];
         if (g_fade.color.b[2] > c) c = g_fade.color.b[2];
