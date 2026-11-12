@@ -1479,8 +1479,13 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
          * copied, found by value) the depth is right, and flat there broke the models: black boxes, smeared faces) */
         o->z = psx_depth_by_value && world_ground ? -(float)(info >> 16) : (float)(info >> 16);
     }
-    o->u = (float)v->u;
-    o->v = (float)v->v;
+    /* (the world map's texels as the PS1 picks them: the texel nearest the interpolated (u, v), where the GPU's nearest
+     * filter takes the one it falls in. At a corner (u, v) is whole, on a texel's edge, and the GPU's rounding took the
+     * texel before as often as not: a transparent one at a block's corner, the fog drawn under it added twice, a pale
+     * dot. Half a texel on, the same texels as the PS1's everywhere) */
+    const float uv_half = world_ground && !ui_mode ? 0.5f : 0;
+    o->u = (float)v->u + uv_half;
+    o->v = (float)v->v + uv_half;
     o->rgba = vcolor(m, v);
     o->d = 0;
 }
@@ -1896,20 +1901,17 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         for (int i = 0; i < n; i++)
             if (t[i].z > 2 * med || 2 * t[i].z < med) t[i].z = med;
     }
-    /* the world map's scenery (not its models: the ship, the party; not the bottom screen's UI) grown outward, each
-     * edge moved out along its normal. Its blocks meet only to the pixel, and where a block's edge and its neighbour's
-     * lie on one line a pixel on it is a tie, which the GPU gives to neither (the PS1 to one side): left uncovered,
-     * the haze drawn under the ground (which is drawn semi-transparent over it) showed through as pale dots, along the
-     * horizon, down a cliff face, at the far ground, whose faces are slivers a pixel or two tall (grown from their
-     * centre, they only got longer). By a pixel; in stereo by a pixel and a half: each corner is shifted by its own
-     * depth's parallax, and on a mountain's face neighbouring blocks' shifts differ by more. An opaque textured face is
-     * drawn twice, grown first and then as it is: grown alone its texture stretched with it, and a pixel inside could
-     * meet a transparent texel the PS1's doesn't (the haze through a cliff). Semi-transparent ones once, grown (twice
-     * they would blend twice) */
+    /* in stereo, the world map's scenery (not its models: the ship, the party; not the bottom screen's UI) grown
+     * outward by a pixel and a half, each edge moved out along its normal. Its blocks are projected each on its own and
+     * meet at the same pixels, but each corner is then shifted by its own depth's parallax, and on a mountain's face
+     * neighbouring blocks' shifts differ: gaps between them, the haze drawn under the ground showing through as pale
+     * dots. (In 2D they meet exactly, and are drawn as they are.) An opaque textured face is drawn twice, grown first and
+     * then as it is: grown alone its texture stretched with it, and a pixel inside could meet a transparent texel the
+     * PS1's doesn't (the haze through a cliff). Semi-transparent ones once, grown (twice they would blend twice) */
     Vtx under[4];
     int has_under = 0;
-    if (world_ground && !ui_mode && !ui_packet() && !model_packet()) {
-        const float d = stereo_on ? 1.5f : 1.0f;
+    if (stereo_on && world_ground && !ui_mode && !ui_packet() && !model_packet()) {
+        const float d = 1.5f;
         if (m->textured && !m->semi) {
             for (int i = 0; i < n; i++) under[i] = t[i];
             grow_poly(under, n, d);
