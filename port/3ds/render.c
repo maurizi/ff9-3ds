@@ -1905,23 +1905,15 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
      * outward by a pixel and a half, each edge moved out along its normal. Its blocks are projected each on its own and
      * meet at the same pixels, but each corner is then shifted by its own depth's parallax, and on a mountain's face
      * neighbouring blocks' shifts differ: gaps between them, the haze drawn under the ground showing through as pale
-     * dots. (In 2D they meet exactly, and are drawn as they are.) An opaque textured face is drawn twice, grown first and
-     * then as it is: grown alone its texture stretched with it, and a pixel inside could meet a transparent texel the
-     * PS1's doesn't (the haze through a cliff). Semi-transparent ones once, grown (twice they would blend twice) */
-    Vtx under[4];
-    int has_under = 0;
-    if (stereo_on && world_ground && !ui_mode && !ui_packet() && !model_packet()) {
-        const float d = 1.5f;
-        if (m->textured && !m->semi) {
-            for (int i = 0; i < n; i++) under[i] = t[i];
-            grow_poly(under, n, d);
-            has_under = 1;
-        } else grow_poly(t, n, d);
-    }
+     * dots. (In 2D they meet exactly, and are drawn as they are.) Each face drawn once, grown with its texture: with
+     * the texels as the PS1 picks them (make_vtx) its grown edges no longer reach a transparent one (an underlay
+     * drawn first, opaque faces twice, cost frames on a 3DS in 3D) */
+    int grown = 0;
+    if (stereo_on && world_ground && !ui_mode && !ui_packet() && !model_packet()) grow_poly(t, n, 1.5f), grown = 2;
     /* The PS1 draws a quad as triangles (0,1,2) and (1,3,2), and skips a triangle 1024 or more wide or 512 or more
      * high on its own: of a quad reaching far off the screen, the half on it is still drawn. */
     static const u8 tri[2][3] = {{0, 1, 2}, {1, 3, 2}};
-    Vtx out[6], out_under[6];
+    Vtx out[6];
     unsigned nout = 0;
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
     for (int k = 0; k < (n == 4 ? 2 : 1); k++) {
@@ -1932,7 +1924,7 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
             ty0 = imin(ty0, p->y); ty1 = imax(ty1, p->y);
         }
         if (tx1 - tx0 > 1023 || ty1 - ty0 > 511) continue;
-        for (int i = 0; i < 3; i++) out_under[nout] = under[tri[k][i]], out[nout++] = t[tri[k][i]];
+        for (int i = 0; i < 3; i++) out[nout++] = t[tri[k][i]];
         x0 = imin(x0, tx0); x1 = imax(x1, tx1);
         y0 = imin(y0, ty0); y1 = imax(y1, ty1);
     }
@@ -1955,8 +1947,7 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
                      n > 3 ? v[3].y : 0, v[0].r, v[0].g, v[0].b, v[1].r, v[1].g, v[1].b, v[2].r, v[2].g, v[2].b, nout);
     }
 #endif
-    if (has_under) emit(m, out_under, nout, x0 - 2, y0 - 2, x1 + 3, y1 + 3, tex, tflags);
-    emit(m, out, nout, x0, y0, x1 + 1, y1 + 1, tex, tflags);
+    emit(m, out, nout, x0 - grown, y0 - grown, x1 + 1 + grown, y1 + 1 + grown, tex, tflags);
 }
 
 static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1);
