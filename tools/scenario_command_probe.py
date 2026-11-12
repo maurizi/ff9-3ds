@@ -51,9 +51,9 @@ def main():
             if not path.resolve().is_relative_to(root / 'build') or path.exists():
                 parser.error(f'--{option} must be a new file under build/')
             captures += f' --{option} ' + quote(path)
-    actor = f' && ((arg0->unk4->unk68 >> 1) & 15)=={args.actor}' if args.actor is not None else ''
+    actor = f' && ((cmd->caster->flags >> 1) & 15)=={args.actor}' if args.actor is not None else ''
     if args.require_trance:
-        actor += ' && (arg0->unk4->status & 0x4000)'
+        actor += ' && (cmd->caster->status & 0x4000)'
     args.out.mkdir(parents=True)
     script = args.out / 'probe.gdb'
     presses = ' '.join(f'--press CROSS@{frame}+4'
@@ -64,24 +64,24 @@ set $cast=0
 break o0b_btl_setCmd
 commands
 silent
-if (arg0->unk4->unk68 & 1) && arg1==1 && $cast==0{actor}
-set arg1={args.command}
-set arg2={args.ability}
-set arg3={args.targets}
+if (cmd->caster->flags & 1) && cmdNo==1 && $cast==0{actor}
+set cmdNo={args.command}
+set subNo={args.ability}
+set targets={args.targets}
 set $cast=1
-printf "PROBE_QUEUE cmd=%u ability=%u targets=%x actor=%u status=%x\\n",arg1,arg2,arg3,(arg0->unk4->unk68 >> 1) & 15,arg0->unk4->status
-printf "PROBE_CHARACTER model=%u preset=%u flags=%x\\n",g_gameState->unk1C->characters[(arg0->unk4->unk68 >> 1) & 15].unk34.b.unk4,g_gameState->unk1C->characters[(arg0->unk4->unk68 >> 1) & 15].unk34.b.row,g_gameState->unk1C->characters[(arg0->unk4->unk68 >> 1) & 15].unkA
+printf "PROBE_QUEUE cmd=%u ability=%u targets=%x actor=%u status=%x\\n",cmdNo,subNo,targets,(cmd->caster->flags >> 1) & 15,cmd->caster->status
+printf "PROBE_CHARACTER model=%u preset=%u flags=%x\\n",g_gameState->gameData->characters[(cmd->caster->flags >> 1) & 15].info.b.kind,g_gameState->gameData->characters[(cmd->caster->flags >> 1) & 15].info.b.row,g_gameState->gameData->characters[(cmd->caster->flags >> 1) & 15].classFlags
 end
 continue
 end
 break o0b_btl_playCmdEffect
 commands
 silent
-if (arg0->unk4->unk68 & 1) && arg0->cmdNo==59 && (arg0->unk4->status & 0x4000){actor}
-printf "PROBE_TRANCE_ENTER actor=%u effect=%u\\n",(arg0->unk4->unk68 >> 1) & 15,arg1
+if (cmd->caster->flags & 1) && cmd->cmdNo==59 && (cmd->caster->status & 0x4000){actor}
+printf "PROBE_TRANCE_ENTER actor=%u effect=%u\\n",(cmd->caster->flags >> 1) & 15,effectId
 end
-if (arg0->unk4->unk68 & 1) && arg0->cmdNo=={args.command} && arg0->subNo=={args.ability}{actor}
-printf "PROBE_EFFECT cmd=%u ability=%u effect=%u\\n",arg0->cmdNo,arg0->subNo,arg1
+if (cmd->caster->flags & 1) && cmd->cmdNo=={args.command} && cmd->subNo=={args.ability}{actor}
+printf "PROBE_EFFECT cmd=%u ability=%u effect=%u\\n",cmd->cmdNo,cmd->subNo,effectId
 end
 continue
 end
