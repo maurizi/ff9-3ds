@@ -65,7 +65,6 @@ void psx_load_image(void) {
 
 void game_main(void); /* the game's main loop (decomp src/main/main.c) */
 void port_ovl_native_load(unsigned int id);
-void plat_guard_unused_ram(int on);
 
 extern unsigned short *psx_vram;
 extern unsigned char *psx_spu_ram;
@@ -157,7 +156,6 @@ void psx_run_game(void) {
     port_ovl_native_load(0xFF); /* the DS reads main's image into an overlay slot first (gen_link.py) */
     psx_relocs_load();
     psx_load_image();
-    plat_guard_unused_ram(1);
     game_main();
     port_fatal("the game's main loop returned");
 }
@@ -173,8 +171,6 @@ __attribute__((weak)) void port_overlay_relocated(unsigned int id, unsigned int 
     (void)id; (void)off; (void)len;
 }
 
-/* port/pc/platform.c: PS1 RAM the game never touches, which the DS reuses, faults on the PC (no-op elsewhere) */
-__attribute__((weak)) void plat_guard_unused_ram(int on) { (void)on; }
 /* port/ds/ovl_pack.c: the DS reads an overlay's native code when the game loads it; elsewhere it is linked in */
 __attribute__((weak)) void port_ovl_native_load(unsigned int id) { (void)id; }
 /* ... and again where disc sectors land on one kept in its own MIPS code range */
