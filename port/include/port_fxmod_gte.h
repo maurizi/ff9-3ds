@@ -14,6 +14,9 @@
 #define gte_ldv3xy(r0, r1, r2) do { GTE_LWC2(0, (r0), 0); GTE_LWC2(2, (r1), 0); GTE_LWC2(4, (r2), 0); } while (0)
 #undef gte_ldv0xy
 #define gte_ldv0xy(r0) GTE_LWC2(0, (r0), 0)
+/* RTPS (fx_114, fx_1bd: gte_rtps_b with a memory clobber, which the call already is) */
+#undef gte_rtps_bm
+#define gte_rtps_bm() GTE_CMD(0x4A180001)
 /* cfc2 $26 (H); sw */
 #undef gte_ReadGeomScreen
 #define gte_ReadGeomScreen(r0) (*(u32 *)(r0) = gte_cfc2(26))
