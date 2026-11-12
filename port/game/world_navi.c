@@ -15,6 +15,7 @@ __attribute__((weak)) void port_bottom_zoom(const void *lo, const void *hi, int 
     (void)lo; (void)hi; (void)cx; (void)cy; (void)factor;
 }
 void o0c_wm_naviWorldToMap(s32, s32, s32 *, s32 *, u8);
+void o0c_wm_naviDrawChocograph(void);
 
 static int zoomed; /* the bottom-screen map zoomed 2x about the party (a tap toggles it: port_world_tap) */
 static s32 zoom_cx, zoom_cy; /* (the party's map position, the zoom's centre) */
@@ -156,32 +157,12 @@ void o0c_wm_naviDraw(void) {
         zoom_cx = x + 0x28;
         zoom_cy = y + 9;
         port_bottom_zoom((const void *)lo, (const void *)hi, zoom_cx, zoom_cy, zoomed ? 2 : 1); /* (where the arrow is) */
+        /* the chosen Chocograph's picture, where the PS1 has it, on the top screen by its minimap (the game's own
+         * drawing, which the minimap's mode does and the full map drawn here doesn't): its packets outside the bottom
+         * screen's range */
+        if (g_gameState->gameData->chocograph) o0c_wm_naviDrawChocograph();
         /* a place a tap named: its name in a box by it, drawn with the game's text code into the world's own frame
          * (its packets a range of their own: not zoomed) */
-        if (g_gameState->gameData->chocograph) { /* (the chosen Chocograph's picture, which the PS1 shows by its minimap:
-                                                  * enlarged in the bottom map's corner, its frame round it; not zoomed) */
-            u32 *saved_ot = g_ot;
-            u8 *saved_prim = g_primPtr;
-            g_ot = (u32 *)g_worldOt[*g_worldBufIndex];
-            g_primPtr = (u8 *)g_worldPrimPtr;
-            s32 lo3 = g_worldPrimPtr;
-            POLY_FT4 *q = (POLY_FT4 *)g_primPtr;
-            const int x0 = 232, y0 = 158, w = 84, h = 56;
-            setPolyFT4(q);
-            setXY4(q, x0, y0, x0 + w, y0, x0, y0 + h, x0 + w, y0 + h);
-            setUV4(q, 0x30, 0xB0, 0x5A, 0xB0, 0x30, 0xCC, 0x5A, 0xCC);
-            setRGB0(q, 0x80, 0x80, 0x80);
-            q->tpage = getTPage(1, 0, 768, 0);
-            q->clut = getClut(640, 246);
-            addPrim(&g_ot[1], q);
-            g_primPtr = (u8 *)(q + 1);
-            static RECT frame = {228, 154, 92, 64};
-            win_drawBox(&frame, 2, 2);
-            g_worldPrimPtr = (s32)g_primPtr;
-            g_ot = saved_ot;
-            g_primPtr = saved_prim;
-            port_bottom_packets((const void *)lo3, (const void *)g_worldPrimPtr);
-        }
         int px, py;
         const u8 *name = port_world_place_name(&px, &py);
         if (name) {
