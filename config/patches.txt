@@ -132,6 +132,10 @@ src/main/main.c | loaded = preload->loaded >> 11; | psx_overlay_patch(files[mode
 # KO motion selection also reads curCmd+4 while no command is active.
 # MIPS B915C/B9514/B986C perform the read without a NULL branch. Preserve
 # the low-RAM value and stored NULL; do not skip the motion transition.
+# The party's reload after a summon's effect (btl_reloadPartyStep, stepped while the disc reads: BTLFX_CTL_RELOAD_PARTY)
+# picks each unit's motion by curCmd's caster, and the summon's command may be over by then (curCmd NULL: a data
+# abort at its +4 on a 3DS, crash_dump_00000007)
+src/ovl_0b/btl_main.c | g_gameState->gameData->ctx.battle->curCmd->caster | PSX_NZ(g_gameState->gameData->ctx.battle->curCmd)->caster | 2
 # The definition takes a 12-byte struct by value to reproduce the MIPS stack homes (ovl_0b.h); its callers pass two
 # pointers. Natively the struct's third word lies past the callers' arguments, in the caller's frame, and the
 # definition stores to it: define it as the callers see it, with the struct a local.
