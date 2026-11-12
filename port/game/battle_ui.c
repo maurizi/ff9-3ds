@@ -69,14 +69,11 @@ void port_battle_ui_frame(void) {
         if (b && ram_ok(b, sizeof *b)) {
             static int lphase;
             if (b->subPhase != lsub && b->phase < BTL_PHASE_END && b->phase == lphase)
-            {
-                s32 o0b_btl_getSceneData(s32);
-                u8 *pc = g_btlCamScript.pc;
-                port_log("battle: subPhase %d in phase %d (cmd %d) cam mode %d frame %u pc %p scenes %p %p %p\n",
-                         b->subPhase, b->phase, b->curCmd && ram_ok(b->curCmd, sizeof *b->curCmd) ? b->curCmd->cmdNo : -1,
-                         g_btlCamera.mode, (unsigned)g_btlCamScript.frame, (void *)pc, (void *)o0b_btl_getSceneData(0),
-                         (void *)o0b_btl_getSceneData(1), (void *)o0b_btl_getSceneData(2));
-            }
+            /* (not the scene table's entries: at a battle's start it isn't loaded yet, and read through then a data
+             * abort on a 3DS, crash_dump_00000008 at Valia Pira's start) */
+            port_log("battle: subPhase %d in phase %d (cmd %d) cam mode %d frame %u pc %p\n", b->subPhase, b->phase,
+                     b->curCmd && ram_ok(b->curCmd, sizeof *b->curCmd) ? b->curCmd->cmdNo : -1, g_btlCamera.mode,
+                     (unsigned)g_btlCamScript.frame, (void *)g_btlCamScript.pc);
             lsub = b->subPhase, lphase = b->phase;
         }
     }
