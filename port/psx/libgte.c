@@ -197,15 +197,20 @@ MATRIX *MulRotMatrix(MATRIX *m0) {
     return m0;
 }
 
-/* m2 = m0 * m1, with translation m2.t = m0 * m1.t + m0.t */
+/* m2 = m0 * m1, with translation m2.t = m0 * m1.t + m0.t. PsyQ's loads m1.t into the GTE's vector registers, 16 bits
+ * each (lhu / sll 16 into VXY0, VZ0's low half): m1.t is taken modulo 65536, as a signed 16-bit value. The world map
+ * relies on it: its size is a multiple of 65536 (6 x 4 by 5 x 4 blocks of 16384), and a block's translation from the
+ * camera, unwrapped, wraps by it, so the blocks across its edge are drawn beside those this side (without, an edge
+ * of haze there until crossed: a 3DS photo) */
 MATRIX *CompMatrix(MATRIX *m0, MATRIX *m1, MATRIX *m2) {
     MATRIX r;
     load_matrix(0, m0);
     rt_times(m1, &r);
     long long t[3];
+    const s16 v[3] = {(s16)m1->t[0], (s16)m1->t[1], (s16)m1->t[2]};
     for (int i = 0; i < 3; i++) {
-        t[i] = ((m0->m[i][0] * (long long)m1->t[0] + m0->m[i][1] * (long long)m1->t[1] +
-                 m0->m[i][2] * (long long)m1->t[2]) >> 12) + m0->t[i];
+        t[i] = ((m0->m[i][0] * (long long)v[0] + m0->m[i][1] * (long long)v[1] + m0->m[i][2] * (long long)v[2]) >> 12) +
+               m0->t[i];
     }
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
