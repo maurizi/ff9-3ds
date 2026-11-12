@@ -334,9 +334,49 @@ static int esc_args(u8 c) {
     }
 }
 
+/* the message system's values (g_msgNumbers) as text: an item's name in yellow, a number, a bank's text (msg.c's
+ * msg_emitItemName, msg_emitNumber, msg_renderText_text) */
+static u8 *msg_value(u8 c, const u8 *arg, u8 *o, u8 *end) {
+    const u8 *str = NULL;
+    if (c == TEXT_MSG_ITEM_NAME) {
+        s32 id = g_msgNumbers[arg[0] & 7];
+        if (id < ITEM_ID_KEY_FIRST) str = g_itemNames + g_itemTable[id].name;
+        else if (id < ITEM_ID_CARD_FIRST) str = g_keyItemNames + g_keyItemTable[id - ITEM_ID_KEY_FIRST].name;
+        else str = (const u8 *)card_getName(id - ITEM_ID_CARD_FIRST);
+        if (o + 2 > end) return o;
+        *o++ = TEXT_ESC, *o++ = TEXT_COLOR + TEXT_PAL_YELLOW;
+        for (int i = 0; i < 32 && str[i] != TEXT_END && o < end - 2; i++) *o++ = str[i];
+        *o++ = TEXT_ESC, *o++ = TEXT_COLOR + TEXT_PAL_WHITE;
+    } else if (c == TEXT_MSG_NUMBER) {
+        s32 v = g_msgNumbers[arg[0] & 7];
+        char d[12];
+        int n = 0;
+        if (v < 0) v = 0; /* (as msg_emitNumber) */
+        do d[n++] = (char)(v % 10), v /= 10; while (v && n < 11);
+        while (n && o < end) *o++ = (u8)d[--n];
+    } else if (c == TEXT_BANK_TEXT && arg[0] < MSG_TEXT_BANKS && arg[1] < MSG_NUMBERS && g_msgTextBanks[arg[0]]) {
+        const u8 *tbl = g_msgTextBanks[arg[0]];
+        s32 k = g_msgNumbers[arg[1]];
+        if (k >= 0 && k < tbl[0]) {
+            const u8 *e = tbl + 1 + 2 * k;
+            str = tbl + 1 + (e[0] | e[1] << 8);
+            for (int i = 0; i < 64 && str[i] != TEXT_END && str[i] != TEXT_NEWLINE && o < end - 1; i++) {
+                if (str[i] == TEXT_ESC || (str[i] >= TEXT_WIDE_FIRST && str[i] <= TEXT_WIDE_LAST)) *o++ = str[i++];
+                *o++ = str[i];
+            }
+        }
+    }
+    return o;
+}
+
 static const u8 *msg_plain(const u8 *t, u8 *o, int max, u8 stop) {
     u8 *start = o;
     while (*t != TEXT_END && *t != stop && o < start + max - 5) {
+        if (*t == TEXT_ESC && (t[1] == TEXT_MSG_ITEM_NAME || t[1] == TEXT_MSG_NUMBER || t[1] == TEXT_BANK_TEXT)) {
+            o = msg_value(t[1], t + 2, o, start + max - 5);
+            t += 2 + esc_args(t[1]);
+            continue;
+        }
         if (*t == TEXT_ESC) {
             u8 c = t[1];
             int n = 2 + esc_args(c);
@@ -603,6 +643,9 @@ static int draw_choices(void) {
         RECT *r = &r_choice[i];
         r->x = 24; r->w = 272; r->h = h; r->y = y0 + i * (h + gap);
         int sel = i == g_msgChoice - 0;
+        /* (an item's name ends back in white: in an unselected choice, back in its grey) */
+        for (u8 *c = lines[i]; !sel && *c != TEXT_END; c++)
+            if (c[0] == TEXT_ESC && c[1] == TEXT_COLOR + TEXT_PAL_WHITE) c[1] = TEXT_COLOR + TEXT_PAL_GREY;
         text_drawBlock(r->x + 12, r->y + (h - 12) / 2 - (h < 24), 2, lines[i], sel ? 0 : 2);
         win_drawBox(r, 3, 2);
         i++;
