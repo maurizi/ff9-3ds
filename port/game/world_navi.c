@@ -75,9 +75,16 @@ static const u8 *port_world_place_name(int *x, int *y) {
     return name;
 }
 
-/* the player's world position, facing and the camera's angle (a scenario's wmpos= puts them back: port/game/scenario.c) */
+static int ram_ok(const void *p, unsigned size) { /* (as field_hud.c's) */
+    const unsigned char *c = (const unsigned char *)p;
+    return c >= psx_ram + 0x10000 && c <= psx_ram + 0x200000 && size <= (unsigned)(psx_ram + 0x200000 - c);
+}
+/* the player's world position, facing and the camera's angle, in the log with the 3DS's heartbeat while the world map
+ * is up (a scenario's wmpos= puts them back, port/game/scenario.c: a spot reported from a 3DS rebuilt in Azahar) */
 void port_world_where(void) {
-    if (!g_worldPlayer || !g_worldCamera) return;
+    if (!g_gameState || g_gameState->mode != 3 || !ram_ok(g_worldPlayer, sizeof *g_worldPlayer) ||
+        !ram_ok(g_worldCamera, sizeof *g_worldCamera))
+        return;
     port_log("world: wmpos=%d,%d,%d,%d,%d (world %d, view blend %d, move mode %d)\n", (int)g_worldPlayer->pos.vx,
              (int)g_worldPlayer->pos.vy, (int)g_worldPlayer->pos.vz, (int)g_worldPlayer->pos.rotY, (int)g_worldCamera->yaw,
              (int)g_gameState->gameData->worldId, (int)g_worldCamera->viewBlend, (int)(u8)g_worldMoveMode);
