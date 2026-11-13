@@ -153,6 +153,11 @@ void plat_wait_frame(void) {
                  psx_cd_read_starts, psx_cd_sectors_read, psx_cd_last_lba, psx_cd_debug[4], psx_cd_debug[5],
                  ctr_audio_frames, ctr_audio_peak, ctr_audio_dropped, ctr_audio_underruns);
         ctr_audio_peak = 0;
+        { /* (memory over a long session: linear (the texture cache, vertices), VRAM, the cache's pages) */
+            int ctr_texture_pages(void);
+            port_log("memory: linear %u KB, VRAM %u KB free, texture pages %u\n", (unsigned)(linearSpaceFree() >> 10),
+                     (unsigned)(vramSpaceFree() >> 10), (unsigned)ctr_texture_pages());
+        }
         void port_world_where(void);
         port_world_where(); /* (on the world map: where, for a spot to rebuild) */
     }

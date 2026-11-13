@@ -989,6 +989,7 @@ typedef struct {
 #define SLOT_RESERVE (512u << 10)
 static TexSlot slots[MAX_SLOTS];
 static int nslots;
+int ctr_texture_pages(void) { return nslots; } /* (the heartbeat's: platform.c) */
 /* The slots live side by side in atlases (1024x1024: 16 of them; 512x512 or one alone when linear memory is short):
  * primitives from different slots of one atlas are drawn in one batch. Each texture bind was a batch of its own, and
  * a busy field background switches between pages and CLUTs hundreds of times a frame (Lindblum's Castle Station:
