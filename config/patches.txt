@@ -186,3 +186,10 @@ src/ovl_0b/btl_main.c | if (*dup == w) { | if (dup >= ids && *dup == w) { | 1
 src/ovl_0b/btl_status.c | if (battle->subPhase != BTL_END_DEFEAT) { | if (battle->phase != BTL_PHASE_END || battle->subPhase != BTL_END_DEFEAT) { | 1
 # btlfx_drawBgOffscreen copies its saved DRAWENV from the pointer's own bytes (decomp F41): PS1 addresses there
 src/ovl_0b/btlfx_op.c | envs->prev = *(DRAWENV *)&g_btlfxEnv->drawEnv; | port_btlfx_prev_env(&envs->prev, &g_btlfxEnv->drawEnv); | 1
+
+# World map characters' models (the party, a chocobo, a vehicle): each mesh group's packets (the model's own buffer, a
+# half per frame buffer: wm_drawMesh) registered as a model's (port/game/wm_mesh.c), so in stereo they are not grown
+# with the scenery (the ground's 1.5 px each way drew Zidane fat) and take one depth (each corner's found by its screen
+# position: as the model animated, its outline flickered).
+src/ovl_0c/w_movement.c | wm_drawMeshClipY(obj, i); | wm_drawMeshClipY(obj, i); port_wm_mesh_packets(obj, i); | 1
+src/ovl_0c/w_movement.c | wm_drawMesh(obj, i); | wm_drawMesh(obj, i); port_wm_mesh_packets(obj, i); | 1

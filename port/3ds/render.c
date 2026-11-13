@@ -1607,7 +1607,21 @@ static void fit_frame(void) {
         zc_smooth += (fit_z / fit_n - zc_smooth) * 0.1f;
         float nz = fit_zmin < zc_smooth / 4 ? zc_smooth / 4 : fit_zmin > zc_smooth ? zc_smooth : fit_zmin;
         near_smooth += (nz - near_smooth) * 0.1f;
-        stereo_inv_zc = 1.0f / (ctr_flat_bg ? zc_smooth : near_smooth);
+        /* the convergence held while the scene's depth stays within 8% of it, followed when it moves further (the camera
+         * moving, a new scene) until within 1%: the smoothed depths drift a little every frame as the samples vary
+         * (1779-1789 of them on a still world map, its mean never settling), and each drift moved the whole scene's
+         * parallax by a fraction of a pixel, its texels resampled: in stereo a still scene shimmered (a 3DS video; in
+         * Azahar 0.7-0.9% of pixels changed a frame against 0.1-0.2% in 2D) */
+        static float zc_used = 0;
+        static int following;
+        float want = ctr_flat_bg ? zc_smooth : near_smooth;
+        if (zc_used <= 0) zc_used = want;
+        if (fabsf(want - zc_used) > 0.08f * zc_used) following = 1;
+        if (following) {
+            zc_used += (want - zc_used) * 0.25f;
+            if (fabsf(want - zc_used) < 0.01f * zc_used) following = 0;
+        }
+        stereo_inv_zc = 1.0f / zc_used;
         float den = fit_n * fit_ss - fit_s * fit_s;
         if (den > 1e-3f) {
             fit_a = (fit_n * fit_sz - fit_s * fit_z) / den;
@@ -2279,6 +2293,16 @@ static const Vtx *model_weld(const Vtx *v, unsigned n, Vtx *out, int m) {
         if (v[i].z != 0) zs += fabsf(v[i].z), zc++; /* (negative: for the parallax alone, a depth all the same) */
     if (zc) models[m - 1].zsum += zs / zc, models[m - 1].zn++;
     mz = zc ? zs / zc : models[m - 1].zn ? models[m - 1].zsum / models[m - 1].zn : models[m - 1].zlast;
+    float base = models[m - 1].zlast > 0 ? models[m - 1].zlast : models[m - 1].zn ? models[m - 1].zsum / models[m - 1].zn : mz;
+    if (world_ground && base > 0) {
+        /* (on the world map, one depth for the whole model: its mean the frame before, in steps of 2%. Its corners'
+         * depths are found by their screen position, and as it animates a corner could take another's (the ground's
+         * behind it): each corner's parallax jumped from frame to frame, the model's outline flickering in stereo (a
+         * 3DS video, the gold chocobo and Zidane). A figure that far off has no depth of its own to see) */
+        float q = expf(roundf(logf(base) * 50.0f) / 50.0f);
+        for (unsigned i = 0; i < n; i++) out[i] = v[i], out[i].z = -q;
+        return out;
+    }
     for (unsigned i = 0; i < n; i++) {
         out[i] = v[i];
         if (out[i].z == 0 && mz > 0) out[i].z = mz;

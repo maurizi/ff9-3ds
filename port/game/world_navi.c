@@ -167,7 +167,13 @@ void o0c_wm_naviDraw(void) {
         /* the chosen Chocograph's picture, where the PS1 has it, on the top screen by its minimap (the game's own
          * drawing, which the minimap's mode does and the full map drawn here doesn't): its packets outside the bottom
          * screen's range */
-        if (g_gameState->gameData->chocograph) o0c_wm_naviDrawChocograph();
+        if (g_gameState->gameData->chocograph) { /* (at the screen plane in stereo, as the windows: a depth fitted per
+                                                  * frame to its ordering-table entry wobbled it, a shimmer in 3D) */
+            s32 lo3 = g_worldPrimPtr;
+            o0c_wm_naviDrawChocograph();
+            void port_ui_packets(const void *, const void *);
+            port_ui_packets((const void *)lo3, (const void *)g_worldPrimPtr);
+        }
         /* a place a tap named: its name in a box by it, drawn with the game's text code into the world's own frame
          * (its packets a range of their own: not zoomed) */
         int px, py;

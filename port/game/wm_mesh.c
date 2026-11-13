@@ -56,3 +56,15 @@ PORT_OVERLAY_CODE(0c) void o0c_wm_projectMesh(ModelObj *arg0, u8 arg1) {
         gte_stsz3c(&g_vtxScreenZ[last_k]);
     }
 }
+
+/* a world map model's mesh group just drawn (wm_drawMesh, wm_drawMeshClipY): its packets, the half of the group's
+ * buffer for the frame buffer drawn into, registered as a model's (render.c: in stereo one depth, not grown) */
+void port_model_packets(const void *lo, const void *hi);
+void port_wm_mesh_packets(ModelObj *model, u8 group) {
+    u8 *m = (u8 *)model;
+    u8 *grp = *(u8 **)(*(u8 **)(m + 8) + 0x10) + group * 0x28;
+    u8 *pkt = *(u8 **)(*(u8 **)(m + 0x44) + group * 12 + 4);
+    u16 half = *(u16 *)grp;
+    if (g_gameState->gameData->drawBuf != 0) pkt += half;
+    port_model_packets(pkt, pkt + half);
+}
