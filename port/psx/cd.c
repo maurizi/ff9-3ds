@@ -188,6 +188,7 @@ static long disc_at = -1; /* the image's position after the last read */
  * The pack keeps each distinct sector once: game data as its 2048 bytes of user data (sync, address and data
  * subheader rebuilt here; EDC/ECC zero), the rest (the movies) whole. Runs map a disc's LBAs to those records. */
 static int packed;
+static char pack_path[256]; /* (psx_cd_plan's readers open it themselves) */
 static unsigned int pack_table, pack_runs, pack_sectors, pack_data, pack_raw;
 #define PACK_DATA 1u   /* run flags: 2048-byte data records (else 2352-byte raw ones) */
 #define PACK_REPEAT 2u /* every sector of the run is the same record */
@@ -276,6 +277,7 @@ static int open_disc(void) {
         pack_sectors = le32(h + 8);
         if (!pack_sectors) port_fatal("%s: no disc %d in this pack (make ds-packed PACK_DISCS=...)", path, disc_no);
         packed = 1;
+        snprintf(pack_path, sizeof pack_path, "%s", path);
         if (!checked++) pack_check(path);
         return 1;
     }
@@ -450,6 +452,41 @@ static void patch_apply(unsigned int lba, u8 *raw) {
                 port_fatal("disc %d: can't read patched sector %u", disc_no, lba);
             return;
         }
+}
+
+int psx_cd_plan(unsigned int lba, unsigned int n, PsxCdPlan *p) {
+    p->n = 0;
+#ifdef PORT_DISC_PACK
+    open_disc();
+    if (!packed || !pack_path[0]) return 0;
+    if (n_runs < 0 || runs_disc != disc_no) patch_load();
+    for (int i = 0; i < n_runs; i++)
+        if (lba < runs[i].lba + runs[i].count && runs[i].lba < lba + n) return 0;
+    for (unsigned int k = 0; k < n; k++) {
+        unsigned int r = pack_run(lba + k), flags = pack_buf[r].pad;
+        if (!(flags & PACK_DATA)) return 0;
+        long at = (long)pack_data + pack_buf[r].off + (flags & PACK_REPEAT ? 0 : (long)(lba + k - pack_buf[r].lba) * 2048);
+        if (p->n && p->run[p->n - 1].at + (long)p->run[p->n - 1].bytes == at) p->run[p->n - 1].bytes += 2048;
+        else {
+            if (p->n == PSX_CD_PLAN_RUNS) return 0;
+            p->run[p->n].at = at, p->run[p->n++].bytes = 2048;
+        }
+    }
+    snprintf(p->path, sizeof p->path, "%s", pack_path);
+    return 1;
+#else
+    (void)lba, (void)n;
+    return 0;
+#endif
+}
+int psx_cd_read_planned(const PsxCdPlan *p, void *buf) {
+    const int f = open(p->path, O_RDONLY);
+    if (f < 0) return 0;
+    u8 *q = buf;
+    for (int i = 0; i < p->n; q += p->run[i].bytes, i++)
+        if (!read_at(f, p->run[i].at, q, p->run[i].bytes)) { close(f); return 0; }
+    close(f);
+    return 1;
 }
 
 /* ---- positions ------------------------------------------------------------------------------------------ */

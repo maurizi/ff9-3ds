@@ -100,6 +100,8 @@ void plat_async_wait(void) {
     ctr_where = was;
 }
 
+int plat_async_busy(void) { return busy; }
+
 void ctr_async_exit(void) {
     if (!worker) return;
     quit = 1;

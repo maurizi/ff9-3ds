@@ -30,6 +30,7 @@ extern int psx_load_image_skip;
 
 __attribute__((weak)) int plat_async(void (*fn)(void *), void *arg) { (void)fn; (void)arg; return 0; }
 __attribute__((weak)) void plat_async_wait(void) {}
+__attribute__((weak)) int plat_async_busy(void) { return 0; }
 static void ahead_start(u32 *out);
 
 /* ---- transcoded frames -------------------------------------------------------------------------------------- */

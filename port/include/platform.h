@@ -31,5 +31,6 @@ const char *plat_data_dir(void);
  * must touch only memory the caller leaves alone until plat_async_wait() returns. (3DS: the second core; PC: none.) */
 int plat_async(void (*fn)(void *), void *arg);
 void plat_async_wait(void);
+int plat_async_busy(void); /* a job sent and not finished (0 with no worker) */
 
 #endif

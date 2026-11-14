@@ -33,6 +33,14 @@ void psx_load_image(void);
  * (port/psx/cd.c) */
 int psx_cd_boot_exe(unsigned int *lba, unsigned int *size);
 void psx_cd_read_data(unsigned int lba, void *buf, unsigned int n);
+/* The same off the game's thread (port/game/model_view.c: a model read on the other core while a menu goes on):
+ * planned on the game's thread as runs of the disc pack's bytes, read by psx_cd_read_planned on any thread through
+ * a descriptor of its own. psx_cd_plan: 0 if they can't be (no pack, a sector not stored as data or patched, too
+ * many runs): read them with psx_cd_read_data then. */
+#define PSX_CD_PLAN_RUNS 16
+typedef struct { char path[256]; int n; struct { long at; unsigned int bytes; } run[PSX_CD_PLAN_RUNS]; } PsxCdPlan;
+int psx_cd_plan(unsigned int lba, unsigned int n, PsxCdPlan *p);
+int psx_cd_read_planned(const PsxCdPlan *p, void *buf);
 /* Port buffers in PS1 RAM the port never uses (main's MIPS code range, ~335 KB); fatal when it runs out. */
 void *psx_spare_alloc(unsigned int size);
 void psx_mem_init(void); /* the VRAM and SPU RAM shadows (port/psx/mem.c) */

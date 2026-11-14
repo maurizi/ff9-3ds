@@ -15,9 +15,10 @@
 #include "ff9.h"
 
 #include <stdlib.h>
+#include "platform.h"
 
 
-void psx_cd_read_data(unsigned int lba, void *buf, unsigned int n);
+#include "psx_runtime.h"
 void ctr_model_texture(int slot, const u32 *rgba);
 void ctr_model_tri(int tex, const float *x, const float *y, const float *z, const float *u, const float *v,
                    const float *par);
@@ -72,16 +73,76 @@ static long db_nth(const u8 *d, long size, long base, int n) {
     return -1;
 }
 
-static u8 *read_file(int dir, int id, long *size) {
+/* The files read, kept (a dozen battle models and weapons, ~100 KB a character): turning to a member seen before
+ * reads nothing. A file not here is read on the other core (plat_async, through a descriptor of its own:
+ * psx_cd_plan), the game going on meanwhile: read here, on the game's thread, a member's model held the party select
+ * screen ~150 ms each time the cursor moved (the user's report). Read ahead too, one file at a time while the worker
+ * is idle: the other members a screen may show (port_model_prefetch). */
+#define CACHED 16
+static struct { int dir, id; u8 *d; long size; unsigned used; } cache[CACHED];
+static unsigned cache_clock;
+static struct { int dir, id; u8 *d; long size; PsxCdPlan plan; int ok; } job; /* the file being read on the worker */
+static int job_on;
+
+static u8 *cached(int dir, int id, long *size) {
+    for (int i = 0; i < CACHED; i++)
+        if (cache[i].d && cache[i].dir == dir && cache[i].id == id) {
+            cache[i].used = ++cache_clock;
+            *size = cache[i].size;
+            return cache[i].d;
+        }
+    return NULL;
+}
+static void cache_put(int dir, int id, u8 *d, long size) {
+    int v = 0;
+    for (int i = 0; i < CACHED; i++) {
+        if (!cache[i].d) { v = i; break; }
+        if (cache[i].used < cache[v].used) v = i;
+    }
+    free(cache[v].d); /* (the least recently used: no loaded model holds it, the four in view being newer) */
+    cache[v].dir = dir, cache[v].id = id, cache[v].d = d, cache[v].size = size, cache[v].used = ++cache_clock;
+}
+static void job_read(void *arg) {
+    (void)arg;
+    job.ok = psx_cd_read_planned(&job.plan, job.d);
+}
+/* the worker's file, if it is done, into the cache */
+static void job_collect(void) {
+    if (!job_on || plat_async_busy()) return;
+    plat_async_wait();
+    job_on = 0;
+    if (job.ok) cache_put(job.dir, job.id, job.d, job.size);
+    else free(job.d);
+}
+/* the file now, from the cache; else its read started (if the worker is free) and NULL: asked again next frame. With
+ * no worker (the PC host) or no plan for it, read here, unless only ahead (then nothing) */
+static u8 *read_file_ahead(int dir, int id, long *size, int ahead) {
+    job_collect();
+    u8 *d = cached(dir, id, size);
+    if (d) return d;
+    if (job_on) return NULL; /* (another file on its way: this one after it) */
     FileEntry *f = file_find(dir, id);
     if (!f) return NULL;
     unsigned n = (unsigned)(f->link - f->sector);
     if (!n || n > 512) return NULL;
-    u8 *d = malloc(n * 2048);
+    d = malloc(n * 2048);
     if (!d) return NULL;
-    psx_cd_read_data((unsigned)(g_gameState->imgSector + f->sector), d, n);
+    unsigned lba = (unsigned)(g_gameState->imgSector + f->sector);
+    if (psx_cd_plan(lba, n, &job.plan)) {
+        job.dir = dir, job.id = id, job.d = d, job.size = (long)n * 2048, job.ok = 0;
+        if (plat_async(job_read, NULL)) { job_on = 1; return NULL; }
+    }
+    if (ahead) { free(d); return NULL; }
+    psx_cd_read_data(lba, d, n);
+    cache_put(dir, id, d, (long)n * 2048);
     *size = (long)n * 2048;
     return d;
+}
+static u8 *read_file(int dir, int id, long *size) { return read_file_ahead(dir, id, size, 0); }
+static int file_missing(int dir, int id) {
+    long size;
+    if (cached(dir, id, &size)) return 0;
+    return file_find(dir, id) != NULL;
 }
 
 /* a TIM (8-bit, own CLUT) at d+o into a 256x256 RGBA image, its pixels from (0, voff) on; 0 if not one */
@@ -176,22 +237,25 @@ static Loaded ms[SLOTS] = {{-1, -1, 0, NULL, NULL, 0, 0, 0, 0, 0, 0}, {-1, -1, 0
                            {-1, -1, 0, NULL, NULL, 0, 0, 0, 0, 0, 0}, {-1, -1, 0, NULL, NULL, 0, 0, 0, 0, 0, 0}};
 static u32 texbuf[256 * 256];
 
-static void unload(Loaded *m) {
-    free(m->body);
-    free(m->wpn);
+static void unload(Loaded *m) { /* (its files stay in the cache) */
     m->body = m->wpn = NULL;
     m->ok = 0;
 }
 
+/* 1 loaded, 0 not (none for it), -1 a file still being read: the slot keeps what it showed, asked again next frame */
 static int load(int slot, int kind, int item) {
     Loaded *m = &ms[slot];
+    int id = kind >= 0 && kind < 19 ? kinds[kind].body : 0;
+    int wid = item >= 0 && item < 0x58 ? rd16((const u8 *)g_weaponTable + item * 0xC + 2) : 0;
+    long bsize = 0, wsize = 0;
+    u8 *body = id ? read_file(10, id, &bsize) : NULL;
+    u8 *wpn = id && wid ? read_file(8, wid, &wsize) : NULL;
+    if (job_on) return -1;
     unload(m);
     m->kind = kind;
     m->weapon_item = item;
-    if (kind < 0 || kind >= 19) return 0;
-    int id = kinds[kind].body;
-    m->body = read_file(10, id, &m->body_size);
-    if (!m->body) return 0;
+    if (!body) return 0;
+    m->body = body, m->body_size = bsize;
     long pack = db_find(m->body, m->body_size, 0, 0x1B0000), tims = db_find(m->body, m->body_size, 0, 0x1B0001);
     m->head = db_find(m->body, m->body_size, pack, 0x020000 | id);
     m->motion = db_find(m->body, m->body_size, pack, kinds[kind].idle);
@@ -204,8 +268,7 @@ static int load(int slot, int kind, int item) {
         if (ok) ctr_model_texture(slot * 3 + n, texbuf);
     }
     m->whead = -1;
-    int wid = item >= 0 && item < 0x58 ? rd16((const u8 *)g_weaponTable + item * 0xC + 2) : 0;
-    if (wid) m->wpn = read_file(8, wid, &m->wpn_size);
+    m->wpn = wpn, m->wpn_size = wsize;
     if (m->wpn) {
         long wpack = db_find(m->wpn, m->wpn_size, 0, 0x1B0000), wtims = db_find(m->wpn, m->wpn_size, 0, 0x1B0001);
         m->whead = db_find(m->wpn, m->wpn_size, wpack, 0x020000 | wid);
@@ -297,6 +360,7 @@ static void draw_member(int slot, Character *c, int phase, const View *w) {
         for (int i = 0; i < SLOTS; i++) unload(&ms[i]), ms[i].kind = -1;
     }
     if (kind != m->kind || item != m->weapon_item) load(slot, kind, item);
+    else job_collect(); /* (a file read ahead: kept) */
     if (!m->ok) return;
     int ticks = (int)VSync(-1);
     int frame = (ticks / 4 + phase) % (m->frames ? m->frames : 1); /* (15 frames a second, as in battle) */
@@ -328,6 +392,19 @@ static void draw_member(int slot, Character *c, int phase, const View *w) {
         int wb = kinds[kind].bone < nb ? kinds[kind].bone : 0;
         draw(m->wpn, m->whead, &bones[wb], 1, slot * 3 + 2, 1, w);
     }
+}
+
+/* Read ahead, while the worker is idle, the files character c's view will need: the other members a screen can
+ * turn to (menu_top.c). One file at a time. */
+void port_model_prefetch(Character *c) {
+    job_collect();
+    if (job_on || !c) return;
+    int kind = (int)c->info.b.kind, item = c->equip[0];
+    if (kind < 0 || kind >= 19) return;
+    int wid = item >= 0 && item < 0x58 ? rd16((const u8 *)g_weaponTable + item * 0xC + 2) : 0;
+    long size;
+    if (file_missing(10, kinds[kind].body)) read_file_ahead(10, kinds[kind].body, &size, 1);
+    else if (wid && file_missing(8, wid)) read_file_ahead(8, wid, &size, 1);
 }
 
 /* the Equip view: character c turning at (cx, cy) on the top screen, about `height` pixels tall */

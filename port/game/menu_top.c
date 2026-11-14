@@ -493,7 +493,10 @@ int port_menu_top_draw(void) {
         int id = ps[10 + row * 8 + (idx & 7)];
         if (id >= 9) return 0;
         void port_model_view(Character *c, float cx, float cy, float height);
+        void port_model_prefetch(Character *c);
         port_model_view(&g->characters[id], 200, 226, 160);
+        for (int k = 0; k < 16; k++) /* (the others the cursor can go to, read ahead) */
+            if (ps[10 + k] < 9) port_model_prefetch(&g->characters[ps[10 + k]]);
         return 0;
     }
     case 5: { /* the Chocograph screen (chocograph_touch.c) */
