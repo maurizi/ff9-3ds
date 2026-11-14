@@ -149,6 +149,16 @@ static void vram_copy(int sx, int sy, int dx, int dy, int w, int h) {
     if (!gp0_state.set_mask && !((sx ^ dx) & 1023) && !((sy ^ dy) & 511)) return;
     const int check_mask=gp0_state.check_mask;
     const u16 set_mask=gp0_state.set_mask?0x8000:0;
+    /* (without the mask check or a wrap, the renderer may copy it where it draws (set_mask: gp0_state's): the
+     * field-to-battle swirl copies the frame on screen into the next every frame, with set_mask on, which read the
+     * GPU's frame back to the CPU and sent it up again) */
+    if (!check_mask && gp0_backend && gp0_backend->copy && (sx & 1023) + w <= VRAM_W && (dx & 1023) + w <= VRAM_W &&
+        (sy & 511) + h <= VRAM_H && (dy & 511) + h <= VRAM_H && gp0_backend->copy(sx & 1023, sy & 511, dx & 1023, dy & 511, w, h)) {
+        psx_vram_generation++;
+        psx_raster_rows_written(dy, h);
+        psx_display_written(dx, dy, w, h);
+        return;
+    }
     vram_wrapped(psx_vram_read, sx, sy, w, h);
     if (check_mask && (((sx ^ dx) & 1023) || ((sy ^ dy) & 511)))
         vram_wrapped(psx_vram_read, dx, dy, w, h);

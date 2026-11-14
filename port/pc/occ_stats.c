@@ -194,7 +194,7 @@ static void occ_frame(void) {
     last = d;
     if (++frames % 600 == 0) report();
 }
-static const Gp0Backend occ_backend = {occ_poly, occ_line, occ_rect, occ_fill, occ_frame, 0};
+static const Gp0Backend occ_backend = {occ_poly, occ_line, occ_rect, occ_fill, occ_frame, 0, 0};
 
 void occ_stats_install(void) {
     if (!getenv("FF9_OCC")) return;

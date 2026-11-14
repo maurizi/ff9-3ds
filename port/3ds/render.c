@@ -391,7 +391,7 @@ static void gpu_quiet(void) {
 
 /* ---- batches ------------------------------------------------------------------------------------------------ */
 
-enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE, K_SCENE };
+enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE, K_SCENE, K_PAGE_OP, K_PAGE_SEMI };
 #define MASK_SET 1   /* drawn pixels get the mask bit (alpha 1); else the texel's (textured) or 0 */
 #define MASK_CHECK 2 /* pixels with the mask bit keep their colour (opaque draws) */
 #define MASK_COPY 4  /* an upload: the source's mask bits as they are */
@@ -602,6 +602,16 @@ static void set_tev_for(int kind, int layer) {
         C3D_TexEnvFunc(e0, C3D_Alpha, GPU_REPLACE);
         C3D_TexEnvColor(e0, 0xFF000000);
         break;
+    case K_PAGE_OP: /* the mirror sampled as a texture, its texels without the mask bit (alpha 0): drawn opaque */
+    case K_PAGE_SEMI: /* ... and those with it (alpha 1): blended. Alpha 1 for the ones drawn (the test), written as
+                       * the mask bit by the blend (set_blend_mask: 0 for the opaque pass, 1 for the blended one) */
+        C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+        C3D_TexEnvFunc(e0, C3D_RGB, GPU_MODULATE);
+        C3D_TexEnvScale(e0, C3D_RGB, GPU_TEVSCALE_2);
+        C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, 0, 0);
+        C3D_TexEnvOpAlpha(e0, kind == K_PAGE_OP ? GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA : GPU_TEVOP_A_SRC_ALPHA, 0, 0);
+        C3D_TexEnvFunc(e0, C3D_Alpha, GPU_REPLACE);
+        break;
     default: /* textured: texel x vertex colour x 2 */
         C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
         C3D_TexEnvFunc(e0, C3D_RGB, GPU_MODULATE);
@@ -655,7 +665,7 @@ static void set_tev_for(int kind, int layer) {
         C3D_TexEnvFunc(e2, C3D_Alpha, GPU_REPLACE);
     }
     if (kind == K_TEX) C3D_AlphaTest(true, GPU_GREATER, 0);
-    else if (kind == K_TEX_P1 || kind == K_TEX_P2) C3D_AlphaTest(true, GPU_GREATER, 0x7F);
+    else if (kind == K_TEX_P1 || kind == K_TEX_P2 || kind == K_PAGE_OP || kind == K_PAGE_SEMI) C3D_AlphaTest(true, GPU_GREATER, 0x7F);
     else C3D_AlphaTest(false, GPU_ALWAYS, 0);
 }
 
@@ -679,7 +689,7 @@ static void set_blend_mask(int abr, int layer, int mask, int kind) {
         int check = mask & MASK_CHECK;
         if (mask & MASK_COPY) sa = GPU_ONE, da = GPU_ZERO;
         else if (mask & MASK_SET) sa = GPU_CONSTANT_ALPHA, da = GPU_ZERO;           /* 1 (masked or not) */
-        else if (kind == K_TEX || kind == K_TEX_P2) sa = check ? GPU_ONE_MINUS_DST_ALPHA : GPU_ONE, da = check ? GPU_ONE : GPU_ZERO;
+        else if (kind == K_TEX || kind == K_TEX_P2 || kind == K_PAGE_SEMI) sa = check ? GPU_ONE_MINUS_DST_ALPHA : GPU_ONE, da = check ? GPU_ONE : GPU_ZERO;
         else sa = GPU_ZERO, da = check ? GPU_ONE : GPU_ZERO;                         /* 0, or kept where masked */
         if (abr == NO_BLEND && check) { /* (opaque draws only: masked pixels keep their colour) */
             C3D_BlendingColor(0xFF000000);
@@ -1414,6 +1424,25 @@ static C3D_Tex *mirror_page(int tx, int ty) {
 }
 
 static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
+    /* A semi-transparent 15-bit texture read from VRAM the GPU has drawn, outside the area being drawn into (the
+     * field-to-battle swirl: the frame on screen warped into the next): the mirror sampled where it is, its alpha the
+     * texels' bit 15 (the mask bit), which the two page passes split as the PS1 does (opaque without it, blended with
+     * it). It was read back to the CPU and converted every frame (a readback and some ten GPU syncs a frame: the
+     * swirl at 25-31 ms a frame in Azahar, the transition's lag on a 3DS) */
+    if (m->depth == 2 && m->semi && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y && u1 >= u0 && v1 >= v0) {
+        int x0 = m->tx + u0, y0 = m->ty + v0, x1 = m->tx + u1 + 1, y1 = m->ty + v1 + 1;
+        int apart = x1 <= gp0_state.area_x0 || x0 > gp0_state.area_x1 || y1 <= gp0_state.area_y0 || y0 > gp0_state.area_y1;
+        if (apart && x1 <= VW && y1 <= VH && gpu_owned(x0, y0, x1, y1)) {
+            int cx0, cy0, cx1, cy1; /* (the mirror current there: cells the CPU wrote since) */
+            if (cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1))
+                for (int cy = cy0; cy < cy1; cy++)
+                    for (int cx = cx0; cx < cx1; cx++)
+                        if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
+            *flags = 8;
+            tex_ou = (float)m->tx, tex_ov = (float)m->ty;
+            return &mirror_tex[0];
+        }
+    }
     /* (a translucent primitive's texels by their bit 15, as the slots hold it (alpha 0xFF / 0x80, flags): the copied
      * page has the mirror's one alpha bit, and with no flags it drew nothing, Demi's sphere and its glow on the ground) */
     if (m->depth == 2 && !m->semi && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
@@ -1723,6 +1752,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         int passes2[2], np2 = 0, abr2 = m->semi ? m->abr : NO_BLEND;
         if (!m->textured) passes2[np2++] = K_UNTEX;
         else if (!m->semi) passes2[np2++] = K_TEX;
+        else if (tflags & 8) passes2[np2++] = K_PAGE_OP, passes2[np2++] = K_PAGE_SEMI;
         else {
             if (tflags & 1) passes2[np2++] = K_TEX_P1;
             if (tflags & 2) passes2[np2++] = K_TEX_P2;
@@ -1730,7 +1760,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         for (int p = 0; p < np2; p++) {
             Vtx *o = alloc_vtx(n);
             memcpy(o, v, n * sizeof *v);
-            add_batch(passes2[p], passes2[p] == K_TEX_P1 ? NO_BLEND : abr2, 3, tsc, tex, o - vb, n);
+            add_batch(passes2[p], passes2[p] == K_TEX_P1 || passes2[p] == K_PAGE_OP ? NO_BLEND : abr2, 3, tsc, tex, o - vb, n);
         }
         return;
     }
@@ -1787,12 +1817,13 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     int passes[2], np = 0, abr = m->semi ? m->abr : NO_BLEND;
     if (!m->textured) passes[np++] = K_UNTEX;
     else if (!m->semi) passes[np++] = K_TEX;
+    else if (tflags & 8) passes[np++] = K_PAGE_OP, passes[np++] = K_PAGE_SEMI;
     else {
         if (tflags & 1) passes[np++] = K_TEX_P1;
         if (tflags & 2) passes[np++] = K_TEX_P2;
     }
     for (int p = 0; p < np; p++) {
-        int pabr = passes[p] == K_TEX_P1 ? NO_BLEND : abr;
+        int pabr = passes[p] == K_TEX_P1 || passes[p] == K_PAGE_OP ? NO_BLEND : abr;
         if (layer < 0 && n % 3 == 0) {
             run_add(passes[p], pabr, sc, tex, v, n);
             continue;
@@ -2187,7 +2218,32 @@ static void r_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
     emit(m, t, 6, imin(a->x, b->x), imin(a->y, b->y), imax(a->x, b->x) + 1, imax(a->y, b->y) + 1, NULL, 0);
 }
 
-static const Gp0Backend pica_backend = {r_poly, r_line, r_rect, 0, 0, 0};
+/* gpu.c's VRAM-to-VRAM copy (set_mask: each pixel copied with its mask bit set), when its source is the GPU's (drawn since the CPU last read it) and apart from where it
+ * goes: copied in the mirror, each eye's from its own, and the destination left the GPU's (read back if the CPU reads
+ * it). Else the CPU copies it in the shadow, as before (a readback of the source first) */
+static int r_copy(int sx, int sy, int dx, int dy, int w, int h) {
+    if (!(sx + w <= dx || dx + w <= sx || sy + h <= dy || dy + h <= sy)) return 0;
+    if (!gpu_owned(sx, sy, sx + w, sy + h)) return 0;
+    int cx0, cy0, cx1, cy1; /* (the source current in the mirror: cells the CPU wrote since) */
+    if (cell_range(sx, sy, sx + w, sy + h, &cx0, &cy0, &cx1, &cy1))
+        for (int cy = cy0; cy < cy1; cy++)
+            for (int cx = cx0; cx < cx1; cx++)
+                if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
+    gpu_draws(dx, dy, dx + w, dy + h);
+    int saved = cur_target, saved_mask = cur_mask;
+    cur_target = 0;
+    cur_mask = gp0_state.set_mask ? MASK_SET : MASK_COPY; /* (the pixels with their mask bits, or all with it set) */
+    for (int eye = 0; eye < 2; eye++) {
+        Vtx *v = alloc_vtx(6);
+        quad(v, dx, dy, dx + w, dy + h, sx, sy, sx + w, sy + h, 0xFFFFFFFF);
+        add_batch(K_BLIT, NO_BLEND, 1 << eye, full_scissor, &mirror_tex[eye], v - vb, 6);
+    }
+    cur_target = saved;
+    cur_mask = saved_mask;
+    ctr_render_stats[2]++;
+    return 1;
+}
+static const Gp0Backend pica_backend = {r_poly, r_line, r_rect, 0, 0, 0, r_copy};
 
 /* gpu.c: the end of an ordering table */
 void psx_gpu_ot_done(void);

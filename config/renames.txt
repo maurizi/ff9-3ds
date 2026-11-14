@@ -71,3 +71,5 @@ src/ovl_0b/btlcam_o1 o0b_btlcam_update o0b_btlcam_update_game
 src/ovl_0b/btlui o0b_btlui_isPauseRequested o0b_btlui_isPauseRequested_game
 # The event timer: drawn on the top screen, over the paused scene, while a menu is up (port/game/field_hud.c).
 src/main/tu_800236C4 game_updateTimer game_updateTimer_game
+# RAM-to-RAM copies through VRAM: plain copies when they use the draw buffer as scratch (port/game/file_copy.c).
+src/main/file file_copyViaVram file_copyViaVram_game

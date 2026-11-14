@@ -42,6 +42,9 @@ typedef struct {
     /* optional: a texture page + SPRT_16 packet's words (gp0_tpage_sprite16, its bookkeeping done) taken as they are
      * (0: given to rect) */
     int (*sprite16)(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc);
+    /* optional: a VRAM-to-VRAM copy (no mask check, no wrap; set_mask as gp0_state has it) done by the renderer itself,
+     * 1 if it took it (0: by the CPU, in the shadow) */
+    int (*copy)(int sx, int sy, int dx, int dy, int w, int h);
 } Gp0Backend;
 
 extern const Gp0Backend *gp0_backend;
