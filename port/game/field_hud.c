@@ -660,16 +660,30 @@ static int draw_choices(void) {
 /* whether the player has had control in this field: before that it is a cutscene or a movie (the opening's
  * "Opening-For FMV" field; its party a placeholder), and the bottom screen stays dark. A dialogue takes control away
  * for a moment, which mustn't hide anything. */
+/* (control held for STEADY frames: an event that gives it for a frame, as an encounter's in a cutscene stretch, brought
+ * the whole screen up for that frame before the swirl) */
+#define STEADY 10
 static int had_control(void) {
-    static int field = -1, had;
+    static int field = -1, had, run;
     GameData *g = g_gameState->gameData;
-    if (g->fieldId != field) field = g->fieldId, had = 0;
-    if (ram_ok(g_evtState, sizeof *g_evtState) && g_evtState->controlEnabled) had = 1;
+    if (g->fieldId != field) field = g->fieldId, had = 0, run = 0;
+    if (ram_ok(g_evtState, sizeof *g_evtState) && g_evtState->controlEnabled) { if (++run >= STEADY) had = 1; }
+    else run = 0;
     return had;
 }
 
+/* (changed only once the new state has held STEADY frames: at an encounter the menu flags change for a frame or two
+ * before the swirl, and the party list went and came back) */
 static int menu_allowed(void) {
-    return had_control() && !(g_gameState->gameData->flags & GD_MENU_DISABLED);
+    static int shown, run, last_frame = -1;
+    int now = had_control() && !(g_gameState->gameData->flags & GD_MENU_DISABLED);
+    int f = (int)VSync(-1);
+    if (f != last_frame) { /* (once a frame: draw asks more than once) */
+        last_frame = f;
+        if (now == shown) run = 0;
+        else if (++run >= STEADY) shown = now, run = 0;
+    }
+    return shown;
 }
 
 static int card_count(void) {
@@ -910,6 +924,10 @@ void port_bottom_hud(void) {
     if (!title) title_opts = 0;
     if (world && world_choices) shown = 1; /* (the world map's question, drawn with its map: port_world_choices) */
     if (g_gameState->mode != 1 && !battle && !world && !title && !boot && !gameover && !bj) return;
+    /* (an encounter begun: dark from the swirl on, until the battle's own screen comes with its HUD. Drawn through it,
+     * the party list went and came back as the menu flags changed under it, then all went at the battle (the user's
+     * report)) */
+    { int port_field_encountering(void); if (g_gameState->mode == 1 && port_field_encountering()) return; }
     if (!g_gameState->gameData->font) return; /* (the common images aren't loaded yet) */
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);

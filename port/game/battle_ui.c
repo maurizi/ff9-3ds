@@ -425,7 +425,8 @@ int port_battle_hud_draw(void) {
     if (st == BTLUI_MENU_CLOSING && g_btlUi->windows[2] && g_btlUi->windows[2]->state) return 0; /* (a list opening) */
     draw_commands();
     draw_cards();
-    { /* PAUSE and RUN */
+    sys_shown = 0;
+    if (g_btluiState.enabled) { /* PAUSE and RUN: with the party (party_unit), not over the battle's opening alone */
         static const u8 pause[] = "PAUSE", run[] = "HOLD TO RUN";
         sys_shown = g_btluiState.started != 0;
         int w = ui_measureLabel((u8 *)pause);
