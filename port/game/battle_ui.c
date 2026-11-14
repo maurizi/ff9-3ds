@@ -137,14 +137,14 @@ static int ram_ok(const void *p, unsigned size) { /* (as field_hud.c's) */
      * could wrap: a pointer of -1 (field 1756's battle UI pointer, outside a battle) passed, and faulted at 0x12B4) */
 }
 
+/* the party as the PS1's panel lists it (btlui_updatePanel, refreshed each frame while the battle UI is enabled):
+ * none before then. At a battle's start its script may still take members out (the unit list held Freya and Blank
+ * with Zidane in Pandemonium's "You're not alone" battle 155, Freya taken out before combat to join later): listed
+ * from the unit list, the bottom screen showed her from the start (the user's report); the PS1 shows no panel then */
 static BtlUnit *party_unit(int i) {
-    int n = 0, guard = 0;
-    for (BtlUnit *u = g_gameState->gameData->ctx.battle->unitList; ram_ok(u, sizeof *u) && guard++ < 32; u = u->next)
-        if (u->flags & 1) {
-            if (n == i) return u;
-            n++;
-        }
-    return NULL;
+    if (!g_btluiState.enabled || !ram_ok(g_btluiPanel, sizeof *g_btluiPanel) || i >= g_btluiPanel->rowCount) return NULL;
+    BtlUnit *u = g_btluiPanel->units[i];
+    return ram_ok(u, sizeof *u) ? u : NULL;
 }
 
 /* a solid bar (a TILE packet) into ot */
@@ -204,7 +204,7 @@ static void draw_cards(void) {
         }
         if (g_btlUi->cmdUnit == u) bar(&g_ot[2], r_cards.x + 2, y + 1, 2, 32, 0x40E0F8); /* (the member choosing) */
     }
-    win_drawBox(&r_cards, 4, 2);
+    if (card_unit[0]) win_drawBox(&r_cards, 4, 2); /* (no box while the panel lists nobody: the PS1 shows none) */
 }
 
 static void draw_commands(void) {
