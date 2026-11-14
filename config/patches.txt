@@ -193,3 +193,7 @@ src/ovl_0b/btlfx_op.c | envs->prev = *(DRAWENV *)&g_btlfxEnv->drawEnv; | port_bt
 # position: as the model animated, its outline flickered).
 src/ovl_0c/w_movement.c | wm_drawMeshClipY(obj, i); | wm_drawMeshClipY(obj, i); port_wm_mesh_packets(obj, i); | 1
 src/ovl_0c/w_movement.c | wm_drawMesh(obj, i); | wm_drawMesh(obj, i); port_wm_mesh_packets(obj, i); | 1
+
+# Test scenarios (port/game/scenario.c, cast=): a party member's Attack queued as another command and ability. No-op
+# without a scenario.
+src/ovl_0b/btl_cmd.c | void btl_setCmd(BtlCmd *cmd, u32 cmdNo, s32 subNo, s32 targets, s32 targeting) { | void btl_setCmd(BtlCmd *cmd, u32 cmdNo, s32 subNo, s32 targets, s32 targeting) { if ((cmd->caster->flags & 1) && cmdNo == 1) { int port_scenario_cast(int, int *, int *); int port_c = port_scenario_cast((cmd->caster->flags >> 1) & 15, (int *)&subNo, (int *)&targets); if (port_c) cmdNo = port_c; } | 1

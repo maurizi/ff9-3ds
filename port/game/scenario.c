@@ -19,6 +19,7 @@ static struct {
     int talk_tag; /* talk=UID,FRAMES,TAG: its function TAG instead of its talk (3), e.g. a menu the talk reaches only on foot */
     int place_uid,place_x,place_z,place_dir,place_set; /* place=UID,X,Z,DIR8: the object put there first (as op 1D) */
     int quina; /* quina=1: character record 5 joins as Quina (the game's PARTY_JOIN 05 01 05 05 05, decomp R40) */
+    int cast_cmd,cast_abil,cast_actor,cast_targets; /* cast=CMD,ABIL[,ACTOR[,TARGETS]]: a party member's Attack queued as that command (port_scenario_cast) */
     int chocograph; /* GameData.chocograph (1-24, 0 none): the one the chocobo digs for (not an event byte, decomp R37) */
     int enabled,consumed,kind,disc,field,battle,world,world_explicit,level,story,field_explicit,return_field_ready,enemy_hp_applied,summons_seen,gil,tetra;
     int menu,menu_arg; /* kind=field: menu=TYPE[,ARG] opens that menu once the field is ready (4,2: the save menu) */
@@ -102,6 +103,12 @@ void port_scenario_load(const char *path) {
             if(__builtin_strlen(eq)>=256) port_fatal("scenario: blob path too long");
             __builtin_strcpy(dst,eq);
         } else if(!__builtin_strncmp(s,"enemy_hp.",9)) scenario.enemy_hp[number(s+9,0,3)]=number(eq,1,65535);
+        else if(!__builtin_strcmp(s,"cast")) {
+            int v[4]={0,0,-1,0},n=0; char *q=eq;
+            while(n<4) { char *e; long x=strtol(q,&e,0); if(e==q) port_fatal("scenario: invalid cast %s",eq); v[n++]=(int)x; if(*e!=',') break; q=e+1; }
+            if(n<2 || v[0]<1 || v[0]>0x30 || v[1]<0 || v[1]>0xBF || v[2]>8 || v[3]<0 || v[3]>255) port_fatal("scenario: invalid cast %s",eq);
+            scenario.cast_cmd=v[0]; scenario.cast_abil=v[1]; scenario.cast_actor=v[2]; scenario.cast_targets=v[3];
+        }
         else if(!__builtin_strncmp(s,"trance.",7)) scenario.trance[number(s+7,0,3)]=number(eq,0,255);
         else if(!__builtin_strncmp(s,"preset.",7)) scenario.preset[number(s+7,0,3)]=number(eq,0,19);
         else if(!__builtin_strncmp(s,"hp.",3)) scenario.hp[number(s+3,0,3)]=number(eq,0,9999);
@@ -420,4 +427,14 @@ int port_scenario_wmpos(int *x, int *y, int *z, int *rot, int *yaw) {
     if(!scenario.enabled || !scenario.wm_set) return 0;
     *x=scenario.wm_x; *y=scenario.wm_y; *z=scenario.wm_z; *rot=scenario.wm_rot; *yaw=scenario.wm_yaw;
     return 1;
+}
+
+/* cast=CMD,ABIL[,ACTOR[,TARGETS]]: (btl_setCmd's counted patch) a party member's Attack (ACTOR: of that character
+ * only) queued as that command and ability (TARGETS: that target mask), as tools/scenario_command_probe.py does on the
+ * host, so a spell's effect can be run on the 3DS build */
+int port_scenario_cast(int actor, int *abil, int *targets) {
+    if(!scenario.enabled || !scenario.cast_cmd || (scenario.cast_actor>=0 && actor!=scenario.cast_actor)) return 0;
+    *abil=scenario.cast_abil;
+    if(scenario.cast_targets) *targets=scenario.cast_targets;
+    return scenario.cast_cmd;
 }
