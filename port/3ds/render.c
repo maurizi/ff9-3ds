@@ -140,6 +140,7 @@ static void mark_dirty(void *p, unsigned n) {
     hz_check(p, n, "cpu write");
     u8 *b = p;
     for (unsigned i = 0; i < ndirty; i++) { /* (adjacent blocks of one texture: one range) */
+        if (b >= dirty[i].p && b + n <= dirty[i].p + dirty[i].n) return; /* (the same tile rows, another block of them) */
         if (dirty[i].p + dirty[i].n == b) { dirty[i].n += n; return; }
         if (b + n == dirty[i].p) { dirty[i].p = b; dirty[i].n += n; return; }
     }
@@ -575,6 +576,7 @@ static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex
 
 static void set_tev_for(int kind, int layer);
 static int tev_dither; /* set_tev_for: the PS1's dither added (a mirror draw with dithering on) */
+static int tev_setmask; /* set_tev_for: a mirror draw with set_mask (its pixels' alpha 1: their mask bit) */
 static void set_tev(int kind) { set_tev_for(kind, 1); }
 /* (layer: a UI layer's, or a screen's; else the mirror's, whose alpha is the mask bit) */
 static void set_tev_for(int kind, int layer) {
@@ -608,9 +610,23 @@ static void set_tev_for(int kind, int layer) {
         C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
         C3D_TexEnvFunc(e0, C3D_RGB, GPU_MODULATE);
         C3D_TexEnvScale(e0, C3D_RGB, GPU_TEVSCALE_2);
-        C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, 0, 0);
-        C3D_TexEnvOpAlpha(e0, kind == K_PAGE_OP ? GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA : GPU_TEVOP_A_SRC_ALPHA, 0, 0);
-        C3D_TexEnvFunc(e0, C3D_Alpha, GPU_REPLACE);
+        if (kind == K_PAGE_SEMI) {
+            C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, 0, 0);
+            C3D_TexEnvFunc(e0, C3D_Alpha, GPU_REPLACE);
+            break;
+        }
+        /* (none for 0x0000, which the PS1 never draws: (R + G) x 4, + B, x 4, then x (1 - a) x 4 in stage 2 (below):
+         * at least 0.5 for a texel of any colour without the mask bit, 0 for black or one with it) */
+        C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, GPU_TEXTURE0, 0);
+        C3D_TexEnvOpAlpha(e0, GPU_TEVOP_A_SRC_R, GPU_TEVOP_A_SRC_G, 0);
+        C3D_TexEnvFunc(e0, C3D_Alpha, GPU_ADD);
+        C3D_TexEnvScale(e0, C3D_Alpha, GPU_TEVSCALE_4);
+        C3D_TexEnvSrc(e1, C3D_RGB, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(e1, C3D_RGB, GPU_REPLACE);
+        C3D_TexEnvSrc(e1, C3D_Alpha, GPU_PREVIOUS, GPU_TEXTURE0, 0);
+        C3D_TexEnvOpAlpha(e1, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_SRC_B, 0);
+        C3D_TexEnvFunc(e1, C3D_Alpha, GPU_ADD);
+        C3D_TexEnvScale(e1, C3D_Alpha, GPU_TEVSCALE_4);
         break;
     default: /* textured: texel x vertex colour x 2 */
         C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
@@ -663,9 +679,45 @@ static void set_tev_for(int kind, int layer) {
         C3D_TexEnvFunc(e2, C3D_RGB, GPU_ADD_SIGNED);
         C3D_TexEnvSrc(e2, C3D_Alpha, GPU_PREVIOUS, 0, 0);
         C3D_TexEnvFunc(e2, C3D_Alpha, GPU_REPLACE);
+    } else if (kind == K_PAGE_OP) {
+        C3D_TexEnvSrc(e2, C3D_RGB, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(e2, C3D_RGB, GPU_REPLACE);
+    }
+    if (kind == K_PAGE_OP) {
+        C3D_TexEnvSrc(e2, C3D_Alpha, GPU_PREVIOUS, GPU_TEXTURE0, 0);
+        C3D_TexEnvOpAlpha(e2, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA, 0);
+        C3D_TexEnvFunc(e2, C3D_Alpha, GPU_MODULATE);
+        C3D_TexEnvScale(e2, C3D_Alpha, GPU_TEVSCALE_4);
+    }
+    /* set_mask: every pixel drawn gets the mask bit. The blend writes it as the source's alpha x the constant's 1, and
+     * a texel without bit 15 has 0.25 (K_TEX: stored as 0): with set_mask each drawn pixel's alpha is raised to 1
+     * here (x 16; those the test drops are 0 exactly), a copy's set to 1. Stored as 0, the target hand (whose CLUT has
+     * no bit 15) was left unmasked in the frame, and Flare's afterimages, which paste a frame's unmasked pixels
+     * opaque, kept a dark copy of it on Nova Dragon */
+    C3D_TexEnv *e3 = C3D_GetTexEnv(3), *e4 = C3D_GetTexEnv(4);
+    C3D_TexEnvInit(e3);
+    C3D_TexEnvInit(e4);
+    if (tev_setmask) {
+        C3D_TexEnvSrc(e3, C3D_RGB, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(e3, C3D_RGB, GPU_REPLACE);
+        C3D_TexEnvSrc(e4, C3D_RGB, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(e4, C3D_RGB, GPU_REPLACE);
+        if (kind == K_BLIT) {
+            C3D_TexEnvSrc(e3, C3D_Alpha, GPU_CONSTANT, 0, 0);
+            C3D_TexEnvFunc(e3, C3D_Alpha, GPU_REPLACE);
+            C3D_TexEnvColor(e3, 0xFF000000);
+        } else {
+            C3D_TexEnvSrc(e3, C3D_Alpha, GPU_PREVIOUS, 0, 0);
+            C3D_TexEnvFunc(e3, C3D_Alpha, GPU_REPLACE);
+            C3D_TexEnvScale(e3, C3D_Alpha, GPU_TEVSCALE_4);
+        }
+        C3D_TexEnvSrc(e4, C3D_Alpha, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(e4, C3D_Alpha, GPU_REPLACE);
+        C3D_TexEnvScale(e4, C3D_Alpha, GPU_TEVSCALE_4);
     }
     if (kind == K_TEX) C3D_AlphaTest(true, GPU_GREATER, 0);
-    else if (kind == K_TEX_P1 || kind == K_TEX_P2 || kind == K_PAGE_OP || kind == K_PAGE_SEMI) C3D_AlphaTest(true, GPU_GREATER, 0x7F);
+    else if (kind == K_PAGE_OP) C3D_AlphaTest(true, GPU_GREATER, 0x3F);
+    else if (kind == K_TEX_P1 || kind == K_TEX_P2 || kind == K_PAGE_SEMI) C3D_AlphaTest(true, GPU_GREATER, 0x7F);
     else C3D_AlphaTest(false, GPU_ALWAYS, 0);
 }
 
@@ -703,9 +755,11 @@ static void set_blend_mask(int abr, int layer, int mask, int kind) {
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_CONSTANT_COLOR, GPU_ONE_MINUS_CONSTANT_COLOR, sa, da);
         break;
     case 1: /* B + F */
+        C3D_BlendingColor(0xFF000000); /* (set_mask's alpha: else as the last draw left it, a UI layer's 0x80 or 0x40) */
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE, sa, da);
         break;
     case 2: /* B - F */
+        C3D_BlendingColor(0xFF000000);
         C3D_AlphaBlend(GPU_BLEND_REVERSE_SUBTRACT, GPU_BLEND_ADD, GPU_ONE, GPU_ONE, sa, da);
         break;
     case 3: /* B + F/4 */
@@ -795,10 +849,11 @@ static void submit(void) {
                               ordered ? -depth_off * (1.0f / 16384) : -0.5f);
             }
             if (b->abr != abr || b->mask != bmask || b->kind != kind) {
-                if (b->kind != kind || ((b->mask ^ bmask) & MASK_DITHER)) {
+                if (b->kind != kind || ((b->mask ^ bmask) & (MASK_DITHER | MASK_SET))) {
                     tev_dither = !target && (b->mask & MASK_DITHER);
+                    tev_setmask = !target && (b->mask & MASK_SET) && !(b->mask & MASK_COPY);
                     set_tev_for(kind = b->kind, target != 0 && target != 4);
-                    tev_dither = 0;
+                    tev_dither = tev_setmask = 0;
                 }
                 if (target == 4) abr = b->abr, bmask = b->mask, set_blend(NO_BLEND, 0);
                 else set_blend_mask(abr = b->abr, target != 0, bmask = b->mask, kind);
@@ -1101,6 +1156,30 @@ static TexSlot *slot_for(u32 key, u32 twin) {
     return s;
 }
 
+/* The page's texture changed where a frame not yet drawn uses it (Nova Dragon's arena scrolls its sky, 8-bit, at every
+ * step of the battle's): those draws keep the slot, out of the cache, and the page gets another, converted afresh: one
+ * given up so earlier that no frame left to draw uses it, else the cache's. Converted again in the same slot, each
+ * waited for the GPU to finish the frame so far, or the frame in flight: some 850 waits in 128 frames there, 4 ms of
+ * a VBlank */
+static void hash_insert(int i);
+static TexSlot *slot_renew(TexSlot *s) {
+    u32 key = s->key, twin = s->twin;
+    hash_remove((int)(s - slots));
+    s->key = 0;
+    s->twin = 0xFFFFFFFFu; /* (slot_for's last-hit check can't match it) */
+    for (int i = 0; i < nslots; i++) {
+        TexSlot *r = &slots[i];
+        if (r->key || r->atlas == 0xFF || r->serial + 2 > frame_serial) continue;
+        r->key = key;
+        r->twin = twin;
+        memset(r->epoch, 0, sizeof r->epoch);
+        memset(r->stamp, 0, sizeof r->stamp);
+        hash_insert(i);
+        return r;
+    }
+    return slot_for(key, twin);
+}
+
 /* the cache's last atlas given up with its slots (its texture freed), for memory someone else needs now; 0 if none */
 static void hash_insert(int i) {
     unsigned h = hash_of(slots[i].key, slots[i].twin);
@@ -1156,8 +1235,9 @@ static u32 shadow_hash(int x, int y, int w, int h, u32 seed) {
     return hsh;
 }
 
-/* Make block (bx, by) of the page's texture current. */
-static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
+/* Make block (bx, by) of the page's texture current; 1 (nothing done) when it must be converted again while a frame
+ * not yet drawn uses the slot: texture_for gives the page another (slot_renew). */
+static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     int b = by * 8 + bx;
     int shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
     int sx0 = m->tx + ((bx * 32) >> shift), sw = 32 >> shift, sy0 = m->ty + by * 32;
@@ -1166,11 +1246,11 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
                    ofy = (s->twin >> 15 & 31) * 8;
     if (s->twin) sx0 = m->tx, sw = 256 >> shift, sy0 = m->ty;
     int ncl = m->depth == 0 ? 16 : m->depth == 1 ? 256 : 0;
-    if (s->stamp[b] && s->epoch[b] == tex_epoch) return;
+    if (s->stamp[b] && s->epoch[b] == tex_epoch) return 0;
     if (s->stamp[b] && !cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]) &&
         (!ncl || !cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b]))) {
         s->epoch[b] = tex_epoch;
-        return;
+        return 0;
     }
     cpu_reads(sx0, sy0, sx0 + sw, sy0 + 32);
     if (ncl) cpu_reads(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
@@ -1181,13 +1261,14 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     if (s->stamp[b] && s->hash[b] == hsh) {
         s->stamp[b] = gen_counter;
         s->epoch[b] = tex_epoch;
-        return;
+        return 0;
     }
-    /* (drawn with earlier in this frame: those draws keep the old texels. Only a block already converted for this page:
-     * one converted for the first time was read by none of them, as a page met for the first time mid-frame (models
-     * walking in: on a 3DS with the cache full, each such block waited for the GPU, 10-15 waits a frame in Burmecia) */
-    if (s->serial == frame_serial && s->stamp[b]) gpu_sync();
-    else if (gpu_busy && s->serial + 1 == frame_serial) frame_begin(); /* (the frame in flight's: it finishes first) */
+    /* (drawn with earlier in this frame, or in the frame in flight: those draws keep the old texels. Only a block
+     * already converted for this page: one converted for the first time was read by none of them, as a page met for
+     * the first time mid-frame (models walking in: on a 3DS with the cache full, each such block waited for the GPU,
+     * 10-15 waits a frame in Burmecia)) */
+    if (s->stamp[b] && (s->serial == frame_serial || (gpu_busy && s->serial + 1 == frame_serial))) return 1;
+    if (gpu_busy && s->serial + 1 == frame_serial) frame_begin(); /* (the frame in flight's: it finishes first) */
     s->hash[b] = hsh;
     u32 clut[256];
     if (ncl) {
@@ -1198,6 +1279,37 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     u32 *dst = at->data;
     const unsigned aw = at->width;
     unsigned flags = 0;
+    if (!s->twin) { /* (no texture window, the usual: each depth's loop, the tiled address as a row's and a column's part) */
+        unsigned col[32];
+        for (int x = 0; x < 32; x++) {
+            unsigned u = s->ox + bx * 32 + x;
+            col[x] = (u >> 3) * 64 + morton_x[u & 7];
+        }
+        for (int y = 0; y < 32; y++) {
+            unsigned v = s->oy + by * 32 + y;
+            u32 *d = dst + (v >> 3) * (aw >> 3) * 64 + morton_y[v & 7];
+            const u16 *row = psx_vram + ((m->ty + by * 32 + y) & 511) * VW;
+            u32 c;
+#define PUT(x) (d[col[x]] = c, flags |= (c & 0xFF) == 0xFF ? 1 : (c & 0xFF) == 0x80 ? 2 : 0)
+            if (m->depth == 0)
+                for (int x = 0; x < 32; x += 4) {
+                    unsigned w = row[(m->tx + ((bx * 32 + x) >> 2)) & 1023];
+                    c = clut[w & 15], PUT(x);
+                    c = clut[w >> 4 & 15], PUT(x + 1);
+                    c = clut[w >> 8 & 15], PUT(x + 2);
+                    c = clut[w >> 12], PUT(x + 3);
+                }
+            else if (m->depth == 1)
+                for (int x = 0; x < 32; x += 2) {
+                    unsigned w = row[(m->tx + ((bx * 32 + x) >> 1)) & 1023];
+                    c = clut[w & 255], PUT(x);
+                    c = clut[w >> 8], PUT(x + 1);
+                }
+            else
+                for (int x = 0; x < 32; x++) c = rgba_lut[row[(m->tx + bx * 32 + x) & 1023]], PUT(x);
+#undef PUT
+        }
+    } else
     for (int y = 0; y < 32; y++) {
         int v = by * 32 + y, sv = (int)(((unsigned)v & ~my) | (ofy & my));
         const u16 *row = psx_vram + ((m->ty + sv) & 511) * VW;
@@ -1221,6 +1333,7 @@ static void convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     /* (the block's four rows of tiles, each the slot's 256 texels across: contiguous) */
     for (int r = 0; r < 4; r++) mark_dirty(dst + tiled(s->ox, s->oy + by * 32 + r * 8, aw), 256 * 8 * 4);
     ctr_render_stats[4]++;
+    return 0;
 }
 
 /* Slots drawn one after the other are kept in one atlas where they can be: the pairs that follow each other are
@@ -1380,10 +1493,11 @@ static void slot_regroup(void) {
 /* A 15-bit texture read from VRAM the GPU has drawn (the field-to-battle swirl samples the frame it draws into): the
  * page copied on the GPU from the mirror into page_tex, once per frame and page, instead of the mirror read back to
  * the CPU and converted (that readback every frame held the transition at ~6 s per 120 frames on a 3DS). Alpha is
- * kept 1: the mirror's alpha is the PS1's mask bit, not transparency (a texel 0 is drawn black, not skipped). */
+ * kept 1: the mirror's alpha is the PS1's mask bit, not transparency (a texel 0 is drawn black, not skipped); a
+ * semi-transparent primitive's copy keeps it (alpha), for its two passes. */
 static C3D_Tex page_tex;
 static C3D_RenderTarget *page_rt;
-static int page_x = -1, page_y = -1;
+static int page_x = -1, page_y = -1, page_alpha;
 static unsigned page_serial;
 static int gpu_owned(int x0, int y0, int x1, int y1) {
     int cx0, cy0, cx1, cy1;
@@ -1394,10 +1508,11 @@ static int gpu_owned(int x0, int y0, int x1, int y1) {
     return 0;
 }
 static void submit(void);
-static C3D_Tex *mirror_page(int tx, int ty) {
+/* (alpha: the mirror's alpha (the mask bit) copied too, else 1) */
+static C3D_Tex *mirror_page(int tx, int ty, int alpha) {
     trace("mirror_page", tx, ty);
     if (!page_rt) return NULL; /* (made at init: ctr_init) */
-    if (page_x == tx && page_y == ty && page_serial == frame_serial) return &page_tex;
+    if (page_x == tx && page_y == ty && page_alpha == alpha && page_serial == frame_serial) return &page_tex;
     int cx0, cy0, cx1, cy1; /* (the mirror current there first: cells the CPU wrote since) */
     if (cell_range(tx, ty, tx + 256, ty + 256, &cx0, &cy0, &cx1, &cy1))
         for (int cy = cy0; cy < cy1; cy++)
@@ -1411,7 +1526,7 @@ static C3D_Tex *mirror_page(int tx, int ty) {
                                                                 * copy was clipped away, the page left its clear 0x00FF) */
     set_tev(K_BLIT);
     set_blend(NO_BLEND, 0);
-    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_RED | GPU_WRITE_GREEN | GPU_WRITE_BLUE); /* (alpha stays 1) */
+    C3D_DepthTest(false, GPU_ALWAYS, alpha ? GPU_WRITE_COLOR : GPU_WRITE_RED | GPU_WRITE_GREEN | GPU_WRITE_BLUE); /* (else alpha stays 1) */
     tex_bind(0, &mirror_tex[0]);
     set_texscale(&mirror_tex[0]);
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
@@ -1419,7 +1534,7 @@ static C3D_Tex *mirror_page(int tx, int ty) {
     quad(v, 0, 0, 256, 256, tx, ty, tx + 256, ty + 256, 0xFFFFFFFF);
     C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
-    page_x = tx, page_y = ty, page_serial = frame_serial;
+    page_x = tx, page_y = ty, page_alpha = alpha, page_serial = frame_serial;
     return &page_tex;
 }
 
@@ -1442,12 +1557,19 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
             tex_ou = (float)m->tx, tex_ov = (float)m->ty;
             return &mirror_tex[0];
         }
+        /* (where it takes in some of the area being drawn: the page as drawn so far, copied with its alpha. Flare's
+         * afterimages sample half the frame before, x 160-320, drawing from x 320: read back and converted, hundreds
+         * of readbacks in the spell) */
+        if (!apart && x1 <= VW && y1 <= VH && gpu_owned(x0, y0, x1, y1)) {
+            C3D_Tex *t = mirror_page(m->tx, m->ty, 1);
+            if (t) { *flags = 8; tex_ou = tex_ov = 0; return t; }
+        }
     }
     /* (a translucent primitive's texels by their bit 15, as the slots hold it (alpha 0xFF / 0x80, flags): the copied
      * page has the mirror's one alpha bit, and with no flags it drew nothing, Demi's sphere and its glow on the ground) */
     if (m->depth == 2 && !m->semi && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
         gpu_owned(m->tx + u0, m->ty + v0, m->tx + u1 + 1, m->ty + v1 + 1)) {
-        C3D_Tex *t = mirror_page(m->tx, m->ty);
+        C3D_Tex *t = mirror_page(m->tx, m->ty, 0);
         if (t) { *flags = 0; tex_ou = tex_ov = 0; return t; }
     }
     u32 key = (u32)m->depth << 30 | (u32)(m->tx >> 6) << 26 | (u32)(m->ty >> 8) << 25 |
@@ -1461,7 +1583,7 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
     unsigned f = 0;
     for (int by = by0; by <= by1; by++)
         for (int bx = bx0; bx <= bx1; bx++) {
-            convert_block(s, m, bx, by);
+            if (convert_block(s, m, bx, by)) { s = slot_renew(s), f = 0, by = by0, bx = bx0 - 1; continue; }
             f |= s->flags[by * 8 + bx];
         }
     s->serial = frame_serial;
