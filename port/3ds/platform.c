@@ -147,17 +147,14 @@ void plat_wait_frame(void) {
         u64 tick = svcGetSystemTick();
         unsigned ms = last_tick ? (unsigned)((tick - last_tick) / (SYSCLOCK_ARM11 / 1000)) : 0;
         last_tick = tick;
+        int ctr_texture_pages(void); /* (memory over a long session: linear, VRAM, the texture cache's pages) */
         port_log("beat %ld: %u ms, mode %d field %d, worker jobs %u/%u, presents %u, cd %u reads %u sectors (last %u) state %03x q %u, "
-                 "audio %u frames peak %u dropped %u underruns %u\n",
+                 "audio %u frames peak %u dropped %u underruns %u, linear %u KB VRAM %u KB pages %d\n",
                  frames, ms, port_game_mode(), port_field_id(), ctr_async_done, ctr_async_jobs, ctr_frames_presented(),
                  psx_cd_read_starts, psx_cd_sectors_read, psx_cd_last_lba, psx_cd_debug[4], psx_cd_debug[5],
-                 ctr_audio_frames, ctr_audio_peak, ctr_audio_dropped, ctr_audio_underruns);
+                 ctr_audio_frames, ctr_audio_peak, ctr_audio_dropped, ctr_audio_underruns, (unsigned)(linearSpaceFree() >> 10),
+                 (unsigned)(vramSpaceFree() >> 10), ctr_texture_pages());
         ctr_audio_peak = 0;
-        { /* (memory over a long session: linear (the texture cache, vertices), VRAM, the cache's pages) */
-            int ctr_texture_pages(void);
-            port_log("memory: linear %u KB, VRAM %u KB free, texture pages %u\n", (unsigned)(linearSpaceFree() >> 10),
-                     (unsigned)(vramSpaceFree() >> 10), (unsigned)ctr_texture_pages());
-        }
         void port_world_where(void);
         port_world_where(); /* (on the world map: where, for a spot to rebuild) */
     }
