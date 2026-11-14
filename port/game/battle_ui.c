@@ -656,11 +656,17 @@ s32 o0b_btl_update(void) {
     return r;
 }
 
-/* the game's fade while the rewards run in the battle: their screen change (EXP to items) is theirs, not the scene's */
+/* the game's fade while the rewards run in the battle: their screen change (EXP to items) is theirs, not the scene's.
+ * Its packets are left out by putting the fade's entry back as it was, still linked on into the battle's frame (an
+ * entry of the main table's first: ClearOTagR ended the table there, and the frame's last packet, DR_STP(0, 0), went
+ * undrawn; the mask bit set, the arena's texture scrolls (MoveImage keeps the mask settings) set bit 15 in every word
+ * they moved: Nova Dragon's 8-bit sky read indices from 128 up, transparent, black dashes over the arena, the user's
+ * report) */
 void game_updateFade_game(void);
 void game_updateFade(void) {
+    u32 *ot = fade_getOt(g_gameState->gameData->drawBuf), was = *ot;
     game_updateFade_game();
-    if (live == 2 && g_gameState->mode == GS_MODE_BATTLE) ClearOTagR(fade_getOt(g_gameState->gameData->drawBuf), 1);
+    if (live == 2 && g_gameState->mode == GS_MODE_BATTLE) *ot = was;
 }
 
 /* The camera while the rewards are up, and on through the fade after them: from where the victory camera gave its cue it circles the party at that
@@ -670,32 +676,44 @@ void game_updateFade(void) {
 #define ORBIT_EASE 60
 void o0b_btlcam_update_game(void);
 void o0b_btlcam_lookAt(MATRIX *, SVECTOR *, SVECTOR *);
+/* the camera before each step of the game's: the one on screen when the victory camera's step gives its cue. That
+ * step goes on to its next shot (the same frame's path keys), which the PS1 shows only under its fade out: started
+ * from there, the orbit cut to a low camera by the party, and its view showed the top edge of Nova Dragon's arena,
+ * where the sky dissolves into the backdrop (black dashes over the sky, the user's report) */
+static SVECTOR shown_eye;
+static s32 shown_z[3];
 void o0b_btlcam_update(void) {
     static s32 cx, cy, cz, r, h, a0, t0;
     static s32 ax0, ay0, az0;
     Battle *b = g_gameState->gameData->ctx.battle;
+    MATRIX *view = &g_gameState->gameData->viewMatrix;
     if (!((live == 1 || live == 2 || live == 3) && b->phase == BTL_PHASE_EXIT && (orbit_start || orbiting))) {
         orbiting = 0;
+        shown_eye = g_btlCamera.eye;
+        shown_z[0] = view->m[2][0], shown_z[1] = view->m[2][1], shown_z[2] = view->m[2][2];
         o0b_btlcam_update_game();
-        return;
+        /* (the cue given in this step: the orbit at once, before this frame's scene is drawn from the next shot) */
+        if (!((live == 1 || live == 2) && b->phase == BTL_PHASE_EXIT && b->subPhase > EXIT_ARMED && b->subPhase != EXIT_HOLD))
+            return;
+        b->subPhase = EXIT_HOLD;
+        orbit_start = 1;
     }
-    MATRIX *view = &g_gameState->gameData->viewMatrix;
     if (orbit_start) { /* (the party's middle, and the camera relative to it, as the script left it) */
         s32 n = 0, sx = 0, sy = 0, sz = 0;
         for (BtlUnit *u = b->unitList; u; u = u->next)
             if ((u->flags & BTL_UNIT_PARTY) && u->hp) sx += u->pos[0] >> 16, sy += u->pos[1] >> 16, sz += u->pos[2] >> 16, n++;
         if (!n) { orbit_start = 0; o0b_btlcam_update_game(); return; }
         cx = sx / n, cy = sy / n - 500, cz = sz / n; /* (aimed at the chest: y is down) */
-        s32 dx = g_btlCamera.eye.vx - cx, dz = g_btlCamera.eye.vz - cz;
+        s32 dx = shown_eye.vx - cx, dz = shown_eye.vz - cz;
         r = SquareRoot0(dx * dx + dz * dz);
-        h = g_btlCamera.eye.vy - cy;
+        h = shown_eye.vy - cy;
         a0 = ratan2(dx, dz);
         t0 = VSync(-1);
         /* (where the script looked: along the view's z axis, as far as the party's middle) */
         s32 d = SquareRoot0(dx * dx + h * h + dz * dz);
-        ax0 = g_btlCamera.eye.vx + view->m[2][0] * d / 4096;
-        ay0 = g_btlCamera.eye.vy + view->m[2][1] * d / 4096;
-        az0 = g_btlCamera.eye.vz + view->m[2][2] * d / 4096;
+        ax0 = shown_eye.vx + shown_z[0] * d / 4096;
+        ay0 = shown_eye.vy + shown_z[1] * d / 4096;
+        az0 = shown_eye.vz + shown_z[2] * d / 4096;
         orbit_start = 0;
         orbiting = 1;
     }
@@ -705,6 +723,7 @@ void o0b_btlcam_update(void) {
     eye.vx = (s16)(cx + r * math_sin(a & 0xFFF) / 4096);
     eye.vy = (s16)(cy + h);
     eye.vz = (s16)(cz + r * math_cos(a & 0xFFF) / 4096);
+    eye.pad = 0; /* (btlcam_lookAt's roll) */
     s32 e = t >= ORBIT_EASE ? 4096 : t * 4096 / ORBIT_EASE;
     e = e * e / 4096 * (3 * 4096 - 2 * e) / 4096; /* (smoothstep) */
     at.vx = (s16)(ax0 + (cx - ax0) * e / 4096);
