@@ -75,14 +75,17 @@ static int to_bottom(const Window *w) {
 static long panel_frame = -100;
 /* The ending's narration over a scene (Kuja's words to Zidane, field 3001): on the PS1 the scene is darkened (a partial
  * fade, to 200 of 255) and the narration shown over it. Its text being on the bottom screen, the top keeps the scene as
- * it was until the text has gone: the fade is left out of the top's frame (game_updateFade, battle_ui.c) from its start,
- * and once the text has gone the top darkens to where the fade is, over RAMP_FRAMES, the fade then drawn again as it
- * is. (A partial fade only: a fade to black is a change of scene, and the next field would show under it. If no
- * narration comes within PEND_FRAMES of the fade's end, the top darkens all the same) */
+ * it was until the text has gone: the fade is left out of the top's frame (game_updateFade, battle_ui.c) from its start.
+ * Once the text has gone: if the game lightens the scene again the top stays as it is; if it goes on to black, or holds
+ * the dimming WAIT_FRAMES, the top darkens to where the fade is over RAMP_FRAMES, the fade then drawn again as it is.
+ * (A partial fade only: a fade to black is a change of scene, and the next field would show under it. If no narration
+ * comes within PEND_FRAMES of the fade's end, the top darkens all the same) */
 #define RAMP_FRAMES 20
 #define PEND_FRAMES 60
+#define WAIT_FRAMES 40
 static long narr_frame = -100, hold_tick = -1;
-static int hold, ramp, pend, hold_field; /* hold: 3 the fade begun, waiting for the text; 1 the text up; 2 darkening */
+static int hold, ramp, pend, hold_field; /* hold: 3 the fade begun, waiting for the text; 1 the text up; 4 the text gone,
+                                          * waiting on the fade; 5 the fade lightening; 2 darkening */
 int port_ending_field(void);
 static int fade_level(void);
 static int fade_target(void) {
@@ -96,18 +99,29 @@ static void hold_update(void) {
     if (hold && (g_gameState->mode != 1 || g_gameState->gameData->fieldId != hold_field)) hold = 0;
     int t = fade_target();
     if (!hold && port_ending_field() && g_fade.active && g_fade.subtract && g_fade.covered && t > 16 && t < 250 &&
-        g_fade.frame * 4 < g_fade.frames)
+        g_fade.frame * 4 < g_fade.frames && fade_level() < 64) /* (from the scene, not from black: field 3000's opens
+                                                                * from black to a slight dimming, "Some time later..."
+                                                                * over it, the next scene under its fade) */
         hold = 3, pend = 0, hold_field = g_gameState->gameData->fieldId;
-    if (hold == 3) {
-        if (!g_fade.covered || !t) hold = 0; /* (lightened again: nothing to darken) */
+    int lightening = !g_fade.covered || !t;
+    if (hold == 3) { /* (the dimming begun: the text may come) */
+        if (lightening) hold = 5;
         else if (!g_fade.active && ++pend > PEND_FRAMES) hold = 2, ramp = 0;
-    } else if (hold == 1 && now - narr_frame > 2) {
-        hold = g_fade.covered && t ? 2 : 0, ramp = 0; /* (the game lightening the scene again: it stays as it is) */
+    } else if (hold == 1 && now - narr_frame > 2) { /* (the text gone: what the game does next decides) */
+        hold = 4, pend = 0;
+    } else if (hold == 4) {
+        /* lightened again (Necron's lines on the hill, field 2928: dimmed for them and back): the scene stays as it is,
+         * no dip to the dimming and back; on to black (a change of scene), or held dim a while (field 3001), it darkens */
+        if (lightening) hold = 5;
+        else if ((g_fade.active && t >= 250) || ++pend > WAIT_FRAMES) hold = 2, ramp = 0;
+    } else if (hold == 5) { /* (lightening: its fade left out until it is done, then nothing is left of it to draw) */
+        if (!lightening) hold = 3, pend = 0;
+        else if (!g_fade.active && !fade_level()) hold = 0;
     } else if (hold == 2 && ++ramp >= RAMP_FRAMES) hold = 0;
 }
 static void narration_shown(void) {
     hold_update();
-    if (hold == 3 || hold == 2) hold = 1;
+    if (hold) hold = 1;
     narr_frame = VSync(-1);
 }
 int port_ending_fade_held(void) {
