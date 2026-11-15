@@ -8,8 +8,8 @@
  *   PARTY:   portrait, name, HP and MP, status    (GameData.party; portraits: the menu's file, read by the port)
  *   [MENU] [CARDS n] [ATE] [LOG]                    MENU: a touch shortcut for triangle (port_hud_tap); LOG: the
  *                                                  dialogue log in place of the map and party (tap: scroll)
- * The party and MENU only while the game allows the menu (not in the opening and other cutscene stretches, where the
- * party may be a placeholder); CARDS once the card game has been met.
+ * The party once the player has had control in the field (before that, as in the opening, it may be a placeholder);
+ * MENU only while the game allows the menu; CARDS once the card game has been met (and the menu is allowed).
  * While a dialogue asks a question (its choices on the top screen with the speaker), the map and party give way to
  * the choices as large buttons: a tap moves the game's choice cursor there and confirms (an input aid: the cursor
  * and the buttons still work).
@@ -816,7 +816,10 @@ static void draw(void) {
             g_primPtr = port_field_map_draw(&g_ot[2], g_primPtr, (u8 *)(hud_mem + OTN + BUF_WORDS) - 64, r_map.x + 3,
                                             r_map.y + 3, r_map.w - 6, r_map.h - 6);
         win_drawBox(&r_map, 3, 2);
-        if (menu_allowed()) {
+        /* (the party once the player has had control here: it is the real party then. Not by the menu's being allowed,
+         * which a cutscene takes away: the party went and came back around Memoria's movie of Alexandria (the user's
+         * report)) */
+        if (had_control()) {
             ui_drawLabel(r_party.x + 8, r_party.y - 3, 2, (s32)party, 0);
             draw_party();
         }
