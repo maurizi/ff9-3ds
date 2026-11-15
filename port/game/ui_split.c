@@ -81,10 +81,10 @@ static long panel_frame = -100;
  * (A partial fade only: a fade to black is a change of scene, and the next field would show under it. If no narration
  * comes within PEND_FRAMES of the fade's end, the top darkens all the same) */
 #define RAMP_FRAMES 20
-#define PEND_FRAMES 60
+#define PEND_FRAMES 180
 #define WAIT_FRAMES 40
 static long narr_frame = -100, hold_tick = -1;
-static int hold, ramp, pend, hold_field; /* hold: 3 the fade begun, waiting for the text; 1 the text up; 4 the text gone,
+static int hold, ramp, pend, hold_field, hold_from_black; /* hold: 3 the fade begun, waiting for the text; 1 the text up; 4 the text gone,
                                           * waiting on the fade; 5 the fade lightening; 2 darkening */
 int port_ending_field(void);
 static int fade_level(void);
@@ -100,11 +100,12 @@ static void hold_update(void) {
     int t = fade_target();
     /* (a strong darkening: the narrations' (128 grey on the hill, 90, 140, 200 in field 3001). A light one is a tint (the
      * Hilda Garde's sunset, field 2931: 0, 32, 64), drawn as it is) */
+    /* (begun from black, as field 3001 is after the Iifa tree (black to its dimming, Mikoto and Vivi's words over it): the
+     * top fades in to the scene itself over the fade's frames, not to the dimming (port_top_fade): a scene in motion,
+     * the user's choice; field 3000's "Some time later..." opens from black to a light dimming (32), not held) */
     if (!hold && port_ending_field() && g_fade.active && g_fade.subtract && g_fade.covered && t >= 100 && t < 250 &&
-        g_fade.frame * 4 < g_fade.frames && fade_level() < 64) /* (from the scene, not from black: field 3000's opens
-                                                                * from black to a slight dimming, "Some time later..."
-                                                                * over it, the next scene under its fade) */
-        hold = 3, pend = 0, hold_field = g_gameState->gameData->fieldId;
+        g_fade.frame * 4 < g_fade.frames)
+        hold = 3, pend = 0, hold_field = g_gameState->gameData->fieldId, hold_from_black = fade_level() >= 64;
     int lightening = !g_fade.covered || !t;
     if (hold == 3) { /* (the dimming begun: the text may come) */
         if (lightening) hold = 5;
@@ -135,7 +136,14 @@ int port_ending_fade_held(void) {
  * growing to where the fade is (render.c), so that the fade drawn again from there changes nothing (darkened grey, a
  * tinted fade came in at once when given back: a visible pop) */
 int port_top_fade(u8 rgb[3]) {
-    if (!port_ending_fade_held() || hold != 2) return 0;
+    if (!port_ending_fade_held()) return 0;
+    if (hold == 3 && hold_from_black && g_fade.active && g_fade.frames > 0) { /* (from black to the scene) */
+        int left = g_fade.frames - (int)g_fade.frame;
+        if (left < 0) left = 0;
+        for (int i = 0; i < 3; i++) rgb[i] = (u8)(g_fade.startColor.b[i] * left / g_fade.frames);
+        return rgb[0] | rgb[1] | rgb[2];
+    }
+    if (hold != 2) return 0;
     for (int i = 0; i < 3; i++) rgb[i] = (u8)(g_fade.color.b[i] * ramp / RAMP_FRAMES);
     return rgb[0] | rgb[1] | rgb[2];
 }
