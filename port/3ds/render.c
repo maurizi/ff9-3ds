@@ -2984,10 +2984,73 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
     if (dark > 0) screen_dim(bottom_rt, 256 - (unsigned)dark);
 }
 
+/* A movie's frames in two textures of their own, used in turn: a frame changed is converted into the one the frame in
+ * flight doesn't draw with, an unchanged one is drawn again as it is, no copy, no flush (on an Old 3DS the opening's
+ * movie spent 11 ms of a VBlank presenting, copying and flushing 384 KB at each present). 768 KB of linear memory, freed
+ * once no movie has been shown for 60 presents; without them, staging as before. */
+static C3D_Tex movie_tex[2];
+static int movie_ok, movie_cur = -1, movie_idle;
+static u32 movie_gen;
+static int movie_key[4];
+static void movie_tex_free(void) {
+    if (!movie_ok) return;
+    gpu_sync(); /* (the frame in flight may draw with them) */
+    C3D_TexDelete(&movie_tex[0]);
+    C3D_TexDelete(&movie_tex[1]);
+    movie_ok = 0, movie_cur = -1;
+}
+static void convert_rgb24(u8 *px, unsigned tw, const PsxDisplayInfo *d, int w, int h) {
+    /* (the tiled address as a row's part and a column's, the column's looked up) */
+    static unsigned col[400], col_tw;
+    if (col_tw != tw) {
+        for (unsigned x = 0; x < 400; x++) col[x] = ((x >> 3) * 64 + morton_x[x & 7]) * 3;
+        col_tw = tw;
+    }
+    for (int y = 0; y < h; y++) {
+        const u8 *src = (const u8 *)(psx_vram + ((d->y + y) & 511) * VW + d->x);
+        u8 *row = px + ((unsigned)(y >> 3) * (tw >> 3) * 64 + morton_y[y & 7]) * 3;
+        for (int x = 0; x < w; x++, src += 3) {
+            u8 *o = row + col[x];
+            o[0] = src[2]; o[1] = src[1]; o[2] = src[0];
+        }
+    }
+}
+
 static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy) {
     trace("present_rgb24", w, h);
     cpu_reads(d->x, d->y, d->x + (w * 3 + 1) / 2, d->y + h);
     unsigned tw = pow2_at_least(w), th = pow2_at_least(h);
+    movie_idle = 0;
+    if (!movie_ok && tw == 512 && th == 256 && linearSpaceFree() > 2 * 512 * 256 * 3 + SLOT_RESERVE) {
+        if (C3D_TexInit(&movie_tex[0], 512, 256, GPU_RGB8)) {
+            if (C3D_TexInit(&movie_tex[1], 512, 256, GPU_RGB8)) {
+                C3D_TexSetFilter(&movie_tex[0], GPU_NEAREST, GPU_NEAREST);
+                C3D_TexSetFilter(&movie_tex[1], GPU_NEAREST, GPU_NEAREST);
+                movie_ok = 1, movie_cur = -1;
+            } else C3D_TexDelete(&movie_tex[0]);
+        }
+    }
+    if (movie_ok && tw == 512 && th == 256) {
+        int key[4] = {d->x, d->y, w, h};
+        u32 newest = 0;
+        int cx0, cy0, cx1, cy1;
+        if (cell_range(d->x, d->y, d->x + (w * 3 + 1) / 2, d->y + h, &cx0, &cy0, &cx1, &cy1))
+            for (int cy = cy0; cy < cy1; cy++)
+                for (int cx = cx0; cx < cx1; cx++)
+                    if (cell_gen[cy][cx] > newest) newest = cell_gen[cy][cx];
+        if (movie_cur < 0 || newest > movie_gen || memcmp(key, movie_key, sizeof key)) {
+            /* (the other one: drawn with last two presents ago at the latest, by a frame done once this one's began) */
+            int next = movie_cur < 0 ? 0 : movie_cur ^ 1;
+            convert_rgb24(movie_tex[next].data, 512, d, w, h);
+            mark_dirty(movie_tex[next].data, movie_tex[next].size);
+            movie_cur = next, movie_gen = gen_counter;
+            __builtin_memcpy(movie_key, key, sizeof key);
+        }
+        HZ_TEX(&movie_tex[movie_cur], "movie frame");
+        for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) draw_to_top(top_rt[eye], &movie_tex[movie_cur], 0, 0, w, h, w, h, 0);
+        (void)ox; (void)oy;
+        return;
+    }
     u8 *px = staging_alloc(tw * th * 3);
     /* (converted only when the frame's VRAM changed since: a movie's frames change 15 times a second and are presented
      * 60, and converting each present cost an Old 3DS 11 ms of a 16.7 ms VBlank in the opening's movie; else the last
@@ -3010,21 +3073,7 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
         (void)ox; (void)oy;
         return;
     }
-    /* (the tiled address as a row's part and a column's, the column's looked up: a movie's every frame, 72K pixels;
-     * an address computed per pixel cost an Old 3DS some 5 ms a frame) */
-    static unsigned col[400], col_tw;
-    if (col_tw != tw) {
-        for (unsigned x = 0; x < 400; x++) col[x] = ((x >> 3) * 64 + morton_x[x & 7]) * 3;
-        col_tw = tw;
-    }
-    for (int y = 0; y < h; y++) {
-        const u8 *src = (const u8 *)(psx_vram + ((d->y + y) & 511) * VW + d->x);
-        u8 *row = px + ((unsigned)(y >> 3) * (tw >> 3) * 64 + morton_y[y & 7]) * 3;
-        for (int x = 0; x < w; x++, src += 3) {
-            u8 *o = row + col[x];
-            o[0] = src[2]; o[1] = src[1]; o[2] = src[0];
-        }
-    }
+    convert_rgb24(px, tw, d, w, h);
     if (kept && tw * th <= 512 * 256) {
         __builtin_memcpy(kept, px, tw * th * 3);
         kept_gen = gen_counter;
@@ -3083,6 +3132,7 @@ void ctr_present(long frame) {
         submit();
         present_rgb24(&d, w, h, ox, oy);
     } else {
+        if (movie_ok && ++movie_idle > 60) movie_tex_free();
         int cx0, cy0, cx1, cy1;
         if (cell_range(d.x, d.y, d.x + w, d.y + h, &cx0, &cy0, &cx1, &cy1))
             for (int cy = cy0; cy < cy1; cy++)
