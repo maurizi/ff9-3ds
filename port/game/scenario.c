@@ -12,6 +12,7 @@ void o14_opening_initNewGame(void);
 void o14_opening_findSceneSectors(void);
 void port_scenario_set_enemy_hp(const int *values);
 s32 chr_resetToLevel(s32,s32,u8);
+int port_scenario_cast_on; /* (btl_setCmd's patch reads the command only with a cast= key) */
 static struct {
     int blackjack; /* blackjack=1 with field_exit=4: the ending's movie skipped and The End's code taken (blackjack_ui.c) */
     int wm_set,wm_x,wm_y,wm_z,wm_rot,wm_yaw; /* wmpos=X,Y,Z,ROT,YAW: the world map's player there and its camera turned so (a 3DS capture's log line) */
@@ -114,6 +115,7 @@ void port_scenario_load(const char *path) {
             while(n<4) { char *e; long x=strtol(q,&e,0); if(e==q) port_fatal("scenario: invalid cast %s",eq); v[n++]=(int)x; if(*e!=',') break; q=e+1; }
             if(n<2 || v[0]<1 || v[0]>0x30 || v[1]<0 || v[1]>0xBF || v[2]>8 || v[3]<0 || v[3]>255) port_fatal("scenario: invalid cast %s",eq);
             scenario.cast_cmd=v[0]; scenario.cast_abil=v[1]; scenario.cast_actor=v[2]; scenario.cast_targets=v[3];
+            port_scenario_cast_on=1;
         }
         else if(!__builtin_strncmp(s,"trance.",7)) scenario.trance[number(s+7,0,3)]=number(eq,0,255);
         else if(!__builtin_strncmp(s,"preset.",7)) scenario.preset[number(s+7,0,3)]=number(eq,0,19);
