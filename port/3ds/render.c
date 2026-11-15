@@ -2989,12 +2989,46 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
     cpu_reads(d->x, d->y, d->x + (w * 3 + 1) / 2, d->y + h);
     unsigned tw = pow2_at_least(w), th = pow2_at_least(h);
     u8 *px = staging_alloc(tw * th * 3);
+    /* (converted only when the frame's VRAM changed since: a movie's frames change 15 times a second and are presented
+     * 60, and converting each present cost an Old 3DS 11 ms of a 16.7 ms VBlank in the opening's movie; else the last
+     * conversion, kept, copied) */
+    static u8 *kept;
+    static u32 kept_gen;
+    static int kept_key[4];
+    int key[4] = {d->x, d->y, w, h};
+    u32 newest = 0;
+    int cx0, cy0, cx1, cy1;
+    if (cell_range(d->x, d->y, d->x + (w * 3 + 1) / 2, d->y + h, &cx0, &cy0, &cx1, &cy1))
+        for (int cy = cy0; cy < cy1; cy++)
+            for (int cx = cx0; cx < cx1; cx++)
+                if (cell_gen[cy][cx] > newest) newest = cell_gen[cy][cx];
+    if (!kept) kept = malloc(512 * 256 * 3);
+    if (kept && newest <= kept_gen && !memcmp(key, kept_key, sizeof key) && tw * th <= 512 * 256) {
+        __builtin_memcpy(px, kept, tw * th * 3);
+        C3D_Tex *t = staging_tex(px, tw, th, GPU_RGB8);
+        for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) draw_to_top(top_rt[eye], t, 0, 0, w, h, w, h, 0);
+        (void)ox; (void)oy;
+        return;
+    }
+    /* (the tiled address as a row's part and a column's, the column's looked up: a movie's every frame, 72K pixels;
+     * an address computed per pixel cost an Old 3DS some 5 ms a frame) */
+    static unsigned col[400], col_tw;
+    if (col_tw != tw) {
+        for (unsigned x = 0; x < 400; x++) col[x] = ((x >> 3) * 64 + morton_x[x & 7]) * 3;
+        col_tw = tw;
+    }
     for (int y = 0; y < h; y++) {
         const u8 *src = (const u8 *)(psx_vram + ((d->y + y) & 511) * VW + d->x);
-        for (int x = 0; x < w; x++) {
-            u8 *o = px + tiled(x, y, tw) * 3;
-            o[0] = src[x * 3 + 2]; o[1] = src[x * 3 + 1]; o[2] = src[x * 3];
+        u8 *row = px + ((unsigned)(y >> 3) * (tw >> 3) * 64 + morton_y[y & 7]) * 3;
+        for (int x = 0; x < w; x++, src += 3) {
+            u8 *o = row + col[x];
+            o[0] = src[2]; o[1] = src[1]; o[2] = src[0];
         }
+    }
+    if (kept && tw * th <= 512 * 256) {
+        __builtin_memcpy(kept, px, tw * th * 3);
+        kept_gen = gen_counter;
+        __builtin_memcpy(kept_key, key, sizeof key);
     }
     C3D_Tex *t = staging_tex(px, tw, th, GPU_RGB8);
     for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) draw_to_top(top_rt[eye], t, 0, 0, w, h, w, h, 0);
