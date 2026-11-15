@@ -121,10 +121,50 @@ static void hold_update(void) {
         else if (!g_fade.active && !fade_level()) hold = 0;
     } else if (hold == 2 && ++ramp >= RAMP_FRAMES) hold = 0;
 }
+static int vhold, vwait, vfield; /* vhold: 1 the scene's fade, 2 the narration, 3 its fade, 4 no narration: fading */
+static void vhold_update(void);
 static void narration_shown(void) {
     hold_update();
+    vhold_update();
+    if (vhold == 1) vhold = 2;
     if (hold) hold = 1;
     narr_frame = VSync(-1);
+}
+/* A vignette's close (fields 3003, 3008, ...): its scene fades to black over 64 frames, a narration paragraph is shown
+ * over the black, and a 30-frame fade to black over it ends it before the next field. The narration being on the
+ * bottom screen, the top keeps the scene's last picture from the fade's start until the text's own fade, and darkens
+ * with that fade, frame for frame (port_top_snapshot: render.c shows the picture it kept, less the fade's colour); black,
+ * it is given back (the next field fades in from black). If no narration comes within VWAIT_FRAMES of the black, the
+ * picture fades out over VFADE_FRAMES all the same */
+#define VWAIT_FRAMES 30
+#define VFADE_FRAMES 32
+static long vtick = -1;
+static void vhold_update(void) {
+    long now = VSync(-1);
+    if (now == vtick) return;
+    vtick = now;
+    int t = fade_target();
+    if (!vhold) {
+        if (port_ending_field() && g_fade.active && g_fade.subtract && g_fade.covered && t >= 250 && g_fade.frames >= 48 &&
+            g_fade.frame * 4 < g_fade.frames && fade_level() < 64)
+            vhold = 1, vwait = 0, vfield = ending_field_id();
+    } else if (vhold == 1) {
+        if (!g_fade.active && ++vwait > VWAIT_FRAMES) vhold = 4, vwait = 0;
+    } else if (vhold == 2) {
+        if (g_fade.active && g_fade.covered && t >= 250) vhold = 3, vwait = 0;
+    } else if (vhold == 3) {
+        if (!g_fade.active && g_fade.covered) vhold = 0; /* (black: the game's from here) */
+        else if (ending_field_id() != vfield && ++vwait > 120) vhold = 0;
+    } else if (vhold == 4 && ++vwait >= VFADE_FRAMES) vhold = 0;
+}
+/* whether the top shows the picture kept at a vignette's close, and what is subtracted from it (render.c) */
+int port_top_snapshot(u8 rgb[3]) {
+    if (!g_gameState || !vhold) return 0;
+    vhold_update();
+    rgb[0] = rgb[1] = rgb[2] = 0;
+    if (vhold == 3) for (int i = 0; i < 3; i++) rgb[i] = g_fade.color.b[i];
+    else if (vhold == 4) rgb[0] = rgb[1] = rgb[2] = (u8)(255 * vwait / VFADE_FRAMES);
+    return vhold != 0;
 }
 int port_ending_fade_held(void) {
     if (!g_gameState || !hold) return 0;
@@ -144,7 +184,7 @@ int port_minigame_panel_up(void) { return VSync(-1) - panel_frame <= 2; }
 
 void win_drawAll(void) {
     u8 *lo = g_primPtr;
-    if (g_gameState->mode == 1) hold_update();
+    if (g_gameState->mode == 1) hold_update(), vhold_update();
     u8 down[10], hide[10], any = 0, mid = 0;
     for (int i = 0; i < 10; i++) { /* (the bottom screen's windows hidden from the first pass) */
         Window *w = &g_windows[i];

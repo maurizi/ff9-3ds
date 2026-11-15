@@ -3012,6 +3012,7 @@ static void screen_dim(C3D_RenderTarget *rt, unsigned frac) {
 __attribute__((weak)) int port_game_mode(void) { return 0; }
 __attribute__((weak)) int port_top_crop(void) { return 0; }
 __attribute__((weak)) int port_top_fade(u8 rgb[3]) { (void)rgb; return 0; }
+__attribute__((weak)) int port_top_snapshot(u8 rgb[3]) { (void)rgb; return 0; }
 /* what is on a screen's render target (already drawn on), less a colour: the PS1's subtractive fade (port_top_fade) */
 static void screen_subtract(C3D_RenderTarget *rt, const u8 rgb[3]) {
     C3D_Mtx p;
@@ -3375,7 +3376,8 @@ void ctr_present(long frame) {
     static int full_menu = -1;
     static float full_stereo_k;
     int light = !moved && !cells_newer(d.x, d.y, d.x + w, d.y + h, present_gen) && !d.rgb24 && !top_ui_head && !n_model_tris && !top_hud && !closing &&
-                menu_state == full_menu && prev_menu == menu_state && stereo_k == full_stereo_k && !port_top_fade((u8[3]){0});
+                menu_state == full_menu && prev_menu == menu_state && stereo_k == full_stereo_k && !port_top_fade((u8[3]){0}) &&
+                !port_top_snapshot((u8[3]){0});
     present_gen = gen_counter;
     if (!light) full_menu = menu_state, full_stereo_k = stereo_k;
     ctr_render_stats[7] += light;
@@ -3413,7 +3415,16 @@ void ctr_present(long frame) {
                                 * for good would otherwise hold an old scene) */
         int hold = have_freeze && port_window_closing() && unsettled < 30;
         unsettled = hold ? unsettled + 1 : 0;
-        if (!menu_state && w >= 256 && !ctr_freeze_held && !closing && !hold) {
+        /* (an ending vignette's close: the top keeps the scene's picture from before its fade while its narration is on
+         * the bottom screen, darkened with the narration's own fade: ui_split.c port_top_snapshot. The picture is the
+         * menus' snapshot, not taken again meanwhile; the field's crop as it was) */
+        int port_top_snapshot(u8 rgb[3]);
+        u8 snap_sub[3];
+        int snap = port_top_snapshot(snap_sub);
+        static int snap_was, snap_crop;
+        if (snap && !snap_was) { int port_top_crop(void); snap_crop = port_top_crop(); }
+        snap_was = snap;
+        if (!menu_state && w >= 256 && !ctr_freeze_held && !closing && !hold && !snap) {
             /* (held: the battle's exit fade, battle_ui.c; a window shrinking: ui_split.c) */
             for (int eye = 0; eye < 2; eye++) {
                 C3D_FrameDrawOn(freeze_rt[eye]);
@@ -3453,7 +3464,11 @@ void ctr_present(long frame) {
         if (port_game_mode() == 2 || port_game_mode() == 8) field_after_battle = 1;
         else if (port_game_mode() != 1 || port_field_current()) field_after_battle = 0;
         for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) {
-            if (menu_state == 3) { /* (the card game: its own top view, port/game/tm_ui.c, over black) */
+            if (snap && have_freeze) {
+                int sh = snap_crop > 0 && snap_crop < freeze_h ? snap_crop : freeze_h;
+                draw_to_top(top_rt[eye], &freeze_tex[eye], edge, 0, freeze_w - 2 * edge, sh, freeze_w, freeze_h, edge);
+                if (snap_sub[0] | snap_sub[1] | snap_sub[2]) screen_subtract(top_rt[eye], snap_sub);
+            } else if (menu_state == 3) { /* (the card game: its own top view, port/game/tm_ui.c, over black) */
                 C3D_RenderTargetClear(top_rt[eye], C3D_CLEAR_ALL, 0x000000FF, 0);
                 C3D_FrameDrawOn(top_rt[eye]);
                 (void)mag_rx;
