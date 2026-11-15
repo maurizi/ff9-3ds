@@ -670,6 +670,9 @@ void game_updateFade(void) {
     u32 *ot = fade_getOt(g_gameState->gameData->drawBuf), was = *ot;
     game_updateFade_game();
     if (live == 2 && g_gameState->mode == GS_MODE_BATTLE) *ot = was;
+    /* (an ending narration's scene kept on the top while its text is on the bottom: ui_split.c) */
+    int port_ending_fade_held(void);
+    if (port_ending_fade_held()) *ot = was;
 }
 
 /* The camera while the rewards are up, and on through the fade after them: from where the victory camera gave its cue it circles the party at that

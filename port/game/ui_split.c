@@ -33,7 +33,7 @@ int port_ending_field(void) {
     return (f >= 2928 && f <= 2934) || (f >= 3000 && f <= 3012);
 }
 /* The vignettes whose scene is the top lines of the frame, a black bar under it for their subtitles: the top screen shows
- * the scene alone, larger, the subtitles being on the bottom screen (render.c). The bar is no primitive nor clip: the
+ * the scene alone, in its middle, the subtitles being on the bottom screen (render.c). The bar is no primitive nor clip: the
  * backgrounds end there, at line 184 (181 in Lindblum's, 3006), measured in each. (3001 and the play on the theater
  * ship, 3009-3011, are full-height) */
 int port_top_crop(void) {
@@ -70,11 +70,59 @@ static int to_bottom(const Window *w) {
 
 /* a minigame's panel was drawn to the bottom screen on the last frames: the field's bottom screen gives way to it */
 static long panel_frame = -100;
+/* The ending's narration over a scene (Kuja's words to Zidane, field 3001): on the PS1 the scene is darkened (a partial
+ * fade, to 200 of 255) and the narration shown over it. Its text being on the bottom screen, the top keeps the scene as
+ * it was until the text has gone: the fade is left out of the top's frame (game_updateFade, battle_ui.c) from its start,
+ * and once the text has gone the top darkens to where the fade is, over RAMP_FRAMES, the fade then drawn again as it
+ * is. (A partial fade only: a fade to black is a change of scene, and the next field would show under it. If no
+ * narration comes within PEND_FRAMES of the fade's end, the top darkens all the same) */
+#define RAMP_FRAMES 20
+#define PEND_FRAMES 60
+static long narr_frame = -100, hold_tick = -1;
+static int hold, ramp, pend, hold_field; /* hold: 3 the fade begun, waiting for the text; 1 the text up; 2 darkening */
+int port_ending_field(void);
+static int fade_level(void);
+static int fade_target(void) {
+    int c = g_fade.endR > g_fade.endG ? g_fade.endR : g_fade.endG;
+    return g_fade.endB > c ? g_fade.endB : c;
+}
+static void hold_update(void) {
+    long now = VSync(-1);
+    if (now == hold_tick) return;
+    hold_tick = now;
+    if (hold && (g_gameState->mode != 1 || g_gameState->gameData->fieldId != hold_field)) hold = 0;
+    int t = fade_target();
+    if (!hold && port_ending_field() && g_fade.active && g_fade.subtract && g_fade.covered && t > 16 && t < 250 &&
+        g_fade.frame * 4 < g_fade.frames)
+        hold = 3, pend = 0, hold_field = g_gameState->gameData->fieldId;
+    if (hold == 3) {
+        if (!g_fade.covered || !t) hold = 0; /* (lightened again: nothing to darken) */
+        else if (!g_fade.active && ++pend > PEND_FRAMES) hold = 2, ramp = 0;
+    } else if (hold == 1 && now - narr_frame > 2) {
+        hold = g_fade.covered && t ? 2 : 0, ramp = 0; /* (the game lightening the scene again: it stays as it is) */
+    } else if (hold == 2 && ++ramp >= RAMP_FRAMES) hold = 0;
+}
+static void narration_shown(void) {
+    hold_update();
+    if (hold == 3 || hold == 2) hold = 1;
+    narr_frame = VSync(-1);
+}
+int port_ending_fade_held(void) {
+    if (!g_gameState || !hold) return 0;
+    hold_update();
+    return hold != 0;
+}
+/* how bright the top screen is drawn (256: as it is): the darkening after an ending narration (render.c) */
+int port_top_bright(void) {
+    if (!port_ending_fade_held() || hold != 2) return 256;
+    return 256 - fade_level() * ramp / RAMP_FRAMES;
+}
 long VSync(long);
 int port_minigame_panel_up(void) { return VSync(-1) - panel_frame <= 2; }
 
 void win_drawAll(void) {
     u8 *lo = g_primPtr;
+    if (g_gameState->mode == 1) hold_update();
     u8 down[10], hide[10], any = 0, mid = 0;
     for (int i = 0; i < 10; i++) { /* (the bottom screen's windows hidden from the first pass) */
         Window *w = &g_windows[i];
@@ -92,6 +140,7 @@ void win_drawAll(void) {
         return;
     }
     panel_frame = VSync(-1);
+    if (mid) narration_shown();
     u8 up[10];
     for (int i = 0; i < 10; i++) { /* (a second pass with only those, its packets to the bottom screen) */
         Window *w = &g_windows[i];
@@ -172,7 +221,12 @@ int port_window_closing(void) {
 /* how dark the game's screen fade has the scene now, 0 (clear) to 256 (black), for the bottom screen to follow: the
  * darkening fade (subtract) of a field or the world map: a flat one's colour, a wipe's frame (covered: towards black,
  * else from it) */
+/* (an ending narration's text is above the fade, as on the PS1: the bottom isn't dimmed while it is held) */
 int port_bottom_fade(void) {
+    int port_ending_fade_held(void);
+    return port_ending_fade_held() ? 0 : fade_level();
+}
+static int fade_level(void) {
     if (!g_gameState || (g_gameState->mode != 1 && g_gameState->mode != 3)) return 0;
     int port_field_current(void);
     /* (a field still loading: the top is black without the fade (after a battle, a disc's load), the bottom too) */

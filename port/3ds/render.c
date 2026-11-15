@@ -2753,7 +2753,7 @@ static void outline_proj(int x0, int y0) {
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &m);
 }
 /* the outline of the displayed part (dx, dy, w, h of the mirror) onto the top screen's eye, placed as draw_to_top */
-static void outline_draw(int eye, int dx, int dy, int w, int h) {
+static void outline_draw(int eye, int dx, int dy, int w, int h, int rows) {
     if (!outline_rt[0][0]) return;
     int e = stereo_on ? eye : 0, buf = outline_buf(dx, dy);
     /* the edge: the mask spread a texel each way (added), less the mask (subtracted); all in the half-size mask */
@@ -2776,7 +2776,8 @@ static void outline_draw(int eye, int dx, int dy, int w, int h) {
     }
     /* the top screen darkened where the edge is: dst x (1 - edge) */
     float sc = top_scale(w, h);
-    int dw = (int)(w * sc + 0.5f), dh = (int)(h * sc + 0.5f);
+    int dw = (int)(w * sc + 0.5f), dh = (int)(rows * sc + 0.5f); /* (rows: the scene's, as draw_to_top shows it) */
+    float mrows = (float)mh * rows / h;
     C3D_FrameDrawOn(top_rt[eye]);
     C3D_Mtx pm;
     Mtx_OrthoTilt(&pm, 0.0f, 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
@@ -2786,7 +2787,7 @@ static void outline_draw(int eye, int dx, int dy, int w, int h) {
     C3D_TexSetFilter(&outline_edge_tex[e], GPU_LINEAR, GPU_LINEAR);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ZERO, GPU_ONE_MINUS_SRC_COLOR, GPU_ZERO, GPU_ONE);
     Vtx *v = alloc_vtx(6);
-    quad(v, (400 - dw) / 2, (240 - dh) / 2, (400 - dw) / 2 + dw, (240 - dh) / 2 + dh, mx, my, mx + mw, my + mh, 0xFFFFFFFF);
+    quad(v, (400 - dw) / 2, (240 - dh) / 2, (400 - dw) / 2 + dw, (240 - dh) / 2 + dh, mx, my, mx + mw, my + mrows, 0xFFFFFFFF);
     draw_tris(v - vb, 6);
     set_blend(NO_BLEND, 0);
 }
@@ -2982,8 +2983,8 @@ static float top_scale(int w, int h) {
     return s < 1.0f ? 1.0f : s;
 }
 static void draw_to_top(C3D_RenderTarget *rt, C3D_Tex *src, int sx, int sy, int w, int h, int fw, int fh, int edge) {
-    float s = top_scale(fw, fh);
-    int dw = (int)(fw * s + 0.5f), dh = (int)(fh * s + 0.5f), e = (int)(edge * s + 0.5f);
+    float s = top_scale(fw, fh); /* (the frame's scale; h lines of it shown, in the middle: the ending's vignettes) */
+    int dw = (int)(fw * s + 0.5f), dh = (int)(h * s + 0.5f), e = (int)(edge * s + 0.5f);
     C3D_RenderTargetClear(rt, C3D_CLEAR_ALL, 0x000000FF, 0);
     C3D_FrameDrawOn(rt);
     if (s > 1.0f) C3D_TexSetFilter(src, GPU_LINEAR, GPU_LINEAR);
@@ -3010,6 +3011,7 @@ static void screen_dim(C3D_RenderTarget *rt, unsigned frac) {
 
 __attribute__((weak)) int port_game_mode(void) { return 0; }
 __attribute__((weak)) int port_top_crop(void) { return 0; }
+__attribute__((weak)) int port_top_bright(void) { return 256; }
 __attribute__((weak)) int port_fade_busy(void) { return 0; }
 
 /* The bottom screen: the UI layer of the displayed buffer, on a plain backdrop (the scene is on the top screen only). */
@@ -3359,7 +3361,7 @@ void ctr_present(long frame) {
     static int full_menu = -1;
     static float full_stereo_k;
     int light = !moved && !cells_newer(d.x, d.y, d.x + w, d.y + h, present_gen) && !d.rgb24 && !top_ui_head && !n_model_tris && !top_hud && !closing &&
-                menu_state == full_menu && prev_menu == menu_state && stereo_k == full_stereo_k;
+                menu_state == full_menu && prev_menu == menu_state && stereo_k == full_stereo_k && port_top_bright() == 256;
     present_gen = gen_counter;
     if (!light) full_menu = menu_state, full_stereo_k = stereo_k;
     ctr_render_stats[7] += light;
@@ -3454,11 +3456,13 @@ void ctr_present(long frame) {
                 if (port_game_mode() != 8 && dim < 0x100) screen_dim(top_rt[eye], dim); /* (the rewards: the battle as it ended) */
             }
             else {
-                /* (the ending's vignettes: the scene without the black bar under it, their subtitles being on the
-                 * bottom screen: ui_split.c) */
+                /* (the ending's vignettes: the scene without the black bar under it, at its size, in the middle; their
+                 * subtitles are on the bottom screen: ui_split.c) */
                 int port_top_crop(void), crop = port_top_crop(), th = crop > 0 && crop < h ? crop : h;
-                draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, th, w, th, edge);
-                outline_draw(eye, d.x, d.y, w, th);
+                draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, th, w, h, edge);
+                outline_draw(eye, d.x, d.y, w, h, th);
+                int port_top_bright(void), bright = port_top_bright();
+                if (bright < 256) screen_dim(top_rt[eye], (unsigned)(bright < 0 ? 0 : bright));
             }
             if (closing && eye == (stereo_on ? 1 : 0)) closing++;
             /* (the display has moved to the other framebuffer: the one it left is drawn next, its mask cleared) */

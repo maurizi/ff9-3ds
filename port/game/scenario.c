@@ -133,8 +133,9 @@ void port_scenario_load(const char *path) {
     if(ferror(f)) port_fatal("scenario: error reading %s",path);
     fclose(f);
     if(!scenario.kind || (scenario.kind==2 && scenario.battle<0)) port_fatal("scenario: kind and battle ID required");
-    if(scenario.kind!=2) for(int i=0;i<4;i++) if(scenario.enemy_hp[i]>=0)
-        port_fatal("scenario: enemy_hp requires kind=battle");
+    /* (kind=field: the field's first battle, which its own story starts (Necron's, from field 2928: the ending after it)) */
+    if(scenario.kind!=1 && scenario.kind!=2) for(int i=0;i<4;i++) if(scenario.enemy_hp[i]>=0)
+        port_fatal("scenario: enemy_hp requires kind=battle or kind=field");
     scenario.enabled=1;psx_cd_select_disc((unsigned)scenario.disc);
     port_log("scenario configured: disc %d, %s %d\n",scenario.disc,scenario.kind==1?"field":scenario.kind==2?"battle":"world",
              scenario.kind==1?scenario.field:scenario.kind==2?scenario.battle:scenario.world);
@@ -150,7 +151,7 @@ s32 port_scenario_seed(s32 ordinary_seed) {
     return scenario.enabled ? (s32)scenario.seed : ordinary_seed;
 }
 void port_scenario_battle_ready(void) {
-    if(!scenario.enabled || !scenario.consumed || scenario.kind!=2 || scenario.enemy_hp_applied) return;
+    if(!scenario.enabled || !scenario.consumed || (scenario.kind!=1 && scenario.kind!=2) || scenario.enemy_hp_applied) return;
     scenario.enemy_hp_applied=1;
     for(int i=0;i<4;i++) if(scenario.enemy_hp[i]>=0) {
         port_scenario_set_enemy_hp(scenario.enemy_hp);
