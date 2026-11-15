@@ -18,6 +18,7 @@ static struct {
     int talk_uid,talk_after,talk_auction; /* talk=UID[,FRAMES]: talk to that object once the player has control (decomp R40) */
     int talk_tag; /* talk=UID,FRAMES,TAG: its function TAG instead of its talk (3), e.g. a menu the talk reaches only on foot */
     int place_uid,place_x,place_z,place_dir,place_set; /* place=UID,X,Z,DIR8: the object put there first (as op 1D) */
+    int atb; /* atb=active|wait: the battle setting (GameState.config bit 3); -1 as it is */
     int quina; /* quina=1: character record 5 joins as Quina (the game's PARTY_JOIN 05 01 05 05 05, decomp R40) */
     int cast_cmd,cast_abil,cast_actor,cast_targets; /* cast=CMD,ABIL[,ACTOR[,TARGETS]]: a party member's Attack queued as that command (port_scenario_cast) */
     int chocograph; /* GameData.chocograph (1-24, 0 none): the one the chocobo digs for (not an event byte, decomp R37) */
@@ -41,7 +42,7 @@ void port_scenario_load(const char *path) {
     if(!f) port_fatal("scenario: cannot open %s",path);
     __builtin_memset(&scenario,0,sizeof scenario);
     scenario.disc=1;scenario.field=70;scenario.battle=-1;scenario.world=0x2331;
-    scenario.level=-1;scenario.story=-1;scenario.gil=-1;scenario.seed=1;
+    scenario.level=-1;scenario.story=-1;scenario.gil=-1;scenario.seed=1;scenario.atb=-1;
     for(int i=0;i<4;++i) {scenario.party[i]=i;scenario.hp[i]=scenario.enemy_hp[i]=scenario.trance[i]=scenario.preset[i]=-1;for(int j=0;j<5;++j) scenario.equip[i][j]=-1;}
     for(int i=0;i<256;++i) scenario.items[i]=-1;
     char line[512];
@@ -78,6 +79,11 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"level")) scenario.level=number(eq,1,99);
         else if(!__builtin_strcmp(s,"story")) scenario.story=number(eq,0,65535);
         else if(!__builtin_strcmp(s,"gil")) scenario.gil=number(eq,0,9999999);
+        else if(!__builtin_strcmp(s,"atb")) {
+            if(!__builtin_strcmp(eq,"active")) scenario.atb=0;
+            else if(!__builtin_strcmp(eq,"wait")) scenario.atb=1;
+            else port_fatal("scenario: atb is active or wait, not %s",eq);
+        }
         else if(!__builtin_strcmp(s,"menu")) {
             char *comma=__builtin_strchr(eq,',');
             if(comma) *comma=0,scenario.menu_arg=number(comma+1,0,0xFFFF);
@@ -308,6 +314,7 @@ void port_scenario_bootstrap(void) {
     GameData *d=g_gameState->gameData;
     d->firstUseFxSeen=(u16)scenario.summons_seen;
     if(scenario.gil>=0) d->gil=(u32)scenario.gil;
+    if(scenario.atb>=0) g_gameState->config=(g_gameState->config&~(1u<<CFG_BIT_ATB))|((unsigned)scenario.atb<<CFG_BIT_ATB);
     _Static_assert(sizeof(Character)==0x90,"scenario character layout");
     load_blob(scenario.characters,d->characters,sizeof d->characters);
     load_blob(scenario.event_blob,&g_evtGlobalVars,sizeof g_evtGlobalVars);

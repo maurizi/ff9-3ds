@@ -342,7 +342,9 @@ static BtlUnit *tap_unit;
 static int draw_targets(void) {
     static const u8 enemy[] = "ENEMY", party[] = "PARTY", all[] = "ALL", one[] = "ONE", back[] = "BACK";
     tgt_shown = 0;
-    if (!g_btlTarget.windowOpen) return 0;
+    /* (whether the game's target-name window is open or not: the config's Target Window off (ZL toggles it while
+     * targeting) or the battle's markers hide it, and with this panel gone the bottom screen showed the PS1's own
+     * command and party windows (the user's report, L+R held with Attack's targets up)) */
     int ne = 0, np = 0;
     n_tgt = 0;
     ui_drawLabel(8, 37, 2, (s32)enemy, 0);
