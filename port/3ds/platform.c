@@ -86,6 +86,38 @@ void plat_vsync_begin(unsigned int n) {
  * and the frame when a frame hasn't ended for 3 seconds (a hang on hardware: where the game is stuck, even when the
  * HOME button no longer answers) */
 volatile const char *ctr_where = "start";
+
+/* A CPU exception on one of our threads (a data or prefetch abort, an undefined instruction): what it was and where,
+ * into the log at once, before the system's handler (Luma's crash dump, which a crash can keep from being written:
+ * the user's escape from a Memoria battle left neither dump nor log line). Then the system's handler as before. Its own
+ * stack: the faulting thread's may be what went wrong. */
+static u8 exception_stack[16 * 1024] __attribute__((aligned(8)));
+static const char *const exception_names[4] = {"prefetch abort", "data abort", "undefined instruction", "VFP"};
+static void __attribute__((noreturn)) on_exception(ERRF_ExceptionInfo *e, CpuRegisters *r) {
+    static volatile int inside;
+    if (!inside++) {
+        u32 tid = 0;
+        svcGetThreadId(&tid, CUR_THREAD_HANDLE);
+        port_log("FATAL: %s in thread %lu at pc %08lx lr %08lx (address %08lx, status %08lx) sp %08lx, frame %ld, in %s\n",
+                 e->type < 4 ? exception_names[e->type] : "exception", (unsigned long)tid, (unsigned long)r->pc,
+                 (unsigned long)r->lr, (unsigned long)e->far, (unsigned long)e->fsr, (unsigned long)r->sp, (long)frames,
+                 ctr_where ? (const char *)ctr_where : "?");
+        port_log("FATAL: r0 %08lx r1 %08lx r2 %08lx r3 %08lx r4 %08lx r5 %08lx r6 %08lx r7 %08lx\n", (unsigned long)r->r[0],
+                 (unsigned long)r->r[1], (unsigned long)r->r[2], (unsigned long)r->r[3], (unsigned long)r->r[4],
+                 (unsigned long)r->r[5], (unsigned long)r->r[6], (unsigned long)r->r[7]);
+        int port_game_mode(void);
+        int port_field_id(void);
+        port_log("FATAL: mode %d field %d\n", port_game_mode(), port_field_id());
+        void ctr_trace_dump(void);
+        ctr_trace_dump();
+    }
+    svcBreak(USERBREAK_PANIC);
+    for (;;) {}
+}
+/* (per thread: platform.c's main, async.c's worker, spu_client.c's sound thread) */
+void ctr_exception_install(void) {
+    threadOnException(on_exception, exception_stack + sizeof exception_stack, WRITE_DATA_TO_HANDLER_STACK);
+}
 static volatile unsigned wd_frames;
 static volatile int watchdog_quit, watchdog_done, watchdog_on;
 static LightEvent watchdog_wake;
@@ -284,6 +316,7 @@ int main(void) {
     gfxInitDefault();
     plat_mkdir(plat_data_dir()); /* (sdmc:/3ds/ff9: its log, settings and memory cards) */
     ctr_console_init();
+    ctr_exception_install();
     find_disc_pack();
     port_log("ff9-3ds (%s 3DS)\n", is_new3ds ? "New" : "Old");
     ctr_audio_init();

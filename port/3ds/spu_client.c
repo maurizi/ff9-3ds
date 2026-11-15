@@ -99,6 +99,8 @@ static void service(void) {
 
 static void audio_main(void *unused) {
     (void)unused;
+    void ctr_exception_install(void);
+    ctr_exception_install();
     spuw_set_rendering(1);
     while (!quit) {
         LightEvent_WaitTimeout(&kick_event, 2000000); /* (2 ms at most: a missed kick only delays) */

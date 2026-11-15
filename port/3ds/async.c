@@ -16,6 +16,8 @@ unsigned ctr_async_jobs, ctr_async_done; /* (the heartbeat: platform.c) */
 
 static void worker_main(void *unused) {
     (void)unused;
+    void ctr_exception_install(void);
+    ctr_exception_install();
     for (;;) {
         LightEvent_Wait(&go);
         if (quit) break;
