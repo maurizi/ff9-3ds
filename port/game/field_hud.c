@@ -657,16 +657,17 @@ static int draw_choices(void) {
 
 /* what the PS1 shows only through its menu is shown only when the menu can be opened: in the opening and other
  * cutscene stretches (GD_MENU_DISABLED) the party may be a placeholder, and there is no menu to offer */
-/* whether the player has had control in this field: before that it is a cutscene or a movie (the opening's
+/* whether the player has had control since the title: before that it is a cutscene or a movie (the opening's
  * "Opening-For FMV" field; its party a placeholder), and the bottom screen stays dark. A dialogue takes control away
  * for a moment, which mustn't hide anything. */
 /* (control held for STEADY frames: an event that gives it for a frame, as an encounter's in a cutscene stretch, brought
  * the whole screen up for that frame before the swirl) */
 #define STEADY 10
+/* (held across fields from then on: a field that opens with a cutscene (Memoria's Recollection, its movie of Alexandria)
+ * has the real party though control comes only after. Afresh from the title: a new game's opening has a placeholder) */
 static int had_control(void) {
-    static int field = -1, had, run;
-    GameData *g = g_gameState->gameData;
-    if (g->fieldId != field) field = g->fieldId, had = 0, run = 0;
+    static int had, run;
+    if (g_gameState->mode == 0) had = 0, run = 0;
     if (ram_ok(g_evtState, sizeof *g_evtState) && g_evtState->controlEnabled) { if (++run >= STEADY) had = 1; }
     else run = 0;
     return had;
