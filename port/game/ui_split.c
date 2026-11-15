@@ -27,9 +27,13 @@ int port_menu_state(void);
  * and the epilogue's vignettes (3000-3012: Alexandria, Burmecia, Lindblum, Treno, the theater ship). The player has no
  * control in them: the bottom screen shows no field screen there (field_hud.c), and their frameless text (narration
  * over a dimmed scene, the vignettes' subtitles) is moved to it */
+/* (the field's id; -1 outside one, and before the game state exists: the renderer asks from its first present, with
+ * g_gameState still null (a crash at start on a 3DS, where address 0 isn't mapped; Azahar maps it)) */
+static int ending_field_id(void) {
+    return g_gameState && g_gameState->mode == 1 && g_gameState->gameData ? g_gameState->gameData->fieldId : -1;
+}
 int port_ending_field(void) {
-    if (g_gameState->mode != 1) return 0;
-    int f = g_gameState->gameData->fieldId;
+    int f = ending_field_id();
     return (f >= 2928 && f <= 2934) || (f >= 3000 && f <= 3012);
 }
 /* The vignettes whose scene is the top lines of the frame, a black bar under it for their subtitles: the top screen shows
@@ -37,8 +41,7 @@ int port_ending_field(void) {
  * backgrounds end there, at line 184 (181 in Lindblum's, 3006), measured in each. (3001 and the play on the theater
  * ship, 3009-3011, are full-height) */
 int port_top_crop(void) {
-    if (g_gameState->mode != 1) return 0;
-    int f = g_gameState->gameData->fieldId;
+    int f = ending_field_id();
     return f == 3006 ? 181 : f == 3000 || (f >= 3002 && f <= 3008) || f == 3012 ? 184 : 0;
 }
 static int to_bottom(const Window *w) {
