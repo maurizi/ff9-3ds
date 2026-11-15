@@ -112,6 +112,8 @@ static void audio_main(void *unused) {
 static int inline_mode; /* SPUSYNC=1: no thread (the SPU in step with the game, as on the host: deterministic runs) */
 static void start(void) {
     if (thread || inline_mode) return;
+    /* (an Old 3DS's core 1 can't mix at 44.1 kHz in the share it gives: at half rate there, psx_spu_ticks) */
+    { extern unsigned psx_spu_ticks; psx_spu_ticks = ctr_is_new3ds() ? 1 : 2; }
 #ifdef PORT_SPU_SYNC
     inline_mode = 1;
     spuw_set_rendering(1);

@@ -17,4 +17,6 @@ void psx_spu_reverb_base(PsxSpuReverb *reverb, uint16_t base_register);
  * Channels alternate each tick; the RAM cursor advances after the right step. */
 void psx_spu_reverb_tick(PsxSpuReverb *reverb, uint8_t *ram, int16_t left, int16_t right,
                          int write_enabled, int16_t output[2]);
+void psx_spu_reverb_tick_half(PsxSpuReverb *reverb, uint8_t *ram, int16_t left, int16_t right, int write_enabled,
+                              int16_t output[2]);
 #endif

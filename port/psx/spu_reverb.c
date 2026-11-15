@@ -122,3 +122,16 @@ SPU_HOT void psx_spu_reverb_tick(PsxSpuReverb *reverb, uint8_t *ram, int16_t lef
     }
     reverb->phase = (pos + 1) & 63;
 }
+
+/* At 22.05 kHz output (psx_spu_ticks 2): the reverb's own rate, both channels each output sample (right, the address
+ * step, then left, as the 44.1 kHz ticks alternate them), the wet samples as they are: no resampling either way */
+SPU_HOT void psx_spu_reverb_tick_half(PsxSpuReverb *reverb, uint8_t *ram, int16_t left, int16_t right,
+                                      int write_enabled, int16_t output[2]) {
+    channel_step(reverb, ram, 1, right, write_enabled);
+    output[1] = reverb->up[1][reverb->phase >> 1];
+    reverb->cursor = (reverb->cursor + 1) & 0x3ffff;
+    if (!reverb->cursor) reverb->cursor = reverb->base;
+    channel_step(reverb, ram, 0, left, write_enabled);
+    output[0] = reverb->up[0][reverb->phase >> 1];
+    reverb->phase = (reverb->phase + 2) & 63;
+}

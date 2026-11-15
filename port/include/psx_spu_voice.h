@@ -30,6 +30,10 @@ void psx_spu_voice_key_off(PsxSpuVoice *voice);
  * The caller supplies this sample's shared noise value and enables fetching of
  * off voices when servicing SPU RAM IRQs. Reverb, CD/external inputs, global
  * mute, clipping/main volume and output are later stages, not approximated here. */
+/* SPU ticks per output sample: 1, or 2 where the CPU can't mix at 44.1 kHz (an Old 3DS): each voice's state (envelope,
+ * volume sweeps, sample position, block fetches) still steps every tick, its sample is interpolated and mixed every
+ * other one, and the reverb runs at its own 22.05 kHz without resampling. Set before the first sample. */
+extern unsigned psx_spu_ticks;
 void psx_spu_mix_voices(PsxSpuVoice voices[PSX_SPU_VOICES], const uint8_t *ram,
                          int16_t noise, uint32_t noise_mask, uint32_t modulation_mask,
                          uint32_t reverb_mask, int fetch_off_voices, PsxSpuVoiceMix *mix);

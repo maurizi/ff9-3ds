@@ -83,8 +83,7 @@ static void audio_header(void) {
     fwrite("WAVEfmt ", 1, 8, audio_file);
     audio_u32(16);
     audio_u32(0x00020001); /* PCM, stereo */
-    audio_u32(44100);
-    audio_u32(44100 * 4);
+    { extern unsigned psx_spu_ticks; audio_u32(44100 / psx_spu_ticks); audio_u32(44100 / psx_spu_ticks * 4); }
     audio_u32(0x00100004); /* block align 4, bits/sample 16 */
     fwrite("data", 1, 4, audio_file);
     audio_u32((unsigned)(audio_frames * 4));
@@ -270,6 +269,9 @@ int main(int argc, char **argv) {
             data_dir = argv[++i];
         } else if (!strcmp(argv[i], "--spu-trace") && i + 1 < argc) {
             if (!plat_spu_trace_open(argv[++i])) return 1;
+        } else if (!strcmp(argv[i], "--spu-half")) { /* (before --audio: the Old 3DS's half-rate mix) */
+            extern unsigned psx_spu_ticks;
+            psx_spu_ticks = 2;
         } else if (!strcmp(argv[i], "--audio") && i + 1 < argc && !audio_file) {
             audio_file = fopen(argv[++i], "wbx");
             if (!audio_file) { perror("audio capture"); return 1; }

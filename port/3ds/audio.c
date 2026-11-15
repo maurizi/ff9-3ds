@@ -22,6 +22,10 @@ unsigned int ctr_audio_dropped, ctr_audio_underruns, ctr_audio_frames, ctr_audio
 static int no_dsp; /* ndspInit failed: the DSP firmware isn't on the SD card (field_hud.c tells the player at boot) */
 int port_audio_missing(void) { return no_dsp; }
 
+/* the SPU mix's rate: 44.1 kHz, or 22.05 kHz where it is mixed at half rate (an Old 3DS: psx_spu_ticks) */
+extern unsigned psx_spu_ticks;
+static float out_rate(void) { return 44100.0f / (float)psx_spu_ticks; }
+
 void ctr_audio_init(void) {
     if (R_FAILED(ndspInit())) {
         port_log("audio: ndspInit failed (no sdmc:/3ds/dspfirm.cdc? dump it with DSP1): silent\n");
@@ -34,7 +38,7 @@ void ctr_audio_init(void) {
     ndspSetOutputMode(NDSP_OUTPUT_STEREO);
     ndspChnReset(0);
     ndspChnSetInterp(0, NDSP_INTERP_LINEAR);
-    ndspChnSetRate(0, 44100.0f);
+    ndspChnSetRate(0, out_rate());
     ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
     float mix[12] = {1.0f, 1.0f};
     ndspChnSetMix(0, mix);
@@ -87,7 +91,7 @@ void plat_audio_samples(const short *samples, unsigned frames) {
             float r = 1.0f + 0.01f * (float)(queued + 1 - NBUF / 2) / (float)(NBUF / 2);
             if (r < 0.985f) r = 0.985f;
             if (r > 1.005f) r = 1.005f;
-            ndspChnSetRate(0, 44100.0f * r);
+            ndspChnSetRate(0, out_rate() * r);
             cur = (cur + 1) % NBUF;
             fill = 0;
         }

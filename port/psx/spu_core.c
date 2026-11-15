@@ -161,23 +161,26 @@ static SPU_HOT void finish_sample(const int32_t dry_in[2], const int32_t send[2]
     uint16_t control = psx_spu_regs[0x1aa / 2];
     /* Capture writes precede the reverb RAM accesses, including when software
      * programs an unusual ESA/offset that overlaps a capture buffer. */
+    for (unsigned t = 0; t < psx_spu_ticks; ++t) /* (each tick's capture word: the sample twice at half rate) */
     for (unsigned channel = 0; channel < 2; ++channel) {
         /* PCM capture buffers: CD input is currently absent; voice capture is
          * post-ADSR and independent of global output mute. All addresses fit. */
         /* Even offsets into the little-endian RAM image: halfword stores. */
         uint16_t *ram = __builtin_assume_aligned(psx_spu_ram, 2);
-        ram[((2 + channel) * 0x400 + capture_offset) / 2] = capture[channel];
-        ram[(channel * 0x400 + capture_offset) / 2] = 0;
+        unsigned at = (capture_offset + 2 * t) & 0x3ff;
+        ram[((2 + channel) * 0x400 + at) / 2] = capture[channel];
+        ram[(channel * 0x400 + at) / 2] = 0;
     }
     int16_t wet[2];
-    psx_spu_reverb_tick(&reverb, psx_spu_ram,
+    (psx_spu_ticks == 2 ? psx_spu_reverb_tick_half : psx_spu_reverb_tick)(&reverb, psx_spu_ram,
         (control & 0x4000) ? clamp16(send[0]) : 0,
         (control & 0x4000) ? clamp16(send[1]) : 0, !!(control & 0x80), wet);
     for (unsigned channel = 0; channel < 2; ++channel) {
         int32_t dry = (control & 0x4000) ? dry_in[channel] : 0;
         int32_t mixed = dry + ((wet[channel] * (int16_t)psx_spu_regs[0xc2 + channel]) >> 15);
         output[channel] = clamp16((clamp16(mixed) * main_volume[channel].level) >> 15);
-        if (main_volume[channel].active) psx_spu_volume_tick(&main_volume[channel]);
+        for (unsigned t = 0; t < psx_spu_ticks; ++t)
+            if (main_volume[channel].active) psx_spu_volume_tick(&main_volume[channel]);
     }
 #ifdef __linux__
     const int32_t stages[8] = {
@@ -188,7 +191,7 @@ static SPU_HOT void finish_sample(const int32_t dry_in[2], const int32_t send[2]
     };
     psx_spu_trace(PSX_SPU_TRACE_SAMPLE, 0, 0, stages);
 #endif
-    capture_offset = (capture_offset + 2) & 0x3ff;
+    capture_offset = (capture_offset + 2 * psx_spu_ticks) & 0x3ff;
     psx_spu_regs[0x1ae / 2] = (psx_spu_regs[0x1ae / 2] & ~0x800) | (capture_offset & 0x200 ? 0x800 : 0);
 }
 
@@ -198,7 +201,7 @@ static SPU_HOT void sample_frame(int16_t output[2]) {
     psx_spu_mix_voices(voices, psx_spu_ram, (int16_t)noise.level,
                        flags(0x194), flags(0x190), flags(0x198), !!(control & 0x40), &mix);
     ended |= mix.ended;
-    psx_spu_noise_tick(&noise, (control >> 8) & 63);
+    for (unsigned t = 0; t < psx_spu_ticks; ++t) psx_spu_noise_tick(&noise, (control >> 8) & 63);
     finish_sample(mix.dry, mix.reverb_send, mix.capture, output);
     /* Key events take effect after one output sample. Off then on means a
      * simultaneous key-on retriggers the voice. Repeated writes remain events. */
@@ -227,11 +230,11 @@ static SPU_HOT int span_independent(unsigned n) {
      * at address 0). The voice 1/3 capture buffers (0x800..0xfff) do change. */
     uint32_t capture_from = 0x800;
     const uint16_t *ram = __builtin_assume_aligned(psx_spu_ram, 2);
-    for (unsigned k = 0; k < n && capture_from; ++k) {
+    for (unsigned k = 0; k < n * psx_spu_ticks && capture_from; ++k) {
         unsigned at = ((capture_offset + k * 2) & 0x3ff) / 2;
         if (ram[at] | ram[0x200 + at]) capture_from = 0;
     }
-    unsigned blocks = (n * 0x3fffu + (PSX_SPU_BLOCK_SAMPLES << 12)) / (PSX_SPU_BLOCK_SAMPLES << 12) + 2;
+    unsigned blocks = (n * psx_spu_ticks * 0x3fffu + (PSX_SPU_BLOCK_SAMPLES << 12)) / (PSX_SPU_BLOCK_SAMPLES << 12) + 2;
     int fetch_off = !!(control & 0x40);
     for (unsigned i = 0; i < PSX_SPU_VOICES; ++i) {
         const PsxSpuVoice *v = &voices[i];
@@ -250,7 +253,7 @@ static SPU_HOT void span_frames(int16_t *output, unsigned n) {
     static int16_t noise_levels[PSX_SPU_BLOCK_SPAN]; /* static: the DS stack is the small DTCM */
     for (unsigned s = 0; s < n; ++s) {
         noise_levels[s] = (int16_t)noise.level;
-        psx_spu_noise_tick(&noise, (control >> 8) & 63);
+        for (unsigned t = 0; t < psx_spu_ticks; ++t) psx_spu_noise_tick(&noise, (control >> 8) & 63);
     }
     static PsxSpuVoiceBlock block;
     unsigned profile_voices = port_profile_begin();
@@ -346,11 +349,13 @@ SPU_HOT void psx_spu_advance(unsigned ticks) {
     }
     if (!rendering || !psx_spu_ram) return;
     unsigned profile_spu = port_profile_begin();
-    /* Break down before adding, so even UINT_MAX ticks cannot overflow. */
-    unsigned frames = ticks / 96;
-    sample_fraction += ticks % 96;
-    frames += sample_fraction / 96;
-    sample_fraction %= 96;
+    /* Break down before adding, so even UINT_MAX ticks cannot overflow. (frames: output samples, of psx_spu_ticks
+     * SPU samples each) */
+    const unsigned per = 96 * psx_spu_ticks;
+    unsigned frames = ticks / per;
+    sample_fraction += ticks % per;
+    frames += sample_fraction / per;
+    sample_fraction %= per;
     static int16_t output[256 * 2]; /* static: the DS stack is the small DTCM, and this runs inside VSync */
     while (frames) {
         unsigned count = frames > 256 ? 256 : frames;
