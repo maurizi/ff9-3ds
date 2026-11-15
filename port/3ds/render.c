@@ -1047,7 +1047,8 @@ typedef struct {
     u32 stamp[64]; /* per 32x32 block: gen_counter when converted (0 = not yet) */
     u32 epoch[64]; /* per block: tex_epoch when it was last known current (no write to any source cell since) */
     u8 flags[64];  /* per block: 1 = has opaque texels, 2 = has semi-transparent ones */
-    u32 hash[64];  /* per block: its source texels' and CLUT's hash when converted */
+    u32 hash[64];  /* per block: its source texels' hash when converted */
+    u32 chash[64]; /* ... and its CLUT's */
 } TexSlot;
 
 #define MAX_SLOTS 96
@@ -1239,6 +1240,7 @@ static u32 shadow_hash(int x, int y, int w, int h, u32 seed) {
  * not yet drawn uses the slot: texture_for gives the page another (slot_renew). */
 static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     int b = by * 8 + bx;
+    if (s->stamp[b] && s->epoch[b] == tex_epoch) return 0; /* (current: nearly every call) */
     int shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
     int sx0 = m->tx + ((bx * 32) >> shift), sw = 32 >> shift, sy0 = m->ty + by * 32;
     /* a texture window reads only inside it: check (and read back) the whole page instead of the block */
@@ -1246,19 +1248,23 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
                    ofy = (s->twin >> 15 & 31) * 8;
     if (s->twin) sx0 = m->tx, sw = 256 >> shift, sy0 = m->ty;
     int ncl = m->depth == 0 ? 16 : m->depth == 1 ? 256 : 0;
-    if (s->stamp[b] && s->epoch[b] == tex_epoch) return 0;
-    if (s->stamp[b] && !cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]) &&
-        (!ncl || !cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b]))) {
+    int texels_new = !s->stamp[b] || cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]);
+    int clut_new = ncl && (!s->stamp[b] || cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b]));
+    if (!texels_new && !clut_new) {
         s->epoch[b] = tex_epoch;
         return 0;
     }
-    cpu_reads(sx0, sy0, sx0 + sw, sy0 + 32);
-    if (ncl) cpu_reads(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
     /* a write near its sources (the 32x32 cells are coarse: the world map scrolls 16-wide strips of water and cycles
-     * single CLUT rows every frame) may have left them as they were: then the block stays */
-    u32 hsh = shadow_hash(sx0, sy0, sw, 32, 0x811C9DC5u);
-    if (ncl) hsh = shadow_hash(m->clut_x, m->clut_y, ncl, 1, hsh);
-    if (s->stamp[b] && s->hash[b] == hsh) {
+     * single CLUT rows every frame) may have left them as they were: then the block stays. Texels and CLUT each
+     * hashed again only if their own cells were written: the rewards rewrite a few uploads every frame in the cell of
+     * the font's CLUTs, and every block of the font pages hashed its texels again with them (with a texture window,
+     * the page's whole width: 130 of them a frame, 8.5 ms in Azahar as an Old 3DS) */
+    u32 hsh = s->hash[b], chsh = s->chash[b];
+    if (texels_new) cpu_reads(sx0, sy0, sx0 + sw, sy0 + 32), hsh = shadow_hash(sx0, sy0, sw, 32, 0x811C9DC5u);
+    if (clut_new)
+        cpu_reads(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1),
+            chsh = shadow_hash(m->clut_x, m->clut_y, ncl, 1, 0x811C9DC5u);
+    if (s->stamp[b] && s->hash[b] == hsh && s->chash[b] == chsh) {
         s->stamp[b] = gen_counter;
         s->epoch[b] = tex_epoch;
         return 0;
@@ -1270,6 +1276,7 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     if (s->stamp[b] && (s->serial == frame_serial || (gpu_busy && s->serial + 1 == frame_serial))) return 1;
     if (gpu_busy && s->serial + 1 == frame_serial) frame_begin(); /* (the frame in flight's: it finishes first) */
     s->hash[b] = hsh;
+    s->chash[b] = chsh;
     u32 clut[256];
     if (ncl) {
         const u16 *c = psx_vram + (m->clut_y & 511) * VW;
