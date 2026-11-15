@@ -40,6 +40,11 @@ static void share_event(APT_HookType t, void *unused) {
     if (t == APTHOOK_ONSUSPEND || t == APTHOOK_ONSLEEP) APT_SetAppCpuTimeLimit(5);
     else if (t == APTHOOK_ONRESTORE || t == APTHOOK_ONWAKEUP) APT_SetAppCpuTimeLimit(80);
 }
+/* closing: core 1 the application's again (the HOME Menu's 5% while suspended, which closing doesn't restore), so our
+ * threads there end in time (render.c ctr_shutdown) */
+void ctr_core1_closing(void) {
+    if (share_hook.callback) APT_SetAppCpuTimeLimit(80);
+}
 void ctr_core1_share(int any_model) { /* (any_model: a New 3DS's thread falling back to core 1) */
     static int done;
     if (done || (ctr_is_new3ds() && !any_model)) return;
@@ -108,7 +113,7 @@ void ctr_async_exit(void) {
     if (!worker) return;
     quit = 1;
     LightEvent_Signal(&go);
-    threadJoin(worker, 1000000000ULL); /* (a second at most: closing must not hang) */
-    threadFree(worker);
+    /* (a second at most: closing must not hang; not freed if it hasn't ended, its stack would go under it) */
+    if (R_SUCCEEDED(threadJoin(worker, 1000000000ULL))) threadFree(worker);
     worker = NULL;
 }

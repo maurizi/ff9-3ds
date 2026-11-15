@@ -3496,6 +3496,8 @@ void ctr_shutdown(void) {
     extern volatile const char *ctr_where;
     void ctr_audio_exit(void);
     ctr_where = "closing: worker";
+    void ctr_core1_closing(void);
+    ctr_core1_closing();
     ctr_async_exit();
     void ctr_spu_exit(void);
     ctr_where = "closing: audio thread";

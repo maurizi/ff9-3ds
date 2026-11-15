@@ -84,7 +84,8 @@ static void service(void) {
         u32 arg = c.a & 0xFFFFFF;
         switch (c.a >> 24) {
         case SPU7_WRITE: spuw_write(arg, (uint16_t)c.b); break;
-        case SPU7_ADVANCE: spuw_advance(c.b * 96); publish(tail + 1); break;
+        case SPU7_ADVANCE: if (!quit) spuw_advance(c.b * 96); publish(tail + 1); break; /* (closing: the queue
+                                                                                                * emptied, nothing mixed) */
         case SPU7_ADDR: ram_at = arg; break;
         case SPU7_RAM_IN: ram_span(ram_at, arg, (const u8 *)c.b, NULL); shared.transfers++; break;
         case SPU7_RAM_OUT: ram_span(ram_at, arg, NULL, (u8 *)c.b); shared.transfers++; break;
@@ -133,8 +134,9 @@ void ctr_spu_exit(void) {
     if (!thread) return;
     quit = 1;
     LightEvent_Signal(&kick_event);
-    threadJoin(thread, 1000000000ULL); /* (a second at most: closing must not hang) */
-    threadFree(thread);
+    /* (a second at most: closing must not hang. Not freed if it hasn't ended: its stack freed under it, it crashed the
+     * close (an Old 3DS, the thread on core 1 at the HOME Menu's 5%)) */
+    if (R_SUCCEEDED(threadJoin(thread, 1000000000ULL))) threadFree(thread);
     thread = NULL;
 }
 
