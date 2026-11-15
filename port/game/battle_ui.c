@@ -233,7 +233,7 @@ static void draw_commands(void) {
  * caught", Frog Drop's; the screen ends at 240) */
 /* The help text in white, its keywords red: the PS1's pale blue help palette (TEXT_PAL_HELP), which its keywords' codes
  * go back to, is hard to read on the bottom screen's boxes. A copy with those codes made white */
-static u8 *help_white(u8 *text) {
+u8 *port_help_white(u8 *text) { /* (menu_top.c's descriptions too) */
     static u8 buf[512];
     unsigned n = 0;
     while (n < sizeof buf - 1 && text[n] != TEXT_END) {
@@ -306,7 +306,7 @@ static int draw_list(void) {
     }
     w->cur = saved;
     u8 *help = (u8 *)o0b_btlui_getListHelpText();
-    if (help) text_drawBlock(r_desc.x + 8, r_desc.y + 5, 2, help_white(help), TEXT_PAL_WHITE);
+    if (help) text_drawBlock(r_desc.x + 8, r_desc.y + 5, 2, port_help_white(help), TEXT_PAL_WHITE);
     win_drawBox(&r_desc, 4, 2);
     int bw = ui_measureLabel((u8 *)back);
     ui_drawLabel(r_back.x + (r_back.w - bw) / 2, r_back.y + 9, 2, (s32)back, 0);

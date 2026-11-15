@@ -18,6 +18,7 @@
  * docs/r32/3ds-requests-2.md). The game's logic pauses as on the PS1; nothing here changes the menu. */
 #define M2CTX
 #include "ff9.h"
+u8 *port_help_white(u8 *text); /* (battle_ui.c: after a keyword, back to white rather than the pale blue help palette) */
 
 void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h);
 void ctr_hud_draw_top(int slot, int x, int y, int w, int h, int dw, int dh);
@@ -171,7 +172,7 @@ static int item_view(int id, u8 *help) {
     /* (its description under the name, as Select's help gave it; the party's rows share what is left) */
     int top = 46, step = 46, size = 40;
     if (help && ram_ok(help, 1) && *help != TEXT_END) {
-        text_drawBlock(22, 38, 2, help, 0);
+        text_drawBlock(22, 38, 2, port_help_white(help), 0);
         top = 38 + text_measure(help).h + 6;
         step = (226 - top) / 4;
         if (step > 46) step = 46;
@@ -255,7 +256,7 @@ static int ability_view(const u8 *st) {
     text_drawBlock(80, 24, 2, c->name, 0);
     int y = 80;
     if (help && ram_ok(help, 1) && *help != TEXT_END) {
-        text_drawBlock(28, y, 2, help, 0);
+        text_drawBlock(28, y, 2, port_help_white(help), 0);
         y += text_measure(help).h + 14;
     }
     int any = 0;
@@ -312,7 +313,7 @@ static int consumable_view(int id, u8 *help) {
     ui_drawLabel(300, 22, 2, (s32) "HELD", 0);
     text_formatNumber(held, a, 2, 1);
     ui_drawDigits(334, 21, 2, a, 0);
-    if (help && ram_ok(help, 1)) text_drawBlock(22, 44, 2, help, 0);
+    if (help && ram_ok(help, 1)) text_drawBlock(22, 44, 2, port_help_white(help), 0);
     for (int i = 0; i < 4; i++) { /* (the party: who needs it) */
         Character *c = g->party[i];
         if (!ram_ok(c, sizeof *c)) continue;
@@ -345,7 +346,7 @@ int port_item_panel(int id, u8 *help) {
 int port_key_item_panel(u8 *name, u8 *help) {
     static RECT box = {8, 8, 384, 224};
     if (name && ram_ok(name, 1)) text_drawBlock(22, 20, 2, name, 0);
-    if (help && ram_ok(help, 1)) text_drawBlock(22, 48, 2, help, 0);
+    if (help && ram_ok(help, 1)) text_drawBlock(22, 48, 2, port_help_white(help), 0);
     win_drawBox(&box, 5, 2);
     return 1;
 }
