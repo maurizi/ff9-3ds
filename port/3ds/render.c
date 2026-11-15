@@ -2043,6 +2043,18 @@ void port_bottom_shift(const void *lo, const void *hi, int dx, int dy) {
     shift_frame = frames_drawn;
 }
 extern const u32 *psx_gpu_packet;
+/* the battle screen's own command rows and party cards replace the PS1's command window and party panel (OT entries
+ * 14-16 and 18-20, and the panel header at 7-8 (shared with the lists, not open then): battle_ui.c); the target window and
+ * its HP readout at 9-10 (and 4-5) the port's targets; Select's help at 2 on the top screen. Asked before a primitive's
+ * texture and vertices are made (r_poly, r_rect, r_line): the battle list is drawn every VBlank, these being most of it */
+static int battle_list_replaced(void) {
+    extern int psx_ui_list_battle, port_battle_hud_on, port_battle_hud_targets, port_battle_help_on;
+    if (!ui_mode || !psx_ui_list_battle || !port_battle_hud_on) return 0;
+    int slot = 0x17 - psx_ot_entry;
+    if (slot == 7 || slot == 8 || slot == 14 || slot == 15 || slot == 16 || (slot >= 18 && slot <= 20)) return 1;
+    if (port_battle_hud_targets && (slot == 4 || slot == 5 || slot == 9 || slot == 10)) return 1;
+    return port_battle_help_on && slot == 2;
+}
 static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, int bx1, int by1, C3D_Tex *tex,
                  unsigned tflags) {
     u16 sc[4];
@@ -2055,16 +2067,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     Vtx moved[6];
     int layer = -1, ox = 0, oy = 0;
     extern int psx_ui_list_battle, port_battle_hud_on, port_battle_hud_targets;
-    /* the battle screen's own command rows and party cards replace the PS1's command window and party panel (OT
-     * entries 14-16 and 18-20, and the panel header at 7-8 (shared with the lists, not open then): battle_ui.c) */
-    if (ui_mode && psx_ui_list_battle && port_battle_hud_on) {
-        int slot = 0x17 - psx_ot_entry;
-        if (slot == 7 || slot == 8 || slot == 14 || slot == 15 || slot == 16 || (slot >= 18 && slot <= 20)) return;
-        /* (the target window and its HP readout at 9-10: the port's targets) */
-        if (port_battle_hud_targets && (slot == 4 || slot == 5 || slot == 9 || slot == 10)) return;
-        extern int port_battle_help_on;
-        if (port_battle_help_on && slot == 2) return; /* (Select help: on the top screen, battle_ui.c) */
-    }
+    if (battle_list_replaced()) return; /* (the port's own: battle_list_replaced) */
     /* the battle list's entry 17 (btlui_drawTargetCursors): the hands pointing into the scene, drawn in it */
     if (ui_mode == 2) { /* the top screen's UI list (ctr_top_ui): straight onto the top screen, at the screen plane */
         u16 tsc[4] = {(u16)clampi(sc[0], 0, 400), (u16)clampi(sc[1], 0, 240), (u16)clampi(sc[2], 0, 400), (u16)clampi(sc[3], 0, 240)};
@@ -2250,6 +2253,7 @@ static void grow_ring(Vtx *t, int n, const int *r, float d) {
 }
 
 static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
+    if (battle_list_replaced()) return;
     unsigned tflags = 0;
     C3D_Tex *tex = prim_texture(m, v, n, &tflags);
     Vtx t[6];
@@ -2495,6 +2499,7 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (ui_mode && m->textured && ui_reads_cache(m, v->u, v->v, v->u + w - 1, v->v + h - 1)) return;
     if (m->textured && w == 23 && h == 13 && m->tx == 960 && m->ty == 256 && v->u == 227 && v->v == 21)
         note_hand(v->x, v->y); /* the pointing hand: where the game's cursor is (touch.c) */
+    if (battle_list_replaced()) return;
 #ifdef PORT_LOGUI_AT
     if (ui_mode && frames_drawn == PORT_LOGUI_AT)
         port_log("ui rect %d,%d %dx%d tex %d uv %d,%d page %d,%d clut %d,%d col %02x%02x%02x\n", v->x - ui_ox, v->y - ui_oy,
@@ -2535,6 +2540,7 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
 }
 
 static void r_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
+    if (battle_list_replaced()) return;
     Vtx va, vb2;
     make_vtx(&va, m, a);
     make_vtx(&vb2, m, b);
@@ -3286,6 +3292,7 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
             __builtin_memcpy(movie_key, key, sizeof key);
         }
         HZ_TEX(&movie_tex[movie_cur], "movie frame");
+        frame_begin(); /* (nothing else may have begun the frame: a movie's present draws alone) */
         for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) draw_to_top(top_rt[eye], &movie_tex[movie_cur], 0, 0, w, h, w, h, 0);
         (void)ox; (void)oy;
         return;
@@ -3308,6 +3315,7 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
     if (kept && newest <= kept_gen && !memcmp(key, kept_key, sizeof key) && tw * th <= 512 * 256) {
         __builtin_memcpy(px, kept, tw * th * 3);
         C3D_Tex *t = staging_tex(px, tw, th, GPU_RGB8);
+        frame_begin();
         for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) draw_to_top(top_rt[eye], t, 0, 0, w, h, w, h, 0);
         (void)ox; (void)oy;
         return;
@@ -3319,6 +3327,7 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
         __builtin_memcpy(kept_key, key, sizeof key);
     }
     C3D_Tex *t = staging_tex(px, tw, th, GPU_RGB8);
+    frame_begin();
     for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) draw_to_top(top_rt[eye], t, 0, 0, w, h, w, h, 0);
     (void)ox; (void)oy;
 }
