@@ -117,6 +117,9 @@ int port_menu_state(void) {
         int port_rewards_live_state(void);
         static int passed;
         if (g_gameState->mode != 8) passed = 0;
+        /* (a game over is mode 8 too: its picture is the screen, on the top as on the PS1. As a menu the top held the
+         * battle's last frame, faded out: black, and the picture's fade went to the bottom (the user's report)) */
+        else if (g->battleResult == BATTLE_END_GAME_OVER) return 0;
         else {
             if (port_rewards_live_state() == 3) passed = 1;
             return passed ? 0 : 2;
