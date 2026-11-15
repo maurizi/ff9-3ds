@@ -119,14 +119,26 @@ void ctr_exception_install(void) {
     threadOnException(on_exception, exception_stack + sizeof exception_stack, WRITE_DATA_TO_HANDLER_STACK);
 }
 static volatile unsigned wd_frames;
-static volatile int watchdog_quit, watchdog_done, watchdog_on;
+static volatile int watchdog_quit, watchdog_done, watchdog_on, watchdog_paused;
 static LightEvent watchdog_wake;
-/* (render.c ctr_shutdown: the thread woken and gone before the process's memory, its stack's, is freed) */
+/* (render.c ctr_shutdown: the thread woken and gone before the process's memory, its stack's, is freed. A dump it is
+ * writing is cut short: an Old 3DS closed from the HOME Menu after 3 s there (no frames: the watchdog's dump of
+ * thousands of lines, at core 1's 5% while suspended) went on past the 100 ms waited, and the system stopped with a
+ * kernel panic on core 1 as the process ended under it) */
 void ctr_watchdog_stop(void) {
     if (!watchdog_on) return;
+    extern volatile int ctr_trace_quit;
+    ctr_trace_quit = 1;
     watchdog_quit = 1;
     LightEvent_Signal(&watchdog_wake);
-    for (int i = 0; i < 100 && !watchdog_done; i++) svcSleepThread(1000000);
+    for (int i = 0; i < 2000 && !watchdog_done; i++) svcSleepThread(1000000);
+}
+/* (suspended in the HOME Menu or asleep, the game draws no frames: nothing to report) */
+static aptHookCookie watchdog_hook;
+static void watchdog_event(APT_HookType t, void *unused) {
+    (void)unused;
+    if (t == APTHOOK_ONSUSPEND || t == APTHOOK_ONSLEEP) watchdog_paused = 1;
+    else if (t == APTHOOK_ONRESTORE || t == APTHOOK_ONWAKEUP) watchdog_paused = 2; /* (counted afresh) */
 }
 static void watchdog_main(void *unused) {
     (void)unused;
@@ -134,6 +146,8 @@ static void watchdog_main(void *unused) {
     for (;;) {
         LightEvent_WaitTimeout(&watchdog_wake, 1000000000LL);
         if (watchdog_quit) break;
+        if (watchdog_paused == 1) continue;
+        if (watchdog_paused == 2) watchdog_paused = 0, last = wd_frames, still = 0;
         unsigned f = wd_frames;
         if (f != last) { last = f, still = 0; continue; }
         if (++still % 3 == 0) {
@@ -154,6 +168,7 @@ void ctr_watchdog_start(void) {
     LightEvent_Init(&watchdog_wake, RESET_ONESHOT);
     t = threadCreate(watchdog_main, NULL, 8 * 1024, prio - 3, ctr_is_new3ds() ? 2 : 1, true);
     watchdog_on = t != NULL;
+    if (watchdog_on) aptHook(&watchdog_hook, watchdog_event, NULL);
 }
 
 void plat_wait_frame(void) {

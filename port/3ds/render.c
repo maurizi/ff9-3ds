@@ -166,11 +166,12 @@ static void trace(const char *what, int a, int b) {
     unsigned i = trace_n++ % TRACE_N;
     trace_ring[i].what = what, trace_ring[i].a = a, trace_ring[i].b = b, trace_ring[i].frame = frames_drawn;
 }
+volatile int ctr_trace_quit; /* (the watchdog's dump cut short: the application is closing, platform.c) */
 void ctr_trace_dump(void) { /* (platform.c's watchdog, once) */
     void ctr_console_raw(const char *, int);
     char line[96];
     unsigned n = trace_n, first = n > TRACE_N ? n - TRACE_N : 0;
-    for (unsigned k = first; k < n; k++) {
+    for (unsigned k = first; k < n && !ctr_trace_quit; k++) {
         unsigned i = k % TRACE_N;
         int len = snprintf(line, sizeof line, "  trace %u: %s %d %d (frame %u)\n", k, trace_ring[i].what, trace_ring[i].a, trace_ring[i].b, trace_ring[i].frame);
         ctr_console_raw(line, len);
