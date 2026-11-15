@@ -665,12 +665,16 @@ static int draw_choices(void) {
 #define STEADY 10
 /* (held across fields from then on: a field that opens with a cutscene (Memoria's Recollection, its movie of Alexandria)
  * has the real party though control comes only after. Afresh from the title: a new game's opening has a placeholder) */
+/* (the ending's cutscenes (ui_split.c port_ending_field) count only control had in the field itself: there is none, and
+ * the minimap and party list showed over them, the party half dead from the last battle (the user's report)) */
 static int had_control(void) {
-    static int had, run;
+    static int had, run, here, field = -1;
+    int port_ending_field(void);
     if (g_gameState->mode == 0) had = 0, run = 0;
-    if (ram_ok(g_evtState, sizeof *g_evtState) && g_evtState->controlEnabled) { if (++run >= STEADY) had = 1; }
+    if (g_gameState->mode == 1 && g_gameState->gameData->fieldId != field) field = g_gameState->gameData->fieldId, here = 0;
+    if (ram_ok(g_evtState, sizeof *g_evtState) && g_evtState->controlEnabled) { if (++run >= STEADY) had = here = 1; }
     else run = 0;
-    return had;
+    return port_ending_field() ? here : had;
 }
 
 /* (changed only once the new state has held STEADY frames: at an encounter the menu flags change for a frame or two

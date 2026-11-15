@@ -3009,6 +3009,7 @@ static void screen_dim(C3D_RenderTarget *rt, unsigned frac) {
 
 
 __attribute__((weak)) int port_game_mode(void) { return 0; }
+__attribute__((weak)) int port_top_crop(void) { return 0; }
 __attribute__((weak)) int port_fade_busy(void) { return 0; }
 
 /* The bottom screen: the UI layer of the displayed buffer, on a plain backdrop (the scene is on the top screen only). */
@@ -3453,8 +3454,11 @@ void ctr_present(long frame) {
                 if (port_game_mode() != 8 && dim < 0x100) screen_dim(top_rt[eye], dim); /* (the rewards: the battle as it ended) */
             }
             else {
-                draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, h, w, h, edge);
-                outline_draw(eye, d.x, d.y, w, h);
+                /* (the ending's vignettes: the scene without the black bar under it, their subtitles being on the
+                 * bottom screen: ui_split.c) */
+                int port_top_crop(void), crop = port_top_crop(), th = crop > 0 && crop < h ? crop : h;
+                draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, th, w, th, edge);
+                outline_draw(eye, d.x, d.y, w, th);
             }
             if (closing && eye == (stereo_on ? 1 : 0)) closing++;
             /* (the display has moved to the other framebuffer: the one it left is drawn next, its mask cleared) */

@@ -23,9 +23,28 @@ static const struct { u16 field, lo, hi; } panels[] = {
     {64, 0x78, 0x80},    /* ... the nobles' verdict, the gil */
 };
 int port_menu_state(void);
+/* The ending's field cutscenes: after Necron (the party waking on the hill (field 2928) to the Iifa tree's roots (2934))
+ * and the epilogue's vignettes (3000-3012: Alexandria, Burmecia, Lindblum, Treno, the theater ship). The player has no
+ * control in them: the bottom screen shows no field screen there (field_hud.c), and their frameless text (narration
+ * over a dimmed scene, the vignettes' subtitles) is moved to it */
+int port_ending_field(void) {
+    if (g_gameState->mode != 1) return 0;
+    int f = g_gameState->gameData->fieldId;
+    return (f >= 2928 && f <= 2934) || (f >= 3000 && f <= 3012);
+}
+/* The vignettes whose scene is the top lines of the frame, a black bar under it for their subtitles: the top screen shows
+ * the scene alone, larger, the subtitles being on the bottom screen (render.c). The bar is no primitive nor clip: the
+ * backgrounds end there, at line 184 (181 in Lindblum's, 3006), measured in each. (3001 and the play on the theater
+ * ship, 3009-3011, are full-height) */
+int port_top_crop(void) {
+    if (g_gameState->mode != 1) return 0;
+    int f = g_gameState->gameData->fieldId;
+    return f == 3006 ? 181 : f == 3000 || (f >= 3002 && f <= 3008) || f == 3012 ? 184 : 0;
+}
 static int to_bottom(const Window *w) {
     if (g_gameState->mode != 1) return 0;
     int field = g_gameState->gameData->fieldId;
+    if (port_ending_field() && w->style == WIN_STYLE_FRAMELESS) return 4; /* (centred on the bottom screen: win_drawAll) */
     /* (a menu over the field: the field's dialogue (its speech balloons, its message windows) stays with the frozen scene
      * on the top screen; while the menu opened, the scene hidden and the menu not yet drawn, a bubble showed on the
      * bottom screen alone for some 20 frames ("You wanna try?", Alexandria's jump rope)) */
@@ -56,13 +75,14 @@ int port_minigame_panel_up(void) { return VSync(-1) - panel_frame <= 2; }
 
 void win_drawAll(void) {
     u8 *lo = g_primPtr;
-    u8 down[10], hide[10], any = 0;
+    u8 down[10], hide[10], any = 0, mid = 0;
     for (int i = 0; i < 10; i++) { /* (the bottom screen's windows hidden from the first pass) */
         Window *w = &g_windows[i];
         int b = w->state != WIN_STATE_CLOSED && w->visible ? to_bottom(w) : 0;
-        down[i] = b == 1;
+        down[i] = b == 1 || b == 4;
+        mid |= b == 4;
         hide[i] = b == 2 || b == 3; /* (3: hidden only, not a minigame's panel) */
-        if (b) w->visible = 0, any |= b == 1;
+        if (b) w->visible = 0, any |= b == 1 || b == 4;
         if (b == 2) panel_frame = VSync(-1);
     }
     win_drawAll_game();
@@ -81,7 +101,7 @@ void win_drawAll(void) {
     /* on the bottom screen: a panel, not a balloon (no speech tail, no shadow); the packets moved as a block so the
      * first one sits centred along the top (port_bottom_shift: the game's own layout and text kept) */
     u8 saved_style[10], saved_shadow[10];
-    int bx0 = 1 << 30, bx1 = -(1 << 30), by0 = 1 << 30;
+    int bx0 = 1 << 30, bx1 = -(1 << 30), by0 = 1 << 30, by1 = -(1 << 30);
     for (int i = 0; i < 10; i++) {
         if (!down[i]) continue;
         Window *w = &g_windows[i];
@@ -91,6 +111,7 @@ void win_drawAll(void) {
         if (w->cur.x < bx0) bx0 = w->cur.x;
         if (w->cur.x + w->cur.w > bx1) bx1 = w->cur.x + w->cur.w;
         if (w->cur.y < by0) by0 = w->cur.y;
+        if (w->cur.y + w->cur.h > by1) by1 = w->cur.y + w->cur.h;
     }
     u8 *lo2 = g_primPtr;
     win_drawAll_game();
@@ -99,7 +120,9 @@ void win_drawAll(void) {
     if (g_primPtr != lo2) {
         void port_bottom_shift(const void *, const void *, int, int);
         port_bottom_packets((const void *)PSX_PTR(lo2), (const void *)PSX_PTR(g_primPtr));
-        port_bottom_shift((const void *)PSX_PTR(lo2), (const void *)PSX_PTR(g_primPtr), (320 - (bx1 - bx0)) / 2 - bx0, 12 - by0);
+        /* (the ending's text: in the middle of the screen, which shows nothing else) */
+        port_bottom_shift((const void *)PSX_PTR(lo2), (const void *)PSX_PTR(g_primPtr), (320 - (bx1 - bx0)) / 2 - bx0,
+                          mid ? (240 - (by1 - by0)) / 2 - by0 : 12 - by0);
     }
     for (int i = 0; i < 10; i++) g_windows[i].visible = (u8)(up[i] | down[i] | hide[i]);
 }
