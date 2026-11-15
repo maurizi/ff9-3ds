@@ -177,11 +177,11 @@ void ctr_trace_dump(void) { /* (platform.c's watchdog, once) */
         ctr_console_raw(line, len);
     }
 }
-static void frame_end(void) {
-    trace("frame_end", vb_used, (int)staging_used);
-    flush_pending();
-    C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
-}
+/* ---- the GPU's cost (PROFILE): what each part of a frame draws, and on a 3DS how long the GPU takes for it --------
+ * The frame's command list is sent in parts (mirror, UI layers, outline masks, top-screen UI list, the frozen scene's
+ * copy, the top screen, the bottom screen, the end), each counted as it is recorded (pixels by its triangles' area,
+ * vertices, draw calls); the GPU's "command list done" event (P3D, which citro3d leaves alone) times each part. Azahar
+ * takes no time for the GPU: there the counts with costs fitted on a 3DS estimate it (ctr_gpu_cost_report) */
 
 static DVLB_s *shader_dvlb;
 static shaderProgram_s shader;
@@ -205,8 +205,11 @@ typedef struct {
     int shown;             /* presented since it was last cleared: the next frame drawn into the buffer clears it */
     unsigned drawn;        /* frames_drawn when UI was last drawn into it */
     int hands[CTR_MAX_HANDS][2], nhands;
+    int dx0, dy0, dx1, dy1; /* where anything was drawn since it was last cleared (empty: dx0 >= dx1) */
 } UiLayer;
 static UiLayer layers[2];
+static inline int imin(int a, int b);
+static inline int imax(int a, int b);
 /* while a menu is up, the top screen shows the scene as it was when the menu was asked for (per eye) */
 static C3D_Tex freeze_tex[2];
 static C3D_RenderTarget *freeze_rt[2];
@@ -218,6 +221,8 @@ static int menu_state; /* port_menu_state(), read at each present */
 static int have_freeze; /* freeze_tex holds a scene */
 #define UNDIM_FRAMES 12 /* a closed menu's paused scene undimmed over these presents */
 static int prev_mode;
+static int prev_menu, closing; /* (ctr_present: the menu at the last present; a closed menu's undimming, in presents) */
+static u32 present_gen;        /* gen_counter at the last present (cells drawn since: cell_gen past it) */
 int port_game_mode(void);
 int port_fade_busy(void);
 __attribute__((weak)) int port_menu_state(void) { return 0; }
@@ -227,6 +232,147 @@ static int in_frame;
 static unsigned frame_serial = 1; /* bumped at each C3D frame: what was recorded since */
 static int stereo_on;            /* eye 1 drawn as well */
 static float stereo_k;           /* parallax constant of eye 1 (eye 0 gets -k) */
+
+/* (fitted on an Old 3DS's battle, ms each (the same GPU on a New 3DS): a command list (its sending and the GSP's
+ * latency included), a pixel (more in the mirror: depth, blending, the mask and dither stages), a vertex. Within 0.4 ms
+ * of each part's measured time there (ff9-test-gpucal, 2026-11-15)) */
+#define GPU_COST_LIST 0.50
+#define GPU_COST_PX 0.0000090
+#define GPU_COST_PX_MIRROR 0.0000039
+#define GPU_COST_VX 0.00098
+#define GPU_COST_END 2.0 /* (a frame's end: its last list, the screens' copies) */
+static gxCmdQueue_s *c3d_queue; /* (citro3d's: GX_BindQueue wrapped, -Wl,--wrap) */
+enum { GS_MIRROR, GS_LAYERS, GS_OUTLINE, GS_TOPUI, GS_FREEZE, GS_TOP, GS_BOTTOM, GS_END, GS_N };
+#ifdef PORT_PROFILE
+static const char *const gs_name[GS_N] = {"mirror", "layers", "outline", "topui", "freeze", "top", "bottom", "end"};
+static double gs_px[GS_N], gs_vx[GS_N], gs_dc[GS_N], gs_ms[GS_N], gs_lists[GS_N];
+static double gs_frame_est; /* this present's estimated GPU time so far (ms) */
+static unsigned gs_ends;    /* frames ended in the window */
+static double gs_wait_est;  /* the window's estimated waits for the GPU (ms) */
+static double cur_px, cur_vx, cur_dc;
+/* (each list's place in citro3d's GX queue, which counts the entries the GPU has finished (lastEntry): stamped as that
+ * count rises, at the GSP's list, transfer and fill events; a list's time is from its start (sent, or the entry before
+ * finished) to its end) */
+#define GQ 256
+static volatile u64 gq_sent[GQ], gq_done[GQ];
+static volatile s8 gq_seg[GQ]; /* -1: not one of the parts (a transfer, a fill, a list sent elsewhere) */
+static volatile unsigned gq_stamped;
+static volatile double gq_ms[GS_N];
+static volatile unsigned gq_odd; /* entries finished before they were sent: the pairing was off */
+static void gq_event(void *unused) { /* (the GSP's event thread, after the queue has taken the event) */
+    (void)unused;
+    if (!c3d_queue) return;
+    unsigned last = c3d_queue->lastEntry;
+    if (last < gq_stamped) gq_stamped = 0; /* (the queue cleared at a frame's begin) */
+    u64 now = svcGetSystemTick();
+    for (unsigned e = gq_stamped; e < last && e < GQ; e++) {
+        gq_done[e] = now;
+        if (gq_seg[e] < 0) continue;
+        u64 start = gq_sent[e];
+        if (e && gq_done[e - 1] > start) start = gq_done[e - 1];
+        if (now < start) gq_odd++;
+        else gq_ms[gq_seg[e]] += (now - start) / (double)SYSCLOCK_ARM11 * 1000.0;
+        gq_seg[e] = -1;
+    }
+    gq_stamped = last;
+}
+static void gq_sending(int seg) { /* the list about to be added to the queue is part seg */
+    static int hooked;
+    if (!hooked) {
+        hooked = 1;
+        memset((void *)gq_seg, -1, sizeof gq_seg);
+        gspSetEventCallback(GSPGPU_EVENT_P3D, gq_event, NULL, false);
+        gspSetEventCallback(GSPGPU_EVENT_PPF, gq_event, NULL, false);
+        gspSetEventCallback(GSPGPU_EVENT_PSC0, gq_event, NULL, false);
+        gspSetEventCallback(GSPGPU_EVENT_PSC1, gq_event, NULL, false);
+    }
+    if (!c3d_queue) return;
+    unsigned e = c3d_queue->numEntries;
+    if (e >= GQ) return;
+    gq_sent[e] = svcGetSystemTick();
+    gq_seg[e] = (s8)seg;
+}
+static void gq_collect(void) {
+    for (int g = 0; g < GS_N; g++) gs_ms[g] += gq_ms[g], gq_ms[g] = 0;
+}
+static void gs_take(int seg) {
+    if (cur_dc) {
+        gs_lists[seg]++;
+        gs_frame_est += GPU_COST_LIST + GPU_COST_VX * cur_vx + (GPU_COST_PX + (seg == GS_MIRROR ? GPU_COST_PX_MIRROR : 0)) * cur_px;
+    }
+    gs_px[seg] += cur_px, gs_vx[seg] += cur_vx, gs_dc[seg] += cur_dc, cur_px = cur_vx = cur_dc = 0;
+}
+/* (Azahar's GPU takes no time: the wait a 3DS would have, from the estimate. A present's GPU work runs from its end;
+ * the next frame_begin waits for what is left of it) */
+static u64 gs_present_t;
+static double gs_present_est;
+static void gs_presented(void) { gs_present_t = svcGetSystemTick(), gs_present_est = gs_frame_est, gs_frame_est = 0; }
+static void gs_beginning(void) {
+    if (!gs_present_t) return;
+    double since = (svcGetSystemTick() - gs_present_t) / (double)SYSCLOCK_ARM11 * 1000.0;
+    if (gs_present_est > since) gs_wait_est += gs_present_est - since;
+    gs_present_t = 0;
+}
+bool C3Di_SplitFrame(u32 **cmdBuf, u32 *cmdBufSize); /* (citro3d's, what C3D_FrameSplit sends) */
+static void gseg(int seg) { /* what was recorded since the last part: sent as a list of its own */
+    if (!in_frame || !cur_dc) { gs_take(seg); return; }
+    flush_pending();
+    u32 *buf, size;
+    gs_take(seg);
+    if (C3Di_SplitFrame(&buf, &size)) gq_sending(seg), GX_ProcessCommandList(buf, size * 4, GX_CMDLIST_FLUSH);
+}
+static void gs_count(unsigned first, unsigned n) {
+    const Vtx *v = vb + first;
+    double a = 0;
+    for (unsigned i = 0; i + 2 < n; i += 3)
+        a += fabsf((v[i + 1].x - v[i].x) * (v[i + 2].y - v[i].y) - (v[i + 2].x - v[i].x) * (v[i + 1].y - v[i].y)) * 0.5f;
+    cur_px += a, cur_vx += n, cur_dc += 1;
+}
+/* the window's GPU time per part and frame, measured (a 3DS) and estimated from the counts */
+void ctr_gpu_cost_report(unsigned frames) {
+    gq_collect();
+    char line[512];
+    int n = 0;
+    double est = 0;
+    for (int g = 0; g < GS_N && n < (int)sizeof line - 64; g++) {
+        if (!gs_dc[g] && !gs_ms[g]) continue;
+        double e = gs_dc[g] ? GPU_COST_LIST * gs_lists[g] + GPU_COST_VX * gs_vx[g] +
+                                  (GPU_COST_PX + (g == GS_MIRROR ? GPU_COST_PX_MIRROR : 0)) * gs_px[g] : 0;
+        est += e;
+        n += snprintf(line + n, sizeof line - n, " %s %.2f/%.2f %.0fk %.0f %.0f |", gs_name[g], gs_ms[g] / frames, e / frames,
+                      gs_px[g] / frames / 1000, gs_vx[g] / frames, gs_dc[g] / frames);
+        gs_ms[g] = gs_px[g] = gs_vx[g] = gs_dc[g] = gs_lists[g] = 0;
+    }
+    est += GPU_COST_END * gs_ends;
+    extern unsigned int ctr_render_stats[8];
+    static unsigned last_light;
+    port_log("[gpuc] ms measured/estimated, kpixels, vertices, draws per frame:%s est %.1f, wait est %.1f, light presents %u (odd %u)\n",
+             line, est / frames, gs_wait_est / frames, ctr_render_stats[7] - last_light, gq_odd);
+    last_light = ctr_render_stats[7];
+    gs_wait_est = 0, gs_ends = 0;
+}
+#define GSEG(seg) gseg(seg)
+#else
+#define GSEG(seg) ((void)0)
+#define gs_presented() ((void)0)
+#define gs_beginning() ((void)0)
+#endif
+static inline void draw_tris(unsigned first, unsigned n) {
+#ifdef PORT_PROFILE
+    gs_count(first, n);
+#endif
+    C3D_DrawArrays(GPU_TRIANGLES, first, n);
+}
+static void frame_end(void) {
+    trace("frame_end", vb_used, (int)staging_used);
+    flush_pending();
+#ifdef PORT_PROFILE
+    gs_take(GS_END);
+    gq_sending(GS_END); /* (C3D_FrameEnd sends what is left as a list) */
+    gs_frame_est += GPU_COST_END, gs_ends++;
+#endif
+    C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
+}
 static float stereo_inv_zc = 1.0f / 1500.0f;
 #define STEREO_MAX_PX 8.0f
 static unsigned display_shown_gen = ~0u;
@@ -336,6 +482,7 @@ static void model_tex_free(void);
 static unsigned texscale_wh = ~0u; /* (the size set last: the atlases share one, a switch between them sets nothing) */
 static void frame_begin(void) {
     if (in_frame) return;
+    gs_beginning();
     unsigned profile_start = port_profile_begin();
     extern volatile const char *ctr_where;
     const char *was = (const char *)ctr_where;
@@ -393,7 +540,7 @@ static void gpu_quiet(void) {
 
 /* ---- batches ------------------------------------------------------------------------------------------------ */
 
-enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE, K_SCENE, K_PAGE_OP, K_PAGE_SEMI };
+enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE, K_SCENE, K_PAGE_OP, K_PAGE_SEMI, K_PAGE_COPY };
 #define MASK_SET 1   /* drawn pixels get the mask bit (alpha 1); else the texel's (textured) or 0 */
 #define MASK_CHECK 2 /* pixels with the mask bit keep their colour (opaque draws) */
 #define MASK_COPY 4  /* an upload: the source's mask bits as they are */
@@ -413,7 +560,9 @@ typedef struct {
 #define MAX_BATCHES 4096
 static Batch batches[MAX_BATCHES];
 
+static void run_flush(void);
 static Vtx *alloc_vtx(unsigned n) {
+    run_flush(); /* (an open run holds the rest of the buffer: run_open) */
     if (vb_used + n > VB_MAX) gpu_sync();
     Vtx *v = vb + vb_used;
     vb_used += n;
@@ -447,8 +596,18 @@ typedef struct {
 } RunGroup;
 static RunGroup run_g[2];
 static int run_n;
-static unsigned run_prims; /* primitives in the run (their place: Vtx.d, from 0) */
-static Vtx run_v[2][RUN_V];
+static unsigned run_prims; /* primitives in the run (their place: Vtx.d, from the run's first value) */
+/* (the open batches' vertices are written straight into the vertex buffer, each with its final depth value: group 0 from
+ * where the buffer was, group 1 at its end, moved down after group 0 when the run ends. They were written into arrays
+ * of their own and copied again at the run's end, every vertex of a battle's models twice more through memory an Old
+ * 3DS doesn't keep in its cache) */
+static unsigned run_at[2], run_cap[2]; /* each group's place in vb and its room */
+static float run_d0;                  /* the run's first depth value */
+static unsigned run_max;              /* ... and its most primitives */
+static inline unsigned run_room(void) {
+    int r = (DEPTH_MAX - (int)depth_submitted) / 2 - (int)(depth_next - depth_submitted);
+    return r > 0 ? (unsigned)r : 0;
+}
 static int cur_ordered;
 unsigned ctr_run_reorders;
 
@@ -461,24 +620,18 @@ static void run_flush(void) {
     int n = run_n;
     if (!n) return;
     run_n = 0;
-    unsigned prims = run_prims;
+    depth_next += run_prims;
     run_prims = 0;
-    /* (both eyes' values of this submit must fit before the next clear: frame_begin clears) */
-    if (2 * (depth_next - depth_submitted + prims) + depth_submitted > DEPTH_MAX) gpu_sync();
-    unsigned total = 0;
-    for (int i = 0; i < n; i++) total += run_g[i].nv;
-    Vtx *o = alloc_vtx(total); /* (one allocation: a sync it makes leaves the run's values valid) */
-    float base = (float)depth_next;
-    depth_next += prims;
+    unsigned first = run_at[0] + run_g[0].nv;
+    if (n == 2) memmove(vb + first, vb + run_at[1], run_g[1].nv * sizeof(Vtx));
+    vb_used = first + (n == 2 ? run_g[1].nv : 0);
     int saved_target = cur_target, saved_mask = cur_mask;
     for (int i = 0; i < n; i++) {
         RunGroup *g = &run_g[i];
-        for (unsigned k = 0; k < g->nv; k++) o[k] = run_v[i][k], o[k].d += base;
         cur_target = 0;
         cur_mask = g->mask;
         cur_ordered = 1;
-        add_batch(g->kind, g->abr, 3, g->sc, g->tex, o - vb, g->nv);
-        o += g->nv;
+        add_batch(g->kind, g->abr, 3, g->sc, g->tex, i ? first : run_at[0], g->nv);
     }
     cur_ordered = 0;
     cur_target = saved_target;
@@ -496,13 +649,26 @@ static inline int replaces(const RunGroup *g) {
 }
 
 static void run_put(int i, const Vtx *v, unsigned n) {
-    Vtx *o = run_v[i] + run_g[i].nv;
-    for (unsigned k = 0; k < n; k++) o[k] = v[k], o[k].d = (float)run_prims;
+    Vtx *o = vb + run_at[i] + run_g[i].nv;
+    const float d = run_d0 + (float)run_prims;
+    for (unsigned k = 0; k < n; k++) o[k] = v[k], o[k].d = d;
     run_g[i].nv += n;
     run_prims++;
 }
 
 static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
+    if (i == 0) { /* (the run's room: the buffer's rest, its last RUN_V for group 1; nothing else allocates meanwhile) */
+        /* (both eyes' values of this submit must fit before the next clear (frame_begin clears): the run ends at as many
+         * primitives as there are values left) */
+        if (run_room() < 16 || vb_used + RUN_V + 64 > VB_MAX) gpu_sync();
+        run_max = run_room();
+        run_at[0] = vb_used, run_cap[0] = VB_MAX - RUN_V - vb_used;
+        if (run_cap[0] > RUN_V) run_cap[0] = RUN_V;
+        run_at[1] = VB_MAX - RUN_V, run_cap[1] = RUN_V;
+        hz_check(vb + vb_used, (VB_MAX - vb_used) * sizeof(Vtx), "vertices");
+        vb_used = VB_MAX;
+        run_d0 = (float)depth_next;
+    }
     RunGroup *g = &run_g[i];
     g->kind = (u8)kind; g->abr = (u8)abr; g->mask = (u8)cur_mask; g->tex = tex; g->nv = 0;
     memcpy(g->sc, sc, sizeof g->sc);
@@ -518,13 +684,14 @@ static void run_add(int kind, int abr, const u16 sc[4], C3D_Tex *tex, const Vtx 
         add_batch(kind, abr, 3, sc, tex, o - vb, n);
         return;
     }
+    if (run_n && run_prims >= run_max) run_flush();
     if (run_n) {
         int last = run_n - 1;
-        if (run_same(&run_g[last], kind, abr, sc, tex) && run_g[last].nv + n <= RUN_V) {
+        if (run_same(&run_g[last], kind, abr, sc, tex) && run_g[last].nv + n <= run_cap[last]) {
             run_put(last, v, n);
             return;
         }
-        if (run_n == 2 && run_same(&run_g[0], kind, abr, sc, tex) && replaces(&run_g[0]) && run_g[0].nv + n <= RUN_V) {
+        if (run_n == 2 && run_same(&run_g[0], kind, abr, sc, tex) && replaces(&run_g[0]) && run_g[0].nv + n <= run_cap[0]) {
             run_put(0, v, n);
             ctr_run_reorders++;
             return;
@@ -800,10 +967,13 @@ static C3D_RenderTarget *outline_rt[2][2]; /* (the outline masks, [buffer][eye]:
 static void outline_proj(int x0, int y0);
 /* a framebuffer's mask: the second one when it lies right of (battles: x 320) or below (fields: y 256) the first */
 static inline int outline_buf(int x, int y) { return x >= 256 || y >= 256; }
+static void page_copy(const Batch *b);
+static unsigned nsubmits, page_pending = ~0u; /* (submits so far; the one a page copy is recorded in: mirror_page) */
 static void submit(void) {
     trace("submit", (int)nbatches, (int)vb_used);
     run_flush();
     if (!nbatches) return;
+    nsubmits++;
     unsigned profile_start = port_profile_begin();
     frame_begin();
     unsigned any_ui = 0;
@@ -843,6 +1013,14 @@ static void submit(void) {
             Batch *b = &batches[i];
             if (b->target != target) continue;
             if ((!target || target == 4) && !(b->eyes & (1 << eye))) continue;
+            if (b->kind == K_PAGE_COPY) { /* a page of the mirror copied for primitives after it (mirror_page) */
+                page_copy(b);
+                C3D_FrameDrawOn(mirror_rt[eye]);
+                set_proj_ortho(VW, VH, 0.0f);
+                C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, k, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
+                ordered = 0, kind = abr = bmask = -1, tex = (C3D_Tex *)-1, sc[0] = 0xFFFF;
+                continue;
+            }
             if (b->ordered != ordered) {
                 ordered = b->ordered;
                 C3D_DepthTest(ordered, GPU_GEQUAL, ordered ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
@@ -871,7 +1049,7 @@ static void submit(void) {
                     outline_proj(sc[0], sc[1]);
                     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
                 }
-                C3D_DrawArrays(GPU_TRIANGLES, b->first, b->count);
+                draw_tris(b->first, b->count);
                 continue;
             }
             if (target != 3 && memcmp(sc, b->sc, sizeof sc)) {
@@ -879,9 +1057,10 @@ static void submit(void) {
                 /* (in window coordinates, which run bottom-up) */
                 C3D_SetScissor(GPU_SCISSOR_NORMAL, sc[0], height - sc[3], sc[2], height - sc[1]);
             }
-            C3D_DrawArrays(GPU_TRIANGLES, b->first, b->count);
+            draw_tris(b->first, b->count);
         }
         if (ordered) C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+        GSEG(target == 0 ? GS_MIRROR : target == 3 ? GS_TOPUI : target == 4 ? GS_OUTLINE : GS_LAYERS);
     }
     ctr_render_stats[0] += nbatches;
     nbatches = 0;
@@ -1520,30 +1699,44 @@ static void submit(void);
 static C3D_Tex *mirror_page(int tx, int ty, int alpha) {
     trace("mirror_page", tx, ty);
     if (!page_rt) return NULL; /* (made at init: ctr_init) */
-    if (page_x == tx && page_y == ty && page_alpha == alpha && page_serial == frame_serial) return &page_tex;
+    if (page_x == tx && page_y == ty && page_alpha == alpha && page_serial == frame_serial && page_pending == nsubmits)
+        return &page_tex;
+    /* (in stereo the right eye's pass comes after the whole left one: with a second page copied in the same submit, its
+     * primitives would read the last page. Submitted first then, as every copy was) */
+    if (stereo_on && page_pending == nsubmits) submit();
     int cx0, cy0, cx1, cy1; /* (the mirror current there first: cells the CPU wrote since) */
     if (cell_range(tx, ty, tx + 256, ty + 256, &cx0, &cy0, &cx1, &cy1))
         for (int cy = cy0; cy < cy1; cy++)
             for (int cx = cx0; cx < cx1; cx++)
                 if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
-    submit(); /* (what was drawn before this primitive, drawn first) */
-    frame_begin();
+    /* recorded as a batch of its own, in the mirror's pass: drawn after what was drawn before this primitive and before
+     * what samples it, in order with the rest (submit). It was drawn at once: everything recorded before it submitted
+     * and the GPU's previous frame waited for, early in the frame (an Old 3DS's battle: 7-8 ms a frame waiting for the
+     * GPU that the next frame's drawing could have overlapped) */
+    Vtx *v = alloc_vtx(6);
+    quad(v, 0, 0, 256, 256, tx, ty, tx + 256, ty + 256, 0xFFFFFFFF);
+    int saved = cur_target, saved_mask = cur_mask;
+    cur_target = 0;
+    cur_mask = 0;
+    add_batch(K_PAGE_COPY, alpha, 1, full_scissor, &mirror_tex[0], v - vb, 6);
+    cur_target = saved;
+    cur_mask = saved_mask;
+    page_x = tx, page_y = ty, page_alpha = alpha, page_serial = frame_serial, page_pending = nsubmits;
+    return &page_tex;
+}
+static void page_copy(const Batch *b) {
     C3D_FrameDrawOn(page_rt);
     set_proj_ortho(256, 256, 0.0f);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, -0.5f); /* (in the clip volume, as the mirror's passes: at +0.5 the
                                                                 * copy was clipped away, the page left its clear 0x00FF) */
     set_tev(K_BLIT);
     set_blend(NO_BLEND, 0);
-    C3D_DepthTest(false, GPU_ALWAYS, alpha ? GPU_WRITE_COLOR : GPU_WRITE_RED | GPU_WRITE_GREEN | GPU_WRITE_BLUE); /* (else alpha stays 1) */
+    C3D_DepthTest(false, GPU_ALWAYS, b->abr ? GPU_WRITE_COLOR : GPU_WRITE_RED | GPU_WRITE_GREEN | GPU_WRITE_BLUE); /* (else alpha stays 1) */
     tex_bind(0, &mirror_tex[0]);
     set_texscale(&mirror_tex[0]);
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
-    Vtx *v = alloc_vtx(6);
-    quad(v, 0, 0, 256, 256, tx, ty, tx + 256, ty + 256, 0xFFFFFFFF);
-    C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+    draw_tris(b->first, b->count);
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
-    page_x = tx, page_y = ty, page_alpha = alpha, page_serial = frame_serial;
-    return &page_tex;
 }
 
 static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
@@ -1928,6 +2121,18 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         if (sc[0] >= sc[2] || sc[1] >= sc[3]) return;
         layers[layer].drawn = frames_drawn;
         cur_target = layer + 1;
+        { /* (what its next clear must cover: ui_layer_for) */
+            float fx0 = v[0].x, fx1 = v[0].x, fy0 = v[0].y, fy1 = v[0].y;
+            for (unsigned i = 1; i < n; i++)
+                fx0 = fminf(fx0, v[i].x), fx1 = fmaxf(fx1, v[i].x), fy0 = fminf(fy0, v[i].y), fy1 = fmaxf(fy1, v[i].y);
+            UiLayer *L = &layers[layer];
+            int x0 = imax(sc[0], (int)fx0 - 1), x1 = imin(sc[2], (int)fx1 + 2);
+            int y0 = imax(sc[1], (int)fy0 - 1), y1 = imin(sc[3], (int)fy1 + 2);
+            if (x0 < x1 && y0 < y1) {
+                if (L->dx0 >= L->dx1) L->dx0 = x0, L->dy0 = y0, L->dx1 = x1, L->dy1 = y1;
+                else L->dx0 = imin(L->dx0, x0), L->dy0 = imin(L->dy0, y0), L->dx1 = imax(L->dx1, x1), L->dy1 = imax(L->dy1, y1);
+            }
+        }
     } else {
         gpu_draws(bx0, by0, bx1, by1);
         cur_target = 0;
@@ -2400,14 +2605,20 @@ static int ui_layer_for(int x, int y, int clear) {
         layers[k].nhands = 0;
         clear = 1;
     }
-    if (clear || layers[k].shown) {
-        static const u16 sc[4] = {0, 0, UI_W, UI_H};
+    /* (only where something was drawn since the last clear: the battle's list clears its layer every VBlank, and the whole
+     * 512x256 was 131k pixels each time, a third of the GPU's work on a battle's VBlank on an Old 3DS) */
+    UiLayer *L = &layers[k];
+    if ((clear || L->shown) && L->dx0 < L->dx1) {
+        const u16 sc[4] = {(u16)L->dx0, (u16)L->dy0, (u16)L->dx1, (u16)L->dy1};
         int saved = cur_target;
         cur_target = k + 1;
         Vtx *v = alloc_vtx(6);
-        quad(v, 0, 0, UI_W, UI_H, 0, 0, 0, 0, 0x00000000);
+        quad(v, L->dx0, L->dy0, L->dx1, L->dy1, 0, 0, 0, 0, 0x00000000);
         add_batch(K_UNTEX, NO_BLEND, 1, sc, NULL, v - vb, 6);
         cur_target = saved;
+        L->dx0 = L->dx1 = 0;
+    }
+    if (clear || L->shown) {
         layers[k].shown = 0;
         layers[k].nhands = 0;
     }
@@ -2561,7 +2772,7 @@ static void outline_draw(int eye, int dx, int dy, int w, int h) {
         else C3D_AlphaBlend(GPU_BLEND_REVERSE_SUBTRACT, GPU_BLEND_REVERSE_SUBTRACT, GPU_ONE, GPU_ONE, GPU_ONE, GPU_ONE);
         Vtx *v = alloc_vtx(6);
         quad(v, mx + off[i][0], my + off[i][1], mx + mw + off[i][0], my + mh + off[i][1], mx, my, mx + mw, my + mh, 0xFFFFFFFF);
-        C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+        draw_tris(v - vb, 6);
     }
     /* the top screen darkened where the edge is: dst x (1 - edge) */
     float sc = top_scale(w, h);
@@ -2576,7 +2787,7 @@ static void outline_draw(int eye, int dx, int dy, int w, int h) {
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ZERO, GPU_ONE_MINUS_SRC_COLOR, GPU_ZERO, GPU_ONE);
     Vtx *v = alloc_vtx(6);
     quad(v, (400 - dw) / 2, (240 - dh) / 2, (400 - dw) / 2 + dw, (240 - dh) / 2 + dh, mx, my, mx + mw, my + mh, 0xFFFFFFFF);
-    C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+    draw_tris(v - vb, 6);
     set_blend(NO_BLEND, 0);
 }
 
@@ -2690,8 +2901,10 @@ int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int h) {
 }
 
 /* gpu.c ContinueDraw: the battle UI's list, drawn over the displayed buffer every VBlank: its layer anew each time */
+/* (nothing submitted at its start or end: its batches are its layer's, in order there, and the layers are drawn after
+ * the mirror in a submit. Submitted, the list, drawn from the VBlank often just after a present, waited for the GPU to
+ * finish the frame before: on an Old 3DS some 7 ms of every battle frame) */
 void psx_ui_list_begin(void) {
-    submit();
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
     ui_mode = 1;
@@ -2704,7 +2917,6 @@ void psx_ui_list_begin(void) {
 /* the same for the framebuffer at (x, y), shown or not (the rewards under a battle: drawn into both buffers' layers,
  * as the battle's VBlank flip may come between the drawing and the present) */
 void psx_ui_list_begin_at(int x, int y) {
-    submit();
     ui_mode = 1;
     ui_ox = x;
     ui_oy = y;
@@ -2714,7 +2926,6 @@ void psx_ui_list_begin_at(int x, int y) {
 
 /* the same, drawing over what the layer has this frame (the battle screen's own drawing after the battle list) */
 void psx_ui_list_begin_keep(void) {
-    submit();
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
     ui_mode = 1;
@@ -2724,12 +2935,14 @@ void psx_ui_list_begin_keep(void) {
 }
 
 void psx_ui_list_end(void) {
-    submit();
     ui_mode = 0;
 }
 
+/* (nothing submitted here: what an ordering table drew is drawn with the rest at the present, or before whatever
+ * needs it (a readback, a texture rewritten). Submitted at each table's end, the next frame's first table, a few ms
+ * after the present, waited for the GPU to finish the frame before: on an Old 3DS, whose GPU takes some 10 ms after a
+ * battle's present, 7-8 ms of every frame) */
 void psx_gpu_ot_done(void) {
-    submit();
     ranges_drawn();
 }
 
@@ -2756,7 +2969,7 @@ static void screen_quad_scaled(C3D_RenderTarget *rt, C3D_Tex *src, int kind, int
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     Vtx *v = alloc_vtx(6);
     quad(v, ox, oy, ox + ow, oy + oh, sx, sy, sx + w, sy + h, rgba);
-    C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+    draw_tris(v - vb, 6);
 }
 
 /* The top screen shows the frame as large as it fits whole: scaled to the screen's 240 lines (a 320x224 field or
@@ -2791,7 +3004,7 @@ static void screen_dim(C3D_RenderTarget *rt, unsigned frac) {
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     Vtx *v = alloc_vtx(6);
     quad(v, 0, 0, rt == bottom_rt ? 320 : 400, 240, 0, 0, 0, 0, 0xFFFFFFFF);
-    C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+    draw_tris(v - vb, 6);
 }
 
 
@@ -2927,7 +3140,7 @@ static void draw_models(int eye) {
     unsigned nv = 0;
     for (int i = 0; i <= n_model_tris; i++) {
         int t = i < n_model_tris ? model_tri[model_order[i]].tex : -2;
-        if (t != tex && run && nv) C3D_DrawArrays(GPU_TRIANGLES, run - vb, (int)nv), run = NULL, nv = 0;
+        if (t != tex && run && nv) draw_tris(run - vb, (int)nv), run = NULL, nv = 0;
         if (t < 0) break;
         if (t != tex) {
             tex = t;
@@ -3135,8 +3348,25 @@ void ctr_present(long frame) {
     if (h > 240) h = 240;
     int ox = (400 - w) / 2, oy = (240 - h) / 2;
     unsigned profile_start = port_profile_begin();
+    /* Only UI layers drawn since the last present (the battle's list, drawn every VBlank, the scene every second one):
+     * the bottom screen alone made again, the top left as it is. The whole present (the scene scaled to the top, its
+     * copy kept for menus, the top's copy) took the GPU some 14 ms on an Old 3DS, and the next one, a VBlank later,
+     * waited for it: ~8 ms of every battle VBlank. (Drawn: a cell under the displayed buffer drawn or written since the last
+     * present; the back buffer's drawing and texture uploads leave the shown picture as it is) */
+    int top_hud = 0;
+    for (int i = 0; i < n_hud_draw; i++) top_hud |= hud_draw[i].x >= 1000;
+    static int full_menu = -1;
+    static float full_stereo_k;
+    int light = !moved && !cells_newer(d.x, d.y, d.x + w, d.y + h, present_gen) && !d.rgb24 && !top_ui_head && !n_model_tris && !top_hud && !closing &&
+                menu_state == full_menu && prev_menu == menu_state && stereo_k == full_stereo_k;
+    present_gen = gen_counter;
+    if (!light) full_menu = menu_state, full_stereo_k = stereo_k;
+    ctr_render_stats[7] += light;
     shown_layer = bottom_layer(&d);
-    if (d.rgb24) {
+    if (light) {
+        submit();
+        frame_begin();
+    } else if (d.rgb24) {
         submit();
         present_rgb24(&d, w, h, ox, oy);
     } else {
@@ -3156,7 +3386,6 @@ void ctr_present(long frame) {
         int want_menu = menu_state == 1 || menu_state == 2;
         /* a menu closed: the game fades the scene in from black; the top keeps the paused scene instead, undimmed over
          * UNDIM_FRAMES, until the fade is done (the live scene then as it was: no flash to black) */
-        static int prev_menu, closing;
         if (prev_menu && !menu_state && frozen && port_game_mode() != 8 && prev_mode == port_game_mode()) closing = 1;
         prev_menu = menu_state, prev_mode = port_game_mode();
         static int settled; /* (presents since the fade was done: the displayed buffer was drawn a frame or two before) */
@@ -3181,11 +3410,12 @@ void ctr_present(long frame) {
                 C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
                 Vtx *v = alloc_vtx(6);
                 quad(v, 0, 0, w, h, d.x, d.y, d.x + w, d.y + h, 0xFFFFFFFF);
-                C3D_DrawArrays(GPU_TRIANGLES, v - vb, 6);
+                draw_tris(v - vb, 6);
             }
             freeze_w = w;
             freeze_h = h;
             have_freeze = 1;
+            GSEG(GS_FREEZE);
         }
         if (want_menu && have_freeze) frozen = 1;
         else if ((!menu_state && !closing) || menu_state == 3) frozen = 0;
@@ -3235,13 +3465,15 @@ void ctr_present(long frame) {
             }
         }
     }
-    if (n_model_tris) model_idle = 0;
+    if (light) {
+    } else if (n_model_tris) model_idle = 0;
     else if (++model_idle == MODEL_IDLE_FRAMES) model_free_pending = 1;
     for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) { /* (models over the scene, under the panels) */
         if (!n_model_tris) break;
         C3D_FrameDrawOn(top_rt[eye]);
         draw_models(eye);
     }
+    GSEG(GS_TOP);
     n_model_tris = 0;
     if (top_ui_head) { /* (over the top screen's scene, both eyes) */
         void port_draw_ot_buffer(unsigned int *head, const void *buffer, unsigned int size);
@@ -3263,15 +3495,21 @@ void ctr_present(long frame) {
                 }
     }
     present_bottom(&d, w, h);
+    GSEG(GS_BOTTOM);
     n_hud_draw = 0;
-    top_queue(stereo_on);
+    if (!light) top_queue(stereo_on);
     frame_end();
     in_frame = 0;
+    /* (runs' depth values from 1 again each frame, the depth buffer cleared at the next frame's begin, which waits for
+     * this one anyway. Left to submit, which starts them again past half their range, the frame was ended and begun
+     * there: the GPU waited for, every few frames) */
+    if (mirror_depth && depth_next > 1) depth_next = depth_submitted = 1, depth_clear = 1;
 #ifdef PORT_NO_OVERLAP
     frame_begin(); /* (test: the frame waited for at once, one half, as before the overlap) */
     half_restart();
 #else
     gpu_busy = 1; /* (drawn while the next frame is recorded into the other half) */
+    gs_presented();
     hz_use(vb, VB_MAX * sizeof(Vtx), "vertex half");
     hz_use(staging, STAGING_SIZE, "staging half");
     hz_sent();
@@ -3406,7 +3644,6 @@ void ctr_render_dump(void) {
  * after citro3d's), nothing waiting. */
 #define TOP_FB_SIZE (240 * 400 * 3) /* (one eye, RGB8) */
 static u8 *top_fb[3]; /* (each: the left eye, then the right, TOP_FB_SIZE on) */
-static gxCmdQueue_s *c3d_queue; /* (citro3d's: GX_BindQueue wrapped, -Wl,--wrap) */
 static void (*c3d_queue_done)(gxCmdQueue_s *);
 static volatile int top_shown = -1, top_presented = -1, top_queued = -1, top_queued_stereo;
 void __real_GX_BindQueue(gxCmdQueue_s *queue);
@@ -3440,7 +3677,15 @@ static int top_queue(int stereo) {
      * the frame drew with, flushed before it starts as frame_end's flush would: else the GPU read vertices and texture
      * blocks written this frame from stale memory (a menu's top panels on the world map without their body) */
     flush_pending();
+#ifdef PORT_PROFILE
+    { /* (a list sent here is timed as the others) */
+        u32 *buf, size;
+        gs_take(GS_END);
+        if (C3Di_SplitFrame(&buf, &size)) gq_sending(GS_END), GX_ProcessCommandList(buf, size * 4, GX_CMDLIST_FLUSH);
+    }
+#else
     C3D_FrameSplit(GX_CMDLIST_FLUSH);
+#endif
     for (int eye = 0; eye < (stereo ? 2 : 1); eye++)
         GX_DisplayTransfer((u32 *)top_rt[eye]->frameBuf.colorBuf, GX_BUFFER_DIM(240, 400),
                            (u32 *)(top_fb[b] + eye * TOP_FB_SIZE), GX_BUFFER_DIM(240, 400), DISPLAY_TRANSFER_FLAGS);

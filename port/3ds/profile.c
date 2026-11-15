@@ -51,6 +51,8 @@ void ctr_profile_frame(void) {
              (ctr_depth_stats[0] + ctr_depth_stats[1]) / frames, ctr_audio_dropped, ctr_audio_underruns, ctr_vblank_waits,
              ctr_vblank_skips);
     ctr_vblank_waits = ctr_vblank_skips = 0;
+    void ctr_gpu_cost_report(unsigned frames);
+    ctr_gpu_cost_report(frames);
     extern unsigned int ctr_render_stats[8];
     static unsigned last[8];
     extern unsigned ctr_flushes, ctr_batch_why[6];
