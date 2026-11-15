@@ -3011,7 +3011,21 @@ static void screen_dim(C3D_RenderTarget *rt, unsigned frac) {
 
 __attribute__((weak)) int port_game_mode(void) { return 0; }
 __attribute__((weak)) int port_top_crop(void) { return 0; }
-__attribute__((weak)) int port_top_bright(void) { return 256; }
+__attribute__((weak)) int port_top_fade(u8 rgb[3]) { (void)rgb; return 0; }
+/* what is on a screen's render target (already drawn on), less a colour: the PS1's subtractive fade (port_top_fade) */
+static void screen_subtract(C3D_RenderTarget *rt, const u8 rgb[3]) {
+    C3D_Mtx p;
+    Mtx_OrthoTilt(&p, 0.0f, rt == bottom_rt ? 320.0f : 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &p);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
+    set_tev(K_UNTEX);
+    C3D_AlphaBlend(GPU_BLEND_REVERSE_SUBTRACT, GPU_BLEND_ADD, GPU_ONE, GPU_ONE, GPU_ZERO, GPU_ONE);
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    Vtx *v = alloc_vtx(6);
+    quad(v, 0, 0, rt == bottom_rt ? 320 : 400, 240, 0, 0, 0, 0, 0xFF000000u | rgb[2] << 16 | rgb[1] << 8 | rgb[0]);
+    draw_tris(v - vb, 6);
+    set_blend(NO_BLEND, 0);
+}
 __attribute__((weak)) int port_fade_busy(void) { return 0; }
 
 /* The bottom screen: the UI layer of the displayed buffer, on a plain backdrop (the scene is on the top screen only). */
@@ -3361,7 +3375,7 @@ void ctr_present(long frame) {
     static int full_menu = -1;
     static float full_stereo_k;
     int light = !moved && !cells_newer(d.x, d.y, d.x + w, d.y + h, present_gen) && !d.rgb24 && !top_ui_head && !n_model_tris && !top_hud && !closing &&
-                menu_state == full_menu && prev_menu == menu_state && stereo_k == full_stereo_k && port_top_bright() == 256;
+                menu_state == full_menu && prev_menu == menu_state && stereo_k == full_stereo_k && !port_top_fade((u8[3]){0});
     present_gen = gen_counter;
     if (!light) full_menu = menu_state, full_stereo_k = stereo_k;
     ctr_render_stats[7] += light;
@@ -3461,8 +3475,9 @@ void ctr_present(long frame) {
                 int port_top_crop(void), crop = port_top_crop(), th = crop > 0 && crop < h ? crop : h;
                 draw_to_top(top_rt[eye], &mirror_tex[eye], d.x + edge, d.y, w - 2 * edge, th, w, h, edge);
                 outline_draw(eye, d.x, d.y, w, h, th);
-                int port_top_bright(void), bright = port_top_bright();
-                if (bright < 256) screen_dim(top_rt[eye], (unsigned)(bright < 0 ? 0 : bright));
+                int port_top_fade(u8 rgb[3]);
+                u8 sub[3];
+                if (port_top_fade(sub)) screen_subtract(top_rt[eye], sub);
             }
             if (closing && eye == (stereo_on ? 1 : 0)) closing++;
             /* (the display has moved to the other framebuffer: the one it left is drawn next, its mask cleared) */

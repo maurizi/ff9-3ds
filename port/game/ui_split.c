@@ -98,7 +98,9 @@ static void hold_update(void) {
     hold_tick = now;
     if (hold && (g_gameState->mode != 1 || g_gameState->gameData->fieldId != hold_field)) hold = 0;
     int t = fade_target();
-    if (!hold && port_ending_field() && g_fade.active && g_fade.subtract && g_fade.covered && t > 16 && t < 250 &&
+    /* (a strong darkening: the narrations' (128 grey on the hill, 90, 140, 200 in field 3001). A light one is a tint (the
+     * Hilda Garde's sunset, field 2931: 0, 32, 64), drawn as it is) */
+    if (!hold && port_ending_field() && g_fade.active && g_fade.subtract && g_fade.covered && t >= 100 && t < 250 &&
         g_fade.frame * 4 < g_fade.frames && fade_level() < 64) /* (from the scene, not from black: field 3000's opens
                                                                 * from black to a slight dimming, "Some time later..."
                                                                 * over it, the next scene under its fade) */
@@ -129,10 +131,13 @@ int port_ending_fade_held(void) {
     hold_update();
     return hold != 0;
 }
-/* how bright the top screen is drawn (256: as it is): the darkening after an ending narration (render.c) */
-int port_top_bright(void) {
-    if (!port_ending_fade_held() || hold != 2) return 256;
-    return 256 - fade_level() * ramp / RAMP_FRAMES;
+/* what is subtracted from the top screen (0: nothing): the darkening after an ending narration, the fade's own colour
+ * growing to where the fade is (render.c), so that the fade drawn again from there changes nothing (darkened grey, a
+ * tinted fade came in at once when given back: a visible pop) */
+int port_top_fade(u8 rgb[3]) {
+    if (!port_ending_fade_held() || hold != 2) return 0;
+    for (int i = 0; i < 3; i++) rgb[i] = (u8)(g_fade.color.b[i] * ramp / RAMP_FRAMES);
+    return rgb[0] | rgb[1] | rgb[2];
 }
 long VSync(long);
 int port_minigame_panel_up(void) { return VSync(-1) - panel_frame <= 2; }
