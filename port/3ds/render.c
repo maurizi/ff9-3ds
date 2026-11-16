@@ -601,22 +601,28 @@ static int cur_target; /* where add_batch records: 0 the mirror, 1 + n UI layer 
  * run's primitives get their place in drawing order as depth (a 16-bit depth buffer shared by both eyes' mirrors),
  * and draw where it is at least the depth there. So a run keeps two batches open, one of replacing primitives and
  * the one after it, and a replacing primitive joins the first even when the second has come since: its pixels are
- * exactly the PS1's whatever overlaps, in either eye. Everything else draws without depth, after the run. */
-#define RUN_V 1536 /* vertices per open batch */
+ * exactly the PS1's whatever overlaps, in either eye. Everything else draws without depth, after the run.
+ * Several open (RUN_GROUPS): a primitive joins the last one, or, replacing its pixels, any earlier one of its state, all
+ * drawn in the order they were opened; one that blends (or checks the mask) only the last, as it must be drawn after
+ * everything before it. A field's background and models alternate among three texture atlases and more: with two
+ * open, Lindblum's castle station was 214 batches a frame, each a draw call and its state. */
+#define RUN_V 1536 /* vertices per open batch (the first; the others RUN_V2) */
+#define RUN_V2 1024
+#define RUN_GROUPS 6
 typedef struct {
     u8 kind, abr, mask;
     u16 sc[4];
     C3D_Tex *tex;
     unsigned nv;
 } RunGroup;
-static RunGroup run_g[2];
+static RunGroup run_g[RUN_GROUPS];
 static int run_n;
 static unsigned run_prims; /* primitives in the run (their place: Vtx.d, from the run's first value) */
 /* (the open batches' vertices are written straight into the vertex buffer, each with its final depth value: group 0 from
  * where the buffer was, group 1 at its end, moved down after group 0 when the run ends. They were written into arrays
  * of their own and copied again at the run's end, every vertex of a battle's models twice more through memory an Old
  * 3DS doesn't keep in its cache) */
-static unsigned run_at[2], run_cap[2]; /* each group's place in vb and its room */
+static unsigned run_at[RUN_GROUPS], run_cap[RUN_GROUPS]; /* each group's place in vb and its room */
 static float run_d0;                  /* the run's first depth value */
 static unsigned run_max;              /* ... and its most primitives */
 static inline unsigned run_room(void) {
@@ -637,16 +643,22 @@ static void run_flush(void) {
     run_n = 0;
     depth_next += run_prims;
     run_prims = 0;
-    unsigned first = run_at[0] + run_g[0].nv;
-    if (n == 2) memmove(vb + first, vb + run_at[1], run_g[1].nv * sizeof(Vtx));
-    vb_used = first + (n == 2 ? run_g[1].nv : 0);
+    /* (the other groups moved down after the first, in order: each to below where it was) */
+    unsigned at[RUN_GROUPS], end = run_at[0] + run_g[0].nv;
+    at[0] = run_at[0];
+    for (int i = 1; i < n; i++) {
+        memmove(vb + end, vb + run_at[i], run_g[i].nv * sizeof(Vtx));
+        at[i] = end;
+        end += run_g[i].nv;
+    }
+    vb_used = end;
     int saved_target = cur_target, saved_mask = cur_mask;
     for (int i = 0; i < n; i++) {
         RunGroup *g = &run_g[i];
         cur_target = 0;
         cur_mask = g->mask;
         cur_ordered = 1;
-        add_batch(g->kind, g->abr, 3, g->sc, g->tex, i ? first : run_at[0], g->nv);
+        add_batch(g->kind, g->abr, 3, g->sc, g->tex, at[i], g->nv);
     }
     cur_ordered = 0;
     cur_target = saved_target;
@@ -675,11 +687,12 @@ static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
     if (i == 0) { /* (the run's room: the buffer's rest, its last RUN_V for group 1; nothing else allocates meanwhile) */
         /* (both eyes' values of this submit must fit before the next clear (frame_begin clears): the run ends at as many
          * primitives as there are values left) */
-        if (run_room() < 16 || vb_used + RUN_V + 64 > VB_MAX) gpu_sync();
+        const unsigned others = (RUN_GROUPS - 1) * RUN_V2; /* (the other groups' room: the buffer's end, in order) */
+        if (run_room() < 16 || vb_used + others + 64 > VB_MAX) gpu_sync();
         run_max = run_room();
-        run_at[0] = vb_used, run_cap[0] = VB_MAX - RUN_V - vb_used;
+        run_at[0] = vb_used, run_cap[0] = VB_MAX - others - vb_used;
         if (run_cap[0] > RUN_V) run_cap[0] = RUN_V;
-        run_at[1] = VB_MAX - RUN_V, run_cap[1] = RUN_V;
+        for (int k = 1; k < RUN_GROUPS; k++) run_at[k] = VB_MAX - others + (k - 1) * RUN_V2, run_cap[k] = RUN_V2;
         hz_check(vb + vb_used, (VB_MAX - vb_used) * sizeof(Vtx), "vertices");
         vb_used = VB_MAX;
         run_d0 = (float)depth_next;
@@ -706,14 +719,15 @@ static void run_add(int kind, int abr, const u16 sc[4], C3D_Tex *tex, const Vtx 
             run_put(last, v, n);
             return;
         }
-        if (run_n == 2 && run_same(&run_g[0], kind, abr, sc, tex) && replaces(&run_g[0]) && run_g[0].nv + n <= run_cap[0]) {
-            run_put(0, v, n);
-            ctr_run_reorders++;
-            return;
-        }
-        if (run_n == 1 && replaces(&run_g[0])) {
-            run_open(1, kind, abr, sc, tex);
-            run_put(1, v, n);
+        for (int i = 0; i < last; i++)
+            if (run_same(&run_g[i], kind, abr, sc, tex) && replaces(&run_g[i]) && run_g[i].nv + n <= run_cap[i]) {
+                run_put(i, v, n);
+                ctr_run_reorders++;
+                return;
+            }
+        if (run_n < RUN_GROUPS) {
+            run_open(run_n, kind, abr, sc, tex);
+            run_put(run_n - 1, v, n);
             return;
         }
         run_flush();
