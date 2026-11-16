@@ -213,7 +213,16 @@ void plat_wait_frame(void) {
     port_battle_ui_frame();
     ctr_present(frames);
 #ifdef PORT_DUMP_EVERY
-    if (frames % PORT_DUMP_EVERY == 0) { void ctr_render_dump_display(long); ctr_render_dump_display(frames); }
+    if (frames % PORT_DUMP_EVERY == 0) {
+        void ctr_render_dump_display(long);
+        ctr_render_dump_display(frames);
+        /* the game's whole state as a hash (PS1 RAM and scratchpad): two builds whose frames match should match here too,
+         * a change the game can see (a value it reads back, a timing) showing at the first dump after it */
+        u32 h = 0x811C9DC5u;
+        for (const u32 *w = (const u32 *)psx_ram; w < (const u32 *)(psx_ram + PSX_RAM_SIZE); w++) h = (h ^ *w) * 0x01000193u;
+        for (const u32 *w = (const u32 *)psx_scratchpad; w < (const u32 *)(psx_scratchpad + 0x400); w++) h = (h ^ *w) * 0x01000193u;
+        port_log("ramhash %ld %08lx\n", frames, (unsigned long)h);
+    }
 #endif
 #ifdef PORT_DUMP_AT
     if (frames == PORT_DUMP_AT) { void ctr_render_dump(void); ctr_render_dump(); }
