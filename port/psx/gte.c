@@ -470,26 +470,83 @@ GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *
         sz[i] = sz3;
     }
 #else
+    /* RTPS's steps for each vertex (rtp_body, sf 1, lm 0), only what the batch gives: its SXY, its SZ and its depth
+     * record, the GTE's registers untouched (RTPS through them, every register written and FLAG, then all restored, was
+     * each vertex of a field's models: some 2 ms of a busy field's VBlank on an Old 3DS) */
+    if (unr_table[0] == 0) init_unr();
+    const i32 r11 = mtx(0, 0, 0), r12 = mtx(0, 0, 1), r13 = mtx(0, 0, 2), r21 = mtx(0, 1, 0), r22 = mtx(0, 1, 1),
+              r23 = mtx(0, 1, 2), r31 = mtx(0, 2, 0), r32 = mtx(0, 2, 1), r33 = mtx(0, 2, 2);
+    const i64 tx = (i64)TRX * 4096, ty = (i64)TRY * 4096, tz = (i64)TRZ * 4096, ofx = OFX, ofy = OFY;
+    const u32 h = H;
+#ifdef GTE_BATCH_CHECK
+    void port_fatal(const char *, ...), port_log(const char *, ...);
+    u32 check_sxy[64], check_sz[64], check_info[64];
+#endif
+    for (int i = 0; i < count; ++i, v += 2) {
+        const i32 x = (i16)v[0], y = (i32)v[0] >> 16, z = (i16)v[1];
+        const i64 m1 = tx + (i64)(r11 * x) + (i64)(r12 * y) + (i64)(r13 * z);
+        const i64 m2 = ty + (i64)(r21 * x) + (i64)(r22 * y) + (i64)(r23 * z);
+        const i64 m3 = tz + (i64)(r31 * x) + (i64)(r32 * y) + (i64)(r33 * z);
+        i32 ir1 = (i32)(m1 >> 12), ir2 = (i32)(m2 >> 12);
+        if (ir1 > 0x7FFF) ir1 = 0x7FFF; else if (ir1 < -0x8000) ir1 = -0x8000;
+        if (ir2 > 0x7FFF) ir2 = 0x7FFF; else if (ir2 < -0x8000) ir2 = -0x8000;
+        const i64 z12 = m3 >> 12;
+        const u32 sz3 = z12 > 0xFFFF ? 0xFFFF : z12 < 0 ? 0 : (u32)z12;
+        u32 div;
+        if (h >= sz3 * 2) div = 0x1FFFF;
+        else {
+            const int sh = __builtin_clz(sz3) - 16;
+            u32 n = h << sh, d = sz3 << sh;
+            const u32 u = unr_table[(d - 0x7FC0) >> 7] + 0x101;
+            d = (0x2000080 - d * u) >> 8;
+            d = (0x0000080 + d * u) >> 8;
+            const uint64_t q = ((uint64_t)n * d + 0x8000) >> 16;
+            div = q > 0x1FFFF ? 0x1FFFF : (u32)q;
+        }
+        const i64 mx = (i64)(i16)ir1 * div + ofx, my = (i64)(i16)ir2 * div + ofy;
+        i64 sx = mx >> 16, sy = my >> 16;
+        if (sx > 0x3FF) sx = 0x3FF; else if (sx < -0x400) sx = -0x400;
+        if (sy > 0x3FF) sy = 0x3FF; else if (sy < -0x400) sy = -0x400;
+        const u32 w = ((u32)(i32)sy << 16) | ((u32)(i32)sx & 0xFFFF);
+#ifdef GTE_BATCH_CHECK
+        if (i < 64) check_sxy[i] = w, check_sz[i] = sz3, check_info[i] = depth_info(sz3, mx, my, (i32)sx, (i32)sy);
+#endif
+        sxy[i] = w;
+        sz[i] = sz3;
+#ifdef PORT_GTE_DEPTH
+        psx_depth_record(&sxy[i], w, depth_info(sz3, mx, my, (i32)sx, (i32)sy));
+#endif
+    }
+#ifdef GTE_BATCH_CHECK
+    /* (the check build: RTPS itself through the registers again, every value compared) */
+    v -= count * 2;
+    {
     gte_u32 saved[32], flag = FLAG;
     for (int k = 0; k < 32; ++k) saved[k] = g.d[k];
 #ifdef PORT_GTE_DEPTH
     GteDepth saved_depth[3];
     memcpy(saved_depth, psx_gte_depth, sizeof saved_depth);
 #endif
-    for (int i = 0; i < count; ++i, v += 2) {
+    for (int i = 0; i < count && i < 64; ++i, v += 2) {
         g.d[0] = v[0]; g.d[1] = v[1];
         rtp_sf1(0, 0, 1);
-        sxy[i] = g.d[14];
-        sz[i] = g.d[19] & 0xFFFF;
+        u32 info = 0;
 #ifdef PORT_GTE_DEPTH
-        psx_depth_record(&sxy[i], g.d[14], psx_gte_depth[2].info);
+        info = psx_gte_depth[2].info;
 #endif
+        if (g.d[14] != check_sxy[i] || (g.d[19] & 0xFFFF) != check_sz[i] || info != check_info[i])
+            port_fatal("GTE batch check: vertex %d of %d: %08x/%08x sz %x/%x info %x/%x", i, count, (unsigned)check_sxy[i],
+                       (unsigned)g.d[14], (unsigned)check_sz[i], (unsigned)(g.d[19] & 0xFFFF), (unsigned)check_info[i], (unsigned)info);
     }
+    static unsigned checked;
+    if (++checked % 20000 == 0) port_log("GTE batch check: %u batches the same\n", checked);
     for (int k = 0; k < 32; ++k) g.d[k] = saved[k];
 #ifdef PORT_GTE_DEPTH
     memcpy(psx_gte_depth, saved_depth, sizeof saved_depth);
 #endif
     FLAG = flag;
+    }
+#endif
 #endif
 }
 
