@@ -288,10 +288,12 @@ static inline __attribute__((always_inline)) void rtp_body(int v, int sf, int lm
      * (a register) and stored once */
     const int shift = sf * 12;
     u32 f = FLAG;
-    i64 x = V_X(v), y = V_Y(v), z = V_Z(v);
-    i64 m1 = ((i64)TRX * 4096) + mtx(0, 0, 0) * x + mtx(0, 0, 1) * y + mtx(0, 0, 2) * z;
-    i64 m2 = ((i64)TRY * 4096) + mtx(0, 1, 0) * x + mtx(0, 1, 1) * y + mtx(0, 1, 2) * z;
-    i64 m3 = ((i64)TRZ * 4096) + mtx(0, 2, 0) * x + mtx(0, 2, 1) * y + mtx(0, 2, 2) * z;
+    /* (32-bit factors, 64-bit sums: each product a 32x32->64 multiply-accumulate on an ARM11 (SMLAL), not a 64x64 one;
+     * the same values, as an i16 times an i16 always fits 32 bits) */
+    const i32 x = V_X(v), y = V_Y(v), z = V_Z(v);
+    i64 m1 = ((i64)TRX * 4096) + (i64)(mtx(0, 0, 0) * x) + (i64)(mtx(0, 0, 1) * y) + (i64)(mtx(0, 0, 2) * z);
+    i64 m2 = ((i64)TRY * 4096) + (i64)(mtx(0, 1, 0) * x) + (i64)(mtx(0, 1, 1) * y) + (i64)(mtx(0, 1, 2) * z);
+    i64 m3 = ((i64)TRZ * 4096) + (i64)(mtx(0, 2, 0) * x) + (i64)(mtx(0, 2, 1) * y) + (i64)(mtx(0, 2, 2) * z);
 #define MAC_FLAG(n, m) do { \
         if ((m) >= ((i64)1 << 43)) f |= 1u << (31 - (n)); \
         else if ((m) < -((i64)1 << 43)) f |= 1u << (28 - (n)); \
