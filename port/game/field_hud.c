@@ -904,6 +904,15 @@ static void overlay(void (*fn)(void)) {
     gp0_state = saved_gp0;
 }
 
+/* n words of a and b equal */
+static int same_words(const u32 *a, const u32 *b, unsigned n) {
+    for (; n >= 4; n -= 4, a += 4, b += 4)
+        if ((a[0] ^ b[0]) | (a[1] ^ b[1]) | (a[2] ^ b[2]) | (a[3] ^ b[3])) return 0;
+    for (; n; n--)
+        if (*a++ != *b++) return 0;
+    return 1;
+}
+
 void port_bottom_hud(void) {
     { void port_rewards_live_draw(void); port_rewards_live_draw(); } /* (the rewards under a battle: rewards_top.c) */
     shown = shown_battle = 0;
@@ -985,13 +994,13 @@ void port_bottom_hud(void) {
      * primitives were some 30% of what a battle draws, the scene's 3D included, and a field's HUD 390 of its 1300, 7 ms
      * of the 26 its drawing took at Lindblum's castle station (an Old 3DS). Per layer: a field's two framebuffers are
      * shown in turn, each with its own */
-    static u32 last_hash[2];
-    static unsigned last_serial[2] = {~0u, ~0u};
-    u32 hash = 0x811C9DC5u;
-    for (const u32 *w = hud_mem; w < hud_mem + used / 4; w++) hash = (hash ^ *w) * 0x01000193u;
+    /* (each layer's packets as last drawn into it, compared word for word: no hash to collide, and cheaper than one) */
+    static u32 last_mem[2][OTN + BUF_WORDS];
+    static unsigned last_used[2], last_serial[2] = {~0u, ~0u};
     {
         unsigned serial = ctr_ui_layer_serial();
-        if (serial != ~0u && hash == last_hash[serial & 1] && serial == last_serial[serial & 1]) {
+        if (serial != ~0u && serial == last_serial[serial & 1] && used == last_used[serial & 1] &&
+            same_words(hud_mem, last_mem[serial & 1], used / 4)) {
             ctr_ui_layer_keep();
             shown = !world;
             shown_battle = battle;
@@ -1007,7 +1016,10 @@ void port_bottom_hud(void) {
     gp0_state = saved_gp0;
     {
         unsigned serial = ctr_ui_layer_serial();
-        if (serial != ~0u) last_hash[serial & 1] = hash, last_serial[serial & 1] = serial;
+        if (serial != ~0u) {
+            __builtin_memcpy(last_mem[serial & 1], hud_mem, used);
+            last_used[serial & 1] = used, last_serial[serial & 1] = serial;
+        }
     }
     shown = !world;
     shown_battle = battle;

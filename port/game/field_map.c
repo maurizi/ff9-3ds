@@ -61,6 +61,7 @@ static struct {
     int nmarks;
     s16 mx[16], mz[16];
     u8 mk[16];                  /* 2 shop, 4 save */
+    unsigned gen;               /* bumped whenever the above may change (maps_load, bake): the drawing's cache key */
 } bk;
 
 /* ---- the maps baked from the disc at build time (tools/bake_maps.py: build/maps.bin, beside the disc pack) ----
@@ -100,6 +101,7 @@ static void maps_open(void) {
 
 /* field's baked map into bk if maps.bin has it, for a walkmesh of n triangles: 1 if read */
 static int maps_load(int field, int n) {
+    bk.gen++;
     if (!maps_state) maps_open();
     if (maps_state < 0) return 0;
     int i = 0;
@@ -430,6 +432,7 @@ static u32 signature(int n) {
 }
 
 static void bake(int n) {
+    bk.gen++;
     collect_exits();
     bk.sig = signature(n);
     bk.n = n;
@@ -470,6 +473,17 @@ static void bake(int n) {
     bk.cur = best; /* (until the player's triangle is known: the largest) */
 }
 
+/* the walkmesh's indices in range (else a field still loading) */
+static int indices_ok(int n) {
+    for (int i = 0; i < n; i++) {
+        const BgiTriangle *t = &g_fieldBgi.triangles[i];
+        if ((u16)t->floor >= g_fieldBgi.header->floorCount) return 0;
+        for (int k = 0; k < 3; k++)
+            if ((u16)t->vertices[k] >= g_fieldBgi.header->vertexCount) return 0;
+    }
+    return 1;
+}
+
 /* The map in the box (bx, by, bw, bh): packets from pkt linked into ot[0] (drawn above the box), returns the next
  * free byte; pkt_end: where the buffer ends. Nothing without a walkmesh. */
 u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, int bh) {
@@ -479,12 +493,6 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
         !ram_ok(g_fieldBgi.vertices, g_fieldBgi.header->vertexCount * sizeof(BgiVertex)) ||
         !ram_ok(g_fieldBgi.floors, g_fieldBgi.header->floorCount * sizeof(BgiFloor)))
         return pkt;
-    for (int i = 0; i < n; i++) { /* (indices in range: else a field still loading) */
-        const BgiTriangle *t = &g_fieldBgi.triangles[i];
-        if ((u16)t->floor >= g_fieldBgi.header->floorCount) return pkt;
-        for (int k = 0; k < 3; k++)
-            if ((u16)t->vertices[k] >= g_fieldBgi.header->vertexCount) return pkt;
-    }
     /* the player: the object the pad moves (the event system's playerUid; the field's playerObj model slot can be
      * another character's, as in the opening, where it was the Masked Baku's) */
     EvtObject *pl = NULL;
@@ -499,6 +507,8 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     unsigned port_field_serial(int *frames);
     int since;
     unsigned serial = port_field_serial(&since);
+    if ((bk.serial != serial || (!bk.from_file && since % 30 == 0)) && !indices_ok(n))
+        return pkt; /* (checked where the walkmesh is read through its indices: baking it, or its signature) */
     if (bk.serial != serial) {
         bk.from_file = 0;
         if (maps_load(g_gameState->gameData->fieldId, n)) bk.serial = serial; /* (baked at build time) */
@@ -536,54 +546,90 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
     }
 #define RU(wx, wz) ((int)(((long long)rc * (wx) + (long long)rs * (wz)) >> 12))
 #define RV(wx, wz) ((int)(((long long)rc * (wz) - (long long)rs * (wx)) >> 12))
-    int u0 = 1 << 30, u1 = -(1 << 30), v0 = 1 << 30, v1 = -(1 << 30);
-    for (int i = 0; i < bk.n; i++) {
-        if (!(bk.in[i] & bit)) continue;
-        for (int k = 0; k < 3; k++) {
-            int u = RU(bk.x[i][k], bk.z[i][k]), v = RV(bk.x[i][k], bk.z[i][k]);
-            if (u < u0) u0 = u;
-            if (u > u1) u1 = u;
-            if (v < v0) v0 = v;
-            if (v > v1) v1 = v;
+    /* the area's outline and floor on the screen, from the baked map, the area, the camera's turn and the box alone:
+     * worked out again only when one of those changes, else its packets made from what was worked out last (every
+     * VBlank, its 36 KB edge table cleared and each edge looked up twice took 15-20% of the main thread at Lindblum's
+     * castle station, an Old 3DS) */
+    static struct {
+        unsigned gen;
+        int a, rc, rs, bx, by, bw, bh, valid;
+        int s, cu, cv, nw;
+        u32 w[MAX_TRIS * 11]; /* per triangle: its outline edges' count, each edge's two points, its colour, its three */
+    } mc = {.gen = ~0u};
+    if (mc.gen != bk.gen || mc.a != a || mc.rc != rc || mc.rs != rs || mc.bx != bx || mc.by != by || mc.bw != bw ||
+        mc.bh != bh) {
+        mc.gen = bk.gen, mc.a = a, mc.rc = rc, mc.rs = rs, mc.bx = bx, mc.by = by, mc.bw = bw, mc.bh = bh;
+        mc.valid = 0, mc.nw = 0;
+        int u0 = 1 << 30, u1 = -(1 << 30), v0 = 1 << 30, v1 = -(1 << 30);
+        for (int i = 0; i < bk.n; i++) {
+            if (!(bk.in[i] & bit)) continue;
+            for (int k = 0; k < 3; k++) {
+                int u = RU(bk.x[i][k], bk.z[i][k]), v = RV(bk.x[i][k], bk.z[i][k]);
+                if (u < u0) u0 = u;
+                if (u > u1) u1 = u;
+                if (v < v0) v0 = v;
+                if (v > v1) v1 = v;
+            }
+        }
+        if (u1 > u0 && v1 > v0) {
+            const int m = 8;
+            int sx = ((bw - 2 * m) << 16) / (u1 - u0), sz = ((bh - 2 * m) << 16) / (v1 - v0), s = sx < sz ? sx : sz;
+            if (s > MAP_SCALE) s = MAP_SCALE; /* (the same scale everywhere: smaller only for an area too big for the box) */
+            const int ox = bx + bw / 2, oy = by + bh / 2, cu = (u0 + u1) / 2, cv = (v0 + v1) / 2;
+            mc.valid = 1, mc.s = s, mc.cu = cu, mc.cv = cv;
+            __builtin_memset(edges, 0, sizeof edges);
+            for (int i = 0; i < bk.n; i++) {
+                if (!(bk.in[i] & bit)) continue;
+                for (int k = 0; k < 3; k++) {
+                    unsigned e = edge_slot(bk.x[i][k], bk.z[i][k], bk.x[i][(k + 1) % 3], bk.z[i][(k + 1) % 3]);
+                    if (edges[e].count < 255) edges[e].count++;
+                }
+            }
+            for (int i = 0; i < bk.n; i++) {
+                if (!(bk.in[i] & bit)) continue; /* (only the player's area: the others are other screens) */
+                int x[3], y[3];
+                for (int k = 0; k < 3; k++)
+                    x[k] = ox + (int)(((long long)(RU(bk.x[i][k], bk.z[i][k]) - cu) * s) >> 16),
+                    y[k] = oy - (int)(((long long)(RV(bk.x[i][k], bk.z[i][k]) - cv) * s) >> 16);
+                u32 *head = &mc.w[mc.nw++];
+                *head = 0;
+                /* the outline: edges no other drawn triangle shares */
+                for (int k = 0; k < 3; k++) {
+                    int b = (k + 1) % 3;
+                    if (edges[edge_slot(bk.x[i][k], bk.z[i][k], bk.x[i][b], bk.z[i][b])].count > 1) continue;
+                    mc.w[mc.nw++] = xy(x[k], y[k]);
+                    mc.w[mc.nw++] = xy(x[b], y[b]);
+                    ++*head;
+                }
+                mc.w[mc.nw++] = 0x20000000u | (bk.exit[i] ? MAP_EXIT : MAP_FILL);
+                mc.w[mc.nw++] = xy(x[0], y[0]);
+                mc.w[mc.nw++] = xy(x[1], y[1]);
+                mc.w[mc.nw++] = xy(x[2], y[2]);
+            }
         }
     }
-    if (u1 <= u0 || v1 <= v0) return pkt;
-    const int m = 8;
-    int sx = ((bw - 2 * m) << 16) / (u1 - u0), sz = ((bh - 2 * m) << 16) / (v1 - v0), s = sx < sz ? sx : sz;
-    if (s > MAP_SCALE) s = MAP_SCALE; /* (the same scale everywhere: smaller only for an area too big for the box) */
-    const int ox = bx + bw / 2, oy = by + bh / 2, cu = (u0 + u1) / 2, cv = (v0 + v1) / 2;
-    __builtin_memset(edges, 0, sizeof edges);
-    for (int i = 0; i < bk.n; i++) {
-        if (!(bk.in[i] & bit)) continue;
-        for (int k = 0; k < 3; k++) {
-            unsigned e = edge_slot(bk.x[i][k], bk.z[i][k], bk.x[i][(k + 1) % 3], bk.z[i][(k + 1) % 3]);
-            if (edges[e].count < 255) edges[e].count++;
-        }
-    }
+    if (!mc.valid) return pkt;
+    const int s = mc.s, ox = bx + bw / 2, oy = by + bh / 2, cu = mc.cu, cv = mc.cv;
 #define MX(wx, wz) (ox + (int)(((long long)(RU(wx, wz) - cu) * s) >> 16))
 #define MY(wx, wz) (oy - (int)(((long long)(RV(wx, wz) - cv) * s) >> 16))
     u32 *p = (u32 *)pkt;
-    for (int i = 0; i < bk.n; i++) {
-        if (!(bk.in[i] & bit)) continue; /* (only the player's area: the others are other screens) */
+    for (int at = 0; at < mc.nw;) {
         if ((u8 *)(p + 5 + 3 * 4) > pkt_end) break;
-        int x[3], y[3];
-        for (int k = 0; k < 3; k++) x[k] = MX(bk.x[i][k], bk.z[i][k]), y[k] = MY(bk.x[i][k], bk.z[i][k]);
-        /* the outline: edges no other drawn triangle shares */
-        for (int k = 0; k < 3; k++) {
-            int b = (k + 1) % 3;
-            if (edges[edge_slot(bk.x[i][k], bk.z[i][k], bk.x[i][b], bk.z[i][b])].count > 1) continue;
+        unsigned ne = mc.w[at++];
+        for (unsigned k = 0; k < ne; k++, at += 2) {
             p[0] = 3u << 24;
             p[1] = 0x40000000u | MAP_EDGE;
-            p[2] = xy(x[k], y[k]);
-            p[3] = xy(x[b], y[b]);
+            p[2] = mc.w[at];
+            p[3] = mc.w[at + 1];
             addPrim(ot, p);
             p += 4;
         }
         p[0] = 4u << 24;
-        p[1] = 0x20000000u | (bk.exit[i] ? MAP_EXIT : MAP_FILL);
-        p[2] = xy(x[0], y[0]);
-        p[3] = xy(x[1], y[1]);
-        p[4] = xy(x[2], y[2]);
+        p[1] = mc.w[at];
+        p[2] = mc.w[at + 1];
+        p[3] = mc.w[at + 2];
+        p[4] = mc.w[at + 3];
+        at += 4;
         addPrim(ot, p); /* (after its edges in the list: added later, drawn first) */
         p += 5;
     }

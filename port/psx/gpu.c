@@ -86,6 +86,14 @@ __attribute__((target("arm"), noinline)) u32 *fill_bursts(u32 *q, u32 v, unsigne
     return q;
 }
 #endif
+/* the renderer's (render.c): the cells a fill covers whole, [ix0, ix1) x [iy0, iy1), kept by the GPU, which draws the
+ * fill too (psx_vram_filled): the CPU's copy of them left alone, to be read back if the CPU ever reads them. 0: the
+ * CPU fills it all */
+__attribute__((weak)) int psx_vram_fill_kept(int x, int y, int w, int h, int *ix0, int *iy0, int *ix1, int *iy1) {
+    (void)x; (void)y; (void)w; (void)h; (void)ix0; (void)iy0; (void)ix1; (void)iy1;
+    return 0;
+}
+static void fill_rows(int x, int y, int w, int h, u16 c);
 static void vram_fill(int x, int y, int w, int h, u16 c) {
     if (!psx_vram) {
         return;
@@ -95,10 +103,21 @@ static void vram_fill(int x, int y, int w, int h, u16 c) {
         port_log("probe: fill %d,%d %dx%d %04x\n", x, y, w, h, c); }
 #endif
     psx_vram_filled(x, y, w, h, c);
+    int ix0, iy0, ix1, iy1;
+    const int kept = psx_vram_fill_kept(x, y, w, h, &ix0, &iy0, &ix1, &iy1);
     psx_vram_generation++;
     psx_raster_rows_written(y, h);
     psx_display_written(x, y, w, h);
     psx_vram_touch(x, y, w, h);
+    if (kept) { /* (the strips around the cells kept: a field's frame cleared every frame was 4-5% of an Old 3DS's main thread) */
+        fill_rows(x, y, w, iy0 - y, c);
+        fill_rows(x, iy1, w, y + h - iy1, c);
+        fill_rows(x, iy0, ix0 - x, iy1 - iy0, c);
+        fill_rows(ix1, iy0, x + w - ix1, iy1 - iy0, c);
+    } else fill_rows(x, y, w, h, c);
+}
+
+static void fill_rows(int x, int y, int w, int h, u16 c) {
     /* Row segments up to the VRAM edge (wrapping as vram_at does), with paired 32-bit stores. */
     const u32 pair = c | (u32)c << 16;
     for (int j = 0; j < h; j++) {

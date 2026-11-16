@@ -439,6 +439,17 @@ static int filling; /* psx_vram_filled -> psx_vram_touch: a fill the GPU draws i
 
 /* gpu.c: the CPU is about to write [x,x+w)x[y,y+h) of the shadow (LoadImage, MoveImage, ClearImage, fills). Cells
  * it covers only in part keep their other pixels: read those back first if the GPU owns them. */
+/* gpu.c: a fill's cells it covers whole stay the GPU's alone (drawn there by psx_vram_filled): the CPU doesn't fill
+ * its copy of them, which is read back if the CPU ever reads them (a field's frame, cleared every frame, isn't) */
+static int fill_kept;
+int psx_vram_fill_kept(int x, int y, int w, int h, int *ix0, int *iy0, int *ix1, int *iy1) {
+    if (!filling || x < 0 || y < 0 || x + w > VW || y + h > VH) return 0;
+    const int a0 = (x + CELL - 1) / CELL * CELL, b0 = (y + CELL - 1) / CELL * CELL;
+    const int a1 = (x + w) / CELL * CELL, b1 = (y + h) / CELL * CELL;
+    if (a0 >= a1 || b0 >= b1) return 0;
+    *ix0 = a0, *iy0 = b0, *ix1 = a1, *iy1 = b1;
+    return fill_kept = 1;
+}
 void psx_vram_touch(int x, int y, int w, int h) {
     int cx0, cy0, cx1, cy1;
     if (!cell_range(x, y, x + w, y + h, &cx0, &cy0, &cx1, &cy1)) return;
@@ -452,7 +463,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
                 /* the fill is drawn into the mirror too (psx_vram_filled): both sides current where it covers a
                  * whole cell; a partly covered cell keeps the GPU's state */
                 int whole = cx * CELL >= x && (cx + 1) * CELL <= x + w && cy * CELL >= y && (cy + 1) * CELL <= y + h;
-                if (whole) shadow_ok[cy][cx] = mirror_ok[cy][cx] = 1;
+                if (whole) mirror_ok[cy][cx] = 1, shadow_ok[cy][cx] = !fill_kept; /* (kept: the CPU's copy not filled) */
                 else if (!shadow_ok[cy][cx]) { /* (the shadow part is updated too, but other pixels are stale) */ }
             } else {
                 shadow_ok[cy][cx] = 1;
@@ -460,7 +471,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
             }
             cell_gen[cy][cx] = gen_counter;
         }
-    filling = 0;
+    filling = fill_kept = 0;
 }
 
 /* gpu.c: before the CPU reads VRAM (StoreImage, MoveImage's source) */
