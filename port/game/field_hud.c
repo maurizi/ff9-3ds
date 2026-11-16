@@ -34,6 +34,9 @@ u32 *ClearOTagR(u32 *ot, int n);
 /* the ordering table and the packets in one array: links are 24-bit, so they share their high byte */
 static u32 hud_mem[OTN + BUF_WORDS];
 static u32 *const hud_ot = hud_mem;
+/* (the 3DS's renderer: its UI layer's state; the PC draws every time) */
+__attribute__((weak)) unsigned ctr_ui_layer_serial(void) { return ~0u; }
+__attribute__((weak)) void ctr_ui_layer_keep(void) {}
 
 /* the layout: 6 px inside every box, 4 px between them, labels on the boxes' top edges (as the PS1's) */
 static RECT r_head = {4, 4, 312, 24};
@@ -976,6 +979,24 @@ void port_bottom_hud(void) {
     g_primPtr = saved_prim;
     if (used > sizeof hud_mem) port_fatal("field HUD: packet buffer overrun");
     if (!drew) return;
+    /* the battle screen's drawing as it was drawn last (its packets the same, word for word) and its layer not cleared
+     * since (the battle's own list, drawn before it every VBlank, draws nothing there: the battle screen's in its place):
+     * left as it is. Drawn every VBlank, its 400-odd primitives were some 30% of what a battle draws, the scene's 3D
+     * included (an Old 3DS's battle) */
+    static u32 last_hash;
+    static unsigned last_serial = ~0u;
+    u32 hash = 0;
+    if (battle) {
+        hash = 0x811C9DC5u;
+        for (const u32 *w = hud_mem; w < hud_mem + used / 4; w++) hash = (hash ^ *w) * 0x01000193u;
+        unsigned serial = ctr_ui_layer_serial();
+        if (hash == last_hash && serial == last_serial && serial != ~0u) {
+            ctr_ui_layer_keep();
+            shown = 1;
+            shown_battle = 1;
+            return;
+        }
+    }
 
     Gp0State saved_gp0 = gp0_state; /* (the field's drawing environment is the field's again after) */
     if (battle || world) psx_ui_list_begin_keep();
@@ -983,6 +1004,8 @@ void port_bottom_hud(void) {
     port_draw_ot_buffer(&hud_ot[OTN - 1], hud_mem, sizeof hud_mem);
     psx_ui_list_end();
     gp0_state = saved_gp0;
+    if (battle) last_hash = hash, last_serial = ctr_ui_layer_serial();
+    else last_serial = ~0u;
     shown = !world;
     shown_battle = battle;
 }

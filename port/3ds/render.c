@@ -206,10 +206,13 @@ typedef struct {
     unsigned drawn;        /* frames_drawn when UI was last drawn into it */
     int hands[CTR_MAX_HANDS][2], nhands;
     int dx0, dy0, dx1, dy1; /* where anything was drawn since it was last cleared (empty: dx0 >= dx1) */
+    int clear_pending;      /* to be cleared before the next thing drawn into it (ui_layer_for, layer_clear) */
+    unsigned clears;        /* times it was cleared (ctr_ui_layer_serial) */
 } UiLayer;
 static UiLayer layers[2];
 static inline int imin(int a, int b);
 static inline int imax(int a, int b);
+static void layer_clear(int k);
 /* while a menu is up, the top screen shows the scene as it was when the menu was asked for (per eye) */
 static C3D_Tex freeze_tex[2];
 static C3D_RenderTarget *freeze_rt[2];
@@ -1777,10 +1780,22 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
               (m->depth < 2 ? (u32)(m->clut_x >> 4) << 9 | (u32)m->clut_y : 0) | 1u << 24;
     u32 twin = (gp0_state.twin_mask_x / 8) | (gp0_state.twin_mask_y / 8) << 5 | (gp0_state.twin_off_x / 8) << 10 |
                (gp0_state.twin_off_y / 8) << 15;
-    TexSlot *s = slot_for(key, twin);
     int bx0 = u0 >> 5, bx1 = u1 >> 5, by0 = v0 >> 5, by1 = v1 >> 5;
     if (bx1 < bx0) bx0 = 0, bx1 = 7;
     if (by1 < by0) by0 = 0, by1 = 7;
+    /* (the same page, CLUT, window and blocks as the last lookup, nothing written to any source since and the same
+     * frame: its answer again, every block then current (convert_block's first test). Runs of glyphs from one font
+     * block, of a model's faces from one texture block, are most lookups) */
+    static struct { u32 key, twin, epoch, serial; int b; TexSlot *s; unsigned f; } last;
+    const int blocks = bx0 | bx1 << 3 | by0 << 6 | by1 << 9;
+    if (last.s && last.key == key && last.twin == twin && last.epoch == tex_epoch && last.serial == frame_serial &&
+        last.b == blocks && last.s->key == key && last.s->twin == twin) {
+        *flags = last.f;
+        tex_ou = last.s->ox, tex_ov = last.s->oy;
+        co_last = (int)(last.s - slots);
+        return slot_tex(last.s);
+    }
+    TexSlot *s = slot_for(key, twin);
     unsigned f = 0;
     for (int by = by0; by <= by1; by++)
         for (int bx = bx0; bx <= bx1; bx++) {
@@ -1790,6 +1805,8 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
     s->serial = frame_serial;
     *flags = f;
     tex_ou = s->ox, tex_ov = s->oy;
+    last.key = key, last.twin = twin, last.epoch = tex_epoch, last.serial = frame_serial, last.b = blocks, last.s = s,
+    last.f = f;
     int id = (int)(s - slots);
     if (co_last >= 0 && co_last != id && co[co_last][id] < 0xFFFF) co[co_last][id]++;
     co_last = id;
@@ -2104,6 +2121,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         oy = y;
     }
     if (layer >= 0) { /* into a UI layer, relative to its framebuffer; the mirror isn't touched */
+        if (layers[layer].clear_pending) layer_clear(layer);
         for (unsigned i = 0; i < n; i++) moved[i] = v[i], moved[i].x -= ox, moved[i].y -= oy;
         /* (as the block move below, only the frame's it was set for: the chocobo's menu opened over the zoomed map drew its
          * choices into the map's packets' place, and a frame's zoom left in force enlarged them, flickering) */
@@ -2144,7 +2162,9 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
          * cuts it in a different place) */
         /* (the welds are for the parallax alone: in 2D they would only cost time) */
         if (stereo_on && nterrain && terrain_packet()) v = terrain_depth(v, n, moved); /* (the world map's ground) */
-        if (gp0_state.area_x1 - gp0_state.area_x0 >= 255 && gp0_state.area_y1 - gp0_state.area_y0 >= 200 && !flat_packet())
+        /* (the entries' depth line is for the parallax alone: in 2D it would only cost time, some 4% of a battle's walk) */
+        if (stereo_on && gp0_state.area_x1 - gp0_state.area_x0 >= 255 && gp0_state.area_y1 - gp0_state.area_y0 >= 200 &&
+            !flat_packet())
             v = ot_depth(v, n, moved, bx1 - bx0, by1 - by0);
         int mi = stereo_on ? model_index() : 0;
         if (mi) v = model_weld(v, n, moved, mi); /* (a model's meshes meeting: one depth where their corners do) */
@@ -2611,24 +2631,48 @@ static int ui_layer_for(int x, int y, int clear) {
         layers[k].nhands = 0;
         clear = 1;
     }
-    /* (only where something was drawn since the last clear: the battle's list clears its layer every VBlank, and the whole
-     * 512x256 was 131k pixels each time, a third of the GPU's work on a battle's VBlank on an Old 3DS) */
+    /* (cleared when something is drawn into it next (layer_clear): a list that draws nothing there, as the battle's own,
+     * all of it the battle screen's in its place, leaves it as it was, and the battle screen's own drawing, unchanged,
+     * needn't be drawn again: field_hud.c) */
     UiLayer *L = &layers[k];
-    if ((clear || L->shown) && L->dx0 < L->dx1) {
-        const u16 sc[4] = {(u16)L->dx0, (u16)L->dy0, (u16)L->dx1, (u16)L->dy1};
-        int saved = cur_target;
-        cur_target = k + 1;
-        Vtx *v = alloc_vtx(6);
-        quad(v, L->dx0, L->dy0, L->dx1, L->dy1, 0, 0, 0, 0, 0x00000000);
-        add_batch(K_UNTEX, NO_BLEND, 1, sc, NULL, v - vb, 6);
-        cur_target = saved;
-        L->dx0 = L->dx1 = 0;
-    }
     if (clear || L->shown) {
+        L->clear_pending = 1;
         layers[k].shown = 0;
         layers[k].nhands = 0;
     }
     return k;
+}
+/* a layer's clear, before the first thing drawn into it since it was asked (ui_layer_for): only where something was drawn
+ * since the last one (the battle's list cleared its layer every VBlank, and the whole 512x256 was 131k pixels each time,
+ * a third of the GPU's work on a battle's VBlank on an Old 3DS) */
+static void layer_clear(int k) {
+    UiLayer *L = &layers[k];
+    L->clear_pending = 0;
+    if (L->dx0 >= L->dx1) return;
+    const u16 sc[4] = {(u16)L->dx0, (u16)L->dy0, (u16)L->dx1, (u16)L->dy1};
+    int saved = cur_target;
+    cur_target = k + 1;
+    Vtx *v = alloc_vtx(6);
+    quad(v, L->dx0, L->dy0, L->dx1, L->dy1, 0, 0, 0, 0, 0x00000000);
+    add_batch(K_UNTEX, NO_BLEND, 1, sc, NULL, v - vb, 6);
+    cur_target = saved;
+    L->dx0 = L->dx1 = 0;
+    L->clears++;
+}
+static int displayed_layer(void) {
+    PsxDisplayInfo d;
+    psx_gpu_display_info(&d);
+    return layers[0].x == d.x && layers[0].y == d.y ? 0 : layers[1].x == d.x && layers[1].y == d.y ? 1 : -1;
+}
+/* the displayed buffer's layer and how many times it was cleared (field_hud.c: its drawing still there) */
+unsigned ctr_ui_layer_serial(void) {
+    int k = displayed_layer();
+    return k < 0 ? ~0u : (unsigned)k | layers[k].clears << 1;
+}
+/* the displayed buffer's layer kept as drawn this frame, nothing drawn into it (field_hud.c) */
+void ctr_ui_layer_keep(void) {
+    int k = displayed_layer();
+    if (k >= 0) layers[k].drawn = frames_drawn;
 }
 
 /* Window-system packets (port/game/ui_split.c): a range lives until an ordering table (any: the battle draws its
