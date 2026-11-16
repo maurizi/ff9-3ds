@@ -216,8 +216,11 @@ void plat_wait_frame(void) {
     if (frames % PORT_DUMP_EVERY == 0) {
         void ctr_render_dump_display(long);
         ctr_render_dump_display(frames);
-        /* the game's whole state as a hash (PS1 RAM and scratchpad): two builds whose frames match should match here too,
-         * a change the game can see (a value it reads back, a timing) showing at the first dump after it */
+        /* the game's whole state as a hash (PS1 RAM and scratchpad): two runs of the same build match here, so a change
+         * in what it does shows at the first dump after it. Only the same build: the game's native pointers (into
+         * psx_ram, whose place moves with the build's layout, and into the program) differ between builds, and can't be
+         * told from data reliably. Across builds, compare the PC host's RAM dumps (--ram-dump: psx_ram at a fixed
+         * address) */
         u32 h = 0x811C9DC5u;
         for (const u32 *w = (const u32 *)psx_ram; w < (const u32 *)(psx_ram + PSX_RAM_SIZE); w++) h = (h ^ *w) * 0x01000193u;
         for (const u32 *w = (const u32 *)psx_scratchpad; w < (const u32 *)(psx_scratchpad + 0x400); w++) h = (h ^ *w) * 0x01000193u;
