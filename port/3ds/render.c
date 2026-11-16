@@ -1946,6 +1946,12 @@ static float tf_a, tf_b, tf_lo, tf_hi;                                        /*
 static int tf_ok;
 #define WELD_N 4096 /* (terrain_depth: this frame's corners by pixel, open addressing) */
 static struct { unsigned frame; short x, y; float z; } weld[WELD_N];
+/* (int)floorf(x), for x within int's range: the Old 3DS's VFPv2 has no rounding instruction and floorf is a library
+ * call, two for each model corner in 3D (model_weld: some 2.7 ms of a busy field's VBlank there with the weld) */
+static inline int floor_int(float x) {
+    const int i = (int)x; /* (toward zero) */
+    return (float)i > x ? i - 1 : i;
+}
 static const Vtx *terrain_depth(const Vtx *v, unsigned n, Vtx *out) {
     int bare = 0;
     for (unsigned i = 0; i < n; i++) {
@@ -1971,7 +1977,7 @@ static const Vtx *terrain_depth(const Vtx *v, unsigned n, Vtx *out) {
             if (w > tf_hi) w = tf_hi;
             z = 1.0f / w;
         }
-        int px = (int)floorf(v[i].x + 0.5f), py = (int)floorf(v[i].y + 0.5f);
+        int px = floor_int(v[i].x + 0.5f), py = floor_int(v[i].y + 0.5f);
         unsigned h = ((unsigned)px * 73856093u ^ (unsigned)py * 19349663u) & (WELD_N - 1);
         for (unsigned k = 0; k < 8; k++, h = (h + 1) & (WELD_N - 1)) {
             if (weld[h].frame != frames_drawn + 1) {
@@ -2746,9 +2752,13 @@ void port_model_packets(const void *lo, const void *hi) {
     nmodels++;
 }
 static int model_index(void) { /* (the model range the packet is in, + 1; 0 if none) */
+    /* (the ranges don't overlap (port_model_packets drops any a new one overlaps), so the one holding the packet is the
+     * only one: the last found, which a model's run of polygons keeps finding, is tried first) */
+    static int last;
     const u8 *p = (const u8 *)psx_gpu_packet;
+    if (last < nmodels && p >= models[last].lo && p < models[last].hi) return last + 1;
     for (int i = 0; i < nmodels; i++)
-        if (p >= models[i].lo && p < models[i].hi) return i + 1;
+        if (p >= models[i].lo && p < models[i].hi) return (last = i) + 1;
     return 0;
 }
 static int model_packet(void) { return model_index() != 0; }
@@ -2783,7 +2793,7 @@ static const Vtx *model_weld(const Vtx *v, unsigned n, Vtx *out, int m) {
         if (out[i].z == 0 && mz > 0) out[i].z = mz;
         float z = fabsf(out[i].z), sign = out[i].z < 0 ? -1.0f : 1.0f;
         if (z <= 0) continue;
-        int px = (int)floorf(v[i].x + 0.5f), py = (int)floorf(v[i].y + 0.5f);
+        int px = floor_int(v[i].x + 0.5f), py = floor_int(v[i].y + 0.5f);
         unsigned h = ((unsigned)px * 73856093u ^ (unsigned)py * 19349663u ^ (unsigned)m * 83492791u) & (MWELD_N - 1);
         for (unsigned k = 0; k < 8; k++, h = (h + 1) & (MWELD_N - 1)) {
             if (mweld[h].frame != frames_drawn + 1) {
@@ -3669,14 +3679,13 @@ static u32 px_shadow(int x, int y, const void *ctx) {
     return (r << 3) << 16 | (g << 3) << 8 | b << 3;
 }
 /* DUMP_EVERY=N: the displayed buffer every N frames, as dump/f<frame>.ppm (a timeline of one run) */
-void ctr_render_dump_display(long frame) {
+static void dump_display_eye(long frame, int eye) {
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
     mkdir("sdmc:/3ds/ff9/dump", 0777);
-    gpu_sync();
     static u16 crop[320 * 240];
     int w = d.w > 320 ? 320 : d.w, h = d.h > 240 ? 240 : d.h;
-    const u16 *m = mirror_tex[0].data;
+    const u16 *m = mirror_tex[eye].data;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) { /* (as RGB565 for px_crop) */
             u16 p = m[tiled((d.x + x) & 1023, (d.y + y) & 511, VW)];
@@ -3700,10 +3709,18 @@ void ctr_render_dump_display(long frame) {
             }
     }
     char name[32];
-    snprintf(name, sizeof name, "f%06ld", frame);
+    snprintf(name, sizeof name, eye ? "f%06ld_r" : "f%06ld", frame);
     static u16 *src;
     src = crop;
     write_ppm(name, w, h, px_crop, src);
+}
+
+/* DUMP_EVERY's frame: the displayed buffer as the left eye's mirror has it, and in 3D the right eye's beside it
+ * (f<frame>_r: for comparing stereo frames between builds) */
+void ctr_render_dump_display(long frame) {
+    gpu_sync();
+    dump_display_eye(frame, 0);
+    if (stereo_on) dump_display_eye(frame, 1);
 }
 
 void ctr_render_dump(void) {
