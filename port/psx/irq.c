@@ -194,6 +194,7 @@ static void rcnt_frame(void) {
     }
 }
 
+__attribute__((weak)) void psx_spu_irq_poll(void) {} /* (spu.c's; the SPU unit tests link without it) */
 /* (port/ds/movie_fv.c; nothing elsewhere) */
 __attribute__((weak)) void movie_fv_idle(void) {
 }
@@ -217,7 +218,6 @@ void psx_frame(void) {
     port_canary("DrawSync callback");
     rcnt_frame();
     port_canary("root counters (SPU/AKAO)");
-    void psx_spu_irq_poll(void);
     psx_spu_irq_poll(); /* (an SPU IRQ the mixer saw: its callback, here on the game thread) */
     movie_fv_idle();
     vblanks++;

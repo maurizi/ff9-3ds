@@ -23,7 +23,9 @@ SPU_HOT void psx_spu_source_set_loop(PsxSpuSource *source, uint16_t *loop_addres
 
 /* Key-on, increment, and loop redirects all align to 16 bytes. The last
  * block starts at 0x7fff0 and fits entirely inside the RAM image. */
-extern volatile unsigned psx_spu_irq_on, psx_spu_irq_addr, psx_spu_irq_hit; /* (spu.c) */
+/* (spu.c's; weak here for the SPU unit tests, which link the mixer without it: no IRQ) */
+volatile unsigned psx_spu_irq_on __attribute__((weak)), psx_spu_irq_addr __attribute__((weak)),
+    psx_spu_irq_hit __attribute__((weak));
 static inline void irq_check(const PsxSpuSource *source) {
     if (psx_spu_irq_on && !((source->address ^ psx_spu_irq_addr) & ~1u)) psx_spu_irq_hit = 1;
 }
