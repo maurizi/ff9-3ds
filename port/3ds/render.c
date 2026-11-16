@@ -208,6 +208,7 @@ typedef struct {
     int dx0, dy0, dx1, dy1; /* where anything was drawn since it was last cleared (empty: dx0 >= dx1) */
     int clear_pending;      /* to be cleared before the next thing drawn into it (ui_layer_for, layer_clear) */
     unsigned clears;        /* times it was cleared (ctr_ui_layer_serial) */
+    unsigned draws;         /* primitives drawn into it (ctr_ui_layer_serial) */
 } UiLayer;
 static UiLayer layers[2];
 static inline int imin(int a, int b);
@@ -2141,6 +2142,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         sc[1] = (u16)clampi(sc[1] - oy + sdy, 0, UI_H); sc[3] = (u16)clampi(sc[3] - oy + sdy, 0, UI_H);
         if (sc[0] >= sc[2] || sc[1] >= sc[3]) return;
         layers[layer].drawn = frames_drawn;
+        layers[layer].draws++;
         cur_target = layer + 1;
         { /* (what its next clear must cover: ui_layer_for) */
             float fx0 = v[0].x, fx1 = v[0].x, fy0 = v[0].y, fy1 = v[0].y;
@@ -2664,10 +2666,11 @@ static int displayed_layer(void) {
     psx_gpu_display_info(&d);
     return layers[0].x == d.x && layers[0].y == d.y ? 0 : layers[1].x == d.x && layers[1].y == d.y ? 1 : -1;
 }
-/* the displayed buffer's layer and how many times it was cleared (field_hud.c: its drawing still there) */
+/* the displayed buffer's layer, and a count changing whenever it is cleared or drawn into (field_hud.c: the same as
+ * after its drawing, the layer holds that and nothing else) */
 unsigned ctr_ui_layer_serial(void) {
     int k = displayed_layer();
-    return k < 0 ? ~0u : (unsigned)k | layers[k].clears << 1;
+    return k < 0 ? ~0u : (unsigned)k | (layers[k].clears + layers[k].draws) << 1;
 }
 /* the displayed buffer's layer kept as drawn this frame, nothing drawn into it (field_hud.c) */
 void ctr_ui_layer_keep(void) {

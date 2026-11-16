@@ -979,21 +979,22 @@ void port_bottom_hud(void) {
     g_primPtr = saved_prim;
     if (used > sizeof hud_mem) port_fatal("field HUD: packet buffer overrun");
     if (!drew) return;
-    /* the battle screen's drawing as it was drawn last (its packets the same, word for word) and its layer not cleared
-     * since (the battle's own list, drawn before it every VBlank, draws nothing there: the battle screen's in its place):
-     * left as it is. Drawn every VBlank, its 400-odd primitives were some 30% of what a battle draws, the scene's 3D
-     * included (an Old 3DS's battle) */
-    static u32 last_hash;
-    static unsigned last_serial = ~0u;
-    u32 hash = 0;
-    if (battle) {
-        hash = 0x811C9DC5u;
-        for (const u32 *w = hud_mem; w < hud_mem + used / 4; w++) hash = (hash ^ *w) * 0x01000193u;
+    /* the screen's drawing as it was drawn last into the displayed buffer's layer (its packets the same, word for word)
+     * and that layer neither cleared nor drawn into since (the battle's own list, drawn before it every VBlank, draws
+     * nothing there: the battle screen's in its place): left as it is. Drawn every VBlank, the battle screen's 400-odd
+     * primitives were some 30% of what a battle draws, the scene's 3D included, and a field's HUD 390 of its 1300, 7 ms
+     * of the 26 its drawing took at Lindblum's castle station (an Old 3DS). Per layer: a field's two framebuffers are
+     * shown in turn, each with its own */
+    static u32 last_hash[2];
+    static unsigned last_serial[2] = {~0u, ~0u};
+    u32 hash = 0x811C9DC5u;
+    for (const u32 *w = hud_mem; w < hud_mem + used / 4; w++) hash = (hash ^ *w) * 0x01000193u;
+    {
         unsigned serial = ctr_ui_layer_serial();
-        if (hash == last_hash && serial == last_serial && serial != ~0u) {
+        if (serial != ~0u && hash == last_hash[serial & 1] && serial == last_serial[serial & 1]) {
             ctr_ui_layer_keep();
-            shown = 1;
-            shown_battle = 1;
+            shown = !world;
+            shown_battle = battle;
             return;
         }
     }
@@ -1004,8 +1005,10 @@ void port_bottom_hud(void) {
     port_draw_ot_buffer(&hud_ot[OTN - 1], hud_mem, sizeof hud_mem);
     psx_ui_list_end();
     gp0_state = saved_gp0;
-    if (battle) last_hash = hash, last_serial = ctr_ui_layer_serial();
-    else last_serial = ~0u;
+    {
+        unsigned serial = ctr_ui_layer_serial();
+        if (serial != ~0u) last_hash[serial & 1] = hash, last_serial[serial & 1] = serial;
+    }
     shown = !world;
     shown_battle = battle;
 }
