@@ -38,6 +38,7 @@
 #include "profile.h"
 #include "psx_display.h"
 #include "psx_mem.h"
+#include "gte_depth.h"
 #include "psx_runtime.h"
 #include "prim_shbin.h"
 
@@ -665,8 +666,16 @@ static void run_flush(void) {
     cur_mask = saved_mask;
 }
 
+/* two scissors (four u16 each) the same: one 64-bit compare (memcmp, a library call a few times for every primitive,
+ * was 0.3 ms of a busy field's VBlank on an Old 3DS) */
+static inline int sc_same(const u16 *a, const u16 *b) {
+    u64 x, y;
+    memcpy(&x, a, sizeof x);
+    memcpy(&y, b, sizeof y);
+    return x == y;
+}
 static inline int run_same(const RunGroup *g, int kind, int abr, const u16 sc[4], const C3D_Tex *tex) {
-    return g->kind == kind && g->abr == abr && g->mask == cur_mask && g->tex == tex && !memcmp(g->sc, sc, sizeof g->sc);
+    return g->kind == kind && g->abr == abr && g->mask == cur_mask && g->tex == tex && sc_same(g->sc, sc);
 }
 
 /* whether a batch's primitives replace what they draw (so they may move ahead of others: their depth keeps later ones
@@ -1859,7 +1868,9 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
     o->x = (float)v->x;
     o->y = (float)v->y;
     o->z = 0;
-    u32 info = v->xyw && !getenv_nodepth ? psx_depth_lookup(v->xyw) : 0;
+    /* (the lookup inline (gte_depth.h): on an Old 3DS the call for every vertex drawn was 0.4 ms of a busy field's
+     * VBlank, which an emulator doesn't show) */
+    u32 info = v->xyw && !getenv_nodepth ? psx_depth_find(v->xyw, &psx_depth_by_value) : 0;
     ctr_depth_stats[info ? 0 : 1]++;
     if (info) {
         /* (not on the world map: its ground's blocks are projected each on its own, and the fractions of a vertex they
@@ -2592,6 +2603,92 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     }
 }
 
+/* ---- a field background's run of tiles (port/game/field_bg.c lifts it out of the OT into a marker, which gpu.c's walk
+ * reaches where the run was): drawn here at once, in its order, as gp0_tpage_sprite16 and r_rect would draw each tile
+ * (the same mode, texture, vertices, batches and depth values), without each tile's packet dispatch and emit's
+ * per-primitive work (the scissor, the UI and stereo tests, the cells). 0: not taken, drawn tile by tile. Only the
+ * plain case: the scene's mirror in 2D, no outlines, no menu; anything else is the walk's as before. Every other tile
+ * the same way through gp0's sprite16 hook (r_sprite16). On an Old 3DS, whose tiles cost some 13 us each (memory
+ * without an L2 cache), 1 ms of Lindblum's castle station's VBlank; an emulator showed nothing. */
+int gxh_bg_runs_on(void) { return 1; }
+void gxh_bg_runs_reset(void) {}
+int gxh_bg_units_on(void) { return 0; } /* (units move a layer's tiles to one entry: the order changes) */
+int gxh_bg_unit(const unsigned int *head, int count, const unsigned char *sprites, const unsigned int *pos, int z,
+                const unsigned int *ot) {
+    (void)head; (void)count; (void)sprites; (void)pos; (void)z; (void)ot;
+    return 0;
+}
+static int in_window_packets(const void *p);
+/* (the plain case: the scene's mirror in 2D, no outlines, no menu) */
+static inline int bg_plain(void) { return !ui_mode && !stereo_on && !ctr_outline && menu_state != 2; }
+/* one tile (t: its page word, then the sprite's three) inside the scissor sc, as r_rect and emit would draw it; 0: not
+ * this way (its texels wrap past its page's edge) */
+static int bg_tile(const unsigned t[4], const u16 sc[4]) {
+    if ((t[3] & 0xFF) > 240 || ((t[3] >> 8) & 0xFF) > 240) return 0;
+    Gp0Mode m;
+    Gp0Vtx v;
+    gp0_sprite16_setup(t, &m, &v);
+    int bx0 = v.x, by0 = v.y, bx1 = v.x + 16, by1 = v.y + 16;
+    if (bx0 < sc[0]) bx0 = sc[0];
+    if (by0 < sc[1]) by0 = sc[1];
+    if (bx1 > sc[2]) bx1 = sc[2];
+    if (by1 > sc[3]) by1 = sc[3];
+    if (bx0 >= bx1 || by0 >= by1) return 1; /* (emit's: nothing drawn) */
+    const int icon = button_icon(&m, v.u, v.v, 16, 16);
+    unsigned tflags = 0;
+    C3D_Tex *tex = icon >= 0 ? &btn_tex[icon] : texture_for(&m, v.u, v.v, v.u + 15, v.v + 15, &tflags);
+    if (icon >= 0) tflags = 2;
+    const float ou = icon < 0 && tex ? tex_ou : 0, ov = icon < 0 && tex ? tex_ov : 0;
+    Vtx q[6];
+    if (icon >= 0) quad(q, v.x, v.y, v.x + 16, v.y + 16, 0, 0, 16, 16, vcolor(&m, &v));
+    else quad(q, v.x, v.y, v.x + 16, v.y + 16, ou + v.u, ov + v.v, ou + v.u + 16, ov + v.v + 16, vcolor(&m, &v));
+    gpu_draws(bx0, by0, bx1, by1);
+    cur_target = 0;
+    cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0) |
+               ((gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
+    ctr_render_stats[1]++;
+    const int abr = m.semi ? m.abr : NO_BLEND;
+    if (!m.semi) run_add(K_TEX, abr, sc, tex, q, 6);
+    else if (tflags & 8) run_add(K_PAGE_OP, NO_BLEND, sc, tex, q, 6), run_add(K_PAGE_SEMI, abr, sc, tex, q, 6);
+    else {
+        if (tflags & 1) run_add(K_TEX_P1, NO_BLEND, sc, tex, q, 6);
+        if (tflags & 2) run_add(K_TEX_P2, abr, sc, tex, q, 6);
+    }
+    return 1;
+}
+/* gp0_tpage_sprite16's (every texture page + SPRT_16 packet: a field background's tiles), its bookkeeping done */
+static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc) {
+    u16 sc[4];
+    if (!bg_plain() || in_window_packets(psx_gpu_packet) || !area_scissor(sc)) return 0;
+    const unsigned t[4] = {tp, cmd, xy, uvc};
+    return bg_tile(t, sc);
+}
+static inline const u32 *bg_tile_next(const u32 *p) { return (const u32 *)(((u32)(uintptr_t)psx_ram & 0xFF000000) | (*p & 0xFFFFFF)); }
+int gxh_bg_run(unsigned int *head, int count) {
+    u16 sc[4];
+    if (!bg_plain() || count <= 0 || !area_scissor(sc)) return 0;
+    /* (every tile a page + SPRT_16 packet as the game builds them (MargePrim'd: the sprite's tag a NOP between), none
+     * on the font pages gp0_tpage_sprite16 leaves to the command path, none in a window's packets, none wrapping) */
+    const u32 *p = (const u32 *)head;
+    for (int i = 0; i < count; i++, p = bg_tile_next(p)) {
+        const u32 *w = p + 1;
+        if ((p[0] >> 24) != 5 || w[0] >> 24 != 0xE1 || w[1] || w[2] >> 26 != 0x7C >> 2) return 0;
+        const u32 tp = w[0] & 0xFFFFFF;
+        if ((tp & 0x10) && (tp & 15) >= 14) return 0;
+        if ((w[4] & 0xFF) > 240 || ((w[4] >> 8) & 0xFF) > 240) return 0;
+        if (in_window_packets(p)) return 0;
+    }
+    gp0_note_sprites(head[1], (unsigned)count); /* (each tile's bookkeeping in gp0_tpage_sprite16, before it draws) */
+    p = (const u32 *)head;
+    for (int i = 0; i < count; i++, p = bg_tile_next(p)) {
+        const u32 *w = p + 1;
+        const unsigned t[4] = {w[0], w[2], w[3], w[4]};
+        psx_gpu_packet = p;
+        bg_tile(t, sc);
+    }
+    return 1;
+}
+
 static void r_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
     if (battle_list_replaced()) return;
     Vtx va, vb2;
@@ -2637,7 +2734,8 @@ static int r_copy(int sx, int sy, int dx, int dy, int w, int h) {
     ctr_render_stats[2]++;
     return 1;
 }
-static const Gp0Backend pica_backend = {r_poly, r_line, r_rect, 0, 0, 0, r_copy};
+static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc);
+static const Gp0Backend pica_backend = {r_poly, r_line, r_rect, 0, 0, r_sprite16, r_copy};
 
 /* gpu.c: the end of an ordering table */
 void psx_gpu_ot_done(void);
@@ -2921,6 +3019,11 @@ static int ui_packet(void) {
     const u8 *p = (const u8 *)psx_gpu_packet;
     for (int i = 0; i < nranges; i++)
         if (p >= ranges[i].lo && p < ranges[i].hi) return ranges[i].hit = 1;
+    return 0;
+}
+static int in_window_packets(const void *p) { /* (ui_packet's test, without marking the range drawn from) */
+    for (int i = 0; i < nranges; i++)
+        if ((const u8 *)p >= ranges[i].lo && (const u8 *)p < ranges[i].hi) return 1;
     return 0;
 }
 static void ranges_drawn(void) { /* (an ordering table is done: what it drew from is spent) */

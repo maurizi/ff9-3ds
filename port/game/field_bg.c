@@ -15,7 +15,7 @@
 s32 o0a_fldbg_draw_game(void);
 s32 o0a_fldbg_draw(void);
 
-#if defined(PORT_GX_HYBRID) && defined(PORT_FIELD_GX)
+#if (defined(PORT_GX_HYBRID) && defined(PORT_FIELD_GX)) || defined(PORT_BG_RUNS)
 extern const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi;
 /* gx_hybrid.c: the run's tiles taken by the renderer (0: drawn as packets, one by one; 2: so, and holding still) */
 int gxh_bg_run(unsigned int *head, int count);
@@ -27,7 +27,11 @@ typedef struct { u32 tag; u32 *head; u16 count, entry; } BgMarker;
 #define BG_MARKERS 32 /* per draw buffer (more: the rest stay linked as they are) */
 #define BG_RUN_MIN 4  /* (shorter runs stay linked: a marker would only add a step) */
 /* (in ovl_0a's area: loaded, cleared, with it; nothing of this is used without it) */
+#ifdef PORT_NDS
 #define BG_DATA __attribute__((section(".psxovl_0a.data")))
+#else
+#define BG_DATA
+#endif
 static int bg_marker_count[2] BG_DATA;
 /* per draw buffer, runs (by first tile) the renderer found still: left linked, the walk's as they are, until the
  * list clears (every BG_SKIP_FRAMES draws: a layer that starts moving is lifted again) */
@@ -195,7 +199,7 @@ void port_ot_marker(unsigned int *marker) {
 
 PORT_OVERLAY_CODE(0a) s32 o0a_fldbg_draw(void) {
     s32 r = o0a_fldbg_draw_game();
-#if defined(PORT_GX_HYBRID) && defined(PORT_FIELD_GX)
+#if (defined(PORT_GX_HYBRID) && defined(PORT_FIELD_GX)) || defined(PORT_BG_RUNS)
     psx_ot_marker_lo = (const unsigned char *)&bg_mk;
     psx_ot_marker_hi = (const unsigned char *)(&bg_mk + 1);
     const int buf = *g_fieldBgCtx.bufIndex;
@@ -208,6 +212,8 @@ PORT_OVERLAY_CODE(0a) s32 o0a_fldbg_draw(void) {
     if (hs != last_h) { last_h = hs; gxh_bg_runs_reset(); bg_skip_count[0] = bg_skip_count[1] = 0; }
     if (++bg_skip_age >= BG_SKIP_FRAMES) { bg_skip_age = 0; bg_skip_count[0] = bg_skip_count[1] = 0; }
     const BgOverlay *o = (const BgOverlay *)((const u8 *)h + h->overlayOffset);
+    /* (the markers are reached by the walk's 24-bit links: in psx_ram's 16 MB window, else nothing lifted) */
+    if (((uintptr_t)&bg_mk ^ (uintptr_t)psx_ram) >> 24) return r;
     if (!gxh_bg_runs_on()) { /* (runs off: the layers as units, when the renderer takes them) */
         if (gxh_bg_units_on()) {
             for (int j = h->overlayCount - 1; j >= 0; --j)

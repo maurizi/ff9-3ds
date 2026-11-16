@@ -378,9 +378,25 @@ GP0_HOT_THUMB int gp0_tpage_sprite16(const unsigned int *w) {
     return 1;
 }
 
+/* gp0_tpage_sprite16's mode and vertex for its sprite (t: the page word, then the sprite's three), as it gives them to
+ * the backend's rect, gp0_state.texpage set to its page: for a run of them drawn at once (render.c gxh_bg_run) */
+void gp0_sprite16_setup(const unsigned int *t, Gp0Mode *m, Gp0Vtx *v) {
+    const unsigned int tp = t[0] & 0xFFFFFF, cmd = t[1] >> 24;
+    gp0_state.texpage = tp;
+    m->textured = 1;
+    m->raw = cmd & 1;
+    m->semi = (cmd >> 1) & 1;
+    m->gouraud = 0;
+    apply_texpage(m, tp);
+    set_clut(m, t[3]);
+    vtx(v, &t[2], t[1]);
+    v->u = t[3] & 0xFF;
+    v->v = (t[3] >> 8) & 0xFF;
+}
+
 /* gp0_tpage_sprite16's bookkeeping for n such sprites drawn at once (a field background's run, gx_hybrid.c
  * gxh_bg_run), the texture page left as the last one's */
-#ifdef PORT_FIELD_GX
+#if defined(PORT_FIELD_GX) && defined(PORT_NDS)
 __attribute__((section(".psxovl_0a.port"), noinline)) /* (its only caller is ovl_0a's) */
 #endif
 void gp0_note_sprites(unsigned int texpage, unsigned int n) {

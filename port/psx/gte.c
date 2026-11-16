@@ -12,6 +12,7 @@
 #define PORT_GTE_IMPL /* the real functions, not the inline wrappers */
 #include "gte.h"
 #include "psx_mem.h"
+#include "gte_depth.h"
 #ifdef __ARM_FEATURE_DSP
 #include <arm_acle.h>
 #endif
@@ -856,27 +857,22 @@ GTE_HOT void gte_cmd(gte_u32 op) {
 /* Depth shadow (gte.h): for each word of psx_ram the SXY word last stored there by the GTE and its depth info;
  * the scratchpad likewise, and the scratchpad's stores also by value, since projected vertices are often staged
  * there and copied into packets by the CPU. */
-/* (a word and its info side by side: a lookup reads one cache line, not one in each of two 2 MB tables, which on an
- * Old 3DS (no L2 cache) were two misses for every vertex drawn and every one stored) */
-typedef struct { u32 word, inf; } DepthSlot;
-static DepthSlot depth_tab[PSX_RAM_SIZE / 4], sp_tab[256];
-#define VALUE_SLOTS 4096
-static struct { u32 word, inf, frame; } val_tab[VALUE_SLOTS];
-/* the renderer's frame count (presents): a value entry older than 8 is stale (battles project every 4 VBlanks) */
+/* (the tables and the lookup: gte_depth.h) */
+PsxDepthSlot psx_depth_tab[PSX_RAM_SIZE / 4], psx_depth_sp_tab[256];
+PsxDepthValue psx_depth_val_tab[PSX_DEPTH_VALUE_SLOTS];
 unsigned int psx_depth_frame;
-static inline unsigned value_slot(u32 w) { return (w * 0x9E3779B1u) >> (32 - 12); }
 
 static inline void record_value(u32 w, u32 info);
 void psx_depth_record(const void *p, gte_u32 w, gte_u32 info) {
     record_value(w, info);
     uintptr_t off = (const unsigned char *)p - psx_ram;
     if (off < PSX_RAM_SIZE) {
-        depth_tab[off >> 2] = (DepthSlot){w, info};
+        psx_depth_tab[off >> 2] = (PsxDepthSlot){w, info};
         return;
     }
     off = (const unsigned char *)p - psx_scratchpad;
     if (off < 0x400) {
-        sp_tab[off >> 2] = (DepthSlot){w, info};
+        psx_depth_sp_tab[off >> 2] = (PsxDepthSlot){w, info};
     }
 }
 
@@ -884,10 +880,10 @@ void psx_depth_record(const void *p, gte_u32 w, gte_u32 info) {
  * g_vtxScreenXY) reach the packets by CPU copies */
 static inline void record_value(u32 w, u32 info) {
     if (!info) return;
-    unsigned k = value_slot(w);
-    val_tab[k].word = w;
-    val_tab[k].inf = info;
-    val_tab[k].frame = psx_depth_frame;
+    PsxDepthValue *e = &psx_depth_val_tab[psx_depth_value_slot(w)];
+    e->word = w;
+    e->inf = info;
+    e->frame = psx_depth_frame;
 }
 
 void gte_store_sxy(int reg, void *p) {
@@ -898,19 +894,5 @@ void gte_store_sxy(int reg, void *p) {
 }
 
 int psx_depth_by_value; /* (psx_depth_lookup: the last info came from the value table) */
-gte_u32 psx_depth_lookup(const gte_u32 *p) {
-    u32 w = *p;
-    psx_depth_by_value = 0;
-    uintptr_t off = (const unsigned char *)p - psx_ram;
-    if (off < PSX_RAM_SIZE) {
-        const DepthSlot *d = &depth_tab[off >> 2];
-        if (d->word == w && d->inf) return d->inf;
-    } else if ((off = (const unsigned char *)p - psx_scratchpad) < 0x400) {
-        if (sp_tab[off >> 2].word == w) return sp_tab[off >> 2].inf;
-    }
-    unsigned k = value_slot(w);
-    if (val_tab[k].word != w || psx_depth_frame - val_tab[k].frame > 8) return 0;
-    psx_depth_by_value = 1;
-    return val_tab[k].inf;
-}
+gte_u32 psx_depth_lookup(const gte_u32 *p) { return psx_depth_find(p, &psx_depth_by_value); }
 #endif
