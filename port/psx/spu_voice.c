@@ -233,14 +233,23 @@ done:
     return s;
 }
 
+/* The modulated pitch as the per-sample path computes it, then spu_source_advance's limit */
+static inline __attribute__((always_inline)) uint32_t modulated_pitch(int32_t signed_pitch, int32_t previous) {
+    uint32_t pitch = (uint16_t)((signed_pitch * (clamp_sample(previous) + 32768)) >> 15);
+    return pitch > 0x3fff ? 0x3fff : pitch;
+}
+
 /* fast_span at two ticks an output sample (psx_spu_ticks): the sample interpolated and mixed once, each tick's envelope
- * and source steps as fast_span's */
-static SPU_HOT __attribute__((noinline)) unsigned fast_span2(PsxSpuVoice *restrict voice, unsigned s, unsigned n,
+ * and source steps as fast_span's. `modulation`: the previous voice's samples, this voice's pitch modulated by them
+ * (its pitch then the sample's, both its ticks the same, as psx_spu_mix_voices_block's per-sample path) */
+static inline __attribute__((always_inline)) unsigned span2_body(PsxSpuVoice *restrict voice, unsigned s, unsigned n,
         const uint8_t *ram, int32_t (*restrict dry)[2], int32_t (*restrict send)[2], int32_t *restrict keep,
         int16_t (*restrict capture)[2], unsigned capture_channel, int fetch_off, uint32_t bit,
-        uint32_t *restrict ended, int32_t *restrict last) {
+        uint32_t *restrict ended, int32_t *restrict last, const int32_t *restrict modulation) {
     PsxSpuSource *src = &voice->source;
-    const uint32_t pitch = voice->registers[2] > 0x3fff ? 0x3fff : voice->registers[2];
+    const uint32_t register_pitch = voice->registers[2] > 0x3fff ? 0x3fff : voice->registers[2];
+    const int32_t signed_pitch = (int16_t)voice->registers[2];
+#define PITCH_AT(s) (modulation ? modulated_pitch(signed_pitch, modulation[s]) : register_pitch)
     const int32_t left = voice->volume[0].level, right = voice->volume[1].level;
     PsxSpuAdsr adsr = voice->adsr;
     uint32_t counter = src->counter;
@@ -248,10 +257,39 @@ static SPU_HOT __attribute__((noinline)) unsigned fast_span2(PsxSpuVoice *restri
     if (!src->fetched) psx_spu_source_fetch(src, ram, &voice->registers[7]);
     for (; s < n; ++s) {
         if (adsr.phase == PSX_SPU_ADSR_OFF && !fetch_off) goto done;
+        uint32_t pitch = PITCH_AT(s);
         const int steady = adsr.phase == PSX_SPU_ADSR_OFF || (adsr.phase == PSX_SPU_ADSR_SUSTAIN && !adsr.envelope.increment);
-        if (steady && !keep && !capture) {
+        /* An envelope moving, but slowly: its level changes only when its counter reaches 0x8000, and until then its
+         * increment is the same each tick (the exponential rise's adjustment is by the level). The samples whose two
+         * ticks all come before that change are steady ones too, their ticks the counter's alone: they go through the
+         * steady loop, and the counter is moved on by their ticks at once. (An Old 3DS: the voices in a long attack,
+         * decay or release took half the sound thread's time on the airship, 9.5 of 21 ms a VBlank) */
+        unsigned run_end = n;
+        uint32_t run_inc = 0;
+        int pseudo = 0;
+        if (!steady) {
+            uint32_t inc = adsr.envelope.increment;
+            const int32_t lv = adsr.level;
+            if (adsr.envelope.exponential && !adsr.envelope.decrease && lv >= 0x6000) {
+                if (adsr.envelope.rate >= 44) inc >>= 2;
+                else if (adsr.envelope.rate >= 40) inc >>= 1;
+            }
+            const int reached = adsr.phase != PSX_SPU_ADSR_SUSTAIN &&
+                                (adsr.envelope.decrease ? lv <= adsr.target : lv >= adsr.target);
+            const uint32_t c = adsr.envelope.counter;
+            if (!reached && inc <= 0x8000 && c < 0x8000) {
+                uint32_t m = n - s;
+                if (inc) {
+                    uint32_t k = (0x8000 - c + inc - 1) / inc; /* (the tick the level changes at) */
+                    if ((k - 1) / 2 < m) m = (k - 1) / 2;
+                }
+                if (m) pseudo = 1, run_end = s + m, run_inc = adsr.envelope.increment ? inc * 2 : 0;
+            }
+        }
+        if (steady || pseudo) {
             /* The envelope holds: samples to the block crossing (in either of a sample's two ticks) or the span's end,
              * nothing else per sample (fast_span's loop, two steps of the position each) */
+            const unsigned s0 = s;
             const int32_t level = adsr.level;
             const uint32_t volumes = (uint16_t)left | (uint32_t)(uint16_t)right << 16;
             const int16_t *samples = src->samples;
@@ -263,12 +301,23 @@ static SPU_HOT __attribute__((noinline)) unsigned fast_span2(PsxSpuVoice *restri
                     dry[s][0] += l, dry[s][1] += r;
                     if (send) send[s][0] += l, send[s][1] += r;
                 } else sample = 0;
+                if (keep || capture) { /* (the next voice's modulation, the capture of voices 1 and 3) */
+                    if (keep) keep[s] = sample;
+                    if (capture) capture[s][capture_channel] = clamp_sample(sample);
+                }
                 counter += pitch;
                 if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) break;
                 counter += pitch;
                 if (counter >= (PSX_SPU_BLOCK_SAMPLES << 12)) { second = 1; break; }
-                if (++s == n) goto done;
+                if (++s == run_end) {
+                    adsr.envelope.counter += run_inc * (s - s0);
+                    if (s == n) goto done;
+                    --s; /* (the outer loop's step brings it back: this sample as the envelope's) */
+                    goto next;
+                }
+                if (modulation) pitch = PITCH_AT(s);
             }
+            adsr.envelope.counter += run_inc * (s - s0 + 1); /* (the crossing's sample: both its ticks) */
             src->counter = counter - pitch;
             unsigned action = spu_source_advance(src, pitch, voice->registers[7], 0);
             if (action & PSX_SPU_SOURCE_END) *ended |= bit;
@@ -318,12 +367,30 @@ static SPU_HOT __attribute__((noinline)) unsigned fast_span2(PsxSpuVoice *restri
         }
         if (crossed && s + 1 < n && (adsr.phase != PSX_SPU_ADSR_OFF || fetch_off))
             psx_spu_source_fetch(src, ram, &voice->registers[7]);
+    next:;
     }
 done:
     src->counter = counter;
     voice->adsr = adsr;
     *last = sample;
     return s;
+#undef PITCH_AT
+}
+
+static SPU_HOT __attribute__((noinline)) unsigned fast_span2(PsxSpuVoice *restrict voice, unsigned s, unsigned n,
+        const uint8_t *ram, int32_t (*restrict dry)[2], int32_t (*restrict send)[2], int32_t *restrict keep,
+        int16_t (*restrict capture)[2], unsigned capture_channel, int fetch_off, uint32_t bit,
+        uint32_t *restrict ended, int32_t *restrict last) {
+    return span2_body(voice, s, n, ram, dry, send, keep, capture, capture_channel, fetch_off, bit, ended, last, NULL);
+}
+
+/* (An Old 3DS: the voices modulated, the airship's engine, were 4.6 ms of its 21 a VBlank in the per-sample path) */
+static SPU_HOT __attribute__((noinline)) unsigned fast_span2_modulated(PsxSpuVoice *restrict voice, unsigned s,
+        unsigned n, const uint8_t *ram, int32_t (*restrict dry)[2], int32_t (*restrict send)[2],
+        int32_t *restrict keep, int16_t (*restrict capture)[2], unsigned capture_channel, int fetch_off, uint32_t bit,
+        uint32_t *restrict ended, int32_t *restrict last, const int32_t *restrict modulation) {
+    return span2_body(voice, s, n, ram, dry, send, keep, capture, capture_channel, fetch_off, bit, ended, last,
+                      modulation);
 }
 
 /* The same arithmetic as psx_spu_mix_voices, for n consecutive samples at once: each voice runs its whole span
@@ -353,6 +420,15 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
                 if (voice->adsr.phase == PSX_SPU_ADSR_OFF && !fetch_off_voices) {
                     /* Ended inside the span: skipped from here on, as in the single-sample mixer. */
                     current[s] = sample = 0;
+                    continue;
+                }
+                if (!noisy && modulated && psx_spu_ticks == 2 && !voice->volume[0].active && !voice->volume[1].active) {
+                    unsigned profile_steady = port_profile_begin();
+                    unsigned next = fast_span2_modulated(voice, s, n, ram, out->dry, reverb ? out->reverb_send : NULL,
+                                                         keep ? current : NULL, (i == 1 || i == 3) ? out->capture : NULL,
+                                                         i >> 1, fetch_off_voices, bit, &out->ended, &sample, previous);
+                    port_profile_detail_end(PORT_PROFILE_SPU_STEADY, profile_steady);
+                    s = next - 1;
                     continue;
                 }
                 if (!noisy && !modulated && !voice->volume[0].active && !voice->volume[1].active) {
