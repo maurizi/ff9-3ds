@@ -233,6 +233,17 @@ done:
     return s;
 }
 
+/* The timers around each voice's span and each sample of the per-sample path (the profile's steady and event) only
+ * with PROFILE=3: a system tick read each, they took ~2 ms of an Old 3DS's sound thread, PROFILE=1's figures for it
+ * otherwise as much too high */
+#ifdef PORT_PROFILE_VOICES
+#define voice_profile_begin() port_profile_begin()
+#define voice_profile_end(category, start) port_profile_detail_end(category, start)
+#else
+#define voice_profile_begin() 0u
+#define voice_profile_end(category, start) ((void)(start))
+#endif
+
 /* The modulated pitch as the per-sample path computes it, then spu_source_advance's limit */
 static inline __attribute__((always_inline)) uint32_t modulated_pitch(int32_t signed_pitch, int32_t previous) {
     uint32_t pitch = (uint16_t)((signed_pitch * (clamp_sample(previous) + 32768)) >> 15);
@@ -423,24 +434,24 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
                     continue;
                 }
                 if (!noisy && modulated && psx_spu_ticks == 2 && !voice->volume[0].active && !voice->volume[1].active) {
-                    unsigned profile_steady = port_profile_begin();
+                    unsigned profile_steady = voice_profile_begin();
                     unsigned next = fast_span2_modulated(voice, s, n, ram, out->dry, reverb ? out->reverb_send : NULL,
                                                          keep ? current : NULL, (i == 1 || i == 3) ? out->capture : NULL,
                                                          i >> 1, fetch_off_voices, bit, &out->ended, &sample, previous);
-                    port_profile_detail_end(PORT_PROFILE_SPU_STEADY, profile_steady);
+                    voice_profile_end(PORT_PROFILE_SPU_STEADY, profile_steady);
                     s = next - 1;
                     continue;
                 }
                 if (!noisy && !modulated && !voice->volume[0].active && !voice->volume[1].active) {
-                    unsigned profile_steady = port_profile_begin();
+                    unsigned profile_steady = voice_profile_begin();
                     unsigned next = (psx_spu_ticks == 2 ? fast_span2 : fast_span)(voice, s, n, ram, out->dry, reverb ? out->reverb_send : NULL,
                                               keep ? current : NULL, (i == 1 || i == 3) ? out->capture : NULL,
                                               i >> 1, fetch_off_voices, bit, &out->ended, &sample);
-                    port_profile_detail_end(PORT_PROFILE_SPU_STEADY, profile_steady);
+                    voice_profile_end(PORT_PROFILE_SPU_STEADY, profile_steady);
                     s = next - 1; /* the loop's ++s: next is n, or a switched-off voice's next sample */
                     continue;
                 }
-                unsigned profile_event = port_profile_begin();
+                unsigned profile_event = voice_profile_begin();
                 if (!voice->source.fetched)
                     psx_spu_source_fetch(&voice->source, ram, &voice->registers[7]);
                 sample = 0;
@@ -473,7 +484,7 @@ SPU_HOT void psx_spu_mix_voices_block(PsxSpuVoice voices[PSX_SPU_VOICES], const 
                         psx_spu_source_fetch(&voice->source, ram, &voice->registers[7]); /* (the next tick's block) */
                 }
                 if (i == 1 || i == 3) out->capture[s][i >> 1] = clamp_sample(sample);
-                port_profile_detail_end(PORT_PROFILE_SPU_EVENT, profile_event);
+                voice_profile_end(PORT_PROFILE_SPU_EVENT, profile_event);
             }
             voice->last_sample = sample;
         }

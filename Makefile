@@ -14,6 +14,7 @@
 #                    on hardware they change that frame; an emulator draws at once, so this is how to see them there
 #   SCENARIO=path     3DS: boot straight into a scenario (docs/scenario-testing.md)
 #   PROFILE=1         3DS: frame-time and per-category timers on the bottom screen
+#   PROFILE=3         3DS: PROFILE=1 and the sound voices' timers (steady, event): ~2 ms more on an Old 3DS's sound thread
 #   DUMP_AT=N         3DS: at frame N write the VRAM mirror, shadow and textures to sdmc:/3ds/ff9/dump/
 #   SOFT=1            3DS: the software renderer, copied to the top screen by the CPU (reference)
 #   VOICELOG=1        3DS: log each dialogue line shown (its voice-pack id) and each recording played
@@ -186,7 +187,7 @@ CTRULIB   := $(DEVKITPRO)/libctru
 CTR_ARCH  := -D__3DS__ -DPORT_3DS -DPORT_GTE_DEPTH -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -marm -mword-relocations
 PORT_EXTRA_3ds := -DPORT_DISC_PACK -DPORT_SPU_WORKER -I$(DEVKITPRO)/portlibs/3ds/include -I$(DEVKITPRO)/portlibs/3ds/include/opus -I$(CTRULIB)/include \
                   $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') \
-                  $(if $(filter 1,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(DUMP_EVERY),-DPORT_DUMP_EVERY=$(DUMP_EVERY)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(PROBE_AT),-DPORT_PROBE_AT=$(PROBE_AT)) $(if $(filter 1,$(SPUSYNC)),-DPORT_SPU_SYNC) $(if $(filter 1,$(VOICELOG)),-DPORT_VOICE_LOG) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') $(if $(filter 1,$(NOOVERLAP)),-DPORT_NO_OVERLAP) $(if $(filter 1,$(HAZARD)),-DPORT_HAZARD) -I$(BUILD)/3ds/shaders
+                  $(if $(filter 1 3,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 3,$(PROFILE)),-DPORT_PROFILE_VOICES) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(DUMP_EVERY),-DPORT_DUMP_EVERY=$(DUMP_EVERY)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(PROBE_AT),-DPORT_PROBE_AT=$(PROBE_AT)) $(if $(filter 1,$(SPUSYNC)),-DPORT_SPU_SYNC) $(if $(filter 1,$(VOICELOG)),-DPORT_VOICE_LOG) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') $(if $(filter 1,$(NOOVERLAP)),-DPORT_NO_OVERLAP) $(if $(filter 1,$(HAZARD)),-DPORT_HAZARD) -I$(BUILD)/3ds/shaders
 # The world map's vertex pass in 32-bit arithmetic (exact but for overflows the game doesn't reach; the DS port's)
 PORT_ARCH_3ds_game/world_verts := -DPORT_GTE_APPROX
 # Vertex shaders (PICA200 assembly, picasso) are embedded as binaries.
