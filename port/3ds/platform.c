@@ -216,11 +216,29 @@ void plat_wait_frame(void) {
     if (frames % PORT_DUMP_EVERY == 0) {
         void ctr_render_dump_display(long);
         ctr_render_dump_display(frames);
-        /* the game's whole state as a hash (PS1 RAM and scratchpad): two builds whose frames match should match here too,
-         * a change the game can see (a value it reads back, a timing) showing at the first dump after it */
+        /* the game's whole state as a hash (PS1 RAM and scratchpad): two runs of a build match here, and a change the
+         * game can see (a value it reads back) shows at the first dump after it. (Two builds of different speed don't
+         * match yet: the disc's sectors arrive in real time, at other game frames) */
+        /* (the game's native pointers move with the build's layout: into PS1 RAM as PS1 addresses, into the program
+         * as one marker, and ordering-table links (a length byte, then 24 address bits) likewise, into PS1 RAM or the
+         * port's own packets; so the same game state hashes the same in another build) */
+        extern char __start__[], __end__[];
+        const u32 ram = (u32)(uintptr_t)psx_ram, image0 = (u32)(uintptr_t)__start__, image1 = (u32)(uintptr_t)__end__;
         u32 h = 0x811C9DC5u;
-        for (const u32 *w = (const u32 *)psx_ram; w < (const u32 *)(psx_ram + PSX_RAM_SIZE); w++) h = (h ^ *w) * 0x01000193u;
-        for (const u32 *w = (const u32 *)psx_scratchpad; w < (const u32 *)(psx_scratchpad + 0x400); w++) h = (h ^ *w) * 0x01000193u;
+        for (int part = 0; part < 2; part++) {
+            const u32 *w = part ? (const u32 *)psx_scratchpad : (const u32 *)psx_ram;
+            const u32 *end = part ? (const u32 *)(psx_scratchpad + 0x400) : (const u32 *)(psx_ram + PSX_RAM_SIZE);
+            for (; w < end; w++) {
+                u32 v = *w;
+                if (v - ram < PSX_RAM_SIZE) v = 0x80000000u + (v - ram);
+                else if (v - image0 < image1 - image0) v = 0xC0DE0000u;
+                else if ((v >> 24) && ((v & 0xFFFFFF) - ram) < PSX_RAM_SIZE && !(ram >> 24))
+                    v = (v & 0xFF000000u) | (0x800000u + ((v & 0xFFFFFF) - ram));
+                else if ((v >> 24) && ((v & 0xFFFFFF) - image0) < image1 - image0 && !(image1 >> 24))
+                    v = (v & 0xFF000000u) | 0xC0DE00u;
+                h = (h ^ v) * 0x01000193u;
+            }
+        }
         port_log("ramhash %ld %08lx\n", frames, (unsigned long)h);
     }
 #endif
