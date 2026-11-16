@@ -2558,6 +2558,35 @@ static int button_icon(const Gp0Mode *m, int u, int v, int w, int h) {
     return -1;
 }
 
+/* A clear of [x0,x1)x[y0,y1) to black the GPU just drew into the mirror: the shadow's pixels there set as a readback
+ * would read them back (black, no mask bit), and its cells current there again: those it covers whole, and those it
+ * covers in part that were current before it (their other pixels unchanged). Else each was the GPU's alone, and the
+ * movies' frames, loaded over their cleared buffer in slices narrower than a cell, read every cell back from the GPU
+ * first: 480 readbacks, each a wait for the GPU, every 128 frames of a movie on an Old 3DS. PORT_CLEAR_CHECK: the
+ * GPU's pixels read back and compared */
+static int in_window_packets(const void *p);
+static void clear_cpu(int x0, int y0, int x1, int y1, const u8 was_ok[VH / CELL][VW / CELL]) {
+    for (int y = y0; y < y1; y++) memset(psx_vram + y * VW + x0, 0, (size_t)(x1 - x0) * 2);
+    int cx0, cy0, cx1, cy1;
+    if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
+    for (int cy = cy0; cy < cy1; cy++)
+        for (int cx = cx0; cx < cx1; cx++) {
+            const int whole = cx * CELL >= x0 && (cx + 1) * CELL <= x1 && cy * CELL >= y0 && (cy + 1) * CELL <= y1;
+            shadow_ok[cy][cx] = whole || was_ok[cy][cx];
+        }
+#ifdef PORT_CLEAR_CHECK
+    gpu_sync();
+    const u16 *m = mirror_tex[0].data;
+    unsigned bad = 0;
+    for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++) bad += rgba5551_to_bgr555(m[tiled(x, y, VW)]) != psx_vram[y * VW + x];
+    static unsigned checks, failed;
+    checks++;
+    if (bad) failed++, port_log("clear check: %u of %d pixels differ in %d,%d-%d,%d\n", bad, (x1 - x0) * (y1 - y0), x0, y0, x1, y1);
+    if (checks % 100 == 0) port_log("clear check: %u clears, %u with differences\n", checks, failed);
+#endif
+}
+
 static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     if (w <= 0 || h <= 0) return;
     if (ui_mode && m->textured && ui_reads_cache(m, v->u, v->v, v->u + w - 1, v->v + h - 1)) return;
@@ -2586,6 +2615,16 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     }
     /* a sprite whose texels run past its page's edge wraps to its start (the PS1's 8-bit u, v): drawn in pieces, cut
      * where it wraps (its slot is one cell of an atlas: no wrapping texture to lean on) */
+    /* (the drawing area cleared to black (a DR_ENV's background, as the movies' 24-bit frames are before their slices
+     * are loaded over them): see clear_cpu below) */
+    const int cx0 = clampi(gp0_state.area_x0, 0, VW), cy0 = clampi(gp0_state.area_y0, 0, VH);
+    const int cx1 = clampi(gp0_state.area_x1 + 1, 0, VW), cy1 = clampi(gp0_state.area_y1 + 1, 0, VH);
+    const int clear = !m->textured && !m->semi && !(v->r | v->g | v->b) && !gp0_state.set_mask && !gp0_state.check_mask &&
+                      !ui_mode && !(menu_state != 3 && (menu_state == 2 || in_window_packets(psx_gpu_packet))) &&
+                      v->x <= cx0 && v->y <= cy0 && v->x + w >= cx1 && v->y + h >= cy1 && cx0 < cx1 && cy0 < cy1 &&
+                      (!stereo_on || (cx1 - cx0 >= 300 && cy1 - cy0 >= 200)) && !ctr_outline;
+    u8 was_ok[VH / CELL][VW / CELL];
+    if (clear) memcpy(was_ok, shadow_ok, sizeof was_ok);
     int ou = tex ? tex_ou : 0, ov = tex ? tex_ov : 0;
     for (int py = 0; py < h;) {
         int sv = (v->v + py) & 255, ph = h - py < 256 - sv ? h - py : 256 - sv;
@@ -2601,6 +2640,7 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         }
         py += ph;
     }
+    if (clear) clear_cpu(cx0, cy0, cx1, cy1, was_ok);
 }
 
 /* ---- a field background's run of tiles (port/game/field_bg.c lifts it out of the OT into a marker, which gpu.c's walk

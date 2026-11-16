@@ -18,6 +18,8 @@
 #   DUMP_AT=N         3DS: at frame N write the VRAM mirror, shadow and textures to sdmc:/3ds/ff9/dump/
 #   SOFT=1            3DS: the software renderer, copied to the top screen by the CPU (reference)
 #   VOICELOG=1        3DS: log each dialogue line shown (its voice-pack id) and each recording played
+#   CLEARCHECK=1      3DS: each drawing-area clear the CPU's VRAM copy takes over (render.c clear_cpu) compared with the
+#                     GPU's pixels, differences logged
 
 DECOMP   := decomp
 VERSION  := us
@@ -187,7 +189,7 @@ CTRULIB   := $(DEVKITPRO)/libctru
 CTR_ARCH  := -D__3DS__ -DPORT_3DS -DPORT_GTE_DEPTH -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -marm -mword-relocations
 PORT_EXTRA_3ds := -DPORT_DISC_PACK -DPORT_SPU_WORKER -DPORT_BG_RUNS -I$(DEVKITPRO)/portlibs/3ds/include -I$(DEVKITPRO)/portlibs/3ds/include/opus -I$(CTRULIB)/include \
                   $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') \
-                  $(if $(filter 1 3,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 3,$(PROFILE)),-DPORT_PROFILE_VOICES) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(DUMP_EVERY),-DPORT_DUMP_EVERY=$(DUMP_EVERY)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(PROBE_AT),-DPORT_PROBE_AT=$(PROBE_AT)) $(if $(filter 1,$(SPUSYNC)),-DPORT_SPU_SYNC) $(if $(filter 1,$(VOICELOG)),-DPORT_VOICE_LOG) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') $(if $(filter 1,$(NOOVERLAP)),-DPORT_NO_OVERLAP) $(if $(filter 1,$(HAZARD)),-DPORT_HAZARD) -I$(BUILD)/3ds/shaders
+                  $(if $(filter 1 3,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 3,$(PROFILE)),-DPORT_PROFILE_VOICES) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(DUMP_EVERY),-DPORT_DUMP_EVERY=$(DUMP_EVERY)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(PROBE_AT),-DPORT_PROBE_AT=$(PROBE_AT)) $(if $(filter 1,$(SPUSYNC)),-DPORT_SPU_SYNC) $(if $(filter 1,$(VOICELOG)),-DPORT_VOICE_LOG) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') $(if $(filter 1,$(NOOVERLAP)),-DPORT_NO_OVERLAP) $(if $(filter 1,$(HAZARD)),-DPORT_HAZARD) $(if $(filter 1,$(CLEARCHECK)),-DPORT_CLEAR_CHECK) -I$(BUILD)/3ds/shaders
 # The world map's vertex pass in 32-bit arithmetic (exact but for overflows the game doesn't reach; the DS port's)
 PORT_ARCH_3ds_game/world_verts := -DPORT_GTE_APPROX
 # Vertex shaders (PICA200 assembly, picasso) are embedded as binaries.
@@ -207,7 +209,7 @@ $(eval $(call target_rules,3ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(CTR_ARC
 .PHONY: FORCE_3DS_CONFIG
 $(BUILD)/3ds/runtime-config: FORCE_3DS_CONFIG
 	@mkdir -p $(dir $@)
-	@printf '%s\n' '$(AUTOPRESS)' '$(SCENARIO)' '$(PROFILE)' '$(SOFT)' '$(DUMP_AT)' '$(LOGUI_AT)' '$(AUTOTOUCH)' '$(PROBE_AT)' '$(DUMP_EVERY)' '$(SPUSYNC)' '$(VOICELOG)' '$(NOOVERLAP)' '$(HAZARD)' > $@.tmp
+	@printf '%s\n' '$(AUTOPRESS)' '$(SCENARIO)' '$(PROFILE)' '$(SOFT)' '$(DUMP_AT)' '$(LOGUI_AT)' '$(AUTOTOUCH)' '$(PROBE_AT)' '$(DUMP_EVERY)' '$(SPUSYNC)' '$(VOICELOG)' '$(NOOVERLAP)' '$(HAZARD)' '$(CLEARCHECK)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(3ds_PORTOBJS): $(BUILD)/3ds/runtime-config $(3ds_EXTRAOBJS)
@@ -221,7 +223,7 @@ $(BUILD)/ff9.smdh: $(BUILD)/3ds/icon.png
 	@smdhtool --create "$(APP_TITLE)" "$(APP_DESC)" "$(APP_AUTHOR)" $< $@
 # A build with any test option (scripted input, a scenario, dumps, timers...) is build/ff9-test.3dsx, never
 # build/ff9.3dsx: that one is always the game as a player gets it.
-TEST_OPTS := $(strip $(HAZARD)$(NOOVERLAP)$(AUTOPRESS)$(AUTOTOUCH)$(SCENARIO)$(PROFILE)$(SOFT)$(DUMP_AT)$(DUMP_EVERY)$(LOGUI_AT)$(PROBE_AT)$(SPUSYNC)$(VOICELOG))
+TEST_OPTS := $(strip $(HAZARD)$(NOOVERLAP)$(AUTOPRESS)$(AUTOTOUCH)$(SCENARIO)$(PROFILE)$(SOFT)$(DUMP_AT)$(DUMP_EVERY)$(LOGUI_AT)$(PROBE_AT)$(SPUSYNC)$(VOICELOG)$(CLEARCHECK))
 OUT_3DSX := $(if $(TEST_OPTS),$(BUILD)/ff9-test.3dsx,$(BUILD)/ff9.3dsx)
 # (a test build's own name in the Homebrew Launcher, never the game's: TEST_NAME="..." says which)
 TEST_NAME ?= test build

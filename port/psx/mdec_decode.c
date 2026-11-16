@@ -211,6 +211,35 @@ MDEC_ITCM int psx_mdec_macroblock(const PsxMdecEnv *e,const uint16_t *rl,size_t 
     /* Pixels are assembled here and copied out once: one bulk copy costs far less than 512 or 768 scattered
      * byte stores. Static rather than on the stack, which on the DS is the small DTCM. Not reentrant. */
     static uint8_t pixels[768] __attribute__((aligned(4)));
+    return psx_mdec_macroblock_with(e,rl,halfwords,command,out,capacity,consumed,pixels);
+}
+
+/* The halfwords psx_mdec_macroblock would consume for its macroblock, and the result it would return, without
+ * decoding: the same steps through the run-length codes (block's), for finding where each macroblock starts */
+int psx_mdec_macroblock_extent(const uint16_t *rl,size_t halfwords,uint32_t command,size_t capacity,size_t *consumed) {
+    *consumed=0;
+    unsigned depth=(command>>27)&3;
+    if ((command>>29)!=1 || depth<2) return PSX_MDEC_MODE;
+    if (capacity<(depth==2 ? 768u : 512u)) return PSX_MDEC_CAPACITY;
+    size_t at=0;
+    for (unsigned i=0;i<6;i++) {
+        unsigned first;
+        do {
+            if (at==halfwords) return PSX_MDEC_TRUNCATED;
+            first=rl[at++];
+        } while (first==0xfe00);
+        unsigned rank=0;
+        while (rank<63) {
+            if (at==halfwords) return PSX_MDEC_TRUNCATED;
+            rank+=(rl[at++]>>10)+1;
+        }
+    }
+    *consumed=at;
+    return PSX_MDEC_OK;
+}
+
+MDEC_ITCM int psx_mdec_macroblock_with(const PsxMdecEnv *e,const uint16_t *rl,size_t halfwords,
+                       uint32_t command,uint8_t *out,size_t capacity,size_t *consumed,uint8_t pixels[768]) {
     *consumed=0;
     unsigned depth=(command>>27)&3;
     if ((command>>29)!=1 || depth<2) return PSX_MDEC_MODE;

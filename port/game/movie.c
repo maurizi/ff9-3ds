@@ -318,12 +318,22 @@ static void in_skip_padding(void) {
  * a DecDCTin whose buffer or command differs decodes as before. The input buffer isn't written again before then:
  * the player VLC-decodes the next frame into its other buffer. */
 #define AHEAD_BYTES (24 * 15 * 768) /* (320x240: 20 x 15 macroblocks of 16x16 RGB24) */
+#define AHEAD_MBS (AHEAD_BYTES / 512)
+/* Both cores decode it: the worker, and the game's core whenever DecDCTout needs a macroblock not done yet (it waited
+ * for the worker there, some 15 ms a VBlank of a movie on an Old 3DS, whose worker shares its core with the sound).
+ * The worker first finds where each macroblock starts (psx_mdec_macroblock_extent: what decoding would consume,
+ * without decoding); then each core takes the next macroblock not yet taken. A macroblock decodes the same from the
+ * same input on either core, into its own place: the pixels are the same as decoded in order. */
 typedef struct {
     const u32 *buf;      /* the input buffer (VLC output: command word, then the run-length halfwords) */
-    u32 cmd;
+    u32 cmd, mb;         /* the command; bytes a macroblock */
     u8 *pixels;
-    volatile u32 done;   /* macroblocks decoded so far */
-    volatile int finished, error;
+    u32 start[AHEAD_MBS]; /* each macroblock's first halfword */
+    u32 halfwords;       /* the run-length data's */
+    u32 count;           /* macroblocks (before the input ran out, an error, or the buffer's end) */
+    volatile int scanned; /* start and count set */
+    volatile u32 next;   /* the next macroblock not yet taken by a core */
+    volatile u8 ready[AHEAD_MBS];
 } Ahead;
 static Ahead ahead;
 static int ahead_on;      /* the current DecDCTin's input is being decoded ahead */
@@ -334,25 +344,34 @@ static u32 movie_cmd(u32 word0, int mode) {
     return mode & 2 ? word0 | 0x02000000u : word0 & ~0x02000000u;
 }
 
+/* the next macroblock not yet taken, decoded with `scratch`; 0 if none was left */
+static int ahead_take(Ahead *a, u8 *scratch) {
+    const u32 i = __atomic_fetch_add(&a->next, 1, __ATOMIC_ACQ_REL);
+    if (i >= a->count) return 0;
+    const u16 *rl = (const u16 *)(a->buf + 1) + a->start[i];
+    size_t used = 0;
+    psx_mdec_macroblock_with(&env, rl, a->halfwords - a->start[i], a->cmd, a->pixels + i * a->mb, a->mb, &used, scratch);
+    __atomic_store_n(&a->ready[i], 1, __ATOMIC_RELEASE); /* (the pixels before the flag) */
+    return 1;
+}
+
 static void ahead_job(void *arg) {
+    static u8 scratch[768] __attribute__((aligned(4)));
     Ahead *a = arg;
-    const u16 *rl = (const u16 *)(a->buf + 1);
-    u32 left = (a->cmd & 0xFFFF) * 2, mb = (a->cmd & 0x08000000) ? 512 : 768, n = 0;
-    while (left) {
+    const u16 *const base = (const u16 *)(a->buf + 1), *rl = base;
+    u32 left = a->halfwords, n = 0;
+    while (left) { /* (as the macroblocks were decoded in order: the padding between them skipped, the same stops) */
         while (left && *rl == 0xFE00) rl++, left--;
-        if (!left || (n + 1) * mb > AHEAD_BYTES) break;
+        if (!left || (n + 1) * a->mb > AHEAD_BYTES) break;
         size_t used = 0;
-        if (psx_mdec_macroblock(&env, rl, left, a->cmd, a->pixels + n * mb, mb, &used) != PSX_MDEC_OK) {
-            a->error = 1;
-            break;
-        }
+        if (psx_mdec_macroblock_extent(rl, left, a->cmd, a->mb, &used) != PSX_MDEC_OK) break;
+        a->start[n++] = (u32)(rl - base);
         rl += used;
         left -= used;
-        __sync_synchronize(); /* (the pixels before the count) */
-        a->done = ++n;
     }
-    __sync_synchronize();
-    a->finished = 1;
+    a->count = n;
+    __atomic_store_n(&a->scanned, 1, __ATOMIC_RELEASE);
+    while (ahead_take(a, scratch)) {}
 }
 
 static void ahead_start(u32 *out) {
@@ -361,29 +380,36 @@ static void ahead_start(u32 *out) {
     plat_async_wait(); /* (the previous frame's job, done long ago) */
     ahead.buf = PSX_PTR(out);
     ahead.cmd = movie_cmd(ahead.buf[0], (s8)g_mbgPlayer.rgb24);
+    ahead.mb = (ahead.cmd & 0x08000000) ? 512 : 768;
+    ahead.halfwords = (ahead.cmd & 0xFFFF) * 2;
     ahead.pixels = pixels;
-    ahead.done = 0;
-    ahead.finished = ahead.error = 0;
+    ahead.count = 0;
+    ahead.scanned = 0;
+    ahead.next = 0;
+    __builtin_memset((void *)ahead.ready, 0, sizeof ahead.ready);
+    __sync_synchronize();
     if (!plat_async(ahead_job, &ahead)) ahead.buf = NULL;
 }
 
 /* An out request from the frame decoded ahead: 0 if it has fewer macroblocks than asked (input ran out). */
 static int ahead_request(u32 *dst, u32 words) {
+    static u8 scratch[768] __attribute__((aligned(4)));
     u32 mb = (in_cmd & 0x08000000) ? 512 : 768, n = words * 4 / mb;
-    while (ahead.done < ahead_taken + n && !ahead.finished) {}
-    __sync_synchronize();
-    u32 have = ahead.done - ahead_taken;
-    if (have > n) have = n;
+    while (!__atomic_load_n(&ahead.scanned, __ATOMIC_ACQUIRE)) {}
+    u32 want = ahead_taken + n;
+    if (want > ahead.count) want = ahead.count;
+    for (u32 i = ahead_taken; i < want; i++) /* (each not done yet: another one taken and decoded here meanwhile) */
+        while (!__atomic_load_n(&ahead.ready[i], __ATOMIC_ACQUIRE))
+            if (!ahead_take(&ahead, scratch)) {}
+    u32 have = want - ahead_taken;
     __builtin_memcpy(dst, ahead.pixels + ahead_taken * mb, have * mb);
     ahead_taken += have;
     if (have < n) {
         in_busy = 0;
         return 0;
     }
-    /* busy while macroblocks remain (the worker knows once it has skipped the trailing padding) */
-    while (ahead.done == ahead_taken && !ahead.finished) {}
-    __sync_synchronize();
-    in_busy = !(ahead.finished && ahead.done == ahead_taken);
+    /* busy while macroblocks remain */
+    in_busy = ahead_taken < ahead.count;
     return 1;
 }
 

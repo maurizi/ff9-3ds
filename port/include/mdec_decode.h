@@ -26,4 +26,11 @@ void psx_mdec_env_init(PsxMdecEnv *env, const uint8_t quant[128], const uint8_t 
  * No allocation or global state. Does not implement MMIO/DMA/timing. */
 int psx_mdec_macroblock(const PsxMdecEnv *env, const uint16_t *rl, size_t halfwords,
                        uint32_t command, uint8_t *pixels, size_t capacity, size_t *consumed);
+/* The same with the caller's scratch (768 bytes, 4-aligned) instead of a static one: reentrant, for decoding a frame's
+ * macroblocks on two cores at once (the clamp tables are only read once psx_mdec_env_init has filled them) */
+int psx_mdec_macroblock_with(const PsxMdecEnv *env, const uint16_t *rl, size_t halfwords, uint32_t command,
+                             uint8_t *pixels, size_t capacity, size_t *consumed, uint8_t scratch[768]);
+/* What psx_mdec_macroblock would return and consume for its macroblock, without decoding it */
+int psx_mdec_macroblock_extent(const uint16_t *rl, size_t halfwords, uint32_t command, size_t capacity,
+                               size_t *consumed);
 #endif
