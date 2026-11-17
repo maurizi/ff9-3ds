@@ -3,15 +3,20 @@
  * Unlike the original register-ABI routine, every input/output is bounded. */
 #include "movie_vlc.h"
 
-typedef struct { const uint8_t *data; unsigned bytes, bit; } Bits;
+/* (at, w: the three halfwords from byte `at` on, kept: peek's window moves to the next only every 16 bits, about every
+ * third code, and building it took three bounded reads for every code) */
+typedef struct { const uint8_t *data; unsigned bytes, bit, at; uint64_t w; } Bits;
 static unsigned le16(const uint8_t *p) {return p[0]|((unsigned)p[1]<<8);}
 static uint32_t halfword(const Bits *b, unsigned offset) {
     return offset+1<b->bytes ? le16(b->data+offset) : 0;
 }
-static uint32_t peek(const Bits *b) {
+static uint32_t peek(Bits *b) {
     unsigned offset=(b->bit/16)*2, shift=b->bit&15;
-    uint32_t word=(halfword(b,offset)<<16)|halfword(b,offset+2);
-    return shift ? (word<<shift)|(halfword(b,offset+4)>>(16-shift)) : word;
+    if (offset!=b->at) {
+        b->at=offset;
+        b->w=(uint64_t)halfword(b,offset)<<32|(uint64_t)halfword(b,offset+2)<<16|halfword(b,offset+4);
+    }
+    return (uint32_t)((b->w<<shift)>>16);
 }
 static int consume(Bits *b, unsigned n) {
     if (n>b->bytes*8-b->bit) return 0;
@@ -59,6 +64,35 @@ static int ac(Bits *b, const uint8_t *pairs, uint16_t *value, int *eob) {
     return FF9_VLC_OK;
 }
 
+/* The codes of up to 12 bits by their first 12 bits: each entry is ac's own answer for its prefix, taken where ac gives
+ * the same code (OK, at most 12 bits) whether the prefix is followed by zeros or by ones: so it depends on the prefix
+ * alone. Anything else (longer codes, escapes, errors, too few bits left) is ac's as before. Made again when the run/
+ * level pairs change. (ac's tests, every code, were most of the movies' VLC) */
+#define SHORT_BITS 12
+static struct { uint16_t value; uint8_t bits, eob; } short_codes[1u<<SHORT_BITS];
+static uint8_t short_pairs[216];
+static int short_made;
+static void short_make(const uint8_t pairs[216]) {
+    for (unsigned p=0;p<(1u<<SHORT_BITS);p++) {
+        uint8_t z[8],o[8];
+        uint16_t vz=0,vo=0;
+        int ez=0,eo=0;
+        const uint32_t hi=p<<(32-SHORT_BITS);
+        for (int k=0;k<4;k++) { /* (the stream's halfwords little-endian: the prefix, then all zeros or all ones) */
+            uint32_t wz=hi, wo=hi|((1u<<(32-SHORT_BITS))-1);
+            uint16_t hz=(uint16_t)(k==0 ? wz>>16 : k==1 ? wz : 0), ho=(uint16_t)(k==0 ? wo>>16 : k==1 ? wo : 0xFFFF);
+            z[k*2]=(uint8_t)hz,z[k*2+1]=(uint8_t)(hz>>8),o[k*2]=(uint8_t)ho,o[k*2+1]=(uint8_t)(ho>>8);
+        }
+        Bits bz={z,8,0,~0u,0},bo={o,8,0,~0u,0};
+        const int rz=ac(&bz,pairs,&vz,&ez),ro=ac(&bo,pairs,&vo,&eo);
+        short_codes[p].bits=0;
+        if (rz==FF9_VLC_OK && ro==FF9_VLC_OK && bz.bit==bo.bit && bz.bit<=SHORT_BITS && vz==vo && ez==eo)
+            short_codes[p].value=vz,short_codes[p].bits=(uint8_t)bz.bit,short_codes[p].eob=(uint8_t)ez;
+    }
+    __builtin_memcpy(short_pairs,pairs,216);
+    short_made=1;
+}
+
 int ff9_movie_vlc_v2(const uint8_t *bs, size_t bytes, const uint8_t pairs[216],
                      uint16_t *out, size_t capacity, Ff9MovieVlcInfo *info) {
     *info=(Ff9MovieVlcInfo){0};
@@ -68,7 +102,8 @@ int ff9_movie_vlc_v2(const uint8_t *bs, size_t bytes, const uint8_t pairs[216],
     unsigned total=le16(bs)*2+2, used=2, blocks=0;
     if (capacity<total) return FF9_VLC_CAPACITY;
     out[0]=le16(bs);out[1]=le16(bs+2);
-    Bits b={bs+8,(unsigned)bytes-8,0};
+    Bits b={bs+8,(unsigned)bytes-8,0,~0u,0};
+    if (!short_made || __builtin_memcmp(short_pairs,pairs,216)) short_make(pairs);
     for (;;) {
         unsigned dc=peek(&b)>>22;
         if (!consume(&b,10)) return FF9_VLC_TRUNCATED;
@@ -78,8 +113,12 @@ int ff9_movie_vlc_v2(const uint8_t *bs, size_t bytes, const uint8_t pairs[216],
         for (;;) {
             uint16_t coefficient;
             int end;
-            int result=ac(&b,pairs,&coefficient,&end);
-            if (result) return result;
+            const unsigned k=peek(&b)>>(32-SHORT_BITS),n=short_codes[k].bits;
+            if (n && n<=b.bytes*8-b.bit) b.bit+=n,coefficient=short_codes[k].value,end=short_codes[k].eob;
+            else {
+                int result=ac(&b,pairs,&coefficient,&end);
+                if (result) return result;
+            }
             if (used>=total) return FF9_VLC_CAPACITY;
             out[used++]=coefficient;
             if (end) break;
