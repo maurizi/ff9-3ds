@@ -2624,7 +2624,14 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
                       v->x <= cx0 && v->y <= cy0 && v->x + w >= cx1 && v->y + h >= cy1 && cx0 < cx1 && cy0 < cy1 &&
                       (!stereo_on || (cx1 - cx0 >= 300 && cy1 - cy0 >= 200)) && !ctr_outline;
     u8 was_ok[VH / CELL][VW / CELL];
-    if (clear) memcpy(was_ok, shadow_ok, sizeof was_ok);
+    if (clear) {
+        memcpy(was_ok, shadow_ok, sizeof was_ok);
+        /* (the cells it covers whole are black after it whatever the mirror had: not brought up to date first (gpu_draws
+         * blits a stale cell's shadow into the mirror before drawing over it): each movie frame's slices, loaded into
+         * the shadow, were blitted into the mirror only to be cleared there at the next frame) */
+        for (int cy = (cy0 + CELL - 1) / CELL; cy < cy1 / CELL; cy++)
+            for (int cx = (cx0 + CELL - 1) / CELL; cx < cx1 / CELL; cx++) mirror_ok[cy][cx] = 1;
+    }
     int ou = tex ? tex_ou : 0, ov = tex ? tex_ov : 0;
     for (int py = 0; py < h;) {
         int sv = (v->v + py) & 255, ph = h - py < 256 - sv ? h - py : 256 - sv;

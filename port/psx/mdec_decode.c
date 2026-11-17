@@ -173,6 +173,86 @@ MDEC_ITCM static void idct(const PsxMdecEnv *e,int16_t block[64],const uint8_t *
     }
 }
 
+/* The same IDCT for the standard (mirrored) matrix, dense over the block's used rows and columns: a column or row with
+ * no coefficients adds exactly zero to every sum, so taking every column below the highest used one (and every row
+ * below the highest used one) gives the same integers, in straight-line code for each width instead of loops over
+ * lists. Two passes as idct's mirrored one: the same even/odd sums, the same +131072 >> 18 and clamps. Only when one
+ * bound for the whole block (its coefficients' total, its first pass's largest result) proves every 32-bit sum fits;
+ * else 0, the block untouched, for idct. (An Old 3DS's movies: the IDCT was 6 of a VBlank's 22 ms) */
+static inline __attribute__((always_inline)) void dense_cols(const int16_t *S,const int16_t *c,int32_t *temp,
+                                                             unsigned w,const unsigned h) {
+    for (unsigned x=0;x<w;x++) {
+        int32_t cv[8],todd=0;
+#pragma GCC unroll 8
+        for (unsigned v=0;v<h;v++) cv[v]=c[v*8+x];
+#pragma GCC unroll 4
+        for (unsigned v=1;v<h;v+=2) todd+=cv[v];
+#pragma GCC unroll 4
+        for (unsigned y=0;y<4;y++) {
+            int32_t E=131072,O=0;
+#pragma GCC unroll 4
+            for (unsigned v=0;v<h;v+=2) E+=cv[v]*S[v*8+y];
+#pragma GCC unroll 4
+            for (unsigned v=1;v<h;v+=2) O+=cv[v]*S[v*8+y];
+            temp[y*8+x]=(E+O)>>18;
+            temp[(7-y)*8+x]=(E-O-todd)>>18;
+        }
+    }
+}
+static inline __attribute__((always_inline)) void dense_rows(const int16_t *S,const int32_t *temp,int16_t *block,
+                                                             const unsigned w) {
+    for (unsigned y=0;y<8;y++) {
+        const int32_t *t=&temp[y*8];
+        int32_t to=0;
+#pragma GCC unroll 4
+        for (unsigned k=1;k<w;k+=2) to+=t[k];
+#pragma GCC unroll 4
+        for (unsigned x=0;x<4;x++) {
+            int32_t E=131072,O=0;
+#pragma GCC unroll 4
+            for (unsigned k=0;k<w;k+=2) E+=t[k]*S[k*8+x];
+#pragma GCC unroll 4
+            for (unsigned k=1;k<w;k+=2) O+=t[k]*S[k*8+x];
+            block[y*8+x]=(int16_t)clamp9((E+O)>>18);
+            block[y*8+7-x]=(int16_t)clamp9((E-O-to)>>18);
+        }
+    }
+}
+MDEC_ITCM static int idct_dense(const PsxMdecEnv *e,int16_t block[64],unsigned w,unsigned h,uint32_t total) {
+    const uint64_t smax=(uint64_t)e->scale_max+1;
+    if (!FITS32(total*smax)) return 0;
+    int32_t temp[64];
+    const int16_t *S=e->scale;
+    switch (h) {
+    case 1: dense_cols(S,block,temp,w,1); break;
+    case 2: dense_cols(S,block,temp,w,2); break;
+    case 3: dense_cols(S,block,temp,w,3); break;
+    case 4: dense_cols(S,block,temp,w,4); break;
+    case 5: dense_cols(S,block,temp,w,5); break;
+    case 6: dense_cols(S,block,temp,w,6); break;
+    case 7: dense_cols(S,block,temp,w,7); break;
+    default: dense_cols(S,block,temp,w,8); break;
+    }
+    uint32_t tmax=0;
+    for (unsigned y=0;y<8;y++)
+        for (unsigned x=0;x<w;x++) {
+            const uint32_t m=(uint32_t)abs(temp[y*8+x]);
+            if (m>tmax) tmax=m;
+        }
+    if (!FITS32((uint64_t)tmax*w*smax)) return 0;
+    switch (w) {
+    case 1: dense_rows(S,temp,block,1); break;
+    case 2: dense_rows(S,temp,block,2); break;
+    case 3: dense_rows(S,temp,block,3); break;
+    case 4: dense_rows(S,temp,block,4); break;
+    case 5: dense_rows(S,temp,block,5); break;
+    case 6: dense_rows(S,temp,block,6); break;
+    case 7: dense_rows(S,temp,block,7); break;
+    default: dense_rows(S,temp,block,8); break;
+    }
+    return 1;
+}
+
 MDEC_ITCM static int block(const PsxMdecEnv *e,const uint8_t *qt,const uint16_t *rl,size_t size,
                  size_t *position,int16_t pixels[64]) {
     memset(pixels,0,64*sizeof *pixels);
@@ -187,7 +267,9 @@ MDEC_ITCM static int block(const PsxMdecEnv *e,const uint8_t *qt,const uint16_t 
     int level=signed10(first);
     int dc=q ? level*qt[0]*16+(level<0 ? 8 : level>0 ? -8 : 0) : level*32;
     pixels[0]=clamp(dc,-16384,16383);
-    if (pixels[0]) nz[count++]=0,cols|=1;
+    unsigned rows=0;
+    uint32_t total=(uint32_t)abs(pixels[0]);
+    if (pixels[0]) nz[count++]=0,cols|=1,rows|=1;
     while (rank<63) {
         if (*position==size) return PSX_MDEC_TRUNCATED;
         unsigned code=rl[(*position)++];
@@ -199,9 +281,12 @@ MDEC_ITCM static int block(const PsxMdecEnv *e,const uint8_t *qt,const uint16_t 
                                (level<0 ? 8 : level>0 ? -8 : 0) : level*32;
         unsigned at=zigzag[rank];
         int value=clamp(coefficient,-16384,16383);
-        if (value) nz[count++]=at,cols|=1u<<(at&7); /* ranks only increase: each position is written once */
+        if (value) nz[count++]=at,cols|=1u<<(at&7),rows|=1u<<(at>>3),total+=(uint32_t)abs(value); /* ranks only
+                                                                    * increase: each position is written once */
         pixels[at]=value;
     }
+    if (!count) return PSX_MDEC_OK; /* (idct's result for none: every value clamp9(131072 >> 18), 0, as it is) */
+    if (e->mirrored && idct_dense(e,pixels,32-__builtin_clz(cols),32-__builtin_clz(rows),total)) return PSX_MDEC_OK;
     idct(e,pixels,nz,count,cols);
     return PSX_MDEC_OK;
 }
