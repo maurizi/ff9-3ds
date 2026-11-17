@@ -1158,6 +1158,11 @@ static inline u16 bgr555_to_rgba5551(u16 c) {
     unsigned r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
     return (u16)(r << 11 | g << 6 | b << 1 | c >> 15);
 }
+typedef u32 __attribute__((may_alias)) u32a; /* (a word of 16-bit pixels) */
+/* two at once: (c1 << 16 | c0) -> (rgba5551(c1) << 16 | rgba5551(c0)) */
+static inline u32 bgr555x2_to_rgba5551(u32 c) {
+    return (c & 0x001F001Fu) << 11 | (c & 0x03E003E0u) << 1 | (c & 0x7C007C00u) >> 9 | (c & 0x80008000u) >> 15;
+}
 static inline u16 rgba5551_to_bgr555(u16 p) {
     return (u16)((p >> 11) | ((p >> 6) & 31) << 5 | ((p >> 1) & 31) << 10 | (p & 1) << 15);
 }
@@ -1213,9 +1218,19 @@ static void blit_run(int cx0, int cx1, int cy) {
         if (w > 256) w = 256;
         unsigned tw = pow2_at_least(w), th = pow2_at_least(h);
         u16 *px = staging_alloc(tw * th * 2);
-        for (int y = 0; y < h; y++) {
-            const u16 *src = psx_vram + (by + y) * VW + bx;
-            for (int x = 0; x < w; x++) px[tiled(x, y, tw)] = bgr555_to_rgba5551(src[x]);
+        /* tile by tile (w a multiple of 32, h 32): a tile's row y is four pairs of texels at morton_y[y] + 0, 4, 16, 20,
+         * each pair (x, x + 1) side by side, converted two at a time in a word; each texel where tiled() puts it, as
+         * bgr555_to_rgba5551 has it (a host test, every run width: the same staging bytes). Per texel through tiled()
+         * it was ~20 instructions: a movie background's frame, 70k pixels blitted every other frame */
+        for (int tx = 0; tx < w; tx += 8) {
+            u32a *t = (u32a *)(px + (tx >> 3) * 64);
+            for (int ty = 0; ty < h; ty += 8, t += (tw >> 3) * 32)
+                for (int y = 0; y < 8; y++) {
+                    const u32a *s = (const u32a *)(psx_vram + (by + ty + y) * VW + bx + tx);
+                    u32a *o = t + morton_y[y] / 2;
+                    o[0] = bgr555x2_to_rgba5551(s[0]), o[2] = bgr555x2_to_rgba5551(s[1]);
+                    o[8] = bgr555x2_to_rgba5551(s[2]), o[10] = bgr555x2_to_rgba5551(s[3]);
+                }
         }
         C3D_Tex *t = staging_tex(px, tw, th, GPU_RGBA5551);
         Vtx *v = alloc_vtx(6);
