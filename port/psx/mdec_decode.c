@@ -26,11 +26,21 @@ static inline int floor_shift(int32_t x,unsigned shift) {
  * rounding boundary at 127. */
 MDEC_DTCM_BSS static int8_t clamp9_table[512];
 MDEC_DTCM_BSS static uint8_t channel8[2][512],channel5[2][512];
+/* the colour offsets of a Cr/Cb pair (psx_mdec_macroblock_with's), by value: the IDCT's results are clamp9's, -128..127.
+ * Green's is (green_cb + green_cr + 128) >> 8, the same sum as computed whole */
+static int16_t red_cr[256],blue_cb[256];
+static int32_t green_cb[256],green_cr[256];
 static inline int clamp9(int x) {
     return clamp9_table[(unsigned)x&511];
 }
 
 void psx_mdec_env_init(PsxMdecEnv *e,const uint8_t quant[128],const uint8_t scale[128]) {
+    for (int c=-128;c<128;c++) {
+        red_cr[c+128]=(int16_t)floor_shift(359*c+128,8);
+        blue_cb[c+128]=(int16_t)floor_shift(454*c+128,8);
+        green_cb[c+128]=floor_shift(-88*c,5)*32;
+        green_cr[c+128]=floor_shift(-183*c,3)*8;
+    }
     for (int i=0;i<512;i++) {
         clamp9_table[i]=(int8_t)clamp(i>=256 ? i-512 : i,-128,127);
         for (unsigned flip=0;flip<2;flip++) {
@@ -396,31 +406,36 @@ MDEC_ITCM int psx_mdec_macroblock_with(const PsxMdecEnv *e,const uint16_t *rl,si
     unsigned signed_mode=(command&0x04000000) ? 1 : 0;
     const uint8_t *c8=channel8[signed_mode],*c5=channel5[signed_mode];
     uint16_t stp=(command&0x02000000) ? 0x8000 : 0;
+    /* (written straight into `out`: nothing fails after the blocks have decoded. The pixels went through `pixels` and a
+     * copy for the DS, whose main RAM takes scattered byte stores slowly) */
+    (void)pixels;
     for (unsigned q=0;q<4;q++) {
         const int16_t *luma=samples[2+q];
         unsigned qx=(q&1)*8,qy=(q>>1)*8;
-        for (unsigned cy=0;cy<4;cy++) for (unsigned cx=0;cx<4;cx++) {
-            unsigned ci=(qy/2+cy)*8+qx/2+cx;
-            int cr=samples[0][ci], cb=samples[1][ci];
-            int dr=floor_shift(359*cr+128,8);
-            int dg=floor_shift(floor_shift(-88*cb,5)*32+floor_shift(-183*cr,3)*8+128,8);
-            int db=floor_shift(454*cb+128,8);
-            for (unsigned dy=0;dy<2;dy++) {
-                unsigned ly=cy*2+dy, offset=(qy+ly)*16+qx+cx*2;
-                for (unsigned dx=0;dx<2;dx++,offset++) {
-                    int lum=luma[ly*8+cx*2+dx];
-                    unsigned r=(unsigned)(lum+dr)&511, g=(unsigned)(lum+dg)&511, b=(unsigned)(lum+db)&511;
+        for (unsigned cy=0;cy<4;cy++)
+#pragma GCC unroll 4
+            for (unsigned cx=0;cx<4;cx++) {
+                unsigned ci=(qy/2+cy)*8+qx/2+cx;
+                const unsigned cr=(unsigned)(samples[0][ci]+128),cb=(unsigned)(samples[1][ci]+128);
+                const int dr=red_cr[cr],dg=(green_cb[cb]+green_cr[cr]+128)>>8,db=blue_cb[cb];
+                for (unsigned dy=0;dy<2;dy++) {
+                    const unsigned ly=cy*2+dy,offset=(qy+ly)*16+qx+cx*2;
+                    const int l0=luma[ly*8+cx*2],l1=luma[ly*8+cx*2+1];
                     if (depth==2) {
-                        pixels[offset*3]=c8[r];pixels[offset*3+1]=c8[g];pixels[offset*3+2]=c8[b];
+                        uint8_t *o=out+offset*3;
+                        o[0]=c8[(unsigned)(l0+dr)&511];o[1]=c8[(unsigned)(l0+dg)&511];o[2]=c8[(unsigned)(l0+db)&511];
+                        o[3]=c8[(unsigned)(l1+dr)&511];o[4]=c8[(unsigned)(l1+dg)&511];o[5]=c8[(unsigned)(l1+db)&511];
                     } else {
-                        uint16_t color=stp|c5[r]|(unsigned)c5[g]<<5|(unsigned)c5[b]<<10;
-                        memcpy(pixels+offset*2,&color,2); /* little-endian halfword; aligned buffers get a strh */
+                        const uint16_t c0=stp|c5[(unsigned)(l0+dr)&511]|(unsigned)c5[(unsigned)(l0+dg)&511]<<5|
+                                          (unsigned)c5[(unsigned)(l0+db)&511]<<10;
+                        const uint16_t c1=stp|c5[(unsigned)(l1+dr)&511]|(unsigned)c5[(unsigned)(l1+dg)&511]<<5|
+                                          (unsigned)c5[(unsigned)(l1+db)&511]<<10;
+                        memcpy(out+offset*2,&c0,2);
+                        memcpy(out+offset*2+2,&c1,2);
                     }
                 }
             }
-        }
     }
-    memcpy(out,pixels,bytes);
     *consumed=at;
     return PSX_MDEC_OK;
 }
