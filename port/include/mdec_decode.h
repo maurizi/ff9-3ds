@@ -8,6 +8,7 @@ typedef struct {
     int16_t scale[64];   /* original uploaded matrix, frequency-major */
     uint32_t scale_max;  /* largest |scale|, for the IDCT's overflow bounds */
     int mirrored;        /* scale has the standard row symmetry (see psx_mdec_env_init) */
+    uint32_t pairs[4][4]; /* [b]: scale[a*8+b] for rows a 0|2, 4|6, 1|3, 5|7, as two halfwords (the IDCT's SMLADs) */
 } PsxMdecEnv;
 /* DS: code and tables in main RAM. ITCM goes to the renderer and SPU, which run every frame; DTCM holds the ARM9
  * stack, which deep game call chains (battles) need nearly all of. MDEC_ITCM=1 builds (benchmarks) can opt in. */

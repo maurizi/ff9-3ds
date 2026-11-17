@@ -49,6 +49,9 @@ void psx_mdec_env_init(PsxMdecEnv *e,const uint8_t quant[128],const uint8_t scal
         uint32_t m=(uint32_t)abs(e->scale[i]);
         if (m>e->scale_max) e->scale_max=m;
     }
+    static const unsigned pair_rows[4][2]={{0,2},{4,6},{1,3},{5,7}};
+    for (unsigned b=0;b<4;b++) for (unsigned j=0;j<4;j++)
+        e->pairs[b][j]=(uint16_t)e->scale[pair_rows[j][0]*8+b]|(uint32_t)(uint16_t)e->scale[pair_rows[j][1]*8+b]<<16;
     /* The standard libpress matrix: even rows symmetric, odd rows mirrored as -s-1 (rounded down). */
     e->mirrored=1;
     for (unsigned u=0;u<8;u++) for (unsigned x=0;x<4;x++) {
@@ -179,6 +182,58 @@ MDEC_ITCM static void idct(const PsxMdecEnv *e,int16_t block[64],const uint8_t *
  * lists. Two passes as idct's mirrored one: the same even/odd sums, the same +131072 >> 18 and clamps. Only when one
  * bound for the whole block (its coefficients' total, its first pass's largest result) proves every 32-bit sum fits;
  * else 0, the block untouched, for idct. (An Old 3DS's movies: the IDCT was 6 of a VBlank's 22 ms) */
+#if defined(__ARM_FEATURE_SIMD32)
+#include <arm_acle.h>
+/* two values as halfwords, the second 0 past n (an absent row or column: its product 0) */
+#define PK(v,i,j,n) ((uint32_t)(uint16_t)(v)[i]|((j)<(n) ? (uint32_t)(uint16_t)(v)[j]<<16 : 0u))
+/* The same sums by SMLAD (two 16x16 products added at once, exactly): the values as halfwords (the coefficients always
+ * fit, the first pass's results only where the block's largest does: idct_dense checks), the matrix's pairs packed by
+ * psx_mdec_env_init */
+static inline __attribute__((always_inline)) void dense_cols(const PsxMdecEnv *e,const int16_t *c,int32_t *temp,
+                                                             unsigned w,const unsigned h) {
+    for (unsigned x=0;x<w;x++) {
+        int16_t cv[8];
+#pragma GCC unroll 8
+        for (unsigned v=0;v<h;v++) cv[v]=c[v*8+x];
+        const uint32_t e0=PK(cv,0,2,h),e1=h>4 ? PK(cv,4,6,h) : 0,o0=h>1 ? PK(cv,1,3,h) : 0,o1=h>5 ? PK(cv,5,7,h) : 0;
+        int32_t todd=0;
+#pragma GCC unroll 4
+        for (unsigned v=1;v<h;v+=2) todd+=cv[v];
+#pragma GCC unroll 4
+        for (unsigned y=0;y<4;y++) {
+            const uint32_t *p=e->pairs[y];
+            int32_t E=__smlad(e0,p[0],131072),O=h>1 ? __smlad(o0,p[2],0) : 0;
+            if (h>4) E=__smlad(e1,p[1],E);
+            if (h>5) O=__smlad(o1,p[3],O);
+            temp[y*8+x]=(E+O)>>18;
+            temp[(7-y)*8+x]=(E-O-todd)>>18;
+        }
+    }
+}
+static inline __attribute__((always_inline)) void dense_rows(const PsxMdecEnv *e,const int32_t *temp,int16_t *block,
+                                                             const unsigned w) {
+    for (unsigned y=0;y<8;y++) {
+        const int32_t *t=&temp[y*8];
+        const uint32_t e0=PK(t,0,2,w),e1=w>4 ? PK(t,4,6,w) : 0,o0=w>1 ? PK(t,1,3,w) : 0,o1=w>5 ? PK(t,5,7,w) : 0;
+        int32_t to=0;
+#pragma GCC unroll 4
+        for (unsigned k=1;k<w;k+=2) to+=t[k];
+#pragma GCC unroll 4
+        for (unsigned x=0;x<4;x++) {
+            const uint32_t *p=e->pairs[x];
+            int32_t E=__smlad(e0,p[0],131072),O=w>1 ? __smlad(o0,p[2],0) : 0;
+            if (w>4) E=__smlad(e1,p[1],E);
+            if (w>5) O=__smlad(o1,p[3],O);
+            block[y*8+x]=(int16_t)clamp9((E+O)>>18);
+            block[y*8+7-x]=(int16_t)clamp9((E-O-to)>>18);
+        }
+    }
+}
+#define DENSE_ENV(e) (e)
+#define DENSE_T16 1 /* (the first pass's results must fit halfwords) */
+#else
+#define DENSE_ENV(e) ((e)->scale)
+#define DENSE_T16 0
 static inline __attribute__((always_inline)) void dense_cols(const int16_t *S,const int16_t *c,int32_t *temp,
                                                              unsigned w,const unsigned h) {
     for (unsigned x=0;x<w;x++) {
@@ -218,20 +273,20 @@ static inline __attribute__((always_inline)) void dense_rows(const int16_t *S,co
         }
     }
 }
+#endif
 MDEC_ITCM static int idct_dense(const PsxMdecEnv *e,int16_t block[64],unsigned w,unsigned h,uint32_t total) {
     const uint64_t smax=(uint64_t)e->scale_max+1;
     if (!FITS32(total*smax)) return 0;
     int32_t temp[64];
-    const int16_t *S=e->scale;
     switch (h) {
-    case 1: dense_cols(S,block,temp,w,1); break;
-    case 2: dense_cols(S,block,temp,w,2); break;
-    case 3: dense_cols(S,block,temp,w,3); break;
-    case 4: dense_cols(S,block,temp,w,4); break;
-    case 5: dense_cols(S,block,temp,w,5); break;
-    case 6: dense_cols(S,block,temp,w,6); break;
-    case 7: dense_cols(S,block,temp,w,7); break;
-    default: dense_cols(S,block,temp,w,8); break;
+    case 1: dense_cols(DENSE_ENV(e),block,temp,w,1); break;
+    case 2: dense_cols(DENSE_ENV(e),block,temp,w,2); break;
+    case 3: dense_cols(DENSE_ENV(e),block,temp,w,3); break;
+    case 4: dense_cols(DENSE_ENV(e),block,temp,w,4); break;
+    case 5: dense_cols(DENSE_ENV(e),block,temp,w,5); break;
+    case 6: dense_cols(DENSE_ENV(e),block,temp,w,6); break;
+    case 7: dense_cols(DENSE_ENV(e),block,temp,w,7); break;
+    default: dense_cols(DENSE_ENV(e),block,temp,w,8); break;
     }
     uint32_t tmax=0;
     for (unsigned y=0;y<8;y++)
@@ -239,16 +294,16 @@ MDEC_ITCM static int idct_dense(const PsxMdecEnv *e,int16_t block[64],unsigned w
             const uint32_t m=(uint32_t)abs(temp[y*8+x]);
             if (m>tmax) tmax=m;
         }
-    if (!FITS32((uint64_t)tmax*w*smax)) return 0;
+    if (!FITS32((uint64_t)tmax*w*smax) || (DENSE_T16 && tmax>32767)) return 0;
     switch (w) {
-    case 1: dense_rows(S,temp,block,1); break;
-    case 2: dense_rows(S,temp,block,2); break;
-    case 3: dense_rows(S,temp,block,3); break;
-    case 4: dense_rows(S,temp,block,4); break;
-    case 5: dense_rows(S,temp,block,5); break;
-    case 6: dense_rows(S,temp,block,6); break;
-    case 7: dense_rows(S,temp,block,7); break;
-    default: dense_rows(S,temp,block,8); break;
+    case 1: dense_rows(DENSE_ENV(e),temp,block,1); break;
+    case 2: dense_rows(DENSE_ENV(e),temp,block,2); break;
+    case 3: dense_rows(DENSE_ENV(e),temp,block,3); break;
+    case 4: dense_rows(DENSE_ENV(e),temp,block,4); break;
+    case 5: dense_rows(DENSE_ENV(e),temp,block,5); break;
+    case 6: dense_rows(DENSE_ENV(e),temp,block,6); break;
+    case 7: dense_rows(DENSE_ENV(e),temp,block,7); break;
+    default: dense_rows(DENSE_ENV(e),temp,block,8); break;
     }
     return 1;
 }
