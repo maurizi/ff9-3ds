@@ -1411,20 +1411,54 @@ static TexSlot *slot_for(u32 key, u32 twin) {
  * waited for the GPU to finish the frame so far, or the frame in flight: some 850 waits in 128 frames there, 4 ms of
  * a VBlank */
 static void hash_insert(int i);
+/* The slot taken is one at the same place in an atlas of the same size, so the page's texture coordinates stay the same
+ * to the bit: where a texture sits changes which texel a pixel near a texel's edge samples (its coordinates, the slot's
+ * place added, interpolated at the GPU's precision). A page rewritten every frame (the world map's water and CLUT
+ * cycling, Kuja's arena) went to whatever slot was free, and its pixels by texel edges changed with the place: in
+ * Azahar, slots moved by extra GPU syncs changed the world map's far ground in 24 of 43 frames; none once pages kept
+ * their places (and each its own texture: the rest of it, pages cached and given up as the camera turns, not done) */
+static int same_place(const TexSlot *r, const TexSlot *s) {
+    return r->ox == s->ox && r->oy == s->oy && atlases[r->atlas].tex.width == atlases[s->atlas].tex.width;
+}
+static TexSlot *slot_take(TexSlot *r, u32 key, u32 twin) {
+    if (r->key) hash_remove((int)(r - slots));
+    r->key = key;
+    r->twin = twin;
+    memset(r->epoch, 0, sizeof r->epoch);
+    memset(r->stamp, 0, sizeof r->stamp);
+    hash_insert((int)(r - slots));
+    return r;
+}
 static TexSlot *slot_renew(TexSlot *s) {
     u32 key = s->key, twin = s->twin;
     hash_remove((int)(s - slots));
     s->key = 0;
     s->twin = 0xFFFFFFFFu; /* (slot_for's last-hit check can't match it) */
+    /* (a free one in its place; else the longest unused there (no frame left to draw uses it); else a new one there) */
+    TexSlot *lru = NULL;
     for (int i = 0; i < nslots; i++) {
         TexSlot *r = &slots[i];
+        if (r == s || r->atlas == 0xFF || r->serial + 2 > frame_serial || !same_place(r, s)) continue;
+        if (!r->key) return slot_take(r, key, twin);
+        if (!lru || r->serial < lru->serial) lru = r;
+    }
+    if (nslots < MAX_SLOTS && slots_held_at != nslots)
+        for (int a = 0; a < natlases; a++) {
+            if (a == s->atlas || atlases[a].tex.width != atlases[s->atlas].tex.width) continue;
+            unsigned per = atlases[a].tex.width / 256, c = s->oy / 256 * per + s->ox / 256;
+            if (atlases[a].occ >> c & 1) continue;
+            atlases[a].occ |= (u16)(1u << c), atlases[a].used++;
+            TexSlot *r = &slots[nslots++];
+            cell_xy(a, (int)c, r);
+            r->key = 0, r->serial = 0;
+            ctr_render_stats[5] = nslots;
+            return slot_take(r, key, twin);
+        }
+    if (lru) return slot_take(lru, key, twin);
+    for (int i = 0; i < nslots; i++) { /* (none in its place: any free one, as before) */
+        TexSlot *r = &slots[i];
         if (r->key || r->atlas == 0xFF || r->serial + 2 > frame_serial) continue;
-        r->key = key;
-        r->twin = twin;
-        memset(r->epoch, 0, sizeof r->epoch);
-        memset(r->stamp, 0, sizeof r->stamp);
-        hash_insert(i);
-        return r;
+        return slot_take(r, key, twin);
     }
     return slot_for(key, twin);
 }
@@ -1758,8 +1792,12 @@ static int gpu_owned(int x0, int y0, int x1, int y1) {
     int cx0, cy0, cx1, cy1;
     if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return 0;
     for (int cy = cy0; cy < cy1; cy++)
-        for (int cx = cx0; cx < cx1; cx++)
+        for (int cx = cx0; cx < cx1; cx++) {
+            /* (a cell written in part (cell_cols) is the shadow's once the rest is read back, as before such cells were
+             * kept: the same texture path as then for a page sampled there) */
+            if (cell_cols[cy][cx]) readback_cells(cx, cy, cx + 1, cy + 1);
             if (!shadow_ok[cy][cx]) return 1;
+        }
     return 0;
 }
 static void submit(void);
