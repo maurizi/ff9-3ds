@@ -3859,6 +3859,13 @@ static u32 px_shadow(int x, int y, const void *ctx) {
     unsigned r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
     return (r << 3) << 16 | (g << 3) << 8 | b << 3;
 }
+#define TOP_FB_SIZE (240 * 400 * 3) /* (one eye, RGB8) */
+static u8 *top_fb[3]; /* (each: the left eye, then the right, TOP_FB_SIZE on: ctr_video_init) */
+static volatile int top_presented, top_queued;
+static u32 px_top(int x, int y, const void *ctx) { /* (a top framebuffer: BGR8, by column, bottom row first) */
+    const u8 *p = (const u8 *)ctx + (x * 240 + (239 - y)) * 3;
+    return (u32)p[2] << 16 | (u32)p[1] << 8 | p[0];
+}
 /* DUMP_EVERY=N: the displayed buffer every N frames, as dump/f<frame>.ppm (a timeline of one run) */
 static void dump_display_eye(long frame, int eye) {
     PsxDisplayInfo d;
@@ -3902,6 +3909,18 @@ void ctr_render_dump_display(long frame) {
     gpu_sync();
     dump_display_eye(frame, 0);
     if (stereo_on) dump_display_eye(frame, 1);
+    /* and the top screen as shown, each eye (f<frame>_top, _top_r): the world map's scene is drawn there from its own
+     * buffers, while the PS1's displayed one holds the navigation map (the bottom screen's); its frames were compared
+     * through that map alone */
+    for (int i = 0; i < 200 && top_queued >= 0; i++) svcSleepThread(50000); /* (this frame's copy presented) */
+    if (!top_fb[0] || top_presented < 0) return;
+    const u8 *fb = top_fb[top_presented];
+    GSPGPU_InvalidateDataCache(fb, 2 * TOP_FB_SIZE);
+    for (int eye = 0; eye < (stereo_on ? 2 : 1); eye++) {
+        char name[32];
+        snprintf(name, sizeof name, eye ? "f%06ld_top_r" : "f%06ld_top", frame);
+        write_ppm(name, 400, 240, px_top, fb + eye * TOP_FB_SIZE);
+    }
 }
 
 void ctr_render_dump(void) {
@@ -3944,8 +3963,6 @@ void ctr_render_dump(void) {
  * game a refresh most frames. With a third buffer a frame always has one that is neither shown nor about to be: the
  * copy is queued after the frame's drawing, into that one, and presented when the queue finishes (its callback, chained
  * after citro3d's), nothing waiting. */
-#define TOP_FB_SIZE (240 * 400 * 3) /* (one eye, RGB8) */
-static u8 *top_fb[3]; /* (each: the left eye, then the right, TOP_FB_SIZE on) */
 static void (*c3d_queue_done)(gxCmdQueue_s *);
 static volatile int top_shown = -1, top_presented = -1, top_queued = -1, top_queued_stereo;
 void __real_GX_BindQueue(gxCmdQueue_s *queue);
