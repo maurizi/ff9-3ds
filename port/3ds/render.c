@@ -388,6 +388,12 @@ unsigned int ctr_depth_stats[2]; /* vertices with / without GTE depth */ /* batc
 
 static u8 shadow_ok[CH][CW]; /* the shadow holds the cell's current pixels */
 static u8 mirror_ok[CH][CW]; /* the mirror (both eyes) holds them */
+/* A cell the GPU owned that CPU writes covered in part, each over its whole height: the columns written (bit i =
+ * column i), held in the shadow, the others still only in the mirror (neither side ok). Read back (those other columns
+ * only) when anything needs the cell before writes have covered it whole. A movie background's frames are loaded in
+ * slices 16 pixels wide over the field the GPU drew: each slice read its cells back first, 320 readbacks a frame,
+ * each a wait for the GPU, though the next slice wrote the rest */
+static u32 cell_cols[CH][CW];
 static u32 cell_gen[CH][CW]; /* write counter: texture blocks made from the cell are stale when it moves */
 static u32 gen_counter = 1;
 /* Cells some texture block was made from (texels or CLUT), and a counter bumped by any write to one: a texture whose
@@ -455,7 +461,18 @@ void psx_vram_touch(int x, int y, int w, int h) {
     int cx0, cy0, cx1, cy1;
     if (!cell_range(x, y, x + w, y + h, &cx0, &cy0, &cx1, &cy1)) return;
     int partial = (x % CELL) || (y % CELL) || ((x + w) % CELL && x + w < VW) || ((y + h) % CELL && y + h < VH);
-    if (partial && !filling) cpu_reads(x, y, x + w, y + h);
+    const int xe = x + w < VW ? x + w : VW, ye = y + h < VH ? y + h : VH;
+    /* (columns: every partly covered cell the shadow doesn't hold is covered over its whole height: kept in part
+     * (cell_cols), not read back) */
+    int columns = 0;
+    if (partial && !filling) {
+        columns = 1;
+        for (int cy = cy0; cy < cy1 && columns; cy++)
+            for (int cx = cx0; cx < cx1; cx++) {
+                if (!shadow_ok[cy][cx] && !(cy * CELL >= y && (cy + 1) * CELL <= ye)) { columns = 0; break; }
+            }
+        if (!columns) cpu_reads(x, y, x + w, y + h);
+    }
     gen_counter++;
     tex_epoch++;
     for (int cy = cy0; cy < cy1; cy++)
@@ -464,11 +481,18 @@ void psx_vram_touch(int x, int y, int w, int h) {
                 /* the fill is drawn into the mirror too (psx_vram_filled): both sides current where it covers a
                  * whole cell; a partly covered cell keeps the GPU's state */
                 int whole = cx * CELL >= x && (cx + 1) * CELL <= x + w && cy * CELL >= y && (cy + 1) * CELL <= y + h;
-                if (whole) mirror_ok[cy][cx] = 1, shadow_ok[cy][cx] = !fill_kept; /* (kept: the CPU's copy not filled) */
+                if (whole) mirror_ok[cy][cx] = 1, shadow_ok[cy][cx] = !fill_kept, cell_cols[cy][cx] = 0; /* (kept: the CPU's copy not filled) */
                 else if (!shadow_ok[cy][cx]) { /* (the shadow part is updated too, but other pixels are stale) */ }
+            } else if (columns && !shadow_ok[cy][cx]) {
+                const int a = x > cx * CELL ? x - cx * CELL : 0, b = xe < (cx + 1) * CELL ? xe - cx * CELL : CELL;
+                const u32 cols = cell_cols[cy][cx] | (b - a == 32 ? ~0u : ((1u << (b - a)) - 1) << a);
+                if (cols == ~0u) shadow_ok[cy][cx] = 1, cell_cols[cy][cx] = 0;
+                else cell_cols[cy][cx] = cols;
+                mirror_ok[cy][cx] = 0;
             } else {
                 shadow_ok[cy][cx] = 1;
                 mirror_ok[cy][cx] = 0;
+                cell_cols[cy][cx] = 0;
             }
             cell_gen[cy][cx] = gen_counter;
         }
@@ -1208,6 +1232,9 @@ static void blit_run(int cx0, int cx1, int cy) {
 static void blit_cells(int cx0, int cy0, int cx1, int cy1) {
     trace("blit_cells", cx0 | cy0 << 8, cx1 | cy1 << 8);
     if (!psx_vram) return;
+    for (int cy = cy0; cy < cy1; cy++) /* (a cell written in part: the rest read back first) */
+        for (int cx = cx0; cx < cx1; cx++)
+            if (cell_cols[cy][cx]) readback_cells(cx, cy, cx + 1, cy + 1);
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1;) {
             if (mirror_ok[cy][cx]) { cx++; continue; }
@@ -1228,11 +1255,14 @@ static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
             if (shadow_ok[cy][cx]) continue;
+            const u32 kept = cell_cols[cy][cx]; /* (columns the CPU wrote since: not the mirror's) */
             for (int y = cy * CELL; y < (cy + 1) * CELL; y++) {
                 u16 *dst = psx_vram + y * VW;
-                for (int x = cx * CELL; x < (cx + 1) * CELL; x++) dst[x] = rgba5551_to_bgr555(m[tiled(x, y, VW)]);
+                for (int x = cx * CELL; x < (cx + 1) * CELL; x++)
+                    if (!(kept >> (x - cx * CELL) & 1)) dst[x] = rgba5551_to_bgr555(m[tiled(x, y, VW)]);
             }
             shadow_ok[cy][cx] = 1;
+            cell_cols[cy][cx] = 0;
         }
     ctr_render_stats[3]++;
 }
@@ -2573,6 +2603,7 @@ static void clear_cpu(int x0, int y0, int x1, int y1, const u8 was_ok[VH / CELL]
         for (int cx = cx0; cx < cx1; cx++) {
             const int whole = cx * CELL >= x0 && (cx + 1) * CELL <= x1 && cy * CELL >= y0 && (cy + 1) * CELL <= y1;
             shadow_ok[cy][cx] = whole || was_ok[cy][cx];
+            if (whole) cell_cols[cy][cx] = 0;
         }
 #ifdef PORT_CLEAR_CHECK
     gpu_sync();
@@ -2630,7 +2661,7 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
          * blits a stale cell's shadow into the mirror before drawing over it): each movie frame's slices, loaded into
          * the shadow, were blitted into the mirror only to be cleared there at the next frame) */
         for (int cy = (cy0 + CELL - 1) / CELL; cy < cy1 / CELL; cy++)
-            for (int cx = (cx0 + CELL - 1) / CELL; cx < cx1 / CELL; cx++) mirror_ok[cy][cx] = 1;
+            for (int cx = (cx0 + CELL - 1) / CELL; cx < cx1 / CELL; cx++) mirror_ok[cy][cx] = 1, cell_cols[cy][cx] = 0;
     }
     int ou = tex ? tex_ou : 0, ov = tex ? tex_ov : 0;
     for (int py = 0; py < h;) {
@@ -4059,6 +4090,7 @@ void ctr_video_init(void) {
     /* the mirror starts as the shadow does: black, and current */
     memset(shadow_ok, 1, sizeof shadow_ok);
     memset(mirror_ok, 0, sizeof mirror_ok);
+    memset(cell_cols, 0, sizeof cell_cols);
     gp0_backend = &pica_backend;
     if (mirror_depth) C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
     port_log("renderer: PICA200, %u KB linear, %u KB VRAM free%s%s\n", (unsigned)(linearSpaceFree() >> 10),
