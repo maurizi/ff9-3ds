@@ -32,9 +32,6 @@ __attribute__((weak)) int plat_async(void (*fn)(void *), void *arg) { (void)fn; 
 __attribute__((weak)) void plat_async_wait(void) {}
 __attribute__((weak)) int plat_async_busy(void) { return 0; }
 static void ahead_start(u32 *out);
-extern unsigned long long svcGetSystemTick(void);
-volatile unsigned long long ctr_mv[8];
-static volatile int mv_on_worker;
 static int ahead_vlc_start(const u8 *bs, u32 bytes, u32 *out);
 static void vlc_flush(void);
 static void vlc_report(int r) {
@@ -361,21 +358,11 @@ static int ahead_take(Ahead *a, u8 *scratch) {
     const u16 *rl = (const u16 *)(a->src + 1) + a->start[i];
     size_t used = 0;
     psx_mdec_macroblock_with(&env, rl, a->halfwords - a->start[i], a->cmd, a->pixels + i * a->mb, a->mb, &used, scratch);
-    ctr_mv[mv_on_worker ? 5 : 4]++;
     __atomic_store_n(&a->ready[i], 1, __ATOMIC_RELEASE); /* (the pixels before the flag) */
     return 1;
 }
 
-static void ahead_job_body(void *arg);
 static void ahead_job(void *arg) {
-    unsigned long long t0 = svcGetSystemTick();
-    mv_on_worker = 1;
-    ahead_job_body(arg);
-    mv_on_worker = 0;
-    ctr_mv[3] += svcGetSystemTick() - t0;
-    ctr_mv[6]++;
-}
-static void ahead_job_body(void *arg) {
     static u8 scratch[768] __attribute__((aligned(4)));
     Ahead *a = arg;
     const u16 *const base = (const u16 *)(a->src + 1), *rl = base;
@@ -484,16 +471,12 @@ static void vlc_flush(void) {
 static int ahead_request(u32 *dst, u32 words) {
     static u8 scratch[768] __attribute__((aligned(4)));
     u32 mb = (in_cmd & 0x08000000) ? 512 : 768, n = words * 4 / mb;
-    unsigned long long t0 = svcGetSystemTick();
     while (!__atomic_load_n(&ahead.scanned, __ATOMIC_ACQUIRE)) {}
-    unsigned long long t1 = svcGetSystemTick();
-    ctr_mv[0] += t1 - t0;
     u32 want = ahead_taken + n;
     if (want > ahead.count) want = ahead.count;
     for (u32 i = ahead_taken; i < want; i++) /* (each not done yet: another one taken and decoded here meanwhile) */
         while (!__atomic_load_n(&ahead.ready[i], __ATOMIC_ACQUIRE))
             if (!ahead_take(&ahead, scratch)) {}
-    ctr_mv[1] += svcGetSystemTick() - t1;
     u32 have = want - ahead_taken;
     __builtin_memcpy(dst, ahead.pixels + ahead_taken * mb, have * mb);
     ahead_taken += have;
