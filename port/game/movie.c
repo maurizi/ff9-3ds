@@ -32,6 +32,19 @@ __attribute__((weak)) int plat_async(void (*fn)(void *), void *arg) { (void)fn; 
 __attribute__((weak)) void plat_async_wait(void) {}
 __attribute__((weak)) int plat_async_busy(void) { return 0; }
 static void ahead_start(u32 *out);
+extern unsigned long long svcGetSystemTick(void);
+volatile unsigned long long ctr_mv[8];
+static volatile int mv_on_worker;
+static int ahead_vlc_start(const u8 *bs, u32 bytes, u32 *out);
+static void vlc_flush(void);
+static void vlc_report(int r) {
+    if (r != FF9_VLC_OK) {
+        static int reported;
+        if (!reported++) {
+            port_log("movie: VLC error %d at frame %d\n", r, g_mbgFrame);
+        }
+    }
+}
 
 /* ---- transcoded frames -------------------------------------------------------------------------------------- */
 
@@ -142,16 +155,12 @@ void o64_mbg_vlcDecode(u8 *bs, u32 *out, void *table) {
     if (bytes > 18336) {
         bytes = 18336;
     }
+    if (ahead_vlc_start(bs, bytes, out)) return; /* (the VLC too on the other core: ahead_vlc_start) */
     Ff9MovieVlcInfo info;
     unsigned int t = port_profile_begin();
     int r = ff9_movie_vlc_v2(bs, bytes & ~1u, (const u8 *)g_mbgVlcPairs, (u16 *)out, 0x10000 / 2, &info);
     port_profile_detail_end(PORT_PROFILE_MOVIE_VLC, t);
-    if (r != FF9_VLC_OK) {
-        static int reported;
-        if (!reported++) {
-            port_log("movie: VLC error %d at frame %d\n", r, g_mbgFrame);
-        }
-    }
+    vlc_report(r);
     ahead_start(out);
 }
 
@@ -326,6 +335,7 @@ static void in_skip_padding(void) {
  * same input on either core, into its own place: the pixels are the same as decoded in order. */
 typedef struct {
     const u32 *buf;      /* the input buffer (VLC output: command word, then the run-length halfwords) */
+    const u32 *src;      /* where its data is read: buf, or the VLC's own buffer (ahead_vlc_start) */
     u32 cmd, mb;         /* the command; bytes a macroblock */
     u8 *pixels;
     u32 start[AHEAD_MBS]; /* each macroblock's first halfword */
@@ -348,17 +358,27 @@ static u32 movie_cmd(u32 word0, int mode) {
 static int ahead_take(Ahead *a, u8 *scratch) {
     const u32 i = __atomic_fetch_add(&a->next, 1, __ATOMIC_ACQ_REL);
     if (i >= a->count) return 0;
-    const u16 *rl = (const u16 *)(a->buf + 1) + a->start[i];
+    const u16 *rl = (const u16 *)(a->src + 1) + a->start[i];
     size_t used = 0;
     psx_mdec_macroblock_with(&env, rl, a->halfwords - a->start[i], a->cmd, a->pixels + i * a->mb, a->mb, &used, scratch);
+    ctr_mv[mv_on_worker ? 5 : 4]++;
     __atomic_store_n(&a->ready[i], 1, __ATOMIC_RELEASE); /* (the pixels before the flag) */
     return 1;
 }
 
+static void ahead_job_body(void *arg);
 static void ahead_job(void *arg) {
+    unsigned long long t0 = svcGetSystemTick();
+    mv_on_worker = 1;
+    ahead_job_body(arg);
+    mv_on_worker = 0;
+    ctr_mv[3] += svcGetSystemTick() - t0;
+    ctr_mv[6]++;
+}
+static void ahead_job_body(void *arg) {
     static u8 scratch[768] __attribute__((aligned(4)));
     Ahead *a = arg;
-    const u16 *const base = (const u16 *)(a->buf + 1), *rl = base;
+    const u16 *const base = (const u16 *)(a->src + 1), *rl = base;
     u32 left = a->halfwords, n = 0;
     while (left) { /* (as the macroblocks were decoded in order: the padding between them skipped, the same stops) */
         while (left && *rl == 0xFE00) rl++, left--;
@@ -374,15 +394,15 @@ static void ahead_job(void *arg) {
     while (ahead_take(a, scratch)) {}
 }
 
+static u8 ahead_pixels[AHEAD_BYTES] __attribute__((aligned(32)));
 static void ahead_start(u32 *out) {
-    static u8 pixels[AHEAD_BYTES] __attribute__((aligned(32)));
     if (fv_now || fv_mbg) return;
     plat_async_wait(); /* (the previous frame's job, done long ago) */
-    ahead.buf = PSX_PTR(out);
+    ahead.buf = ahead.src = PSX_PTR(out);
     ahead.cmd = movie_cmd(ahead.buf[0], (s8)g_mbgPlayer.rgb24);
     ahead.mb = (ahead.cmd & 0x08000000) ? 512 : 768;
     ahead.halfwords = (ahead.cmd & 0xFFFF) * 2;
-    ahead.pixels = pixels;
+    ahead.pixels = ahead_pixels;
     ahead.count = 0;
     ahead.scanned = 0;
     ahead.next = 0;
@@ -391,16 +411,89 @@ static void ahead_start(u32 *out) {
     if (!plat_async(ahead_job, &ahead)) ahead.buf = NULL;
 }
 
+/* The frame's VLC on the other core as well, before its macroblocks (ahead_job): the player's mbg_vlcDecode returns at
+ * once. On the PS1 the CPU expands frame N+1 while the MDEC decodes frame N; here the game's core did it (2.2 ms of a
+ * VBlank of field 1464's movie background on an Old 3DS) while the worker, done with frame N, waited for it: that core
+ * had as much time to spare. Its input is copied first (the player frees the frame's ring slot when the call returns),
+ * and it expands into a buffer of its own: the frame's DecDCTin waits for it and copies what it wrote into the player's
+ * buffer, so the game's memory is only written on the game's core, before anything reads it (a movie stopped before
+ * then leaves it as it was). */
+#define VLC_SRC_MAX 18336 /* (o64_mbg_vlcDecode's bound) */
+static struct {
+    u8 src[VLC_SRC_MAX] __attribute__((aligned(4)));
+    u32 bytes;
+    u32 *out;
+    int rgb24;
+    volatile int done, r;
+    u32 dst[0x10000 / 4]; /* (the VLC's output: o64_mbg_vlcDecode's capacity) */
+    u32 halfwords;        /* ... as much as it wrote */
+} vlc_ahead;
+static void ahead_vlc_job(void *arg) {
+    Ff9MovieVlcInfo info;
+    unsigned int t = port_profile_begin();
+    info.halfwords = 0;
+    vlc_ahead.r = ff9_movie_vlc_v2(vlc_ahead.src, vlc_ahead.bytes & ~1u, (const u8 *)g_mbgVlcPairs, (u16 *)vlc_ahead.dst,
+                                   0x10000 / 2, &info);
+    /* (on an error, its partial output: all of the buffer, as written in place it would be partly there) */
+    vlc_ahead.halfwords = vlc_ahead.r == FF9_VLC_OK && info.halfwords <= 0x10000 / 2 ? info.halfwords : 0x10000 / 2;
+    port_profile_detail_end(PORT_PROFILE_MOVIE_VLC, t);
+    /* (ahead_start's, from the data now there) */
+    ahead.cmd = movie_cmd(ahead.src[0], vlc_ahead.rgb24);
+    ahead.mb = (ahead.cmd & 0x08000000) ? 512 : 768;
+    ahead.halfwords = (ahead.cmd & 0xFFFF) * 2;
+    __atomic_store_n(&vlc_ahead.done, 1, __ATOMIC_RELEASE);
+    ahead_job(arg);
+}
+static int ahead_vlc_start(const u8 *bs, u32 bytes, u32 *out) {
+    if (fv_now || fv_mbg || bytes > VLC_SRC_MAX) return 0;
+    vlc_flush(); /* (the previous frame's job, done long ago; its data DecDCTin'd: nothing to copy) */
+    __builtin_memcpy(vlc_ahead.src, bs, bytes);
+    vlc_ahead.bytes = bytes;
+    vlc_ahead.out = out;
+    vlc_ahead.rgb24 = (s8)g_mbgPlayer.rgb24;
+    vlc_ahead.done = 0;
+    ahead.buf = PSX_PTR(out);
+    ahead.src = vlc_ahead.dst;
+    ahead.cmd = ~0u; /* (until the VLC is done: no DecDCTin matches it before it waits) */
+    ahead.pixels = ahead_pixels;
+    ahead.count = 0;
+    ahead.scanned = 0;
+    ahead.next = 0;
+    __builtin_memset((void *)ahead.ready, 0, sizeof ahead.ready);
+    __sync_synchronize();
+    if (plat_async(ahead_vlc_job, &ahead)) return 1;
+    ahead.buf = NULL;
+    return 0;
+}
+/* a DecDCTin of `buf`: the VLC decoding into it on the other core done first and copied there (its error, if any,
+ * reported) */
+static void vlc_wait(const u32 *buf) {
+    if (!vlc_ahead.out || (const u32 *)PSX_PTR(vlc_ahead.out) != buf) return;
+    while (!__atomic_load_n(&vlc_ahead.done, __ATOMIC_ACQUIRE)) {}
+    __builtin_memcpy((u32 *)buf, vlc_ahead.dst, vlc_ahead.halfwords * 2);
+    vlc_report(vlc_ahead.r);
+    vlc_ahead.out = NULL;
+}
+/* the other core's job done, and a frame it expanded copied into the player's buffer if no DecDCTin took it */
+static void vlc_flush(void) {
+    plat_async_wait();
+    if (vlc_ahead.out) vlc_wait((const u32 *)PSX_PTR(vlc_ahead.out));
+}
+
 /* An out request from the frame decoded ahead: 0 if it has fewer macroblocks than asked (input ran out). */
 static int ahead_request(u32 *dst, u32 words) {
     static u8 scratch[768] __attribute__((aligned(4)));
     u32 mb = (in_cmd & 0x08000000) ? 512 : 768, n = words * 4 / mb;
+    unsigned long long t0 = svcGetSystemTick();
     while (!__atomic_load_n(&ahead.scanned, __ATOMIC_ACQUIRE)) {}
+    unsigned long long t1 = svcGetSystemTick();
+    ctr_mv[0] += t1 - t0;
     u32 want = ahead_taken + n;
     if (want > ahead.count) want = ahead.count;
     for (u32 i = ahead_taken; i < want; i++) /* (each not done yet: another one taken and decoded here meanwhile) */
         while (!__atomic_load_n(&ahead.ready[i], __ATOMIC_ACQUIRE))
             if (!ahead_take(&ahead, scratch)) {}
+    ctr_mv[1] += svcGetSystemTick() - t1;
     u32 have = want - ahead_taken;
     __builtin_memcpy(dst, ahead.pixels + ahead_taken * mb, have * mb);
     ahead_taken += have;
@@ -442,6 +535,8 @@ static int decode_request(u32 *dst, u32 words) {
 
 int o64_DecDCTReset(int mode) {
     plat_async_wait();
+    if (mode == 0) vlc_ahead.out = NULL; /* (a new movie: the last one's buffers may be anything's now) */
+    else vlc_flush();
     ahead.buf = NULL;
     ahead_on = 0;
     if (mode == 0) {
@@ -463,6 +558,7 @@ int o64_DecDCTReset(int mode) {
 
 int o64_DecDCTin(u32 *buf, int mode) {
     buf = PSX_PTR(buf);
+    vlc_wait(buf);
     u32 frame = fv_frame_of[in_buffer(buf)];
     fv_mbg = frame && movie_fv_mbg_active();
     fv_now = frame && (movie_fv_active() || fv_mbg);
@@ -551,7 +647,9 @@ s32 o64_DecDCToutSync(s32 mode) {
 
 void o64_DecDCToutCallback(void (*func)()) {
     out_cb = (void (*)(void))func;
-    if (!func) { movie_fv_stop(); movie_fv_mbg_stop(); } /* (mbg_stop) */
+    /* (mbg_stop: a frame expanded on the other core and not yet DecDCTin'd copied into the player's buffer now, while
+     * it is still the player's, as the VLC in place had written it) */
+    if (!func) { vlc_flush(); movie_fv_stop(); movie_fv_mbg_stop(); }
 }
 
 void o64_DecDCTinCallback(void (*func)()) {
