@@ -237,7 +237,10 @@ void plat_wait_frame(void) {
     if ((s32)(now - next_vblank) < 0) {
         unsigned int w = port_profile_wait_begin();
         ctr_vblank_waits++;
-        while ((s32)(C3D_FrameCounter(0) - next_vblank) < 0) gspWaitForVBlank();
+        /* (the wait used for a movie's macroblocks decoded ahead, one at a time, while there are any: movie.c) */
+        int port_idle_step(void);
+        while ((s32)(C3D_FrameCounter(0) - next_vblank) < 0)
+            if (!port_idle_step()) gspWaitForVBlank();
         port_profile_wait_end(w);
     } else {
         ctr_vblank_skips++;

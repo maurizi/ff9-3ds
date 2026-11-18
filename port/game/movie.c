@@ -362,6 +362,16 @@ static int ahead_take(Ahead *a, u8 *scratch) {
     return 1;
 }
 
+/* One macroblock of the frame being decoded ahead, not yet taken, decoded on the game's core: 0 if none (no frame
+ * ahead, or all taken). For the game's waits for a VBlank (the 3DS's plat_wait_frame): a movie behind a field (15 frames
+ * a second, the game 30) put the game core's share of a frame's macroblocks into every other game frame, which then ran
+ * late, while the one between finished early and waited (an Old 3DS, field 1464). A macroblock is some 0.1 ms there */
+int port_idle_step(void) {
+    static u8 scratch[768] __attribute__((aligned(4)));
+    if (!ahead.buf || !__atomic_load_n(&ahead.scanned, __ATOMIC_ACQUIRE)) return 0;
+    return ahead_take(&ahead, scratch);
+}
+
 static void ahead_job(void *arg) {
     static u8 scratch[768] __attribute__((aligned(4)));
     Ahead *a = arg;
