@@ -708,12 +708,13 @@ static inline int replaces(const RunGroup *g) {
     return g->abr == NO_BLEND && !(g->mask & MASK_CHECK) && (g->kind == K_TEX || g->kind == K_TEX_P1 || g->kind == K_UNTEX);
 }
 
-static void run_put(int i, const Vtx *v, unsigned n) {
+/* room for a primitive's n vertices in group i, and its depth value (*d): the caller writes them, each with d */
+static inline Vtx *run_take(int i, unsigned n, float *d) {
     Vtx *o = vb + run_at[i] + run_g[i].nv;
-    const float d = run_d0 + (float)run_prims;
-    for (unsigned k = 0; k < n; k++) o[k] = v[k], o[k].d = d;
+    *d = run_d0 + (float)run_prims;
     run_g[i].nv += n;
     run_prims++;
+    return o;
 }
 
 static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
@@ -736,6 +737,28 @@ static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
     run_n = i + 1;
 }
 
+/* where a primitive's n vertices go in the run (cur_target 0, n <= RUN_V, mirror_depth: run_add's case), *d their
+ * depth value */
+static Vtx *run_slot(int kind, int abr, const u16 sc[4], C3D_Tex *tex, unsigned n, float *d) {
+    if (run_n && run_prims >= run_max) run_flush();
+    if (run_n) {
+        int last = run_n - 1;
+        if (run_same(&run_g[last], kind, abr, sc, tex) && run_g[last].nv + n <= run_cap[last]) return run_take(last, n, d);
+        for (int i = 0; i < last; i++)
+            if (run_same(&run_g[i], kind, abr, sc, tex) && replaces(&run_g[i]) && run_g[i].nv + n <= run_cap[i]) {
+                ctr_run_reorders++;
+                return run_take(i, n, d);
+            }
+        if (run_n < RUN_GROUPS) {
+            run_open(run_n, kind, abr, sc, tex);
+            return run_take(run_n - 1, n, d);
+        }
+        run_flush();
+    }
+    run_open(0, kind, abr, sc, tex);
+    return run_take(0, n, d);
+}
+
 /* a primitive into the mirror (triangles) */
 static void run_add(int kind, int abr, const u16 sc[4], C3D_Tex *tex, const Vtx *v, unsigned n) {
     if (cur_target != 0 || n > RUN_V || !mirror_depth) {
@@ -745,28 +768,9 @@ static void run_add(int kind, int abr, const u16 sc[4], C3D_Tex *tex, const Vtx 
         add_batch(kind, abr, 3, sc, tex, o - vb, n);
         return;
     }
-    if (run_n && run_prims >= run_max) run_flush();
-    if (run_n) {
-        int last = run_n - 1;
-        if (run_same(&run_g[last], kind, abr, sc, tex) && run_g[last].nv + n <= run_cap[last]) {
-            run_put(last, v, n);
-            return;
-        }
-        for (int i = 0; i < last; i++)
-            if (run_same(&run_g[i], kind, abr, sc, tex) && replaces(&run_g[i]) && run_g[i].nv + n <= run_cap[i]) {
-                run_put(i, v, n);
-                ctr_run_reorders++;
-                return;
-            }
-        if (run_n < RUN_GROUPS) {
-            run_open(run_n, kind, abr, sc, tex);
-            run_put(run_n - 1, v, n);
-            return;
-        }
-        run_flush();
-    }
-    run_open(0, kind, abr, sc, tex);
-    run_put(0, v, n);
+    float d;
+    Vtx *o = run_slot(kind, abr, sc, tex, n, &d);
+    for (unsigned k = 0; k < n; k++) o[k] = v[k], o[k].d = d;
 }
 
 static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n) {
@@ -1312,6 +1316,8 @@ typedef struct {
     u8 flags[64];  /* per block: 1 = has opaque texels, 2 = has semi-transparent ones */
     u32 hash[64];  /* per block: its source texels' hash when converted */
     u32 chash[64]; /* ... and its CLUT's */
+    u64 cur;       /* blocks known current (stamp set, epoch == cur_epoch): texture_for's test of them at once */
+    u32 cur_epoch;
 } TexSlot;
 
 #define MAX_SLOTS 96
@@ -1413,6 +1419,7 @@ static TexSlot *slot_for(u32 key, u32 twin) {
     s->key = key;
     s->twin = twin;
     memset(s->epoch, 0, sizeof s->epoch);
+    s->cur = 0;
     unsigned h = hash_of(key, twin);
     while (slot_hash[h]) h = (h + 1) & (SLOT_HASH - 1);
     slot_hash[h] = (u16)(victim + 1);
@@ -1441,6 +1448,7 @@ static TexSlot *slot_take(TexSlot *r, u32 key, u32 twin) {
     r->twin = twin;
     memset(r->epoch, 0, sizeof r->epoch);
     memset(r->stamp, 0, sizeof r->stamp);
+    r->cur = 0;
     hash_insert((int)(r - slots));
     return r;
 }
@@ -1915,11 +1923,27 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
     }
     TexSlot *s = slot_for(key, twin);
     unsigned f = 0;
-    for (int by = by0; by <= by1; by++)
-        for (int bx = bx0; bx <= bx1; bx++) {
-            if (convert_block(s, m, bx, by)) { s = slot_renew(s), f = 0, by = by0, bx = bx0 - 1; continue; }
-            f |= s->flags[by * 8 + bx];
-        }
+    /* (the blocks wanted, as a mask: when every one is known current, convert_block's first test for each at once.
+     * Nearly every lookup misses the one before (a model's faces alternate between pages, CLUTs and blocks)) */
+    const u64 row = (u64)(((2u << bx1) - 1) & ~((1u << bx0) - 1));
+    u64 want = 0;
+    for (int by = by0; by <= by1; by++) want |= row << (by * 8);
+    if (s->cur_epoch == tex_epoch && !(want & ~s->cur)) {
+        for (int by = by0; by <= by1; by++)
+            for (int bx = bx0; bx <= bx1; bx++) f |= s->flags[by * 8 + bx];
+    } else {
+        for (int by = by0; by <= by1; by++)
+            for (int bx = bx0; bx <= bx1; bx++) {
+                if (convert_block(s, m, bx, by)) { s = slot_renew(s), f = 0, by = by0, bx = bx0 - 1; continue; }
+                f |= s->flags[by * 8 + bx];
+            }
+        if (s->cur_epoch != tex_epoch) s->cur = 0, s->cur_epoch = tex_epoch;
+        for (int by = by0; by <= by1; by++) /* (each checked: a conversion may have moved the epoch on) */
+            for (int bx = bx0; bx <= bx1; bx++) {
+                const int b = by * 8 + bx;
+                if (s->stamp[b] && s->epoch[b] == tex_epoch) s->cur |= (u64)1 << b;
+            }
+    }
     s->serial = frame_serial;
     *flags = f;
     tex_ou = s->ox, tex_ov = s->oy;
@@ -2172,6 +2196,7 @@ static int ui_layer_for(int x, int y, int clear);
 int ctr_keep_layers; /* the UI layers are kept by their owner (the rewards under a battle): no restart, no staleness */
 static int ui_packet(void);
 static int flat_packet(void);
+static int in_window_packets(const void *p);
 extern int ctr_outline;
 static int model_packet(void);
 static int model_index(void);
@@ -2404,8 +2429,76 @@ static void grow_ring(Vtx *t, int n, const int *r, float d) {
     for (int k = 0; k < n; k++) t[r[k]].x += ox[k], t[r[k]].y += oy[k];
 }
 
+/* A polygon in the plain case: into the scene's mirror in 2D (no UI list or layer, no menu, no outlines, not the world
+ * map), as r_poly and emit draw it there: the same vertices, passes, batches and depth values, without their general
+ * cases. Each vertex is made once and written where the run keeps it (it went through make_vtx, a copy per triangle
+ * and one into the run: on an Old 3DS, where this path is bound by its instructions, some 14 us a polygon) */
+static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
+    unsigned tflags = 0;
+    C3D_Tex *tex = prim_texture(m, v, n, &tflags);
+    ctr_depth_stats[1] += n;
+    const float ou = tex ? (float)tex_ou : 0, ov = tex ? (float)tex_ov : 0;
+    Vtx t[4];
+    for (int i = 0; i < n; i++) {
+        t[i].x = (float)v[i].x + 5.0f / 16;
+        t[i].y = (float)v[i].y + 7.0f / 16;
+        t[i].z = 0;
+        t[i].u = tex ? (float)v[i].u + ou : (float)v[i].u;
+        t[i].v = tex ? (float)v[i].v + ov : (float)v[i].v;
+        t[i].rgba = vcolor(m, &v[i]);
+    }
+    /* (the PS1's triangles (0,1,2) and (1,3,2), each skipped 1024 or more wide or 512 or more high: r_poly) */
+    static const u8 tri[2][3] = {{0, 1, 2}, {1, 3, 2}};
+    u8 idx[6];
+    unsigned nout = 0;
+    int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
+    for (int k = 0; k < (n == 4 ? 2 : 1); k++) {
+        const Gp0Vtx *a = &v[tri[k][0]], *b = &v[tri[k][1]], *c = &v[tri[k][2]];
+        const int tx0 = imin(imin(a->x, b->x), c->x), tx1 = imax(imax(a->x, b->x), c->x);
+        const int ty0 = imin(imin(a->y, b->y), c->y), ty1 = imax(imax(a->y, b->y), c->y);
+        if (tx1 - tx0 > 1023 || ty1 - ty0 > 511) continue;
+        idx[nout++] = tri[k][0], idx[nout++] = tri[k][1], idx[nout++] = tri[k][2];
+        x0 = imin(x0, tx0); x1 = imax(x1, tx1);
+        y0 = imin(y0, ty0); y1 = imax(y1, ty1);
+    }
+    if (!nout) return;
+    /* (emit's: the drawing area's scissor, the bounds clipped to it) */
+    u16 sc[4];
+    if (!area_scissor(sc)) return;
+    int bx0 = imax(x0, sc[0]), by0 = imax(y0, sc[1]), bx1 = imin(x1 + 1, sc[2]), by1 = imin(y1 + 1, sc[3]);
+    if (bx0 >= bx1 || by0 >= by1) return;
+    gpu_draws(bx0, by0, bx1, by1);
+    cur_target = 0;
+    cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0) |
+               ((gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
+    ctr_render_stats[1]++;
+    int passes[2], np = 0, abr = m->semi ? m->abr : NO_BLEND;
+    if (!m->textured) passes[np++] = K_UNTEX;
+    else if (!m->semi) passes[np++] = K_TEX;
+    else if (tflags & 8) passes[np++] = K_PAGE_OP, passes[np++] = K_PAGE_SEMI;
+    else {
+        if (tflags & 1) passes[np++] = K_TEX_P1;
+        if (tflags & 2) passes[np++] = K_TEX_P2;
+    }
+    for (int p = 0; p < np; p++) {
+        const int pabr = passes[p] == K_TEX_P1 || passes[p] == K_PAGE_OP ? NO_BLEND : abr;
+        float d;
+        Vtx *o = run_slot(passes[p], pabr, sc, tex, nout, &d);
+        for (unsigned k = 0; k < nout; k++) o[k] = t[idx[k]], o[k].d = d;
+    }
+}
+
 static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (battle_list_replaced()) return;
+    /* (emit's case for a primitive into the mirror: not in a window's packets (in_window_packets: ui_packet's test
+     * without its mark, which emit leaves as it was), no menu drawn into the frame) */
+#ifndef PORT_PROBE_AT /* (its log is r_poly's) */
+    if (!ui_mode && !stereo_on && !world_ground && !ctr_outline && mirror_depth && menu_state != 2 &&
+        (menu_state == 3 || !in_window_packets(psx_gpu_packet))) {
+        r_poly_plain(m, v, n);
+        return;
+    }
+#endif
     unsigned tflags = 0;
     C3D_Tex *tex = prim_texture(m, v, n, &tflags);
     Vtx t[6];
@@ -2775,20 +2868,36 @@ static int bg_tile(const unsigned t[4], const u16 sc[4]) {
     C3D_Tex *tex = icon >= 0 ? &btn_tex[icon] : texture_for(&m, v.u, v.v, v.u + 15, v.v + 15, &tflags);
     if (icon >= 0) tflags = 2;
     const float ou = icon < 0 && tex ? tex_ou : 0, ov = icon < 0 && tex ? tex_ov : 0;
-    Vtx q[6];
-    if (icon >= 0) quad(q, v.x, v.y, v.x + 16, v.y + 16, 0, 0, 16, 16, vcolor(&m, &v));
-    else quad(q, v.x, v.y, v.x + 16, v.y + 16, ou + v.u, ov + v.v, ou + v.u + 16, ov + v.v + 16, vcolor(&m, &v));
+    /* (quad's corners: its triangles (a, b, c) and (b, d, c)) */
+    const float qx0 = v.x, qy0 = v.y, qx1 = v.x + 16, qy1 = v.y + 16;
+    const float qu0 = icon >= 0 ? 0 : ou + v.u, qv0 = icon >= 0 ? 0 : ov + v.v;
+    const float qu1 = icon >= 0 ? 16 : ou + v.u + 16, qv1 = icon >= 0 ? 16 : ov + v.v + 16;
+    const u32 rgba = vcolor(&m, &v);
     gpu_draws(bx0, by0, bx1, by1);
     cur_target = 0;
     cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0) |
                ((gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
     ctr_render_stats[1]++;
     const int abr = m.semi ? m.abr : NO_BLEND;
-    if (!m.semi) run_add(K_TEX, abr, sc, tex, q, 6);
-    else if (tflags & 8) run_add(K_PAGE_OP, NO_BLEND, sc, tex, q, 6), run_add(K_PAGE_SEMI, abr, sc, tex, q, 6);
+    int passes[2], pabr[2], np = 0;
+    if (!m.semi) passes[np] = K_TEX, pabr[np++] = abr;
+    else if (tflags & 8) passes[np] = K_PAGE_OP, pabr[np++] = NO_BLEND, passes[np] = K_PAGE_SEMI, pabr[np++] = abr;
     else {
-        if (tflags & 1) run_add(K_TEX_P1, NO_BLEND, sc, tex, q, 6);
-        if (tflags & 2) run_add(K_TEX_P2, abr, sc, tex, q, 6);
+        if (tflags & 1) passes[np] = K_TEX_P1, pabr[np++] = NO_BLEND;
+        if (tflags & 2) passes[np] = K_TEX_P2, pabr[np++] = abr;
+    }
+    for (int p = 0; p < np; p++) {
+        if (!mirror_depth) { /* (run_add's other case) */
+            Vtx q[6];
+            quad(q, qx0, qy0, qx1, qy1, qu0, qv0, qu1, qv1, rgba);
+            run_add(passes[p], pabr[p], sc, tex, q, 6);
+            continue;
+        }
+        float d;
+        Vtx *o = run_slot(passes[p], pabr[p], sc, tex, 6, &d);
+        o[0] = (Vtx){qx0, qy0, 0, qu0, qv0, rgba, d}, o[1] = (Vtx){qx1, qy0, 0, qu1, qv0, rgba, d};
+        o[2] = (Vtx){qx0, qy1, 0, qu0, qv1, rgba, d};
+        o[3] = o[1], o[4] = (Vtx){qx1, qy1, 0, qu1, qv1, rgba, d}, o[5] = o[2];
     }
     return 1;
 }
