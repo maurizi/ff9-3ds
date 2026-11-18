@@ -122,6 +122,75 @@ static unsigned int state_command(unsigned int w0) {
     return 1;
 }
 
+/* A polygon command (20-3F) of kind (cmd >> 2) & 7 (textured, quad, gouraud bits), m set as command() sets it for every
+ * command. Inlined for each kind (command()'s switch): its loop over the vertices straight-line code, each branch
+ * on the kind resolved (one loop for all was some 240 instructions a polygon on an Old 3DS: the world map's ~2600 a
+ * frame, 5.6 ms of a frame in Azahar as an Old 3DS) */
+static inline __attribute__((always_inline)) unsigned int poly_command(const unsigned int *w, unsigned int avail,
+                                                                     unsigned int cmd, Gp0Mode m, const unsigned kind) {
+    m.gouraud = (kind >> 2) & 1;
+    const int quad = (kind >> 1) & 1;
+    m.textured = kind & 1;
+    m.semi = (cmd >> 1) & 1;
+    m.raw = cmd & 1;
+    int nv = quad ? 4 : 3;
+    unsigned int need = 1 + nv * (1 + m.textured) + (m.gouraud ? nv - 1 : 0);
+    if (need > avail) {
+        return avail;
+    }
+    Gp0Vtx v[4];
+    unsigned int k = 1;
+#pragma GCC unroll 4
+    for (int i = 0; i < nv; i++) {
+        unsigned int col = (i == 0 || !m.gouraud) ? w[0] : w[k++];
+        vtx(&v[i], &w[k], col);
+        k++;
+        if (m.textured) {
+            unsigned int uv = w[k++];
+            v[i].u = uv & 0xFF;
+            v[i].v = (uv >> 8) & 0xFF;
+            if (i == 0) {
+                set_clut(&m, uv);
+            } else if (i == 1) {
+                unsigned int tp = uv >> 16;
+                gp0_state.texpage = (gp0_state.texpage & ~0x9FFu) | (tp & 0x9FF);
+                apply_texpage(&m, tp);
+            }
+        }
+    }
+#if defined(PORT_GP0_PROBE) || defined(PORT_PROBE_AT)
+    { /* polygons with a vertex in the top 6 rows of the drawing area, per frame (debug) */
+        extern unsigned int psx_probe_top;
+        for (int i = 0; i < nv; i++) if (v[i].y - gp0_state.area_y0 < 6 && v[i].y >= gp0_state.area_y0) { psx_probe_top++; break; }
+    }
+#endif
+#if defined(PORT_GP0_PROBE) || defined(PORT_PROBE_AT)
+    { /* (debug: FF9_PROBE=x,y on the host, PROBE_AT=frame on the 3DS: every polygon whose bounds hold that point of
+       * the drawing area) */
+        static int px = -1, py;
+#ifdef PORT_PROBE_AT
+        extern long ctr_frames(void);
+        static int nlog;
+        px = ctr_frames() >= PORT_PROBE_AT - 12 && ctr_frames() <= PORT_PROBE_AT && nlog++ < 4000 ? 120 : -2;
+        py = 160;
+#else
+        if (px == -1) { const char *e = getenv("FF9_PROBE"); px = -2; if (e) sscanf(e, "%d,%d", &px, &py); }
+#endif
+        int qx = gp0_state.area_x0 + px, qy = gp0_state.area_y0 + py, inx = 0, iny = 0;
+        for (int i = 0; i < nv; i++) { inx |= (v[i].x <= qx) | (v[i].x >= qx) << 1; iny |= (v[i].y <= qy) | (v[i].y >= qy) << 1; }
+        if (px >= 0 && inx == 3 && iny == 3)
+            port_log("probe: cmd %02x abr %d page %d,%d d%d clut %d,%d %d,%d %d,%d %d,%d %d,%d rgb %02x%02x%02x %02x%02x%02x %02x%02x%02x\n", cmd, m.abr, m.tx, m.ty, m.depth, m.clut_x, m.clut_y,
+                     v[0].x, v[0].y, v[1].x, v[1].y, v[2].x, v[2].y, nv > 3 ? v[3].x : 0, nv > 3 ? v[3].y : 0,
+                     v[0].r, v[0].g, v[0].b, v[1].r, v[1].g, v[1].b, v[2].r, v[2].g, v[2].b);
+    }
+#endif
+    if (gp0_backend && gp0_backend->poly) {
+        ++psx_gpu_scene_prims;
+        gp0_backend->poly(&m, v, nv);
+    }
+    return need;
+}
+
 GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int avail) {
     unsigned int cmd = w[0] >> 24;
     if (cmd >= 0xE0) return state_command(w[0]);
@@ -145,66 +214,16 @@ GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int av
     apply_texpage(&m, gp0_state.texpage);
 
     if (cmd >= 0x20 && cmd < 0x40) { /* polygon */
-        m.gouraud = (cmd >> 4) & 1;
-        int quad = (cmd >> 3) & 1;
-        m.textured = (cmd >> 2) & 1;
-        m.semi = (cmd >> 1) & 1;
-        m.raw = cmd & 1;
-        int nv = quad ? 4 : 3;
-        unsigned int need = 1 + nv * (1 + m.textured) + (m.gouraud ? nv - 1 : 0);
-        if (need > avail) {
-            return avail;
+        switch ((cmd >> 2) & 7) {
+        case 0: return poly_command(w, avail, cmd, m, 0);
+        case 1: return poly_command(w, avail, cmd, m, 1);
+        case 2: return poly_command(w, avail, cmd, m, 2);
+        case 3: return poly_command(w, avail, cmd, m, 3);
+        case 4: return poly_command(w, avail, cmd, m, 4);
+        case 5: return poly_command(w, avail, cmd, m, 5);
+        case 6: return poly_command(w, avail, cmd, m, 6);
+        default: return poly_command(w, avail, cmd, m, 7);
         }
-        Gp0Vtx v[4];
-        unsigned int k = 1;
-        for (int i = 0; i < nv; i++) {
-            unsigned int col = (i == 0 || !m.gouraud) ? w[0] : w[k++];
-            vtx(&v[i], &w[k], col);
-            k++;
-            if (m.textured) {
-                unsigned int uv = w[k++];
-                v[i].u = uv & 0xFF;
-                v[i].v = (uv >> 8) & 0xFF;
-                if (i == 0) {
-                    set_clut(&m, uv);
-                } else if (i == 1) {
-                    unsigned int tp = uv >> 16;
-                    gp0_state.texpage = (gp0_state.texpage & ~0x9FFu) | (tp & 0x9FF);
-                    apply_texpage(&m, tp);
-                }
-            }
-        }
-#if defined(PORT_GP0_PROBE) || defined(PORT_PROBE_AT)
-        { /* polygons with a vertex in the top 6 rows of the drawing area, per frame (debug) */
-            extern unsigned int psx_probe_top;
-            for (int i = 0; i < nv; i++) if (v[i].y - gp0_state.area_y0 < 6 && v[i].y >= gp0_state.area_y0) { psx_probe_top++; break; }
-        }
-#endif
-#if defined(PORT_GP0_PROBE) || defined(PORT_PROBE_AT)
-        { /* (debug: FF9_PROBE=x,y on the host, PROBE_AT=frame on the 3DS: every polygon whose bounds hold that point of
-           * the drawing area) */
-            static int px = -1, py;
-#ifdef PORT_PROBE_AT
-            extern long ctr_frames(void);
-            static int nlog;
-            px = ctr_frames() >= PORT_PROBE_AT - 12 && ctr_frames() <= PORT_PROBE_AT && nlog++ < 4000 ? 120 : -2;
-            py = 160;
-#else
-            if (px == -1) { const char *e = getenv("FF9_PROBE"); px = -2; if (e) sscanf(e, "%d,%d", &px, &py); }
-#endif
-            int qx = gp0_state.area_x0 + px, qy = gp0_state.area_y0 + py, inx = 0, iny = 0;
-            for (int i = 0; i < nv; i++) { inx |= (v[i].x <= qx) | (v[i].x >= qx) << 1; iny |= (v[i].y <= qy) | (v[i].y >= qy) << 1; }
-            if (px >= 0 && inx == 3 && iny == 3)
-                port_log("probe: cmd %02x abr %d page %d,%d d%d clut %d,%d %d,%d %d,%d %d,%d %d,%d rgb %02x%02x%02x %02x%02x%02x %02x%02x%02x\n", cmd, m.abr, m.tx, m.ty, m.depth, m.clut_x, m.clut_y,
-                         v[0].x, v[0].y, v[1].x, v[1].y, v[2].x, v[2].y, nv > 3 ? v[3].x : 0, nv > 3 ? v[3].y : 0,
-                         v[0].r, v[0].g, v[0].b, v[1].r, v[1].g, v[1].b, v[2].r, v[2].g, v[2].b);
-        }
-#endif
-        if (gp0_backend && gp0_backend->poly) {
-            ++psx_gpu_scene_prims;
-            gp0_backend->poly(&m, v, nv);
-        }
-        return need;
     }
     if (cmd >= 0x40 && cmd < 0x60) { /* line, polyline (terminated by 0x5xxx5xxx) */
         m.gouraud = (cmd >> 4) & 1;
