@@ -1953,7 +1953,12 @@ static inline void make_vtx(Vtx *o, const Gp0Mode *m, const Gp0Vtx *v) {
     o->z = 0;
     /* (the lookup inline (gte_depth.h): on an Old 3DS the call for every vertex drawn was 0.4 ms of a busy field's
      * VBlank, which an emulator doesn't show) */
-    u32 info = v->xyw && !getenv_nodepth ? psx_depth_find(v->xyw, &psx_depth_by_value) : 0;
+    /* (in 3D only: in 2D the PS1's own drawing, its corners whole pixels and its textures affine. With the GTE's
+     * depths there, sub-pixel corners and perspective-correct textures went to the ~78% of model vertices its by-value
+     * table kept (Lindblum), which could change from frame to frame; against the PS1's frame (the host's software
+     * renderer, Lindblum's castle station) 2727 pixels differed, 2043 without them, and the lookups were ~2 ms of a
+     * model-heavy field's VBlank on an Old 3DS) */
+    u32 info = v->xyw && !getenv_nodepth && stereo_on ? psx_depth_find(v->xyw, &psx_depth_by_value) : 0;
     ctr_depth_stats[info ? 0 : 1]++;
     if (info) {
         /* (not on the world map: its ground's blocks are projected each on its own, and the fractions of a vertex they
@@ -3674,6 +3679,11 @@ void ctr_present(long frame) {
     }
     stereo_on = want_stereo;
     gfxSet3D(stereo_on);
+    if (psx_depth_on != stereo_on) { /* (the GTE's depths recorded in 3D only: make_vtx; from none when it comes on) */
+        if (stereo_on) memset(psx_depth_tab, 0, sizeof psx_depth_tab), memset(psx_depth_sp_tab, 0, sizeof psx_depth_sp_tab),
+            memset(psx_depth_val_tab, 0, sizeof psx_depth_val_tab);
+        psx_depth_on = stereo_on;
+    }
 
     menu_state = port_menu_state();
     PsxDisplayInfo d;

@@ -863,7 +863,10 @@ PsxDepthValue psx_depth_val_tab[PSX_DEPTH_VALUE_SLOTS];
 unsigned int psx_depth_frame;
 
 static inline void record_value(u32 w, u32 info);
+/* 0: nothing recorded (the 3DS in 2D, where the renderer draws as the PS1 does, without depths) */
+int psx_depth_on = 1;
 void psx_depth_record(const void *p, gte_u32 w, gte_u32 info) {
+    if (!psx_depth_on) return;
     record_value(w, info);
     uintptr_t off = (const unsigned char *)p - psx_ram;
     if (off < PSX_RAM_SIZE) {

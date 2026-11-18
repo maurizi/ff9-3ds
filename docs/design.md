@@ -87,8 +87,12 @@ ordering table.
   of its source texels and CLUT, so the world map's per-frame palette cycling and water scrolling reconvert only what
   changed. Texture windows (GP0 E2) are baked into their own slots. A slot drawn with earlier in a frame forces a GPU
   sync before it changes.
-- **Depth from the GTE** (§4.3): sub-pixel positions, perspective-correct texturing and stereo parallax for every
-  projected vertex; a primitive uses depth only if all its vertices have it. 2D primitives in the scene get the depth
+- **Depth from the GTE** (§4.3), in 3D only: sub-pixel positions, perspective-correct texturing and stereo parallax for
+  every projected vertex; a primitive uses depth only if all its vertices have it. In 2D nothing is recorded or looked
+  up and polygons are drawn as the PS1 draws them (whole-pixel corners, affine textures): closer to the PS1's frames
+  (its software renderer on the host) than with the depths, and ~2 ms of a model-heavy field's VBlank cheaper on an
+  Old 3DS. Field models' vertex depths are also recorded at their packets' addresses (field_mesh.c), where the
+  renderer looks them up: by value alone, ~20% of them were lost. 2D primitives in the scene get the depth
   of their ordering-table entry (a per-frame fit of SZ against entry over the projected ones): layered stereo for
   field backgrounds. Full-screen ones stay at the screen plane.
 - PS1 rules kept: quads are two triangles, each skipped when 1024+ wide or 512+ high.

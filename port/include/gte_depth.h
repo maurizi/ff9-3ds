@@ -11,6 +11,7 @@ typedef struct { gte_u32 word, inf; } PsxDepthSlot;
 typedef struct { gte_u32 word, inf, frame; } PsxDepthValue;
 #define PSX_DEPTH_VALUE_SLOTS 4096
 extern PsxDepthSlot psx_depth_tab[PSX_RAM_SIZE / 4], psx_depth_sp_tab[256];
+extern int psx_depth_on; /* (gte.c: depths recorded; the 3DS renderer sets it with its 3D) */
 extern PsxDepthValue psx_depth_val_tab[PSX_DEPTH_VALUE_SLOTS];
 /* the renderer's frame count (presents): a value entry older than 8 is stale (battles project every 4 VBlanks) */
 extern unsigned int psx_depth_frame;

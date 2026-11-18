@@ -278,6 +278,35 @@ static void link_translucent(u8 *grp, u8 *pkt, u32 *ot, int clip_y, int mirror) 
     }
 }
 
+/* The 3DS's GTE depth shadow (gte.c) for a group's packets, by their own addresses: each vertex word the game copied
+ * from g_vtxScreenXY this frame gets the depth recorded where it was projected (its entry by g_vtxScreenXY's address).
+ * The renderer looks each vertex up by the packet word's address (gte_depth.h psx_depth_find): it missed there, and
+ * found the depth by value, a second random read (and, for two vertices at one screen position, the last one's
+ * depth: at Lindblum ~500 of 2400 model vertices a frame got none, which in 3D left them without parallax). The
+ * packets and the OT are the game's, untouched. */
+#ifdef PORT_GTE_DEPTH
+#include "gte.h"
+#include "gte_depth.h"
+static void depth_to_packets(const u8 *grp, const u8 *pkt) {
+    if (!psx_depth_on) return; /* (2D: none recorded) */
+    const u8 *poly = *(u8 *const *)(grp + 0x1C);
+    for (int k = 0; k < 8; k++) {
+        const int nv = k & 1 ? 3 : 4;
+        for (s32 n = *(const u16 *)(grp + 2 + 2 * k); n > 0; n--, poly += kind_src[k], pkt += kind_size[k])
+            for (int j = 0; j < nv; j++) {
+                const u32 i = *(const u16 *)(poly + 2 * j), off = kind_xy[k][j];
+                const u32 w = *(const u32 *)(pkt + off);
+                if (w != (u32)g_vtxScreenXY[i]) continue; /* (not written this frame: culled) */
+                const PsxDepthSlot *src = &psx_depth_tab[((const u8 *)&g_vtxScreenXY[i] - psx_ram) >> 2];
+                if (src->word != w) continue;
+                psx_depth_tab[(pkt + off - psx_ram) >> 2] = *src;
+            }
+    }
+}
+#else
+static void depth_to_packets(const u8 *grp, const u8 *pkt) { (void)grp; (void)pkt; }
+#endif
+
 PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     GameData *gd = g_gameState->gameData;
     u8 *grp = (u8 *)&model->model->groups[group];
@@ -302,6 +331,7 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     if (taken >= 2) link_translucent(grp, pkt, (u32 *)n.ot, 0, 0);
     if (taken) return;
     o0a_fldmdl_drawMesh_link(model, group);
+    depth_to_packets(grp, pkt);
 }
 
 /* fldmdl_drawMeshClipY (tu_800B61A4.c, renamed by config/renames.txt): a group cut at the model's clipY, as
@@ -332,6 +362,7 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshClipY(ModelObj *model, u8 group) {
     if (taken >= 2) link_translucent(grp, pkt, (u32 *)n.ot, 1, 0);
     if (taken) return;
     o0a_fldmdl_drawMeshClipY_game(model, group);
+    depth_to_packets(grp, pkt);
 }
 
 /* fldmdl_drawMeshMirrored (tu_800B61A4.c, renamed by config/renames.txt): a reflection's group, the PS1's culling
@@ -361,4 +392,5 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMeshMirrored(ModelObj *model, u8 group
     if (taken >= 2) link_translucent(grp, pkt, (u32 *)n.ot, 0, 1);
     if (taken) return;
     o0a_fldmdl_drawMeshMirrored_game(model, group);
+    depth_to_packets(grp, pkt);
 }
