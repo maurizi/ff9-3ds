@@ -2436,8 +2436,8 @@ static void grow_ring(Vtx *t, int n, const int *r, float d) {
     for (int k = 0; k < n; k++) t[r[k]].x += ox[k], t[r[k]].y += oy[k];
 }
 
-/* A polygon in the plain case: into the scene's mirror in 2D (no UI list or layer, no menu, no outlines, not the world
- * map), as r_poly and emit draw it there: the same vertices, passes, batches and depth values, without their general
+/* A polygon in the plain case: into the scene's mirror in 2D (no UI list or layer, no menu, no outlines), as r_poly and
+ * emit draw it there: the same vertices, passes, batches and depth values, without their general
  * cases. Each vertex is made once and written where the run keeps it (it went through make_vtx, a copy per triangle
  * and one into the run: on an Old 3DS, where this path is bound by its instructions, some 14 us a polygon) */
 static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
@@ -2445,13 +2445,16 @@ static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     C3D_Tex *tex = prim_texture(m, v, n, &tflags);
     ctr_depth_stats[1] += n;
     const float ou = tex ? (float)tex_ou : 0, ov = tex ? (float)tex_ov : 0;
+    /* (make_vtx's half texel on the world map, then the slot's place: the same sums in the same order) */
+    const float uvh = world_ground ? 0.5f : 0;
     Vtx t[4];
     for (int i = 0; i < n; i++) {
         t[i].x = (float)v[i].x + 5.0f / 16;
         t[i].y = (float)v[i].y + 7.0f / 16;
         t[i].z = 0;
-        t[i].u = tex ? (float)v[i].u + ou : (float)v[i].u;
-        t[i].v = tex ? (float)v[i].v + ov : (float)v[i].v;
+        t[i].u = (float)v[i].u + uvh;
+        t[i].v = (float)v[i].v + uvh;
+        if (tex) t[i].u += ou, t[i].v += ov;
         t[i].rgba = vcolor(m, &v[i]);
     }
     /* (the PS1's triangles (0,1,2) and (1,3,2), each skipped 1024 or more wide or 512 or more high: r_poly) */
@@ -2500,7 +2503,7 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     /* (emit's case for a primitive into the mirror: not in a window's packets (in_window_packets: ui_packet's test
      * without its mark, which emit leaves as it was), no menu drawn into the frame) */
 #ifndef PORT_PROBE_AT /* (its log is r_poly's) */
-    if (!ui_mode && !stereo_on && !world_ground && !ctr_outline && mirror_depth && menu_state != 2 &&
+    if (!ui_mode && !stereo_on && !ctr_outline && mirror_depth && menu_state != 2 &&
         (menu_state == 3 || !in_window_packets(psx_gpu_packet))) {
         r_poly_plain(m, v, n);
         return;
