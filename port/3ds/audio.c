@@ -83,7 +83,10 @@ void plat_audio_samples(const short *samples, unsigned frames) {
             int queued = 0;
             for (int i = 0; i < NBUF; i++) queued += wbuf[i].status == NDSP_WBUF_QUEUED || wbuf[i].status == NDSP_WBUF_PLAYING;
             if (!queued) ctr_audio_underruns++;
-            DSP_FlushDataCache(b->data_vaddr, BUF_FRAMES * 4);
+            /* (the kernel's flush: DSP_FlushDataCache asks the DSP service, which on an Old 3DS runs on the second core
+             * in the system's share of it, and waited for it: ~2.3 ms of a VBlank of the sound thread's, there; this
+             * one 0.02) */
+            svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)b->data_vaddr, BUF_FRAMES * 4);
             ndspChnWaveBufAdd(0, b);
             /* dynamic rate control: the game makes 44100 samples per 60 of its frames, the 3DS paces it to its own
              * refresh (59.83 Hz) and may run a little slow besides; play a fraction of a percent slower or faster to
