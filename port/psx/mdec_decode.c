@@ -348,7 +348,7 @@ MDEC_ITCM static int block(const PsxMdecEnv *e,const uint8_t *qt,const uint16_t 
     pixels[0]=clamp(dc,-16384,16383);
     unsigned rows=0;
     uint32_t total=(uint32_t)abs(pixels[0]);
-    if (pixels[0]) nz[count++]=0,cols|=1,rows|=1;
+    if (pixels[0]) count++,cols|=1,rows|=1;
     while (rank<63) {
         if (*position==size) return PSX_MDEC_TRUNCATED;
         unsigned code=rl[(*position)++];
@@ -360,12 +360,16 @@ MDEC_ITCM static int block(const PsxMdecEnv *e,const uint8_t *qt,const uint16_t 
                                (level<0 ? 8 : level>0 ? -8 : 0) : level*32;
         unsigned at=zigzag[rank];
         int value=clamp(coefficient,-16384,16383);
-        if (value) nz[count++]=at,cols|=1u<<(at&7),rows|=1u<<(at>>3),total+=(uint32_t)abs(value); /* ranks only
+        if (value) count++,cols|=1u<<(at&7),rows|=1u<<(at>>3),total+=(uint32_t)abs(value); /* ranks only
                                                                     * increase: each position is written once */
         pixels[at]=value;
     }
     if (!count) return PSX_MDEC_OK; /* (idct's result for none: every value clamp9(131072 >> 18), 0, as it is) */
     if (e->mirrored && idct_dense(e,pixels,32-__builtin_clz(cols),32-__builtin_clz(rows),total)) return PSX_MDEC_OK;
+    /* (the nonzero positions for idct, only now: the dense pass takes nearly every block. In row-major order, not the
+     * codes': its sums are exact (32-bit only where a bound proves they fit), so the order doesn't change them) */
+    count=0;
+    for (unsigned at=0;at<64;at++) if (pixels[at]) nz[count++]=(uint8_t)at;
     idct(e,pixels,nz,count,cols);
     return PSX_MDEC_OK;
 }
