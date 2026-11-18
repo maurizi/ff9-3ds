@@ -264,7 +264,8 @@ static void pack_read(long at, void *buf, unsigned int bytes) {
         if (ra_buf && ra_at >= 0 && at >= ra_at && at + (long)bytes <= ra_at + ra_len) {
             __builtin_memcpy(buf, ra_buf + (at - ra_at), bytes);
             disc_at = at + (long)bytes;
-            if (packed && ra_len == RA_BYTES && at - ra_at >= RA_BYTES / 2) prefetch(ra_at + RA_BYTES);
+            /* (from a little before this block's end: a record crossing it (2352 bytes) is wholly in the next one) */
+            if (packed && ra_len == RA_BYTES && at - ra_at >= RA_BYTES / 2) prefetch(ra_at + RA_BYTES - 4096);
             return;
         }
     }
