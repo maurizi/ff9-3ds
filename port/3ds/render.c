@@ -88,7 +88,9 @@ static unsigned ndirty;
 unsigned ctr_flushes, ctr_batch_why[6], ctr_kind_pairs[8][8];
 static void flush_range(void *p, unsigned n) {
     if (!n) return;
-    GSPGPU_FlushDataCache(p, n);
+    /* (the kernel's flush, as audio.c's: GSPGPU_FlushDataCache asks the GSP service, which on an Old 3DS runs on the
+     * second core in the system's share of it, and waits for its turn there) */
+    svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)p, n);
     ctr_flushes++;
 }
 static void flush_pending(void);

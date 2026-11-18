@@ -70,7 +70,7 @@ static void play(const char *path) {
             if (n) {
                 b->data_vaddr = out;
                 b->nsamples = (u32)n;
-                DSP_FlushDataCache(out, (u32)n * 4);
+                svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)out, (u32)n * 4); /* (the kernel's: audio.c) */
                 ndspChnWaveBufAdd(CHN, b);
                 next = (next + 1) % NBUF;
             }
