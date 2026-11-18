@@ -326,12 +326,17 @@ static void gseg(int seg) { /* what was recorded since the last part: sent as a 
     gs_take(seg);
     if (C3Di_SplitFrame(&buf, &size)) gq_sending(seg), GX_ProcessCommandList(buf, size * 4, GX_CMDLIST_FLUSH);
 }
+/* (the pixels from every 8th frame's vertices, times 8: every vertex drawn read again, in doubles, was 0.16 ms of field
+ * 1450's VBlank in Azahar as an Old 3DS (more on a 3DS, the vertices out of its cache): the profile's own cost, in its
+ * submit times) */
 static void gs_count(unsigned first, unsigned n) {
+    cur_vx += n, cur_dc += 1;
+    if (frames_drawn & 7) return;
     const Vtx *v = vb + first;
-    double a = 0;
+    float a = 0;
     for (unsigned i = 0; i + 2 < n; i += 3)
         a += fabsf((v[i + 1].x - v[i].x) * (v[i + 2].y - v[i].y) - (v[i + 2].x - v[i].x) * (v[i + 1].y - v[i].y)) * 0.5f;
-    cur_px += a, cur_vx += n, cur_dc += 1;
+    cur_px += 8 * (double)a;
 }
 /* the window's GPU time per part and frame, measured (a 3DS) and estimated from the counts */
 void ctr_gpu_cost_report(unsigned frames) {
