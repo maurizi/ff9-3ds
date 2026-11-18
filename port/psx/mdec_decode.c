@@ -207,7 +207,8 @@ MDEC_ITCM static void idct(const PsxMdecEnv *e,int16_t block[64],const uint8_t *
  * fit, the first pass's results only where the block's largest does: idct_dense checks), the matrix's pairs packed by
  * psx_mdec_env_init */
 static inline __attribute__((always_inline)) void dense_cols(const PsxMdecEnv *e,const int16_t *c,int32_t *temp,
-                                                             unsigned w,const unsigned h) {
+                                                             unsigned w,const unsigned h,uint32_t *tmax) {
+    uint32_t m=0;
     for (unsigned x=0;x<w;x++) {
         int16_t cv[8];
 #pragma GCC unroll 8
@@ -222,10 +223,15 @@ static inline __attribute__((always_inline)) void dense_cols(const PsxMdecEnv *e
             int32_t E=__smlad(e0,p[0],131072),O=h>1 ? __smlad(o0,p[2],0) : 0;
             if (h>4) E=__smlad(e1,p[1],E);
             if (h>5) O=__smlad(o1,p[3],O);
-            temp[y*8+x]=(E+O)>>18;
-            temp[(7-y)*8+x]=(E-O-todd)>>18;
+            const int32_t a=(E+O)>>18,b=(E-O-todd)>>18;
+            temp[y*8+x]=a;
+            temp[(7-y)*8+x]=b;
+            const uint32_t ma=(uint32_t)abs(a),mb=(uint32_t)abs(b);
+            if (ma>m) m=ma;
+            if (mb>m) m=mb;
         }
     }
+    *tmax=m;
 }
 static inline __attribute__((always_inline)) void dense_rows(const PsxMdecEnv *e,const int32_t *temp,int16_t *block,
                                                              const unsigned w) {
@@ -252,7 +258,8 @@ static inline __attribute__((always_inline)) void dense_rows(const PsxMdecEnv *e
 #define DENSE_ENV(e) ((e)->scale)
 #define DENSE_T16 0
 static inline __attribute__((always_inline)) void dense_cols(const int16_t *S,const int16_t *c,int32_t *temp,
-                                                             unsigned w,const unsigned h) {
+                                                             unsigned w,const unsigned h,uint32_t *tmax) {
+    uint32_t m=0;
     for (unsigned x=0;x<w;x++) {
         int32_t cv[8],todd=0;
 #pragma GCC unroll 8
@@ -266,10 +273,15 @@ static inline __attribute__((always_inline)) void dense_cols(const int16_t *S,co
             for (unsigned v=0;v<h;v+=2) E+=cv[v]*S[v*8+y];
 #pragma GCC unroll 4
             for (unsigned v=1;v<h;v+=2) O+=cv[v]*S[v*8+y];
-            temp[y*8+x]=(E+O)>>18;
-            temp[(7-y)*8+x]=(E-O-todd)>>18;
+            const int32_t a=(E+O)>>18,b=(E-O-todd)>>18;
+            temp[y*8+x]=a;
+            temp[(7-y)*8+x]=b;
+            const uint32_t ma=(uint32_t)abs(a),mb=(uint32_t)abs(b);
+            if (ma>m) m=ma;
+            if (mb>m) m=mb;
         }
     }
+    *tmax=m;
 }
 static inline __attribute__((always_inline)) void dense_rows(const int16_t *S,const int32_t *temp,int16_t *block,
                                                              const unsigned w) {
@@ -295,22 +307,17 @@ MDEC_ITCM static int idct_dense(const PsxMdecEnv *e,int16_t block[64],unsigned w
     const uint64_t smax=(uint64_t)e->scale_max+1;
     if (!FITS32(total*smax)) return 0;
     int32_t temp[64];
+    uint32_t tmax; /* (the first pass's largest |result|, as dense_cols makes them) */
     switch (h) {
-    case 1: dense_cols(DENSE_ENV(e),block,temp,w,1); break;
-    case 2: dense_cols(DENSE_ENV(e),block,temp,w,2); break;
-    case 3: dense_cols(DENSE_ENV(e),block,temp,w,3); break;
-    case 4: dense_cols(DENSE_ENV(e),block,temp,w,4); break;
-    case 5: dense_cols(DENSE_ENV(e),block,temp,w,5); break;
-    case 6: dense_cols(DENSE_ENV(e),block,temp,w,6); break;
-    case 7: dense_cols(DENSE_ENV(e),block,temp,w,7); break;
-    default: dense_cols(DENSE_ENV(e),block,temp,w,8); break;
+    case 1: dense_cols(DENSE_ENV(e),block,temp,w,1,&tmax); break;
+    case 2: dense_cols(DENSE_ENV(e),block,temp,w,2,&tmax); break;
+    case 3: dense_cols(DENSE_ENV(e),block,temp,w,3,&tmax); break;
+    case 4: dense_cols(DENSE_ENV(e),block,temp,w,4,&tmax); break;
+    case 5: dense_cols(DENSE_ENV(e),block,temp,w,5,&tmax); break;
+    case 6: dense_cols(DENSE_ENV(e),block,temp,w,6,&tmax); break;
+    case 7: dense_cols(DENSE_ENV(e),block,temp,w,7,&tmax); break;
+    default: dense_cols(DENSE_ENV(e),block,temp,w,8,&tmax); break;
     }
-    uint32_t tmax=0;
-    for (unsigned y=0;y<8;y++)
-        for (unsigned x=0;x<w;x++) {
-            const uint32_t m=(uint32_t)abs(temp[y*8+x]);
-            if (m>tmax) tmax=m;
-        }
     if (!FITS32((uint64_t)tmax*w*smax) || (DENSE_T16 && tmax>32767)) return 0;
     switch (w) {
     case 1: dense_rows(DENSE_ENV(e),temp,block,1); break;
