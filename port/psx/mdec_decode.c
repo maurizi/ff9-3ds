@@ -29,6 +29,10 @@ MDEC_DTCM_BSS static uint8_t channel8[2][512],channel5[2][512];
 /* the colour offsets of a Cr/Cb pair (psx_mdec_macroblock_with's), by value: the IDCT's results are clamp9's, -128..127.
  * Green's is (green_cb + green_cr + 128) >> 8, the same sum as computed whole */
 static int16_t red_cr[256],blue_cb[256];
+/* 15-bit output's five-bit channels by the sum itself (luma + offset, -355..353), each already in its place: channel5
+ * of (sum & 511), shifted left 0, 5 and 10 (rgb5[flip][channel][sum + 512]). The same values with no mask or shift per
+ * pixel: the colour stage was some 29 instructions a pixel (a third of a macroblock's decode) */
+static uint16_t rgb5[2][3][1024];
 static int32_t green_cb[256],green_cr[256];
 static inline int clamp9(int x) {
     return clamp9_table[(unsigned)x&511];
@@ -49,6 +53,9 @@ void psx_mdec_env_init(PsxMdecEnv *e,const uint8_t quant[128],const uint8_t scal
             channel5[flip][i]=(uint8_t)clamp((int)(value+4)/8,0,31);
         }
     }
+    for (unsigned flip=0;flip<2;flip++)
+        for (int v=-512;v<512;v++)
+            for (unsigned c=0;c<3;c++) rgb5[flip][c][v+512]=(uint16_t)(channel5[flip][(unsigned)v&511]<<(5*c));
     memcpy(e->quant,quant,128);
     for (unsigned i=0;i<64;i++) {
         unsigned value=scale[i*2]|((unsigned)scale[i*2+1]<<8);
@@ -409,6 +416,29 @@ MDEC_ITCM int psx_mdec_macroblock_with(const PsxMdecEnv *e,const uint16_t *rl,si
     /* (written straight into `out`: nothing fails after the blocks have decoded. The pixels went through `pixels` and a
      * copy for the DS, whose main RAM takes scattered byte stores slowly) */
     (void)pixels;
+    if (depth!=2) { /* (15-bit: rgb5's tables, two pixels to a store) */
+        const uint16_t *R=rgb5[signed_mode][0]+512,*G=rgb5[signed_mode][1]+512,*B=rgb5[signed_mode][2]+512;
+        const uint32_t stp2=stp*0x10001u;
+        for (unsigned q=0;q<4;q++) {
+            const int16_t *luma=samples[2+q];
+            unsigned qx=(q&1)*8,qy=(q>>1)*8;
+            for (unsigned cy=0;cy<4;cy++)
+#pragma GCC unroll 4
+                for (unsigned cx=0;cx<4;cx++) {
+                    unsigned ci=(qy/2+cy)*8+qx/2+cx;
+                    const unsigned cr=(unsigned)(samples[0][ci]+128),cb=(unsigned)(samples[1][ci]+128);
+                    const int dr=red_cr[cr],dg=(green_cb[cb]+green_cr[cr]+128)>>8,db=blue_cb[cb];
+                    for (unsigned dy=0;dy<2;dy++) {
+                        const unsigned ly=cy*2+dy,offset=(qy+ly)*16+qx+cx*2;
+                        const int l0=luma[ly*8+cx*2],l1=luma[ly*8+cx*2+1];
+                        const uint32_t c=stp2|R[l0+dr]|G[l0+dg]|B[l0+db]|(uint32_t)(R[l1+dr]|G[l1+dg]|B[l1+db])<<16;
+                        memcpy(out+offset*2,&c,4);
+                    }
+                }
+        }
+        *consumed=at;
+        return PSX_MDEC_OK;
+    }
     for (unsigned q=0;q<4;q++) {
         const int16_t *luma=samples[2+q];
         unsigned qx=(q&1)*8,qy=(q>>1)*8;
