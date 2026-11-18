@@ -109,9 +109,59 @@ void plat_async_wait(void) {
 
 int plat_async_busy(void) { return busy; }
 
+/* ---- the I/O thread (plat_io_async): the disc pack read ahead while the game runs (cd.c). Its reads waited for the
+ * card on the game's thread: a 128 KiB block of a movie's stream some 30 ms, three times a second (field 1464's movie
+ * background on an Old 3DS: 1.5 ms of a VBlank, the game a frame behind each time). On the game's core, above the game:
+ * it only runs to start a read and when one returns. */
+static Thread io_thread;
+static LightEvent io_go, io_done;
+static void (*volatile io_fn)(void *);
+static void *volatile io_arg;
+static volatile int io_busy;
+static void io_main(void *unused) {
+    (void)unused;
+    for (;;) {
+        LightEvent_Wait(&io_go);
+        if (quit) break;
+        io_fn(io_arg);
+        __sync_synchronize();
+        io_busy = 0;
+        LightEvent_Signal(&io_done);
+    }
+}
+int plat_io_async(void (*fn)(void *), void *arg) {
+    if (!io_thread) {
+        static int tried;
+        if (tried++) return 0;
+        LightEvent_Init(&io_go, RESET_ONESHOT);
+        LightEvent_Init(&io_done, RESET_ONESHOT);
+        s32 prio = 0x30;
+        svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+        io_thread = threadCreate(io_main, NULL, 16 * 1024, prio - 1, 0, false);
+        if (!io_thread) return 0;
+    }
+    plat_io_wait();
+    io_fn = fn;
+    io_arg = arg;
+    io_busy = 1;
+    __sync_synchronize();
+    LightEvent_Signal(&io_go);
+    return 1;
+}
+void plat_io_wait(void) {
+    while (io_busy) LightEvent_WaitTimeout(&io_done, 20000000);
+    __sync_synchronize();
+}
+
 void ctr_async_exit(void) {
-    if (!worker) return;
     quit = 1;
+    if (io_thread) {
+        plat_io_wait();
+        LightEvent_Signal(&io_go);
+        if (R_SUCCEEDED(threadJoin(io_thread, 1000000000ULL))) threadFree(io_thread);
+        io_thread = NULL;
+    }
+    if (!worker) return;
     LightEvent_Signal(&go);
     /* (a second at most: closing must not hang; not freed if it hasn't ended, its stack would go under it) */
     if (R_SUCCEEDED(threadJoin(worker, 1000000000ULL))) threadFree(worker);

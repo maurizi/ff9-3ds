@@ -33,4 +33,9 @@ int plat_async(void (*fn)(void *), void *arg);
 void plat_async_wait(void);
 int plat_async_busy(void); /* a job sent and not finished (0 with no worker) */
 
+/* Run fn(arg) on a thread of its own for blocking I/O (it waits on the card, using next to no CPU), one job at a time;
+ * 0 if there is none (the caller does without). plat_io_wait waits for it. (3DS: such a thread; PC: none.) */
+int plat_io_async(void (*fn)(void *), void *arg);
+void plat_io_wait(void);
+
 #endif

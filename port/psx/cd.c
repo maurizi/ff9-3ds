@@ -204,9 +204,51 @@ static unsigned int le32(const u8 *p);
 #define RA_BYTES (128 * 1024)
 static u8 *ra_buf;
 static long ra_at = -1, ra_len;
+/* The next block, read by the platform's I/O thread (plat_io_async) with a file of its own while the game uses this one,
+ * once reads reach this block's second half: a movie's stream (or any read going on in order) then never waits for the
+ * card. Each block read waited ~30 ms on a 3DS, three times a second in a movie (field 1464's movie background: the game
+ * a frame behind each time) */
+static u8 *ra_next;
+static long ra_next_at = -1, ra_next_len;
+static int pf_fd = -1, pf_failed;
+__attribute__((weak)) int plat_io_async(void (*fn)(void *), void *arg) { (void)fn; (void)arg; return 0; }
+__attribute__((weak)) void plat_io_wait(void) {}
+static void prefetch_job(void *unused) {
+    (void)unused;
+    long got = 0;
+    if (lseek(pf_fd, ra_next_at, SEEK_SET) == ra_next_at)
+        while (got < RA_BYTES) {
+            int n = (int)read(pf_fd, ra_next + got, (size_t)(RA_BYTES - got));
+            if (n <= 0) break;
+            got += n;
+        }
+    ra_next_len = got;
+}
+static void prefetch(long at) {
+    if (ra_next_at == at || pf_failed) return;
+    plat_io_wait(); /* (one in flight at most: an older one, not taken) */
+    if (!ra_next && !(ra_next = malloc(RA_BYTES))) { pf_failed = 1; return; }
+    if (pf_fd < 0 && (pf_fd = open(pack_path, O_RDONLY)) < 0) { pf_failed = 1; return; }
+    ra_next_at = at, ra_next_len = 0;
+    if (!plat_io_async(prefetch_job, NULL)) ra_next_at = -1, pf_failed = 1;
+}
+static void prefetch_drop(void) { /* (another disc: its file the same, the blocks not) */
+    plat_io_wait();
+    ra_next_at = -1;
+}
 static void pack_read(long at, void *buf, unsigned int bytes) {
     if (bytes <= RA_BYTES) {
         if (!ra_buf) ra_buf = malloc(RA_BYTES);
+        if (ra_buf && !(at >= ra_at && at + (long)bytes <= ra_at + ra_len) && ra_next_at >= 0 && at >= ra_next_at &&
+            at < ra_next_at + RA_BYTES) { /* (the block read ahead: taken when done) */
+            plat_io_wait();
+            if (at + (long)bytes <= ra_next_at + ra_next_len) {
+                u8 *b = ra_buf;
+                ra_buf = ra_next, ra_next = b;
+                ra_at = ra_next_at, ra_len = ra_next_len;
+            }
+            ra_next_at = -1;
+        }
         if (ra_buf && !(at >= ra_at && at + (long)bytes <= ra_at + ra_len)) {
             ra_at = -1;
             if (lseek(disc, at, SEEK_SET) == at) {
@@ -222,6 +264,7 @@ static void pack_read(long at, void *buf, unsigned int bytes) {
         if (ra_buf && ra_at >= 0 && at >= ra_at && at + (long)bytes <= ra_at + ra_len) {
             __builtin_memcpy(buf, ra_buf + (at - ra_at), bytes);
             disc_at = at + (long)bytes;
+            if (packed && ra_len == RA_BYTES && at - ra_at >= RA_BYTES / 2) prefetch(ra_at + RA_BYTES);
             return;
         }
     }
@@ -298,6 +341,7 @@ void psx_cd_swap(unsigned n) {
     disc = -1;
 #ifdef PORT_DISC_PACK
     ra_at = -1; /* (the read-ahead was the old disc's) */
+    prefetch_drop();
 #endif
     disc_no = (int)n;
     disc_at = -1;
