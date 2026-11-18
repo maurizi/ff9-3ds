@@ -233,8 +233,9 @@ static inline __attribute__((always_inline)) void dense_cols(const PsxMdecEnv *e
     }
     *tmax=m;
 }
+/* (sat: every result proved within -256..255, where clamp9's wrap does nothing: its clamp is SSAT's to 8 bits) */
 static inline __attribute__((always_inline)) void dense_rows(const PsxMdecEnv *e,const int32_t *temp,int16_t *block,
-                                                             const unsigned w) {
+                                                             const unsigned w,const int sat) {
     for (unsigned y=0;y<8;y++) {
         const int32_t *t=&temp[y*8];
         const uint32_t e0=PK(t,0,2,w),e1=w>4 ? PK(t,4,6,w) : 0,o0=w>1 ? PK(t,1,3,w) : 0,o1=w>5 ? PK(t,5,7,w) : 0;
@@ -247,16 +248,23 @@ static inline __attribute__((always_inline)) void dense_rows(const PsxMdecEnv *e
             int32_t E=__smlad(e0,p[0],131072),O=w>1 ? __smlad(o0,p[2],0) : 0;
             if (w>4) E=__smlad(e1,p[1],E);
             if (w>5) O=__smlad(o1,p[3],O);
-            block[y*8+x]=(int16_t)clamp9((E+O)>>18);
-            block[y*8+7-x]=(int16_t)clamp9((E-O-to)>>18);
+            if (sat) {
+                block[y*8+x]=(int16_t)__ssat((E+O)>>18,8);
+                block[y*8+7-x]=(int16_t)__ssat((E-O-to)>>18,8);
+            } else {
+                block[y*8+x]=(int16_t)clamp9((E+O)>>18);
+                block[y*8+7-x]=(int16_t)clamp9((E-O-to)>>18);
+            }
         }
     }
 }
 #define DENSE_ENV(e) (e)
 #define DENSE_T16 1 /* (the first pass's results must fit halfwords) */
+#define DENSE_SAT 1
 #else
 #define DENSE_ENV(e) ((e)->scale)
 #define DENSE_T16 0
+#define DENSE_SAT 0
 static inline __attribute__((always_inline)) void dense_cols(const int16_t *S,const int16_t *c,int32_t *temp,
                                                              unsigned w,const unsigned h,uint32_t *tmax) {
     uint32_t m=0;
@@ -284,7 +292,8 @@ static inline __attribute__((always_inline)) void dense_cols(const int16_t *S,co
     *tmax=m;
 }
 static inline __attribute__((always_inline)) void dense_rows(const int16_t *S,const int32_t *temp,int16_t *block,
-                                                             const unsigned w) {
+                                                             const unsigned w,const int sat) {
+    (void)sat;
     for (unsigned y=0;y<8;y++) {
         const int32_t *t=&temp[y*8];
         int32_t to=0;
@@ -319,15 +328,30 @@ MDEC_ITCM static int idct_dense(const PsxMdecEnv *e,int16_t block[64],unsigned w
     default: dense_cols(DENSE_ENV(e),block,temp,w,8,&tmax); break;
     }
     if (!FITS32((uint64_t)tmax*w*smax) || (DENSE_T16 && tmax>32767)) return 0;
+    /* (each second-pass sum is 131072 plus at most w terms of |t| <= tmax times |s| <= smax - 1, less the odd ones'
+     * total (at most w tmax): within 2^18 * 256 - 1 of zero, every result >> 18 is in -256..255) */
+    if (DENSE_SAT && 131072+(uint64_t)tmax*w*smax<(uint64_t)256<<18) {
+        switch (w) {
+        case 1: dense_rows(DENSE_ENV(e),temp,block,1,1); break;
+        case 2: dense_rows(DENSE_ENV(e),temp,block,2,1); break;
+        case 3: dense_rows(DENSE_ENV(e),temp,block,3,1); break;
+        case 4: dense_rows(DENSE_ENV(e),temp,block,4,1); break;
+        case 5: dense_rows(DENSE_ENV(e),temp,block,5,1); break;
+        case 6: dense_rows(DENSE_ENV(e),temp,block,6,1); break;
+        case 7: dense_rows(DENSE_ENV(e),temp,block,7,1); break;
+        default: dense_rows(DENSE_ENV(e),temp,block,8,1); break;
+        }
+        return 1;
+    }
     switch (w) {
-    case 1: dense_rows(DENSE_ENV(e),temp,block,1); break;
-    case 2: dense_rows(DENSE_ENV(e),temp,block,2); break;
-    case 3: dense_rows(DENSE_ENV(e),temp,block,3); break;
-    case 4: dense_rows(DENSE_ENV(e),temp,block,4); break;
-    case 5: dense_rows(DENSE_ENV(e),temp,block,5); break;
-    case 6: dense_rows(DENSE_ENV(e),temp,block,6); break;
-    case 7: dense_rows(DENSE_ENV(e),temp,block,7); break;
-    default: dense_rows(DENSE_ENV(e),temp,block,8); break;
+    case 1: dense_rows(DENSE_ENV(e),temp,block,1,0); break;
+    case 2: dense_rows(DENSE_ENV(e),temp,block,2,0); break;
+    case 3: dense_rows(DENSE_ENV(e),temp,block,3,0); break;
+    case 4: dense_rows(DENSE_ENV(e),temp,block,4,0); break;
+    case 5: dense_rows(DENSE_ENV(e),temp,block,5,0); break;
+    case 6: dense_rows(DENSE_ENV(e),temp,block,6,0); break;
+    case 7: dense_rows(DENSE_ENV(e),temp,block,7,0); break;
+    default: dense_rows(DENSE_ENV(e),temp,block,8,0); break;
     }
     return 1;
 }
