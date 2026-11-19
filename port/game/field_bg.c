@@ -21,6 +21,7 @@ extern const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi;
 int gxh_bg_run(unsigned int *head, int count);
 void gxh_bg_runs_reset(void);
 int gxh_bg_runs_on(void);
+void psx_gpu_sync(void); /* (gpu.c: the scene's walk, if it is on another core, finished) */
 
 /* a run of one layer's tiles linked at one OT entry: its first (the walk's first: the newest linked) and how many */
 typedef struct { u32 tag; u32 *head; u16 count, entry; } BgMarker;
@@ -214,8 +215,9 @@ PORT_OVERLAY_CODE(0a) s32 o0a_fldbg_draw(void) {
     static u32 last_h BG_DATA; /* (the background file: its place and header, which another field's changes) */
     const u32 hs = (u32)(uintptr_t)h ^ (u32)h->overlayCount << 16 ^ (u32)h->overlayOffset ^ (u32)h->cameraOffset << 8 ^
                    (u32)h->orgX << 20 ^ (u32)h->orgY << 4;
-    if (hs != last_h) { last_h = hs; gxh_bg_runs_reset(); bg_skip_count[0] = bg_skip_count[1] = 0; }
-    if (++bg_skip_age >= BG_SKIP_FRAMES) { bg_skip_age = 0; bg_skip_count[0] = bg_skip_count[1] = 0; }
+    /* (the lists are the walk's too, port_ot_marker: one on another core is waited for before they are cleared) */
+    if (hs != last_h) { psx_gpu_sync(); last_h = hs; gxh_bg_runs_reset(); bg_skip_count[0] = bg_skip_count[1] = 0; }
+    if (++bg_skip_age >= BG_SKIP_FRAMES) { psx_gpu_sync(); bg_skip_age = 0; bg_skip_count[0] = bg_skip_count[1] = 0; }
     const BgOverlay *o = (const BgOverlay *)((const u8 *)h + h->overlayOffset);
     /* (the markers are reached by the walk's 24-bit links: in psx_ram's 16 MB window, else nothing lifted) */
     if (((uintptr_t)&bg_mk ^ (uintptr_t)psx_ram) >> 24) return r;

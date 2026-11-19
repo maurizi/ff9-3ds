@@ -33,6 +33,11 @@ int plat_async(void (*fn)(void *), void *arg);
 void plat_async_wait(void);
 int plat_async_busy(void); /* a job sent and not finished (0 with no worker) */
 
+/* Run fn(arg) on another core as plat_async does, on a thread of its own for the scene's drawing (gpu.c: an ordering
+ * table walked while the game builds the next frame); 0 if there is none. plat_draw_wait waits for it. (3DS only.) */
+int plat_draw_async(void (*fn)(void *), void *arg);
+void plat_draw_wait(void);
+
 /* Run fn(arg) on a thread of its own for blocking I/O (it waits on the card, using next to no CPU), one job at a time;
  * 0 if there is none (the caller does without). plat_io_wait waits for it. (3DS: such a thread; PC: none.) */
 int plat_io_async(void (*fn)(void *), void *arg);

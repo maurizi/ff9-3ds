@@ -44,6 +44,13 @@
 
 extern unsigned short *psx_vram;
 
+/* The scene's walk may be on the other core (gpu.c psx_gpu_sync): every way in here from outside the walk waits for it
+ * first, or (the packet ranges the port reports while the next frame is built) is kept and made after it, in order
+ * (psx_gpu_stage, psx_gpu_staged). */
+void psx_gpu_sync(void);
+int psx_gpu_stage(int kind, const int *args, int nargs, const void *data, unsigned int bytes);
+enum { STG_TERRAIN, STG_SHIFT, STG_ZOOM, STG_MODEL, STG_UI, STG_BOTTOM };
+
 #define VW 1024
 #define VH 512
 #define CELL 32
@@ -342,6 +349,7 @@ static void gs_count(unsigned first, unsigned n) {
 }
 /* the window's GPU time per part and frame, measured (a 3DS) and estimated from the counts */
 void ctr_gpu_cost_report(unsigned frames) {
+    psx_gpu_sync();
     gq_collect();
     char line[512];
     int n = 0;
@@ -469,6 +477,7 @@ static int filling; /* psx_vram_filled -> psx_vram_touch: a fill the GPU draws i
  * its copy of them, which is read back if the CPU ever reads them (a field's frame, cleared every frame, isn't) */
 static int fill_kept;
 int psx_vram_fill_kept(int x, int y, int w, int h, int *ix0, int *iy0, int *ix1, int *iy1) {
+    psx_gpu_sync();
     if (!filling || x < 0 || y < 0 || x + w > VW || y + h > VH) return 0;
     const int a0 = (x + CELL - 1) / CELL * CELL, b0 = (y + CELL - 1) / CELL * CELL;
     const int a1 = (x + w) / CELL * CELL, b1 = (y + h) / CELL * CELL;
@@ -477,6 +486,7 @@ int psx_vram_fill_kept(int x, int y, int w, int h, int *ix0, int *iy0, int *ix1,
     return fill_kept = 1;
 }
 void psx_vram_touch(int x, int y, int w, int h) {
+    psx_gpu_sync();
     int cx0, cy0, cx1, cy1;
     if (!cell_range(x, y, x + w, y + h, &cx0, &cy0, &cx1, &cy1)) return;
     int partial = (x % CELL) || (y % CELL) || ((x + w) % CELL && x + w < VW) || ((y + h) % CELL && y + h < VH);
@@ -521,6 +531,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
 
 /* gpu.c: before the CPU reads VRAM (StoreImage, MoveImage's source) */
 void psx_vram_read(int x, int y, int w, int h) {
+    psx_gpu_sync();
     cpu_reads(x, y, x + w, y + h);
 }
 
@@ -1309,6 +1320,7 @@ static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
 
 /* gpu.c: a fill (ClearImage, a GP0 fill command): drawn by the GPU too, so the cells it covers stay current there */
 void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
+    psx_gpu_sync();
     if (w <= 0 || h <= 0) return;
     int x1 = x + w > VW ? VW : x + w, y1 = y + h > VH ? VH : y + h;
     gpu_draws(x, y, x1, y1); /* (its partly covered cells must be current in the mirror first) */
@@ -1346,7 +1358,7 @@ typedef struct {
 #define SLOT_RESERVE (512u << 10)
 static TexSlot slots[MAX_SLOTS];
 static int nslots;
-int ctr_texture_pages(void) { return nslots; } /* (the heartbeat's: platform.c) */
+int ctr_texture_pages(void) { psx_gpu_sync(); return nslots; } /* (the heartbeat's: platform.c) */
 /* The slots live side by side in atlases (1024x1024: 16 of them; 512x512 or one alone when linear memory is short):
  * primitives from different slots of one atlas are drawn in one batch. Each texture bind was a batch of its own, and
  * a busy field background switches between pages and CLUTs hundreds of times a frame (Lindblum's Castle Station:
@@ -2073,7 +2085,7 @@ static float zc_smooth = 1500.0f;   /* the scene's mean depth, smoothed */
 static float near_smooth = 1500.0f; /* its nearest, smoothed: the convergence depth */
 static float fit_zmin = 1e9f;       /* this frame's nearest sample */
 static int ctr_flat_bg;             /* in a field: its background layers at one depth (ctr_flat_background) */
-void ctr_flat_background(int on) { ctr_flat_bg = on; } /* (port/game/field_hud.c, each frame) */
+void ctr_flat_background(int on) { psx_gpu_sync(); ctr_flat_bg = on; } /* (port/game/field_hud.c, each frame) */
 /* The world map's terrain in stereo: each block of it is projected on its own (near and far blocks at different
  * precision), so where two meet the same ground point has slightly different depths, and each side shifted by its
  * own parallax: hairline cracks along the blocks' seams. Its depth is instead the ground's as seen: 1/Z is linear
@@ -2088,6 +2100,7 @@ static struct { const u8 *lo, *hi; unsigned frame; } terrain[MAX_TERRAIN];
 static int nterrain;
 void port_terrain_packets(const void *lo, const void *hi) {
     if (lo == hi) return;
+    if (psx_gpu_stage(STG_TERRAIN, (const int[]){(int)lo, (int)hi}, 2, NULL, 0)) return;
     for (int i = 0; i < nterrain; i++)
         if (frames_drawn - terrain[i].frame > 1) terrain[i] = terrain[--nterrain], i--;
     if (nterrain && terrain[nterrain - 1].hi == (const u8 *)lo && terrain[nterrain - 1].frame == frames_drawn) {
@@ -2252,6 +2265,7 @@ static const u8 *shift_lo, *shift_hi;
 static int shift_dx, shift_dy;
 static unsigned shift_frame; /* (frames_drawn when set: the frame's packets are drawn then or at the next) */
 void port_bottom_shift(const void *lo, const void *hi, int dx, int dy) {
+    if (psx_gpu_stage(STG_SHIFT, (const int[]){(int)lo, (int)hi, dx, dy}, 4, NULL, 0)) return;
     shift_lo = lo, shift_hi = hi, shift_dx = dx, shift_dy = dy;
     shift_frame = frames_drawn;
 }
@@ -2691,6 +2705,7 @@ static inline __attribute__((always_inline)) void poly_k(const unsigned *w, cons
  * the decoder as the walk would. 0: not taken (they are drawn one by one) */
 void DrawPrim(void *p); /* (gpu.c: a packet decoded and drawn as the walk would) */
 int port_terrain_chain(u32 *head, u32 count) {
+    psx_gpu_sync();
 #ifdef PORT_PROBE_AT
     (void)head, (void)count;
     return 0;
@@ -3140,6 +3155,7 @@ static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsign
 }
 static inline const u32 *bg_tile_next(const u32 *p) { return (const u32 *)(((u32)(uintptr_t)psx_ram & 0xFF000000) | (*p & 0xFFFFFF)); }
 int gxh_bg_run(unsigned int *head, int count) {
+    psx_gpu_sync();
     u16 sc[4];
     if (!bg_plain() || count <= 0 || !area_scissor(sc)) return 0;
     /* (every tile a page + SPRT_16 packet as the game builds them (MargePrim'd: the sprite's tag a NOP between), none
@@ -3223,7 +3239,7 @@ int ctr_ui_hands[CTR_MAX_HANDS][2], ctr_ui_nhands;
 static int shown_layer = -1; /* the layer of the displayed buffer, when it has UI */
 /* the card game's hands: drawn in the scene itself (menu_state 3), relative to their drawing area, last frame's */
 static int scene_hands[CTR_MAX_HANDS][2], scene_nhands, scene_nhands_next;
-int ctr_ui_active(void) { return shown_layer >= 0 || (menu_state == 3 && scene_nhands > 0); }
+int ctr_ui_active(void) { psx_gpu_sync(); return shown_layer >= 0 || (menu_state == 3 && scene_nhands > 0); }
 static struct { int x0, y0, x1, y1; } ui_cache[8];
 static int n_ui_cache;
 
@@ -3273,11 +3289,13 @@ static int displayed_layer(void) {
 /* the displayed buffer's layer, and a count changing whenever it is cleared or drawn into (field_hud.c: the same as
  * after its drawing, the layer holds that and nothing else) */
 unsigned ctr_ui_layer_serial(void) {
+    psx_gpu_sync();
     int k = displayed_layer();
     return k < 0 ? ~0u : (unsigned)k | (layers[k].clears + layers[k].draws) << 1;
 }
 /* the displayed buffer's layer kept as drawn this frame, nothing drawn into it (field_hud.c) */
 void ctr_ui_layer_keep(void) {
+    psx_gpu_sync();
     int k = displayed_layer();
     if (k >= 0) layers[k].drawn = frames_drawn;
 }
@@ -3293,6 +3311,7 @@ void port_bottom_packets(const void *lo, const void *hi);
 /* packets [lo, hi) of this frame are drawn on the bottom screen scaled by factor, (cx, cy) of them in the middle of
  * the screen (the world map's zoom: port/game/world_navi.c); factor 1: as they are */
 void port_bottom_zoom(const void *lo, const void *hi, int cx, int cy, int factor) {
+    if (psx_gpu_stage(STG_ZOOM, (const int[]){(int)lo, (int)hi, cx, cy, factor}, 5, NULL, 0)) return;
     zoom_lo = lo;
     zoom_hi = hi;
     zoom_cx = (float)cx;
@@ -3313,6 +3332,7 @@ static C3D_RenderTarget *outline_edge_rt[2];
 static struct { const u8 *lo, *hi; unsigned frame; float zsum, zlast; int zn; } models[MAX_MODEL_RANGES];
 static int nmodels;
 void port_model_packets(const void *lo, const void *hi) {
+    if (psx_gpu_stage(STG_MODEL, (const int[]){(int)lo, (int)hi}, 2, NULL, 0)) return;
     float zlast = 0; /* (the range's depth last frame, carried over when the same model writes there again) */
     for (int i = 0; i < nmodels; i++)
         if (((const u8 *)lo < models[i].hi && (const u8 *)hi > models[i].lo) || frames_drawn - models[i].frame > 2) {
@@ -3457,10 +3477,15 @@ static void outline_draw(int eye, int dx, int dy, int w, int h, int rows) {
 /* the windows' packets that stay on the top screen: drawn at the screen plane in stereo (box and text together) */
 static struct { const u8 *lo, *hi; unsigned frame; } flat[8];
 static int nflat;
+static void ui_packets(const void *lo, const void *hi, int mode);
 void port_ui_packets(const void *lo, const void *hi) {
+    const int mode = port_game_mode(); /* (the game's as the call is made, whenever a kept one is: psx_gpu_stage) */
+    if (psx_gpu_stage(STG_UI, (const int[]){(int)lo, (int)hi, mode}, 3, NULL, 0)) return;
+    ui_packets(lo, hi, mode);
+}
+static void ui_packets(const void *lo, const void *hi, int mode) {
     /* In a field or on the world map, windows are speech bubbles and prompts anchored to the scene: they stay on the
      * top screen with the speaker (docs/ui-design.md), at the screen plane. Menus go to the bottom whatever the mode. */
-    int mode = port_game_mode();
     if ((mode == 1 || mode == 3) && !menu_state) {
         for (int i = 0; i < nflat; i++) /* (the buffer was reused, or two presents went by: a past frame's) */
             if (((const u8 *)lo < flat[i].hi && (const u8 *)hi > flat[i].lo) || frames_drawn - flat[i].frame > 2)
@@ -3476,6 +3501,7 @@ void port_ui_packets(const void *lo, const void *hi) {
 }
 /* packets [lo, hi) of the frame's buffer are drawn on the bottom screen (the world map's navigation map too) */
 void port_bottom_packets(const void *lo, const void *hi) {
+    if (psx_gpu_stage(STG_BOTTOM, (const int[]){(int)lo, (int)hi}, 2, NULL, 0)) return;
     for (int i = 0; i < nranges; i++) /* (the buffer was reused: a range there is a past frame's) */
         if ((const u8 *)lo < ranges[i].hi && (const u8 *)hi > ranges[i].lo) ranges[i] = ranges[--nranges], i--;
     if (nranges == 8) nranges--;
@@ -3528,6 +3554,7 @@ static void ranges_age(void) {
 
 /* gpu.c: an ordering table drawn into a framebuffer starts that frame's UI layer afresh, once it has been shown */
 void psx_gpu_ot_begin(const u32 *ot) {
+    psx_gpu_sync();
     (void)ot;
     if (ui_mode || ctr_keep_layers) return;
     int x, y, w, h;
@@ -3573,6 +3600,7 @@ static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1) {
 }
 
 int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int h) {
+    psx_gpu_sync();
     (void)sx; (void)sy;
     if (!ui_mode) return 0;
     if (n_ui_cache < 8) {
@@ -3588,6 +3616,7 @@ int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int h) {
  * the mirror in a submit. Submitted, the list, drawn from the VBlank often just after a present, waited for the GPU to
  * finish the frame before: on an Old 3DS some 7 ms of every battle frame) */
 void psx_ui_list_begin(void) {
+    psx_gpu_sync();
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
     ui_mode = 1;
@@ -3600,6 +3629,7 @@ void psx_ui_list_begin(void) {
 /* the same for the framebuffer at (x, y), shown or not (the rewards under a battle: drawn into both buffers' layers,
  * as the battle's VBlank flip may come between the drawing and the present) */
 void psx_ui_list_begin_at(int x, int y) {
+    psx_gpu_sync();
     ui_mode = 1;
     ui_ox = x;
     ui_oy = y;
@@ -3609,6 +3639,7 @@ void psx_ui_list_begin_at(int x, int y) {
 
 /* the same, drawing over what the layer has this frame (the battle screen's own drawing after the battle list) */
 void psx_ui_list_begin_keep(void) {
+    psx_gpu_sync();
     PsxDisplayInfo d;
     psx_gpu_display_info(&d);
     ui_mode = 1;
@@ -3618,6 +3649,7 @@ void psx_ui_list_begin_keep(void) {
 }
 
 void psx_ui_list_end(void) {
+    psx_gpu_sync();
     ui_mode = 0;
 }
 
@@ -3626,7 +3658,30 @@ void psx_ui_list_end(void) {
  * after the present, waited for the GPU to finish the frame before: on an Old 3DS, whose GPU takes some 10 ms after a
  * battle's present, 7-8 ms of every frame) */
 void psx_gpu_ot_done(void) {
+    psx_gpu_sync();
     ranges_drawn();
+}
+
+/* gpu.c: whether the scene's walk may go to the other core now. An Old 3DS's (a New 3DS has the time, and its 3D reads
+ * the GTE's depths as the game writes the next frame's), in a field or on the world map with no menu up and no UI
+ * layer kept: the frames this was measured and compared on. */
+int ctr_defer = 1;
+int psx_gpu_defer_ok(void) {
+    if (!ctr_defer || ctr_is_new3ds() || stereo_on || ui_mode || menu_state || ctr_keep_layers || ctr_outline) return 0;
+    const int mode = port_game_mode();
+    return mode == 1 || mode == 3;
+}
+/* a call kept while the walk was on the other core (psx_gpu_stage), made now */
+void psx_gpu_staged(int kind, const int *a) {
+    const void *lo = (const void *)a[0], *hi = (const void *)a[1];
+    switch (kind) {
+    case STG_TERRAIN: port_terrain_packets(lo, hi); break;
+    case STG_SHIFT: port_bottom_shift(lo, hi, a[2], a[3]); break;
+    case STG_ZOOM: port_bottom_zoom(lo, hi, a[2], a[3], a[4]); break;
+    case STG_MODEL: port_model_packets(lo, hi); break;
+    case STG_UI: ui_packets(lo, hi, a[2]); break;
+    case STG_BOTTOM: port_bottom_packets(lo, hi); break;
+    }
 }
 
 /* ---- presenting ------------------------------------------------------------------------------------------ */
@@ -3726,6 +3781,7 @@ static u32 *top_ui_head;
 static const void *top_ui_buf;
 static unsigned top_ui_size;
 void ctr_top_ui(unsigned *head, const void *buf, unsigned size) {
+    psx_gpu_sync();
     top_ui_head = (u32 *)head;
     top_ui_buf = buf;
     top_ui_size = size;
@@ -3739,6 +3795,7 @@ static int n_hud_draw;
 
 /* image slot: w x h (<= 64x64) 8-bit pixels through a CLUT of PS1 colours, kept while key is the same */
 void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h) {
+    psx_gpu_sync();
     trace("hud_image", slot, (int)key);
     if (slot < 0 || slot >= HUD_IMAGES || w > 64 || h > 64) return;
     if (hud_img[slot].ok && hud_img[slot].key == key) return;
@@ -3774,7 +3831,7 @@ static u16 model_order[MODEL_TRIS];
  * down). model_view.c reloads its models when the generation changes. */
 #define MODEL_IDLE_FRAMES 300
 static unsigned model_idle;
-unsigned ctr_model_generation(void) { return model_gen; }
+unsigned ctr_model_generation(void) { psx_gpu_sync(); return model_gen; }
 /* (called by frame_begin once the GPU has finished what was sent: no draw can still read them) */
 static void model_tex_free(void) {
     for (int i = 0; i < MODEL_TEXS; i++)
@@ -3784,7 +3841,7 @@ static void model_tex_free(void) {
     slots_held_at = -1; /* (the cache may grow again) */
 }
 
-void ctr_model_texture(int slot, const u32 *rgba) { /* rgba: 256x256, rows from the top, 0xRRGGBBAA */
+void ctr_model_texture(int slot, const u32 *rgba) { psx_gpu_sync(); /* rgba: 256x256, rows from the top, 0xRRGGBBAA */
     trace("model_texture", slot, 0);
     if (slot < 0 || slot >= MODEL_TEXS) return;
     model_idle = 0;
@@ -3802,12 +3859,13 @@ void ctr_model_texture(int slot, const u32 *rgba) { /* rgba: 256x256, rows from 
     mark_dirty(dst, 256 * 256 * 4);
 }
 
-void ctr_model_begin(void) { n_model_tris = 0; }
+void ctr_model_begin(void) { psx_gpu_sync(); n_model_tris = 0; }
 
 /* one triangle: x, y, z (depth: larger farther), u, v per corner, its parallax per corner (pixels, + to the right
  * eye), texture slot */
 void ctr_model_tri(int tex, const float *x, const float *y, const float *z, const float *u, const float *v,
                    const float *par) {
+    psx_gpu_sync();
     if (n_model_tris == MODEL_TRIS || tex < 0 || tex >= MODEL_TEXS || !model_tex_ok[tex]) return;
     typeof(model_tri[0]) *t = &model_tri[n_model_tris++];
     for (int k = 0; k < 3; k++) t->x[k] = x[k], t->y[k] = y[k], t->u[k] = u[k], t->v[k] = v[k], t->par[k] = par[k];
@@ -3859,6 +3917,7 @@ static void draw_models(int eye) {
 
 /* draw image slot at (x, y) of the bottom screen's UI (its 320x224 coordinates) this frame, w x h of it */
 void ctr_hud_draw(int slot, int x, int y, int w, int h) {
+    psx_gpu_sync();
     if (slot < 0 || slot >= HUD_IMAGES || !hud_img[slot].ok || n_hud_draw == 16) return;
     hud_draw[n_hud_draw].slot = slot;
     hud_draw[n_hud_draw].x = x; hud_draw[n_hud_draw].y = y;
@@ -3869,6 +3928,7 @@ void ctr_hud_draw(int slot, int x, int y, int w, int h) {
 
 /* the same on the top screen (its 400x240), scaled to dw x dh */
 void ctr_hud_draw_top(int slot, int x, int y, int w, int h, int dw, int dh) {
+    psx_gpu_sync();
     ctr_hud_draw(slot, x + 1000, y, w, h);
     if (n_hud_draw && hud_draw[n_hud_draw - 1].x == x + 1000) hud_draw[n_hud_draw - 1].dw = dw, hud_draw[n_hud_draw - 1].dh = dh;
 }
@@ -4010,6 +4070,7 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
 unsigned ctr_frames_presented(void) { return frames_drawn; }
 
 void ctr_present(long frame) {
+    psx_gpu_sync();
     trace("present", (int)frame, 0);
     extern volatile const char *ctr_where;
     ctr_where = "present";
@@ -4326,6 +4387,7 @@ static void dump_display_eye(long frame, int eye) {
 /* DUMP_EVERY's frame: the displayed buffer as the left eye's mirror has it, and in 3D the right eye's beside it
  * (f<frame>_r: for comparing stereo frames between builds) */
 void ctr_render_dump_display(long frame) {
+    psx_gpu_sync();
     gpu_sync();
     dump_display_eye(frame, 0);
     if (stereo_on) dump_display_eye(frame, 1);
@@ -4344,6 +4406,7 @@ void ctr_render_dump_display(long frame) {
 }
 
 void ctr_render_dump(void) {
+    psx_gpu_sync();
     mkdir("sdmc:/3ds/ff9/dump", 0777);
     gpu_sync();
     write_ppm("mirror0", VW, VH, px_mirror, mirror_tex[0].data);
@@ -4537,6 +4600,7 @@ void ctr_video_init(void) {
 }
 
 void ctr_shutdown(void) {
+    psx_gpu_sync();
     extern volatile const char *ctr_where;
     void ctr_audio_exit(void);
     ctr_where = "closing: worker";

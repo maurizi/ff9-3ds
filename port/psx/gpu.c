@@ -42,6 +42,13 @@ unsigned int psx_gpu_packets, psx_gpu_words;
 
 int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int h);
 
+/* the scene's walk on another core (below, at draw_ot) */
+void psx_gpu_sync(void);
+int psx_gpu_stage(int kind, const int *args, int nargs, const void *data, unsigned int bytes);
+enum { STAGE_LOAD = 0x100, STAGE_MOVE };
+static volatile int ot_job_on;
+static __thread int ot_on_job; /* this thread is the worker, in the walk */
+
 static inline u32 *link_ptr(u32 addr24) {
     return (u32 *)(((u32)psx_ram & 0xFF000000) | addr24);
 }
@@ -241,6 +248,13 @@ int LoadImage(RECT *r, u32 *p) {
     if (!psx_vram || psx_load_image_skip) {
         return 0;
     }
+    if (ot_job_on && !ot_on_job) { /* (behind the scene's walk, as libgpu queues it: its pixels copied, if they are few) */
+        const int a[4] = {r->x, r->y, r->w, r->h};
+        const unsigned int bytes = r->w > 0 && r->h > 0 ? (unsigned int)r->w * (unsigned int)r->h * 2 : 0;
+        if (!psx_load_record && bytes && bytes <= 0x8000 &&
+            psx_gpu_stage(STAGE_LOAD, a, 4, (const void *)((uintptr_t)p & ~(uintptr_t)3), bytes)) return 0;
+        psx_gpu_sync();
+    }
     if (psx_load_record) load_record(r, p);
     const int check_mask=gp0_state.check_mask;
     const u16 set_mask=gp0_state.set_mask?0x8000:0;
@@ -272,6 +286,7 @@ int StoreImage(RECT *r, u32 *p) {
     if (!psx_vram) {
         return 0;
     }
+    psx_gpu_sync();
     int peek = psx_vram_peek_begin(r->x, r->y, r->w, r->h);
     if (!peek) psx_vram_read(r->x, r->y, r->w, r->h);
     /* by DMA, word-aligned: FF9 stores a single pixel to an odd address (Fossil Roo, field 1403): unaligned, the
@@ -296,6 +311,10 @@ int MoveImage(RECT *r, int x, int y) {
     if (psx_trace_gpu) {
         port_log("gpu: MoveImage %d,%d %dx%d -> %d,%d\n", r->x, r->y, r->w, r->h, x, y);
     }
+    if (ot_job_on && !ot_on_job) {
+        const int a[6] = {r->x, r->y, r->w, r->h, x, y};
+        if (psx_gpu_stage(STAGE_MOVE, a, 6, NULL, 0)) return 0;
+    }
     vram_copy(r->x, r->y, x, y, r->w, r->h);
     return 0;
 }
@@ -304,6 +323,7 @@ void ClearImage(RECT *r, s32 cr, s32 cg, s32 cb) {
     if (psx_trace_gpu) {
         port_log("gpu: ClearImage %d,%d %dx%d rgb %ld,%ld,%ld\n", r->x, r->y, r->w, r->h, (long)cr, (long)cg, (long)cb);
     }
+    psx_gpu_sync();
     vram_fill(r->x, r->y, r->w, r->h, rgb15(cr, cg, cb));
 }
 
@@ -420,6 +440,7 @@ static void draw_packet(u32 *p);
 unsigned int psx_gpu_env_version;
 
 DRAWENV *PutDrawEnv(DRAWENV *env) {
+    psx_gpu_sync();
     psx_gpu_env_version++;
     make_draw_env(&env->dr_env, env, 1);
     ((P_TAG *)&env->dr_env)->addr = OT_END;
@@ -434,6 +455,7 @@ extern unsigned int psx_gpu_scene_prims;
 unsigned int psx_gpu_scene_prims_max;
 
 DISPENV *PutDispEnv(DISPENV *env) {
+    psx_gpu_sync();
     if (env->disp.x != disp_env.disp.x || env->disp.y != disp_env.disp.y) {
         if (psx_gpu_scene_prims > psx_gpu_scene_prims_max) psx_gpu_scene_prims_max = psx_gpu_scene_prims;
         psx_gpu_scene_prims = 0;
@@ -592,7 +614,10 @@ unsigned int *psx_main_ot;
 unsigned int psx_main_ot_n, psx_ot_slot, psx_ot_generation; /* generation: bumped when the main OT is cleared */
 
 u32 *ClearOTagR(u32 *ot, int n) {
-    if (n >= 0x1000) { psx_main_ot = (unsigned int *)ot; psx_main_ot_n = (unsigned int)n; psx_ot_slot = (unsigned int)n; ++psx_ot_generation; }
+    if (n >= 0x1000) {
+        psx_main_ot = (unsigned int *)ot; psx_main_ot_n = (unsigned int)n; ++psx_ot_generation;
+        if (!ot_job_on) psx_ot_slot = (unsigned int)n; /* (a walk on the worker has it, with the table it began in) */
+    }
     note_big_ot(ot, n);
     ot[0] = OT_END;
     int i = 1;
@@ -691,6 +716,7 @@ static void draw_packet(u32 *p) {
 }
 
 void DrawPrim(void *p) {
+    psx_gpu_sync();
     draw_packet(p);
 }
 
@@ -718,32 +744,53 @@ int psx_ot_entry = -1;
  * and its clip rectangle must not shift apart between the eyes. */
 int psx_ot_side;
 
-static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
-    unsigned int profile_start = port_profile_begin();
-    psx_gpu_ot_begin(p);
-    psx_ot_slot = ~0u; /* (set as the walk enters the main OT's entries; another OT's packets have none) */
-    const u32 *head = p;
-    psx_ot_entry = 0;
-    psx_ot_side = 0;
-    const int from_main = psx_main_ot && (unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n;
-    /* Explicit bounds disambiguate stack links whose low 24 bits alias arena RAM. */
-    u32 head_window = (u32)p & 0xFF000000;
-    unsigned int guard = 0;
-    /* ClearOTagR's empty entries each link to the word before: a run of them is stepped over by comparison
-     * (both branches below would go to p - 1 for these) */
-    const int ram_window = head_window == ((u32)psx_ram & 0xFF000000);
-    /* (the markers' range, set before the walk: a marker is a packet of no words) */
-    const uintptr_t marker_lo = (uintptr_t)psx_ot_marker_lo, marker_size = (uintptr_t)psx_ot_marker_hi - marker_lo;
+/* ---- the scene's walk on another core --------------------------------------------------------------------------
+ * The PS1's DrawOTag returns at once: its GPU draws the list while the game works on the next frame, in the other
+ * ordering table and packet buffer, and the game waits for it (DrawSync(0), or any other GPU call: libgpu queues them
+ * behind the list) before it touches either again. Here a scene's walk may run the same way, on a thread of the platform's on another
+ * core (plat_draw_async), where the renderer says so (psx_gpu_defer_ok: an Old 3DS, port/3ds/render.c): everything the walk
+ * draws with (the decoder's state, the VRAM shadow, the renderer's) is the walk's alone until psx_gpu_sync, which
+ * every other way into the GPU or the renderer starts with. A sync stops the worker at its next packet and walks the
+ * rest here (the game has nothing else to do then). The few calls the port makes while a frame is built that only
+ * note something for its own walk (psx_gpu_stage: packet ranges, the world map's texture uploads and copies) are kept
+ * in order and made at the sync, after the walk: the renderer sees the calls it would have, in the same order. */
+typedef struct {
+    u32 *p;
+    const u32 *head;
+    u32 head_window;
+    unsigned int guard;
+    int from_main, ram_window;
+    uintptr_t marker_lo, marker_size;
+    const void *native_buffer;
+    unsigned int native_size;
+    unsigned int *main_ot; /* (as the walk began: the game clears the next frame's while this one is drawn) */
+    unsigned int main_ot_n;
+} OtWalk;
+static OtWalk ot_job;
+static volatile int ot_job_stop, ot_job_finished;
+unsigned int psx_gpu_deferred, psx_gpu_defer_helped; /* walks sent to the worker; of them, finished here */
+
+/* 0 when *stop was set before the walk's end (s says where it is) */
+static int ot_walk(OtWalk *s, const volatile int *stop) {
+    u32 *p = s->p;
+    const u32 *const head = s->head;
+    unsigned int *const main_ot = s->main_ot;
+    const unsigned int main_ot_n = s->main_ot_n;
+    const int from_main = s->from_main, ram_window = s->ram_window;
+    const uintptr_t marker_lo = s->marker_lo, marker_size = s->marker_size;
     while (((u32)p & 0xFFFFFF) != OT_END) {
+        if (stop && *stop) { s->p = p; return 0; }
+        /* ClearOTagR's empty entries each link to the word before: a run of them is stepped over by comparison
+         * (both branches below would go to p - 1 for these) */
         if (ram_window && (unsigned char *)p > psx_ram && (unsigned char *)p < psx_ram + PSX_RAM_SIZE)
             while ((unsigned char *)p > psx_ram && *p == (((u32)(p - 1)) & 0xFFFFFF)) --p;
-        if ((unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n) psx_ot_slot = (unsigned int)((unsigned int *)p - psx_main_ot);
+        if ((unsigned int)((unsigned int *)p - main_ot) < main_ot_n) psx_ot_slot = (unsigned int)((unsigned int *)p - main_ot);
         if (!((P_TAG *)p)->len && (uintptr_t)p - marker_lo >= marker_size) { /* an ordering table's entry (within 64K
                                                                                    * entries of the head; not a marker): how far into it the walk is */
             int d = (int)(head - p);
             if (d < 0) d = -d;
             if (d < 0x10000) psx_ot_entry = d;
-            psx_ot_side = from_main && (unsigned int)((unsigned int *)p - psx_main_ot) >= psx_main_ot_n;
+            psx_ot_side = from_main && (unsigned int)((unsigned int *)p - main_ot) >= main_ot_n;
         }
         u32 addr = *p & 0xFFFFFF;
         if (((P_TAG *)p)->len)
@@ -753,8 +800,8 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
         if (addr == OT_END) {
             break;
         }
-        u32 candidate = head_window | addr;
-        if (native_size && candidate - (u32)native_buffer < native_size)
+        u32 candidate = s->head_window | addr;
+        if (s->native_size && candidate - (u32)s->native_buffer < s->native_size)
             p = (u32 *)candidate;
         else {
             p = link_ptr(addr);
@@ -762,16 +809,128 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
                 (uintptr_t)p - marker_lo >= marker_size)
                 port_fatal("DrawOTag: link 0x%06X outside known buffers", addr);
         }
-        if (++guard > 1000000) {
+        if (++s->guard > 1000000) {
             port_fatal("DrawOTag: ordering table loops");
         }
     }
-    if (drawsync_cb) {
-        drawsync_owed = 1;
-    }
+    s->p = p;
+    return 1;
+}
+static void ot_walk_begin(const OtWalk *s) {
+    psx_gpu_ot_begin(s->head);
+    psx_ot_slot = ~0u; /* (set as the walk enters the main OT's entries; another OT's packets have none) */
+    psx_ot_entry = 0;
+    psx_ot_side = 0;
+}
+static void ot_walk_end(void) {
     psx_gpu_ot_done();
     psx_ot_entry = -1;
     psx_ot_side = 0;
+}
+static void ot_job_main(void *arg) {
+    OtWalk *s = arg;
+    unsigned int profile_start = port_profile_begin();
+    ot_on_job = 1;
+    if (!s->guard) ot_walk_begin(s), s->guard = 1; /* (not begun: a job the caller runs itself comes here twice) */
+    if (ot_walk(s, &ot_job_stop)) ot_walk_end(), ot_job_finished = 1;
+    ot_on_job = 0;
+    port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
+}
+
+/* 1 if the scene's walk may run on the worker now (the renderer: port/3ds/render.c) */
+__attribute__((weak)) int psx_gpu_defer_ok(void) { return 0; }
+__attribute__((weak)) int plat_draw_async(void (*fn)(void *), void *arg) { (void)fn; (void)arg; return 0; }
+__attribute__((weak)) void plat_draw_wait(void) {}
+__attribute__((weak)) int plat_async_busy(void) { return 0; }
+
+/* calls kept for the sync (psx_gpu_stage): each its kind, its arguments and its data */
+#define STAGE_BYTES (192 * 1024)
+#define STAGE_ARGS 6
+static u32 *stage_buf;
+static unsigned int stage_used;
+__attribute__((weak)) void psx_gpu_staged(int kind, const int *args) { (void)kind; (void)args; }
+static void stage_replay(void);
+
+/* The scene's walk, if one is on the worker, finished: what follows may use the GPU's state and the renderer's. */
+void psx_gpu_sync(void) {
+    if (!ot_job_on || ot_on_job) return;
+    unsigned int profile_start = port_profile_begin();
+    ot_job_stop = 1;
+    plat_draw_wait();
+    ot_job_stop = 0;
+    ot_job_on = 0; /* (the worker is out of it: the rest is this thread's, as any walk) */
+    if (!ot_job_finished) {
+        psx_gpu_defer_helped++;
+        if (!ot_job.guard) ot_walk_begin(&ot_job), ot_job.guard = 1;
+        ot_walk(&ot_job, NULL);
+        ot_walk_end();
+    }
+    port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
+    stage_replay();
+}
+
+/* A call that only notes something for the next walk: 1 if it was kept for the sync (a walk is on the worker; the
+ * caller returns), 0 if the caller makes it now (no walk, or no room: the walk is finished first). data: `bytes` the
+ * call reads later, copied (the game may change them before the sync). */
+int psx_gpu_stage(int kind, const int *args, int nargs, const void *data, unsigned int bytes) {
+    if (!ot_job_on || ot_on_job) return 0;
+    const unsigned int need = (2 + STAGE_ARGS) * 4 + ((bytes + 3) & ~3u);
+    if (!stage_buf) stage_buf = malloc(STAGE_BYTES);
+    if (!stage_buf || stage_used + need > STAGE_BYTES) { psx_gpu_sync(); return 0; }
+    u32 *r = (u32 *)((u8 *)stage_buf + stage_used);
+    r[0] = (u32)kind, r[1] = bytes;
+    for (int i = 0; i < STAGE_ARGS; i++) r[2 + i] = i < nargs ? (u32)args[i] : 0;
+    if (bytes) __builtin_memcpy(r + 2 + STAGE_ARGS, data, bytes);
+    stage_used += need;
+    return 1;
+}
+static void stage_replay(void) {
+    for (unsigned int at = 0; at < stage_used;) { /* (nothing is staged meanwhile: no walk is on the worker) */
+        const u32 *r = (const u32 *)((const u8 *)stage_buf + at);
+        const int *a = (const int *)(r + 2);
+        at += (2 + STAGE_ARGS) * 4 + ((r[1] + 3) & ~3u);
+        if (r[0] == STAGE_LOAD) {
+            RECT rc = {(s16)a[0], (s16)a[1], (s16)a[2], (s16)a[3]};
+            LoadImage(&rc, (u32 *)(r + 2 + STAGE_ARGS));
+        } else if (r[0] == STAGE_MOVE) {
+            RECT rc = {(s16)a[0], (s16)a[1], (s16)a[2], (s16)a[3]};
+            MoveImage(&rc, a[4], a[5]);
+        } else psx_gpu_staged((int)r[0], a);
+    }
+    stage_used = 0;
+}
+
+static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
+    psx_gpu_sync();
+    unsigned int profile_start = port_profile_begin();
+    OtWalk w = {0};
+    w.p = p, w.head = p;
+    w.main_ot = psx_main_ot, w.main_ot_n = psx_main_ot_n;
+    w.from_main = psx_main_ot && (unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n;
+    /* Explicit bounds disambiguate stack links whose low 24 bits alias arena RAM. */
+    w.head_window = (u32)p & 0xFF000000;
+    w.ram_window = w.head_window == ((u32)psx_ram & 0xFF000000);
+    /* (the markers' range, set before the walk: a marker is a packet of no words) */
+    w.marker_lo = (uintptr_t)psx_ot_marker_lo, w.marker_size = (uintptr_t)psx_ot_marker_hi - w.marker_lo;
+    w.native_buffer = native_buffer, w.native_size = native_size;
+    if (drawsync_cb) {
+        drawsync_owed = 1;
+    }
+    if (w.from_main && !ot_on_job && psx_ot_entry < 0 && !native_size && psx_gpu_defer_ok() && !plat_async_busy()) {
+        ot_job = w;
+        ot_job_finished = 0;
+        ot_job_on = 1;
+        if (plat_draw_async(ot_job_main, &ot_job)) {
+            psx_gpu_deferred++;
+            port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
+            return;
+        }
+        ot_job_on = 0;
+    }
+    ot_walk_begin(&w);
+    w.guard = 1;
+    ot_walk(&w, NULL);
+    ot_walk_end();
     port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
 }
 void DrawOTag(u32 *p) { draw_ot(p, NULL, 0); }
@@ -793,12 +952,14 @@ int DrawSyncCallback(void (*func)(void)) {
 /* Deliver an owed DrawSync callback (the GPU "finished"): at DrawSync and once per frame. */
 void psx_drawsync_pending(void) {
     if (drawsync_owed && drawsync_cb) {
+        psx_gpu_sync(); /* (the GPU has finished: what the callback is told) */
         drawsync_owed = 0;
         drawsync_cb();
     }
 }
 
 int DrawSync(int mode) {
+    psx_gpu_sync(); /* (the game's own wait for the GPU) */
     if (mode == 0) {
         psx_drawsync_pending();
     }
@@ -834,6 +995,7 @@ __attribute__((weak)) void psx_ui_list_end(void) {}
 void ContinueDraw(u32 *insaddr, s32 contaddr) {
     /* Even when BreakDraw returns zero, the inserted list must execute. FF9
      * uses this at VBlank for battle commands, status bars and text. */
+    psx_gpu_sync();
     if (!contaddr && psx_skip_vblank_list()) return;
     if (insaddr && !(!contaddr && psx_vblank_list_native(insaddr))) {
         psx_ui_list_battle = 1;

@@ -153,8 +153,88 @@ void plat_io_wait(void) {
     __sync_synchronize();
 }
 
+/* ---- the drawing thread (plat_draw_async): a scene's ordering table walked while the game builds the next frame
+ * (gpu.c). On the worker's core, above the sound thread there: the game's thread kicks the sound's mix as a frame
+ * ends, just before the walk is sent, and the mix (some 9 ms a frame on an Old 3DS) would have the walk wait for most
+ * of the time it has. The sound waits for the walk instead, which the game's next GPU call ends (a frame's game code,
+ * 12 ms or so, at most its drawing), and mixes while the game's thread finishes the frame: its queue holds a quarter
+ * of a second. */
+static Thread draw_thread;
+static LightEvent draw_go, draw_done;
+static void (*volatile draw_fn)(void *);
+static void *volatile draw_arg;
+static volatile int draw_busy, draw_started, draw_dead;
+static void draw_main(void *unused) {
+    (void)unused;
+    void ctr_exception_install(void);
+    ctr_exception_install();
+    for (;;) {
+        LightEvent_Wait(&draw_go);
+        if (quit) break;
+        draw_started = 1;
+        __sync_synchronize();
+        draw_fn(draw_arg);
+        __sync_synchronize();
+        draw_busy = 0;
+        LightEvent_Signal(&draw_done);
+    }
+}
+int plat_draw_async(void (*fn)(void *), void *arg) {
+    if (draw_dead) return 0;
+    if (!draw_thread) {
+        static int tried;
+        if (tried++) return 0;
+        LightEvent_Init(&draw_go, RESET_ONESHOT);
+        LightEvent_Init(&draw_done, RESET_ONESHOT);
+        s32 prio = 0x30;
+        svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+        ctr_core1_share(0);
+        draw_thread = threadCreate(draw_main, NULL, 128 * 1024, prio - 3, ctr_is_new3ds() ? 2 : 1, false);
+        port_log("async: drawing thread %s\n", draw_thread ? "started" : "not created");
+        if (!draw_thread) return 0;
+    }
+    plat_draw_wait();
+    if (draw_dead) return 0;
+    draw_fn = fn;
+    draw_arg = arg;
+    draw_started = 0;
+    draw_busy = 1;
+    __sync_synchronize();
+    LightEvent_Signal(&draw_go);
+    return 1;
+}
+/* (as plat_async_wait: a thread the system doesn't schedule within half a second isn't used again, and its job runs
+ * here) */
+void plat_draw_wait(void) {
+    if (!draw_busy) return;
+    extern volatile const char *ctr_where;
+    const char *was = (const char *)ctr_where;
+    ctr_where = "waiting for the drawing thread";
+    u64 t0 = osGetTime();
+    while (draw_busy) {
+        LightEvent_WaitTimeout(&draw_done, 20000000);
+        if (draw_busy && !draw_started && osGetTime() - t0 > 500) {
+            draw_dead = 1;
+            port_log("async: the drawing thread isn't running; the game's thread draws\n");
+            void (*fn)(void *) = draw_fn;
+            void *arg = draw_arg;
+            draw_busy = 0;
+            fn(arg);
+            break;
+        }
+    }
+    __sync_synchronize();
+    ctr_where = was;
+}
+
 void ctr_async_exit(void) {
     quit = 1;
+    if (draw_thread) {
+        plat_draw_wait();
+        LightEvent_Signal(&draw_go);
+        if (R_SUCCEEDED(threadJoin(draw_thread, 1000000000ULL))) threadFree(draw_thread);
+        draw_thread = NULL;
+    }
     if (io_thread) {
         plat_io_wait();
         LightEvent_Signal(&io_go);

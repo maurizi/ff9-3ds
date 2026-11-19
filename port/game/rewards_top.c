@@ -259,6 +259,8 @@ static void live_draw_into(int j) {
     env[1] = 0xE3000000u | (u32)b->x | (u32)b->y << 10;
     env[2] = 0xE4000000u | (u32)(b->x + b->w - 1) | (u32)(b->y + b->h - 1) << 10;
     env[3] = 0xE5000000u | ((u32)b->x & 0x7FF) | ((u32)b->y & 0x7FF) << 11;
+    void psx_gpu_sync(void);
+    psx_gpu_sync();
     Gp0State saved = gp0_state; /* (the battle's drawing state is the battle's again after, as field_hud.c's) */
     psx_ui_list_begin_at(r->x, r->y);
     psx_area_dx = r->x - b->x, psx_area_dy = r->y - b->y;

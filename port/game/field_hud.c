@@ -35,6 +35,7 @@ u32 *ClearOTagR(u32 *ot, int n);
 static u32 hud_mem[OTN + BUF_WORDS];
 static u32 *const hud_ot = hud_mem;
 /* (the 3DS's renderer: its UI layer's state; the PC draws every time) */
+void psx_gpu_sync(void); /* (gpu.c) */
 __attribute__((weak)) unsigned ctr_ui_layer_serial(void) { return ~0u; }
 __attribute__((weak)) void ctr_ui_layer_keep(void) {}
 
@@ -912,6 +913,7 @@ static void overlay(void (*fn)(void)) {
     fn();
     g_ot = saved_ot;
     g_primPtr = saved_prim;
+    psx_gpu_sync(); /* (the scene's walk, if it is on another core: the drawing state is its until it ends) */
     Gp0State saved_gp0 = gp0_state;
     psx_ui_list_begin_keep();
     port_draw_ot_buffer(&hud_ot[OTN - 1], hud_mem, sizeof hud_mem);
@@ -1023,6 +1025,7 @@ void port_bottom_hud(void) {
         }
     }
 
+    psx_gpu_sync();
     Gp0State saved_gp0 = gp0_state; /* (the field's drawing environment is the field's again after) */
     if (battle || world) psx_ui_list_begin_keep();
     else psx_ui_list_begin();

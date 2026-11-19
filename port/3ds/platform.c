@@ -202,6 +202,12 @@ void plat_wait_frame(void) {
                  ctr_audio_frames, ctr_audio_peak, ctr_audio_dropped, ctr_audio_underruns, (unsigned)(linearSpaceFree() >> 10),
                  (unsigned)(vramSpaceFree() >> 10), ctr_texture_pages());
         ctr_audio_peak = 0;
+        { /* (the scene's walks sent to the other core since the last beat, and those of them finished here: gpu.c) */
+            extern unsigned int psx_gpu_deferred, psx_gpu_defer_helped;
+            static unsigned int d0, h0;
+            if (psx_gpu_deferred != d0) port_log("walks: %u on the other core, %u finished here\n", psx_gpu_deferred - d0, psx_gpu_defer_helped - h0);
+            d0 = psx_gpu_deferred, h0 = psx_gpu_defer_helped;
+        }
         void port_world_where(void);
         port_world_where(); /* (on the world map: where, for a spot to rebuild) */
     }
