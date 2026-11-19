@@ -43,6 +43,7 @@
 #include "prim_shbin.h"
 
 extern unsigned short *psx_vram;
+extern int ctr_sw_chain, ctr_sw_poly1, ctr_sw_drawmemo, ctr_sw_reorder, ctr_sw_overlap; /* (below, at ctr_defer) */
 
 /* The scene's walk may be on the other core (gpu.c psx_gpu_sync): every way in here from outside the walk waits for it
  * first, or (the packet ranges the port reports while the next frame is built) is kept and made after it, in order
@@ -443,7 +444,7 @@ static void gpu_draws(int x0, int y0, int x1, int y1) {
     int cx0, cy0, cx1, cy1;
     if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
     const int cells = cx0 | cy0 << 6 | cx1 << 12 | cy1 << 18;
-    if (cells == last_cells && last_ver == cells_ver) return;
+    if (ctr_sw_drawmemo && cells == last_cells && last_ver == cells_ver) return;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++)
             if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); goto ok; }
@@ -775,7 +776,7 @@ static Vtx *run_slot(int kind, int abr, const u16 sc[4], C3D_Tex *tex, unsigned 
     if (run_n) {
         int last = run_n - 1;
         if (run_same(&run_g[last], kind, abr, sc, tex) && run_g[last].nv + n <= run_cap[last]) return run_take(last, n, d);
-        for (int i = 0; i < last; i++)
+        for (int i = 0; i < last && ctr_sw_reorder; i++)
             if (run_same(&run_g[i], kind, abr, sc, tex) && replaces(&run_g[i]) && run_g[i].nv + n <= run_cap[i]) {
                 ctr_run_reorders++;
                 return run_take(i, n, d);
@@ -2613,7 +2614,7 @@ static int r_poly1(const unsigned *w) {
     (void)w;
     return 0;
 #else
-    if (!poly_plain()) return 0;
+    if (!ctr_sw_poly1 || !poly_plain()) return 0;
     TriCtx c;
     tri_ctx(&c);
     switch ((w[0] >> 26) & 7) { /* (textured, quad, gouraud bits: the vertices' words at constant places) */
@@ -2757,7 +2758,7 @@ int port_terrain_chain(u32 *head, u32 count) {
     (void)head, (void)count;
     return 0;
 #else
-    if (ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2) return 0;
+    if (!ctr_sw_chain || ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2) return 0;
     u32 *p = head;
     unsigned n = 0;
     TriCtx c;
@@ -3713,6 +3714,11 @@ void psx_gpu_ot_done(void) {
  * the GTE's depths as the game writes the next frame's), in a field, a battle or on the world map with no menu up and
  * no UI layer kept: the frames this was measured and compared on. (A battle's VBlank list, its UI, is drawn from the
  * game's VSync, after its DrawSync: the walk is over by then.) */
+/* Switches for comparing on a 3DS (the hardware harness sets them by name, port/3ds/agent.c; each 1 is the renderer as
+ * it is): the world map's chains drawn at once (0: packet by packet), a polygon's packet straight from its words (0:
+ * decoded), gpu_draws' skip of a repeated call (0: every call), opaque primitives joining an earlier group of a run
+ * (0: none), and a frame drawn by the GPU while the next is recorded (0: waited for at each present, one half). */
+int ctr_sw_chain = 1, ctr_sw_poly1 = 1, ctr_sw_drawmemo = 1, ctr_sw_reorder = 1, ctr_sw_overlap = 1;
 int ctr_defer = 1;
 int ctr_defer_world; /* (the world map too: off for now, below; a switch for comparing on a 3DS) */
 int psx_gpu_defer_ok(void) {
@@ -4342,13 +4348,18 @@ void ctr_present(long frame) {
     frame_begin(); /* (test: the frame waited for at once, one half, as before the overlap) */
     half_restart();
 #else
-    gpu_busy = 1; /* (drawn while the next frame is recorded into the other half) */
-    gs_presented();
-    hz_use(vb, VB_MAX * sizeof(Vtx), "vertex half");
-    hz_use(staging, STAGING_SIZE, "staging half");
-    hz_sent();
-    half ^= 1;
-    half_restart();
+    if (!ctr_sw_overlap) { /* (the frame waited for at once, one half) */
+        frame_begin();
+        half_restart();
+    } else {
+        gpu_busy = 1; /* (drawn while the next frame is recorded into the other half) */
+        gs_presented();
+        hz_use(vb, VB_MAX * sizeof(Vtx), "vertex half");
+        hz_use(staging, STAGING_SIZE, "staging half");
+        hz_sent();
+        half ^= 1;
+        half_restart();
+    }
 #endif
     frames_drawn++;
     co_last = -1;

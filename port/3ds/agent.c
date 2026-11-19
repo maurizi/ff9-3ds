@@ -48,10 +48,18 @@
 
 /* the switches a job may set by name; any other int of the build by its address (hwrun.py finds it in the ELF).
  * Weak: a build without one still links, and says so when a job names it. */
-extern int ctr_defer __attribute__((weak)), ctr_slot_keep __attribute__((weak));
+extern int ctr_defer __attribute__((weak)), ctr_slot_keep __attribute__((weak)), ctr_defer_world __attribute__((weak)),
+    ctr_sw_chain __attribute__((weak)), ctr_sw_poly1 __attribute__((weak)), ctr_sw_drawmemo __attribute__((weak)),
+    ctr_sw_reorder __attribute__((weak)), ctr_sw_overlap __attribute__((weak));
 static const struct { const char *name; int *p; } switches[] = {
     {"ctr_defer", &ctr_defer},
     {"ctr_slot_keep", &ctr_slot_keep},
+    {"ctr_defer_world", &ctr_defer_world},
+    {"ctr_sw_chain", &ctr_sw_chain},
+    {"ctr_sw_poly1", &ctr_sw_poly1},
+    {"ctr_sw_drawmemo", &ctr_sw_drawmemo},
+    {"ctr_sw_reorder", &ctr_sw_reorder},
+    {"ctr_sw_overlap", &ctr_sw_overlap},
 };
 
 extern volatile const char *ctr_where;
@@ -568,6 +576,44 @@ const char *ctr_agent_start(void) {
             continue;
         }
         unsigned len = 0;
+        { /* PUT PATH BYTES ADLER32: a file for the card (a new agent build, in this one's place: hwrun.py update). Written
+           * beside it and moved over it once whole and checked; then this one starts again, as after a job. */
+            char path[160];
+            unsigned long sum = 0;
+            if (sscanf(line, "PUT %150s %u %lx", path, &len, &sum) == 3 && !strncmp(path, "sdmc:/", 6) && len && len <= 8u << 20) {
+                char tmp[168];
+                snprintf(tmp, sizeof tmp, "%s.new", path);
+                FILE *f = fopen(tmp, "wb");
+                unsigned got = 0;
+                u32 a = 1, b = 0;
+                u64 t = svcGetSystemTick();
+                printf("\nreceiving %s (%u KB)\n", path, len >> 10);
+                while (f && got < len && sock >= 0 && ms_since(t) < 15000) {
+                    unsigned k = (unsigned)rxn < len - got ? (unsigned)rxn : len - got;
+                    if (k) {
+                        for (unsigned i = 0; i < k; i++) a = (a + (u8)rx[i]) % 65521, b = (b + a) % 65521;
+                        if (fwrite(rx, 1, k, f) != k) break;
+                        got += k, rxn -= (int)k;
+                        memmove(rx, rx + k, (size_t)rxn);
+                        t = svcGetSystemTick();
+                    }
+                    if (got < len && rx_fill() == 0) svcSleepThread(2000000);
+                }
+                int ok = f && got == len && (b << 16 | a) == sum;
+                if (f) fclose(f);
+                if (ok) remove(path), ok = rename(tmp, path) == 0;
+                else remove(tmp);
+                say("agent: %s: %u of %u bytes, %s\n", path, got, len, ok ? "in place" : "not taken");
+                int n = snprintf(line, sizeof line, "status=%s relaunch=%d", ok ? "updated" : "refused reason=file not whole",
+                                 ok ? relaunch_set() : 0);
+                send_chunk('E', line, (unsigned)n);
+                shutdown(sock, SHUT_WR);
+                for (int i = 0; i < 30; i++) gspWaitForVBlank();
+                net_close();
+                if (ok) { gfxExit(); exit(0); }
+                continue;
+            }
+        }
         if (sscanf(line, "JOB %31s %u", job.id, &len) != 2 || len > 256 * 1024) continue;
         char *text = malloc(len + 1);
         unsigned got = 0;

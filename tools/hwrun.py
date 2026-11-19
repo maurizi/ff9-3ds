@@ -266,6 +266,22 @@ def handle(conn, addr, st):
             conn.sendall(b'QUIT\n')
             log('quit sent')
             return
+        if job.get('put'):  # (a file for the console's card: a new agent build)
+            import zlib
+            data = open(job['put'], 'rb').read()
+            conn.sendall(f'PUT {job["path"]} {len(data)} {zlib.adler32(data) & 0xffffffff:x}\n'.encode() + data)
+            conn.settimeout(60)
+            reply = b''
+            try:
+                while True:
+                    b = conn.recv(4096)
+                    if not b:
+                        break
+                    reply += b
+            except OSError:
+                pass
+            log(f'put {job["put"]} -> {job["path"]}: {reply[-80:]!r}')
+            return
         out = job['out']
         text = job['text'].encode()
         try:
@@ -422,6 +438,15 @@ def cmd_quit(args):
     return 0
 
 
+def cmd_update(args):
+    """A new agent build onto the console's card over the harness's own connection; the console starts it."""
+    st = State(args.state)
+    server_note(st)
+    enqueue(st, {'id': 'put', 'put': os.path.abspath(args.file), 'path': args.path})
+    print(f'hwrun: {args.file} -> {args.path} queued')
+    return 0
+
+
 def cmd_status(args):
     st = State(args.state)
     s, c = st.read('serve.json'), st.read('console.json')
@@ -548,6 +573,9 @@ def main():
     p.add_argument('--timeout', type=float, help='seconds to wait for the result (frames/10 + 300)')
     p.add_argument('--no-wait', action='store_true')
     sub.add_parser('quit')
+    p = sub.add_parser('update')
+    p.add_argument('file', nargs='?', default='build/ff9-agent.3dsx')
+    p.add_argument('--path', default='sdmc:/3ds/ff9-agent.3dsx')
     sub.add_parser('status')
     p = sub.add_parser('decode')
     p.add_argument('file')
@@ -557,7 +585,7 @@ def main():
     p.add_argument('--port', type=int, default=PORT)
     p.add_argument('--jobs', type=int, default=0, help='stop after this many (0: until quit)')
     args = ap.parse_args()
-    return {'serve': cmd_serve, 'run': cmd_run, 'quit': cmd_quit, 'status': cmd_status, 'decode': cmd_decode,
+    return {'serve': cmd_serve, 'run': cmd_run, 'quit': cmd_quit, 'update': cmd_update, 'status': cmd_status, 'decode': cmd_decode,
             'sim': cmd_sim}[args.cmd](args)
 
 
