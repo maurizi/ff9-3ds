@@ -1491,7 +1491,11 @@ static TexSlot *slot_take(TexSlot *r, u32 key, u32 twin) {
 }
 /* (slot_renew: a slot the page gave up, the page's again with the blocks it holds) */
 #define RENEW_OWN 4
-int ctr_slot_keep = 1; /* (0: a page given another slot never takes one of its own back: as before, for comparing) */
+/* Off: on an Old 3DS the world map's water showed dark streaks and black triangles a frame at a time, far worse with
+ * this on than off (one build switching halfway, 2026-11-19; Azahar draws neither). What a kept slot's blocks hold
+ * when they are drawn with there is not yet understood: 0 until it is (a page given another slot then never takes one
+ * of its own back, as before 1f4231c). */
+int ctr_slot_keep = 0;
 static int renew_b;                  /* convert_block: the block that must change, and what its sources hash to now */
 static u32 renew_hash, renew_chash;
 static TexSlot *slot_back(TexSlot *r, u32 key, u32 twin) {
