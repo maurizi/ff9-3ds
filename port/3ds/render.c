@@ -1352,6 +1352,7 @@ typedef struct {
     u64 cur;       /* blocks known current (stamp set, epoch == cur_epoch): texture_for's test of them at once */
     u64 fl1, fl2;  /* blocks whose flags have 1, 2 (as flags[]: texture_for's flags of current blocks at once) */
     u32 cur_epoch;
+    u32 was_key, was_twin; /* given up by slot_renew (key 0): the page its blocks still hold, as stamp, hash and chash say */
 } TexSlot;
 
 #define MAX_SLOTS 96
@@ -1452,6 +1453,7 @@ static TexSlot *slot_for(u32 key, u32 twin) {
     slots_made++;
     s->key = key;
     s->twin = twin;
+    s->was_key = 0;
     memset(s->epoch, 0, sizeof s->epoch);
     s->cur = 0;
     unsigned h = hash_of(key, twin);
@@ -1480,8 +1482,20 @@ static TexSlot *slot_take(TexSlot *r, u32 key, u32 twin) {
     if (r->key) hash_remove((int)(r - slots));
     r->key = key;
     r->twin = twin;
+    r->was_key = 0;
     memset(r->epoch, 0, sizeof r->epoch);
     memset(r->stamp, 0, sizeof r->stamp);
+    r->cur = 0;
+    hash_insert((int)(r - slots));
+    return r;
+}
+/* (slot_renew: a slot the page gave up, the page's again with the blocks it holds) */
+#define RENEW_OWN 4
+static int renew_b;                  /* convert_block: the block that must change, and what its sources hash to now */
+static u32 renew_hash, renew_chash;
+static TexSlot *slot_back(TexSlot *r, u32 key, u32 twin) {
+    r->key = key, r->twin = twin, r->was_key = 0;
+    memset(r->epoch, 0, sizeof r->epoch);
     r->cur = 0;
     hash_insert((int)(r - slots));
     return r;
@@ -1491,14 +1505,36 @@ static TexSlot *slot_renew(TexSlot *s) {
     hash_remove((int)(s - slots));
     s->key = 0;
     s->twin = 0xFFFFFFFFu; /* (slot_for's last-hit check can't match it) */
+    s->was_key = key, s->was_twin = twin;
     /* (a free one in its place; else the longest unused there (no frame left to draw uses it); else a new one there) */
-    TexSlot *lru = NULL;
+    TexSlot *lru = NULL, *free_one = NULL, *own_oldest = NULL;
+    int own = 0;
+    const int b = renew_b;
     for (int i = 0; i < nslots; i++) {
         TexSlot *r = &slots[i];
         if (r == s || r->atlas == 0xFF || r->serial + 2 > frame_serial || !same_place(r, s)) continue;
-        if (!r->key) return slot_take(r, key, twin);
+        if (!r->key) {
+            /* One this page gave up itself: its blocks are the page's as it was then, and each is checked against
+             * what it was converted from before it is drawn with (convert_block: its sources' cells written since its
+             * stamp, then their hashes), so only what changed is converted. The world map's pages go between two
+             * slots as each frame's change comes while the frame before is in flight (the water's CLUT rows cycle
+             * through four states, its strips scroll): taken empty, each converted every block it draws with again,
+             * every frame: four pages, 682 blocks, 27 ms of the disc 3 airship's 53 ms walk in Azahar as an Old 3DS.
+             * So the one whose block that asked for the change (convert_block: renew_b) already is what it must become:
+             * the state of a cycle met again. A page keeps up to RENEW_OWN of them; past that its oldest is taken. */
+            if (r->was_key == key && r->was_twin == twin) {
+                if (r->stamp[b] && r->hash[b] == renew_hash && r->chash[b] == renew_chash) return slot_back(r, key, twin);
+                own++;
+                if (!own_oldest || r->serial < own_oldest->serial) own_oldest = r;
+                continue;
+            }
+            if (!free_one) free_one = r;
+            continue;
+        }
         if (!lru || r->serial < lru->serial) lru = r;
     }
+    if (own >= RENEW_OWN) return slot_back(own_oldest, key, twin);
+    if (free_one) return slot_take(free_one, key, twin);
     if (nslots < MAX_SLOTS && slots_held_at != nslots)
         for (int a = 0; a < natlases; a++) {
             if (a == s->atlas || atlases[a].tex.width != atlases[s->atlas].tex.width) continue;
@@ -1511,6 +1547,7 @@ static TexSlot *slot_renew(TexSlot *s) {
             ctr_render_stats[5] = nslots;
             return slot_take(r, key, twin);
         }
+    if (own_oldest) return slot_back(own_oldest, key, twin);
     if (lru) return slot_take(lru, key, twin);
     /* none in its place (the cache full: the world map's camera turned): the GPU waited for (what this frame recorded
      * so far drawn, or the frame in flight finished) and the page rewritten where it is. Moved to any free slot, as
@@ -1617,7 +1654,12 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
      * already converted for this page: one converted for the first time was read by none of them, as a page met for
      * the first time mid-frame (models walking in: on a 3DS with the cache full, each such block waited for the GPU,
      * 10-15 waits a frame in Burmecia)) */
-    if (s->stamp[b] && (s->serial == frame_serial || (gpu_busy && s->serial + 1 == frame_serial))) return 1;
+    /* (... and known current since the slot took the page, so maybe drawn with: a slot taken back by slot_renew holds
+     * blocks of its time before, which nothing has drawn with since) */
+    if (s->stamp[b] && s->epoch[b] && (s->serial == frame_serial || (gpu_busy && s->serial + 1 == frame_serial))) {
+        renew_b = b, renew_hash = hsh, renew_chash = chsh;
+        return 1;
+    }
     if (gpu_busy && s->serial + 1 == frame_serial) frame_begin(); /* (the frame in flight's: it finishes first) */
     s->hash[b] = hsh;
     s->chash[b] = chsh;
