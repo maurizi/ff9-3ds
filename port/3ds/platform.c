@@ -75,6 +75,8 @@ unsigned int plat_pad_buttons(int port) {
  * (VSync(n)), so pacing to the 3DS's VBlank keeps it 0.2% slow, which nobody hears. VBlanks that passed while the
  * game worked count toward a VSync(n) (plat_vsync_begin), as on the PS1, so a slow frame doesn't wait again. */
 static unsigned int vsync_owed;
+static unsigned long long ctr_idle_us; /* waited for a VBlank (the heartbeat's) */
+unsigned long long plat_time_us(void) { return svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000000); }
 unsigned int ctr_vblank_waits, ctr_vblank_skips;
 static u32 next_vblank; /* the VBlank count (citro3d's) at which the current virtual frame ends */
 
@@ -205,8 +207,16 @@ void plat_wait_frame(void) {
         { /* (the scene's walks sent to the other core since the last beat, and those of them finished here: gpu.c) */
             extern unsigned int psx_gpu_deferred, psx_gpu_defer_helped;
             static unsigned int d0, h0;
-            if (psx_gpu_deferred != d0) port_log("walks: %u on the other core, %u finished here\n", psx_gpu_deferred - d0, psx_gpu_defer_helped - h0);
-            d0 = psx_gpu_deferred, h0 = psx_gpu_defer_helped;
+            extern volatile unsigned long long psx_gpu_defer_us[3];
+            static unsigned long long u0[3], idle0;
+            const unsigned n = psx_gpu_deferred - d0;
+            if (n) /* (per walk: what the other core walked, the wait for it to stop, the rest walked here; and the time
+                    * this thread waited for a VBlank, of the beat) */
+                port_log("walks: %u on the other core, %u finished here; a walk: %u us there, %u us to stop it, %u us here; idle %u ms\n", n,
+                         psx_gpu_defer_helped - h0, (unsigned)((psx_gpu_defer_us[0] - u0[0]) / n), (unsigned)((psx_gpu_defer_us[1] - u0[1]) / n),
+                         (unsigned)((psx_gpu_defer_us[2] - u0[2]) / n), (unsigned)((ctr_idle_us - idle0) / 1000));
+            d0 = psx_gpu_deferred, h0 = psx_gpu_defer_helped, idle0 = ctr_idle_us;
+            for (int i = 0; i < 3; i++) u0[i] = psx_gpu_defer_us[i];
         }
         void port_world_where(void);
         port_world_where(); /* (on the world map: where, for a spot to rebuild) */
@@ -245,8 +255,10 @@ void plat_wait_frame(void) {
         ctr_vblank_waits++;
         /* (the wait used for a movie's macroblocks decoded ahead, one at a time, while there are any: movie.c) */
         int port_idle_step(void);
+        const unsigned long long idle_t0 = plat_time_us();
         while ((s32)(C3D_FrameCounter(0) - next_vblank) < 0)
             if (!port_idle_step()) gspWaitForVBlank();
+        ctr_idle_us += plat_time_us() - idle_t0;
         port_profile_wait_end(w);
     } else {
         ctr_vblank_skips++;

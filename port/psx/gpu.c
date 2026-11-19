@@ -769,6 +769,9 @@ typedef struct {
 static OtWalk ot_job;
 static volatile int ot_job_stop, ot_job_finished;
 unsigned int psx_gpu_deferred, psx_gpu_defer_helped; /* walks sent to the worker; of them, finished here */
+/* (the heartbeat's: microseconds the worker walked, the game's thread waited for it to stop, and walked the rest) */
+__attribute__((weak)) unsigned long long plat_time_us(void) { return 0; }
+volatile unsigned long long psx_gpu_defer_us[3];
 
 /* 0 when *stop was set before the walk's end (s says where it is) */
 static int ot_walk(OtWalk *s, const volatile int *stop) {
@@ -830,10 +833,12 @@ static void ot_walk_end(void) {
 static void ot_job_main(void *arg) {
     OtWalk *s = arg;
     unsigned int profile_start = port_profile_begin();
+    const unsigned long long t0 = plat_time_us();
     ot_on_job = 1;
     if (!s->guard) ot_walk_begin(s), s->guard = 1; /* (not begun: a job the caller runs itself comes here twice) */
     if (ot_walk(s, &ot_job_stop)) ot_walk_end(), ot_job_finished = 1;
     ot_on_job = 0;
+    psx_gpu_defer_us[0] += plat_time_us() - t0;
     port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
 }
 
@@ -855,15 +860,19 @@ static void stage_replay(void);
 void psx_gpu_sync(void) {
     if (!ot_job_on || ot_on_job) return;
     unsigned int profile_start = port_profile_begin();
+    const unsigned long long t0 = plat_time_us();
     ot_job_stop = 1;
     plat_draw_wait();
     ot_job_stop = 0;
     ot_job_on = 0; /* (the worker is out of it: the rest is this thread's, as any walk) */
+    const unsigned long long t1 = plat_time_us();
+    psx_gpu_defer_us[1] += t1 - t0;
     if (!ot_job_finished) {
         psx_gpu_defer_helped++;
         if (!ot_job.guard) ot_walk_begin(&ot_job), ot_job.guard = 1;
         ot_walk(&ot_job, NULL);
         ot_walk_end();
+        psx_gpu_defer_us[2] += plat_time_us() - t1;
     }
     port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
     stage_replay();
