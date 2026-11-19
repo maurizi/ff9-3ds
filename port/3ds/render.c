@@ -3717,7 +3717,10 @@ int ctr_defer = 1;
 int psx_gpu_defer_ok(void) {
     if (!ctr_defer || ctr_is_new3ds() || stereo_on || ui_mode || menu_state || ctr_keep_layers || ctr_outline) return 0;
     const int mode = port_game_mode();
-    return mode == 1 || mode == 2 || mode == 3; /* (field, battle, world map) */
+    /* (field, battle. Not the world map, mode 3, for now: an Old 3DS drew garbage triangles among its water's there, a
+     * frame at a time, the sailing boat's across both screens (2026-11-19: with this or without was not yet told
+     * apart; Azahar draws none)) */
+    return mode == 1 || mode == 2;
 }
 /* gpu.c: the drawing goes to the other thread. What this one wrote for the GPU since the last flush (vertices, staging,
  * texture blocks) is written out of this core's data cache here, by this core: a flush asked later by the other
