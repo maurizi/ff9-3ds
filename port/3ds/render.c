@@ -1485,12 +1485,16 @@ static TexSlot *slot_renew(TexSlot *s) {
             return slot_take(r, key, twin);
         }
     if (lru) return slot_take(lru, key, twin);
-    for (int i = 0; i < nslots; i++) { /* (none in its place: any free one, as before) */
-        TexSlot *r = &slots[i];
-        if (r->key || r->atlas == 0xFF || r->serial + 2 > frame_serial) continue;
-        return slot_take(r, key, twin);
-    }
-    return slot_for(key, twin);
+    /* none in its place (the cache full: the world map's camera turned): the GPU waited for (what this frame recorded
+     * so far drawn, or the frame in flight finished) and the page rewritten where it is. Moved to any free slot, as
+     * before, its place changed, and on a 3DS so did the texels its pixels by a texel's edge pick: the world map's far
+     * ocean, rewritten every frame, flickered on the right of the horizon (an Old 3DS: some 15 moves in 128 VBlanks there,
+     * a page alternating between two places) */
+    s->key = key, s->twin = twin;
+    hash_insert((int)(s - slots));
+    if (s->serial == frame_serial) gpu_sync();
+    else frame_begin();
+    return s;
 }
 
 /* the cache's last atlas given up with its slots (its texture freed), for memory someone else needs now; 0 if none */
@@ -1916,11 +1920,18 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
     int bx0 = u0 >> 5, bx1 = u1 >> 5, by0 = v0 >> 5, by1 = v1 >> 5;
     if (bx1 < bx0) bx0 = 0, bx1 = 7;
     if (by1 < by0) by0 = 0, by1 = 7;
+    /* the blocks made current: the primitive's, and those a texel beyond its texels (cx/cy): a 3DS's GPU may sample a
+     * texel past the edge of what a primitive spans (its precision), which in a block not yet converted (a slot just
+     * given a page) is whatever was there before: black and white specks and triangles on the world map's far ground as
+     * the camera turned, on an Old 3DS. The flags (which passes it needs) are its own blocks' alone */
+    int cx0 = bx0, cx1 = bx1, cy0 = by0, cy1 = by1;
+    if (u1 >= u0) cx0 = (u0 > 0 ? u0 - 1 : 0) >> 5, cx1 = (u1 < 255 ? u1 + 1 : 255) >> 5;
+    if (v1 >= v0) cy0 = (v0 > 0 ? v0 - 1 : 0) >> 5, cy1 = (v1 < 255 ? v1 + 1 : 255) >> 5;
     /* (the same page, CLUT, window and blocks as the last lookup, nothing written to any source since and the same
      * frame: its answer again, every block then current (convert_block's first test). Runs of glyphs from one font
      * block, of a model's faces from one texture block, are most lookups) */
     static struct { u32 key, twin, epoch, serial; int b; TexSlot *s; unsigned f; } last;
-    const int blocks = bx0 | bx1 << 3 | by0 << 6 | by1 << 9;
+    const int blocks = bx0 | bx1 << 3 | by0 << 6 | by1 << 9 | cx0 << 12 | cx1 << 15 | cy0 << 18 | cy1 << 21;
     if (last.s && last.key == key && last.twin == twin && last.epoch == tex_epoch && last.serial == frame_serial &&
         last.b == blocks && last.s->key == key && last.s->twin == twin) {
         *flags = last.f;
@@ -1932,21 +1943,21 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
     unsigned f = 0;
     /* (the blocks wanted, as a mask: when every one is known current, convert_block's first test for each at once.
      * Nearly every lookup misses the one before (a model's faces alternate between pages, CLUTs and blocks)) */
-    const u64 row = (u64)(((2u << bx1) - 1) & ~((1u << bx0) - 1));
+    const u64 row = (u64)(((2u << cx1) - 1) & ~((1u << cx0) - 1));
     u64 want = 0;
-    for (int by = by0; by <= by1; by++) want |= row << (by * 8);
+    for (int by = cy0; by <= cy1; by++) want |= row << (by * 8);
     if (s->cur_epoch == tex_epoch && !(want & ~s->cur)) {
         for (int by = by0; by <= by1; by++)
             for (int bx = bx0; bx <= bx1; bx++) f |= s->flags[by * 8 + bx];
     } else {
-        for (int by = by0; by <= by1; by++)
-            for (int bx = bx0; bx <= bx1; bx++) {
-                if (convert_block(s, m, bx, by)) { s = slot_renew(s), f = 0, by = by0, bx = bx0 - 1; continue; }
-                f |= s->flags[by * 8 + bx];
+        for (int by = cy0; by <= cy1; by++)
+            for (int bx = cx0; bx <= cx1; bx++) {
+                if (convert_block(s, m, bx, by)) { s = slot_renew(s), f = 0, by = cy0, bx = cx0 - 1; continue; }
+                if (bx >= bx0 && bx <= bx1 && by >= by0 && by <= by1) f |= s->flags[by * 8 + bx];
             }
         if (s->cur_epoch != tex_epoch) s->cur = 0, s->cur_epoch = tex_epoch;
-        for (int by = by0; by <= by1; by++) /* (each checked: a conversion may have moved the epoch on) */
-            for (int bx = bx0; bx <= bx1; bx++) {
+        for (int by = cy0; by <= cy1; by++) /* (each checked: a conversion may have moved the epoch on) */
+            for (int bx = cx0; bx <= cx1; bx++) {
                 const int b = by * 8 + bx;
                 if (s->stamp[b] && s->epoch[b] == tex_epoch) s->cur |= (u64)1 << b;
             }
