@@ -3,7 +3,12 @@
  * worked out in place instead of through the GTE (three register loads, the command and a read a face: some 5000
  * faces a frame). The screen positions are the vertex pass's, clamped to -1024..1023 by its projection, so the
  * products and their sum stay in 32 bits as MAC0 has them. The GTE is left as the routines leave it: the last face's
- * positions loaded and NCLIP run on them. */
+ * positions loaded and NCLIP run on them.
+ *
+ * Chains: a face's packets linked at an OT entry whose head is still a chain of this frame's ground packets (nothing
+ * else linked there since) go on that chain instead of the entry, at its head as the entry would have them; a chain is
+ * one marker in the entry (gpu.c's port markers), so the walk reaches its packets at the same place, in the same order,
+ * and the renderer takes them at once (port_terrain_chain), or they are drawn one by one as before. */
 #include "psyq_port.h"
 #include "ovl_0c.h"
 #include "port_hw.h"
@@ -23,9 +28,49 @@ s32 o0c_wm_blockFacesFar(void *o, s32 pkt, s32 ot);
 #define WF_NEED_LIT 0x20 /* POLY_GT3 only when a lit colour is non-zero */
 #define WF_CULL 0x40    /* drop faces whose three vertices are all right/below of or left of the screen */
 
-static inline void wf_link(u32 *slot, u32 *p, u32 len) {
+/* a chain: its marker's link (the entry's head before it), its newest packet, how many */
+typedef struct { u32 tag; u32 *head; u32 count; } WfChain;
+#define WF_CHAINS 3072 /* per draw buffer (more: linked as they are) */
+static WfChain wf_chains[2][WF_CHAINS];
+static int wf_nchains[2], wf_buf = -1;
+extern const unsigned char *psx_ot_marker_lo, *psx_ot_marker_hi;
+/* the renderer's: a chain's packets drawn at once (1), or not taken (0: drawn one by one) */
+__attribute__((weak)) int port_terrain_chain(u32 *head, u32 count) { (void)head; (void)count; return 0; }
+static inline u32 *wf_ptr(u32 word) { return (u32 *)(((uintptr_t)psx_ram & 0xFF000000) | (word & 0xFFFFFF)); }
+
+static inline void wf_link(u32 *slot, u32 *p, u32 len, WfChain *ch, int *nch) {
+    WfChain *c = (WfChain *)(void *)wf_ptr(*slot);
+    if ((uintptr_t)c - (uintptr_t)ch < (uintptr_t)*nch * sizeof *ch) { /* (the entry's head is a chain of this frame's) */
+        p[0] = ((u32)(uintptr_t)c->head & 0xFFFFFF) | (len << 24);
+        c->head = p;
+        c->count++;
+        return;
+    }
+    if (*nch < WF_CHAINS) {
+        c = &ch[(*nch)++];
+        c->tag = *slot & 0xFFFFFF;
+        c->head = p;
+        c->count = 1;
+        p[0] = 0xFFFFFF | (len << 24);
+        *slot = (u32)(uintptr_t)c & 0xFFFFFF;
+        return;
+    }
     p[0] = (*slot & 0xFFFFFF) | (len << 24);
     *slot = (u32)(uintptr_t)p & 0xFFFFFF;
+}
+
+/* gpu.c's walk at a marker of the world map's (field_bg.c port_ot_marker): 1 if it is a chain, drawn */
+int port_world_marker(unsigned int *m) {
+    const WfChain *c = (const WfChain *)m;
+    if ((uintptr_t)c - (uintptr_t)wf_chains >= sizeof wf_chains) return 0;
+    if (!port_terrain_chain(c->head, c->count)) {
+        u32 *p = c->head;
+        for (u32 i = 0; i < c->count; i++) {
+            DrawPrim(p);
+            p = wf_ptr(*p);
+        }
+    }
+    return 1;
 }
 
 /* index of the largest of three depths, by signed difference as the original compares */
@@ -46,6 +91,18 @@ static inline __attribute__((always_inline)) s32 wf_mesh(u8 *o, s32 pkt, s32 ot,
     alt[0] = src[0];
     alt[1] = src[1];
     alt[2] = src[2];
+    /* (a new frame's first block: the other buffer's chains start afresh. Chains only reached by the walk's 24-bit
+     * links: in psx_ram's 16 MB window, else none) */
+    const int buf = *g_worldBufIndex & 1;
+    if (buf != wf_buf) {
+        wf_buf = buf;
+        wf_nchains[buf] = 0;
+        psx_ot_marker_lo = (const unsigned char *)wf_chains;
+        psx_ot_marker_hi = (const unsigned char *)(wf_chains + 2);
+    }
+    WfChain *const ch = wf_chains[buf];
+    int nch = ((uintptr_t)wf_chains ^ (uintptr_t)psx_ram) >> 24 ? WF_CHAINS : wf_nchains[buf];
+    int *const pn = &nch;
     u32 s0, s1, s2;
     do {
         const u32 w = face[0];
@@ -83,7 +140,7 @@ static inline __attribute__((always_inline)) s32 wf_mesh(u8 *o, s32 pkt, s32 ot,
             p[1] = (fg0 & 0xFFFFFF) | (litOr ? 0x32000000 : 0x30000000);
             p[3] = fg1;
             p[5] = fg2;
-            wf_link(slot, p, 6);
+            wf_link(slot, p, 6, ch, pn);
             p += 7;
         }
         if ((flags & WF_NEED_LIT) && !litOr) continue;
@@ -115,9 +172,10 @@ static inline __attribute__((always_inline)) s32 wf_mesh(u8 *o, s32 pkt, s32 ot,
         p[3] = uv0;
         p[6] = uv1;
         p[9] = uv2;
-        wf_link(slot, p, 9);
+        wf_link(slot, p, 9, ch, pn);
         p += 10;
     } while (--n != 0);
+    if (nch <= WF_CHAINS && !(((uintptr_t)wf_chains ^ (uintptr_t)psx_ram) >> 24)) wf_nchains[buf] = nch;
     gte_ldsxy3(s0, s1, s2); /* (the GTE as the last face left it) */
     gte_nclip();
     return (s32)(uintptr_t)p;

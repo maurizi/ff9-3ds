@@ -456,6 +456,20 @@ int gp0_tri3_packet(const unsigned int *w, unsigned int len) {
 #endif
 }
 
+/* command()'s bookkeeping for n polygons a backend took as a run (render.c port_terrain_chain) */
+void gp0_note_polys(unsigned int n) {
+    if (!psx_display_drawing_on) psx_display_drawing();
+    psx_vram_generation += n;
+    if (!area_hits_valid || area_hits_version != psx_display_watch_version) {
+        area_hits = psx_display_hits(gp0_state.area_x0, gp0_state.area_y0, gp0_state.area_x1 - gp0_state.area_x0 + 1,
+                                     gp0_state.area_y1 - gp0_state.area_y0 + 1);
+        area_hits_version = psx_display_watch_version;
+        area_hits_valid = 1;
+    }
+    if (area_hits) psx_display_generation += n;
+    psx_gpu_scene_prims += n;
+}
+
 /* The commands from w on that are drawing primitives (polygons, lines, rectangles) or drawing state (E0 up), up to
  * the first other one: their words used. One loop for a packet's run of them (gpu.c draw_packet). */
 unsigned int gp0_run_plain(const unsigned int *w, unsigned int len) {

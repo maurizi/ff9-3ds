@@ -175,7 +175,9 @@ static void bg_unit_relink(BgUnit *u) {
 }
 
 /* gpu.c's walk at a marker: the run, the renderer's or drawn tile by tile in the walk's order */
+int port_world_marker(unsigned int *m); /* (world_faces.c: the world map's ground chains) */
 void port_ot_marker(unsigned int *marker) {
+    if (port_world_marker(marker)) return;
     if ((uintptr_t)marker - (uintptr_t)bg_units < sizeof bg_units) { /* a layer's unit */
         BgUnit *u = (BgUnit *)marker;
         if (psx_ovl_resident[0] == 0x0A && gxh_bg_unit(u->head, u->count, u->sprites, u->pos, u->z, u->ot)) return;
@@ -195,6 +197,9 @@ void port_ot_marker(unsigned int *marker) {
         p = bg_link(*p);
     }
 }
+#else
+int port_world_marker(unsigned int *m); /* (world_faces.c: the world map's ground chains) */
+void port_ot_marker(unsigned int *marker) { (void)port_world_marker(marker); }
 #endif
 
 PORT_OVERLAY_CODE(0a) s32 o0a_fldbg_draw(void) {

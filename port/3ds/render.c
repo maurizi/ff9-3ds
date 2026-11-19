@@ -2604,6 +2604,35 @@ static inline __attribute__((always_inline)) void tri3_k(const unsigned *w, cons
     }
 }
 
+/* A chain of the world map's ground packets (world_faces.c: G3s and GT3s, the walk's order from head, count of them):
+ * r_tri3's case decided once for them all, each drawn by tri3_k; one in a window's packets (never, in practice) by
+ * the decoder as the walk would. 0: not taken (they are drawn one by one) */
+void DrawPrim(void *p); /* (gpu.c: a packet decoded and drawn as the walk would) */
+int port_terrain_chain(u32 *head, u32 count) {
+#ifdef PORT_PROBE_AT
+    (void)head, (void)count;
+    return 0;
+#else
+    if (ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2) return 0;
+    u32 *p = head;
+    unsigned n = 0;
+    for (u32 i = 0; i < count; i++) {
+        const u32 cmd = p[1] >> 24;
+        if ((cmd & 0xF8) != 0x30 || (p[0] >> 24) != ((cmd & 4) ? 9u : 6u) ||
+            (menu_state != 3 && in_window_packets(p)))
+            DrawPrim(p);
+        else {
+            if (cmd & 4) tri3_k((const unsigned *)p + 1, 1);
+            else tri3_k((const unsigned *)p + 1, 0);
+            n++;
+        }
+        p = (u32 *)(((uintptr_t)psx_ram & 0xFF000000) | (p[0] & 0xFFFFFF));
+    }
+    gp0_note_polys(n);
+    return 1;
+#endif
+}
+
 static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (battle_list_replaced()) return;
     /* (emit's case for a primitive into the mirror: not in a window's packets (in_window_packets: ui_packet's test

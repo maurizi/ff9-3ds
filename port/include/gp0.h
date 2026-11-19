@@ -55,7 +55,8 @@ extern const Gp0Backend *gp0_backend;
 void gp0_run(const unsigned int *w, unsigned int len);
 unsigned int gp0_run_plain(const unsigned int *w, unsigned int len);
 int gp0_tpage_sprite16(const unsigned int *w);
-int gp0_tri3_packet(const unsigned int *w, unsigned int len); /* a packet of one G3 or GT3; 0: not run */ /* a texture page + SPRT_16 packet; 0: not run */
+int gp0_tri3_packet(const unsigned int *w, unsigned int len); /* a packet of one G3 or GT3; 0: not run */
+void gp0_note_polys(unsigned int n); /* the decoder's bookkeeping for n polygons a backend took at once */ /* a texture page + SPRT_16 packet; 0: not run */
 void gp0_note_sprites(unsigned int texpage, unsigned int n); /* its bookkeeping for n at once (gxh_bg_run) */
 void gp0_sprite16_setup(const unsigned int *t, Gp0Mode *m, Gp0Vtx *v); /* its sprite's mode and vertex */
 void psx_gpu_draw_area(int *x, int *y, int *w, int *h);

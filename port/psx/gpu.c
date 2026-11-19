@@ -738,7 +738,8 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
         if (ram_window && (unsigned char *)p > psx_ram && (unsigned char *)p < psx_ram + PSX_RAM_SIZE)
             while ((unsigned char *)p > psx_ram && *p == (((u32)(p - 1)) & 0xFFFFFF)) --p;
         if ((unsigned int)((unsigned int *)p - psx_main_ot) < psx_main_ot_n) psx_ot_slot = (unsigned int)((unsigned int *)p - psx_main_ot);
-        if (!((P_TAG *)p)->len) { /* an ordering table's entry (within 64K entries of the head): how far into it the walk is */
+        if (!((P_TAG *)p)->len && (uintptr_t)p - marker_lo >= marker_size) { /* an ordering table's entry (within 64K
+                                                                                   * entries of the head; not a marker): how far into it the walk is */
             int d = (int)(head - p);
             if (d < 0) d = -d;
             if (d < 0x10000) psx_ot_entry = d;
