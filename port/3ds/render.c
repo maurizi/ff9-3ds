@@ -1491,6 +1491,7 @@ static TexSlot *slot_take(TexSlot *r, u32 key, u32 twin) {
 }
 /* (slot_renew: a slot the page gave up, the page's again with the blocks it holds) */
 #define RENEW_OWN 4
+int ctr_slot_keep = 1; /* (0: a page given another slot never takes one of its own back: as before, for comparing) */
 static int renew_b;                  /* convert_block: the block that must change, and what its sources hash to now */
 static u32 renew_hash, renew_chash;
 static TexSlot *slot_back(TexSlot *r, u32 key, u32 twin) {
@@ -1522,7 +1523,7 @@ static TexSlot *slot_renew(TexSlot *s) {
              * every frame: four pages, 682 blocks, 27 ms of the disc 3 airship's 53 ms walk in Azahar as an Old 3DS.
              * So the one whose block that asked for the change (convert_block: renew_b) already is what it must become:
              * the state of a cycle met again. A page keeps up to RENEW_OWN of them; past that its oldest is taken. */
-            if (r->was_key == key && r->was_twin == twin) {
+            if (ctr_slot_keep && r->was_key == key && r->was_twin == twin) {
                 if (r->stamp[b] && r->hash[b] == renew_hash && r->chash[b] == renew_chash) return slot_back(r, key, twin);
                 own++;
                 if (!own_oldest || r->serial < own_oldest->serial) own_oldest = r;
@@ -3714,6 +3715,12 @@ int psx_gpu_defer_ok(void) {
     const int mode = port_game_mode();
     return mode == 1 || mode == 2 || mode == 3; /* (field, battle, world map) */
 }
+/* gpu.c: the drawing goes to the other thread. What this one wrote for the GPU since the last flush (vertices, staging,
+ * texture blocks) is written out of this core's data cache here, by this core: a flush asked later by the other
+ * thread, on the other core, need not reach lines this core still holds, and the GPU reads memory. (An Old 3DS's
+ * water on the world map, its blocks converted on the drawing thread every frame: black triangles and streaks in
+ * it, which Azahar, with no caches, never drew.) */
+void psx_gpu_handoff(void) { flush_pending(); }
 /* a call kept while the walk was on the other core (psx_gpu_stage), made now */
 void psx_gpu_staged(int kind, const int *a) {
     const void *lo = (const void *)a[0], *hi = (const void *)a[1];
