@@ -3663,13 +3663,14 @@ void psx_gpu_ot_done(void) {
 }
 
 /* gpu.c: whether the scene's walk may go to the other core now. An Old 3DS's (a New 3DS has the time, and its 3D reads
- * the GTE's depths as the game writes the next frame's), in a field or on the world map with no menu up and no UI
- * layer kept: the frames this was measured and compared on. */
+ * the GTE's depths as the game writes the next frame's), in a field, a battle or on the world map with no menu up and
+ * no UI layer kept: the frames this was measured and compared on. (A battle's VBlank list, its UI, is drawn from the
+ * game's VSync, after its DrawSync: the walk is over by then.) */
 int ctr_defer = 1;
 int psx_gpu_defer_ok(void) {
     if (!ctr_defer || ctr_is_new3ds() || stereo_on || ui_mode || menu_state || ctr_keep_layers || ctr_outline) return 0;
     const int mode = port_game_mode();
-    return mode == 1 || mode == 3;
+    return mode == 1 || mode == 2 || mode == 3; /* (field, battle, world map) */
 }
 /* a call kept while the walk was on the other core (psx_gpu_stage), made now */
 void psx_gpu_staged(int kind, const int *a) {
