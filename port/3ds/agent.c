@@ -85,6 +85,7 @@ static struct {
 
 static int sock = -1;
 static volatile int net_busy, finishing;
+static volatile u64 net_idle_at; /* when the last send ended: the watchdog's seconds without a frame include it */
 static int can_relaunch;
 
 /* ---- the log: every line of console.c's, sent every 2 s -------------------------------------------------------- */
@@ -141,6 +142,7 @@ static int send_all(const void *data, size_t n) {
             svcSleepThread(1000000);
         } else break;
     }
+    net_idle_at = svcGetSystemTick();
     net_busy = 0;
     ctr_where = where;
     if (n) {
@@ -400,7 +402,11 @@ void ctr_agent_end(const char *status) {
 
 /* the watchdog's thread: no frame for `seconds` */
 void ctr_agent_hang(unsigned seconds) {
-    if (job.active && job.hang && seconds >= (unsigned)job.hang && !net_busy && !finishing) finish("hang");
+    /* (not while a send is under way, nor counting one that just ended: a buffer of frames takes most of a minute over
+     * an Old 3DS's Wi-Fi, and the first job that sent one ended as hung the moment it had, 2026-11-19) */
+    if (job.active && job.hang && seconds >= (unsigned)job.hang && !net_busy && !finishing &&
+        ms_since(net_idle_at) >= (u64)job.hang * 1000)
+        finish("hang");
 }
 
 void ctr_agent_frame(long frame) {
