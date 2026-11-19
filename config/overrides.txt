@@ -26,6 +26,9 @@ akao_initState
 # (port/game/movie.c).
 o64_mbg_streamGetFrame
 
+# Rotation matrices from angles: GPF products in port code, the GTE left as the game leaves it (port/game/rot_native.c).
+math_buildRotMatrixZYX
+
 # Model vertex projection: the per-vertex loop in port code (port/game/mesh_native.c, field_mesh.c, wm_mesh.c).
 o0b_btl_projectMesh
 o0a_fldmdl_projectMesh
