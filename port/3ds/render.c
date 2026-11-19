@@ -424,20 +424,32 @@ static inline int cell_range(int x0, int y0, int x1, int y1, int *cx0, int *cy0,
 }
 
 /* The GPU is about to draw into [x0,x1)x[y0,y1): its cells must be current in the mirror; then the shadow isn't. */
+/* (the same cells as the call before, none of them a texture's source and nothing done to any cell's state since
+ * (cells_ver): that call's work again would change only gen_counter, which no stamp taken since can tell (a block is
+ * stamped against its sources' cells, none of these): it is skipped. The world map's ground draws small triangles one
+ * after another in the same cells) */
+static unsigned cells_ver;
 static void gpu_draws(int x0, int y0, int x1, int y1) {
+    static int last_cells = -1;
+    static unsigned last_ver;
     int cx0, cy0, cx1, cy1;
     if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
+    const int cells = cx0 | cy0 << 6 | cx1 << 12 | cy1 << 18;
+    if (cells == last_cells && last_ver == cells_ver) return;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++)
             if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); goto ok; }
 ok:
     gen_counter++;
+    int source = 0;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
             shadow_ok[cy][cx] = 0;
             cell_gen[cy][cx] = gen_counter;
-            if (cell_is_source[cy][cx]) tex_epoch++;
+            if (cell_is_source[cy][cx]) tex_epoch++, source = 1;
         }
+    last_cells = source ? -1 : cells;
+    last_ver = cells_ver;
 }
 
 /* The CPU reads [x0,x1)x[y0,y1) of the shadow. */
@@ -482,6 +494,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
     }
     gen_counter++;
     tex_epoch++;
+    cells_ver++;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
             if (filling) {
@@ -1274,6 +1287,7 @@ static void blit_cells(int cx0, int cy0, int cx1, int cy1) {
 /* Read cells [cx0,cx1)x[cy0,cy1) whose shadow is stale back from the left eye's mirror. */
 static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
     trace("readback", cx0 | cy0 << 8, cx1 | cy1 << 8);
+    cells_ver++;
     extern volatile const char *ctr_where;
     ctr_where = "readback";
     gpu_sync();
@@ -1539,6 +1553,7 @@ static inline int cells_newer(int x0, int y0, int x1, int y1, u32 stamp) {
 }
 
 static void mark_source(int x0, int y0, int x1, int y1) {
+    cells_ver++;
     for (int cy = y0 / CELL; cy <= (y1 - 1) / CELL; cy++)
         for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++) cell_is_source[cy & (CH - 1)][cx & (CW - 1)] = 1;
 }
@@ -2516,75 +2531,95 @@ static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     }
 }
 
-/* A gouraud triangle (G3, GT3: GP0 30-37) from its packet words (gp0.h tri3), in r_poly_plain's case: what r_poly
- * and r_poly_plain do with it, without the decoded mode and vertices between (the world map's ground is ~3300 of them a
- * frame, its far fog under them; their decode was some 2 us each on an Old 3DS). 0: not that case, decoded as before */
-static inline __attribute__((always_inline)) void tri3_k(const unsigned *w, const int textured);
-static int r_tri3(const unsigned *w) {
+/* A polygon (GP0 20-3F) from its packet words (gp0.h poly1), in r_poly_plain's case: what r_poly and r_poly_plain do
+ * with it, without the decoded mode and vertices between, each kind its own code (the world map's ground is ~3300
+ * gouraud triangles a frame; their decode was some 2 us each on an Old 3DS). 0: not that case, decoded as before */
+/* what poly_k reads of the drawing state, the same for a run of polygons (no state command between them) */
+typedef struct { u16 sc[4]; int sc_ok, ox, oy, mask; float uvh; } TriCtx;
+static inline void tri_ctx(TriCtx *c) {
+    c->sc_ok = area_scissor(c->sc);
+    c->ox = gp0_state.ofs_x, c->oy = gp0_state.ofs_y;
+    c->mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0);
+    c->uvh = world_ground ? 0.5f : 0;
+}
+static inline __attribute__((always_inline)) void poly_k(const unsigned *w, const unsigned kind, const TriCtx *c);
+static inline int poly_plain(void) {
+    return !(ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2 ||
+             (menu_state != 3 && in_window_packets(psx_gpu_packet)));
+}
+static int r_poly1(const unsigned *w) {
 #ifdef PORT_PROBE_AT
     (void)w;
     return 0;
 #else
-    if (ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2 ||
-        (menu_state != 3 && in_window_packets(psx_gpu_packet)))
-        return 0;
-    if (w[0] & 0x04000000) tri3_k(w, 1); /* (each kind its own code: the vertices' words at constant places) */
-    else tri3_k(w, 0);
+    if (!poly_plain()) return 0;
+    TriCtx c;
+    tri_ctx(&c);
+    switch ((w[0] >> 26) & 7) { /* (textured, quad, gouraud bits: the vertices' words at constant places) */
+    case 0: poly_k(w, 0, &c); break;
+    case 1: poly_k(w, 1, &c); break;
+    case 2: poly_k(w, 2, &c); break;
+    case 3: poly_k(w, 3, &c); break;
+    case 4: poly_k(w, 4, &c); break;
+    case 5: poly_k(w, 5, &c); break;
+    case 6: poly_k(w, 6, &c); break;
+    default: poly_k(w, 7, &c); break;
+    }
     return 1;
 #endif
 }
-static inline __attribute__((always_inline)) void tri3_k(const unsigned *w, const int textured) {
-    const unsigned cmd = w[0] >> 24, st = textured ? 3 : 2; /* (words a vertex) */
-    const unsigned tp = textured ? w[5] >> 16 : gp0_state.texpage;
+static inline __attribute__((always_inline)) void poly_k(const unsigned *w, const unsigned kind, const TriCtx *c) {
+    const int textured = kind & 1, nv = (kind & 2) ? 4 : 3, gouraud = (kind >> 2) & 1;
+    const unsigned cmd = w[0] >> 24;
+    /* (the words of vertex i: colour, position, texture coordinates) */
+#define PK_XY(i) (1 + (i) * (1 + textured) + (gouraud ? (i) : 0))
+#define PK_COL(i) ((i) == 0 || !gouraud ? 0 : PK_XY(i) - 1)
+#define PK_UV(i) (PK_XY(i) + 1)
+    const unsigned tp = textured ? w[PK_UV(1)] >> 16 : gp0_state.texpage;
     Gp0Mode m;
-    m.textured = textured, m.raw = cmd & 1, m.semi = (cmd >> 1) & 1, m.gouraud = 1;
+    m.textured = textured, m.raw = cmd & 1, m.semi = (cmd >> 1) & 1, m.gouraud = gouraud;
     m.tx = (tp & 15) * 64, m.ty = ((tp >> 4) & 1) * 256, m.abr = (tp >> 5) & 3, m.depth = (tp >> 7) & 3;
     if (m.depth == 3) m.depth = 2;
-    m.clut_x = textured ? ((w[2] >> 16) & 0x3F) * 16 : 0, m.clut_y = textured ? (w[2] >> 22) & 0x1FF : 0;
+    m.clut_x = textured ? ((w[PK_UV(0)] >> 16) & 0x3F) * 16 : 0, m.clut_y = textured ? (w[PK_UV(0)] >> 22) & 0x1FF : 0;
     if (textured) gp0_state.texpage = (gp0_state.texpage & ~0x9FFu) | (tp & 0x9FF);
-    const int ox = gp0_state.ofs_x, oy = gp0_state.ofs_y;
-    int x[3], y[3];
-    Vtx t[3];
-    const u32 rawc = textured && m.raw ? 0xFF808080 : 0;
-#pragma GCC unroll 3
-    for (int i = 0; i < 3; i++) {
-        const unsigned xy = w[st * i + 1];
+    const int ox = c->ox, oy = c->oy;
+    int x[4], y[4], u[4] = {0, 0, 0, 0}, v[4] = {0, 0, 0, 0};
+#pragma GCC unroll 4
+    for (int i = 0; i < nv; i++) {
+        const unsigned xy = w[PK_XY(i)];
         x[i] = (int)(xy & 0x7FF) - (int)((xy & 0x400) << 1) + ox;
         y[i] = (int)((xy >> 16) & 0x7FF) - (int)((xy >> 15) & 0x800) + oy;
-        t[i].rgba = rawc ? rawc : 0xFF000000u | (w[st * i] & 0xFFFFFF);
     }
     unsigned tflags = 0;
     C3D_Tex *tex = NULL;
-    int u[3] = {0, 0, 0}, v[3] = {0, 0, 0};
     if (textured) {
-#pragma GCC unroll 3
-        for (int i = 0; i < 3; i++) u[i] = w[st * i + 2] & 0xFF, v[i] = (w[st * i + 2] >> 8) & 0xFF;
-        tex = texture_for(&m, imin(imin(u[0], u[1]), u[2]), imin(imin(v[0], v[1]), v[2]), imax(imax(u[0], u[1]), u[2]),
-                          imax(imax(v[0], v[1]), v[2]), &tflags);
+#pragma GCC unroll 4
+        for (int i = 0; i < nv; i++) u[i] = w[PK_UV(i)] & 0xFF, v[i] = (w[PK_UV(i)] >> 8) & 0xFF;
+        int u0 = imin(imin(u[0], u[1]), u[2]), u1 = imax(imax(u[0], u[1]), u[2]);
+        int v0 = imin(imin(v[0], v[1]), v[2]), v1 = imax(imax(v[0], v[1]), v[2]);
+        if (nv == 4) u0 = imin(u0, u[3]), u1 = imax(u1, u[3]), v0 = imin(v0, v[3]), v1 = imax(v1, v[3]);
+        tex = texture_for(&m, u0, v0, u1, v1, &tflags);
     }
-    ctr_depth_stats[1] += 3;
-    const float ou = tex ? (float)tex_ou : 0, ov = tex ? (float)tex_ov : 0;
-    const float uvh = world_ground ? 0.5f : 0;
-#pragma GCC unroll 3
-    for (int i = 0; i < 3; i++) {
-        t[i].x = (float)x[i] + 5.0f / 16;
-        t[i].y = (float)y[i] + 7.0f / 16;
-        t[i].z = 0;
-        t[i].u = (float)u[i] + uvh;
-        t[i].v = (float)v[i] + uvh;
-        if (tex) t[i].u += ou, t[i].v += ov;
+    ctr_depth_stats[1] += nv;
+    /* (the PS1's triangles (0,1,2) and (1,3,2), each skipped 1024 or more wide or 512 or more high: r_poly) */
+    int x0 = imin(imin(x[0], x[1]), x[2]), x1 = imax(imax(x[0], x[1]), x[2]);
+    int y0 = imin(imin(y[0], y[1]), y[2]), y1 = imax(imax(y[0], y[1]), y[2]);
+    int ta = x1 - x0 <= 1023 && y1 - y0 <= 511, tb = 0;
+    if (nv == 4) {
+        const int qx0 = imin(imin(x[1], x[3]), x[2]), qx1 = imax(imax(x[1], x[3]), x[2]);
+        const int qy0 = imin(imin(y[1], y[3]), y[2]), qy1 = imax(imax(y[1], y[3]), y[2]);
+        tb = qx1 - qx0 <= 1023 && qy1 - qy0 <= 511;
+        if (!ta) x0 = qx0, x1 = qx1, y0 = qy0, y1 = qy1;
+        else if (tb) x0 = imin(x0, qx0), x1 = imax(x1, qx1), y0 = imin(y0, qy0), y1 = imax(y1, qy1);
     }
-    const int x0 = imin(imin(x[0], x[1]), x[2]), x1 = imax(imax(x[0], x[1]), x[2]);
-    const int y0 = imin(imin(y[0], y[1]), y[2]), y1 = imax(imax(y[0], y[1]), y[2]);
-    if (x1 - x0 > 1023 || y1 - y0 > 511) return;
-    u16 sc[4];
-    if (!area_scissor(sc)) return;
+    if (!ta && !tb) return;
+    const u16 *sc = c->sc;
+    if (!c->sc_ok) return;
     int bx0 = imax(x0, sc[0]), by0 = imax(y0, sc[1]), bx1 = imin(x1 + 1, sc[2]), by1 = imin(y1 + 1, sc[3]);
     if (bx0 >= bx1 || by0 >= by1) return;
     gpu_draws(bx0, by0, bx1, by1);
     cur_target = 0;
-    cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0) |
-               ((gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
+    cur_mask = c->mask | ((gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
     ctr_render_stats[1]++;
     int passes[2], np = 0, abr = m.semi ? m.abr : NO_BLEND;
     if (!textured) passes[np++] = K_UNTEX;
@@ -2594,18 +2629,65 @@ static inline __attribute__((always_inline)) void tri3_k(const unsigned *w, cons
         if (tflags & 1) passes[np++] = K_TEX_P1;
         if (tflags & 2) passes[np++] = K_TEX_P2;
     }
+    /* (each vertex made once and written where the run keeps it: r_poly_plain's values, the same sums in the same
+     * order) */
+    const u32 rawc = textured && m.raw ? 0xFF808080 : 0;
+    const float ou = tex ? (float)tex_ou : 0, ov = tex ? (float)tex_ov : 0;
+    const float uvh = c->uvh;
+    if (nv == 3) { /* (a triangle's vertices straight into the run, once a pass) */
+        for (int p = 0; p < np; p++) {
+            const int pabr = passes[p] == K_TEX_P1 || passes[p] == K_PAGE_OP ? NO_BLEND : abr;
+            float d;
+            Vtx *o = run_slot(passes[p], pabr, sc, tex, 3, &d);
+#pragma GCC unroll 3
+            for (int i = 0; i < 3; i++) {
+                o[i].x = (float)x[i] + 5.0f / 16;
+                o[i].y = (float)y[i] + 7.0f / 16;
+                o[i].z = 0;
+                float tu = (float)u[i] + uvh, tv = (float)v[i] + uvh;
+                if (tex) tu += ou, tv += ov;
+                o[i].u = tu, o[i].v = tv;
+                o[i].rgba = rawc ? rawc : 0xFF000000u | (w[PK_COL(i)] & 0xFFFFFF);
+                o[i].d = d;
+            }
+        }
+        return;
+    }
+    Vtx t[4];
+#pragma GCC unroll 4
+    for (int i = 0; i < nv; i++) {
+        t[i].x = (float)x[i] + 5.0f / 16;
+        t[i].y = (float)y[i] + 7.0f / 16;
+        t[i].z = 0;
+        float tu = (float)u[i] + uvh, tv = (float)v[i] + uvh;
+        if (tex) tu += ou, tv += ov;
+        t[i].u = tu, t[i].v = tv;
+        t[i].rgba = rawc ? rawc : 0xFF000000u | (w[PK_COL(i)] & 0xFFFFFF);
+    }
+    const unsigned nout = (ta ? 3 : 0) + (tb ? 3 : 0);
     for (int p = 0; p < np; p++) {
         const int pabr = passes[p] == K_TEX_P1 || passes[p] == K_PAGE_OP ? NO_BLEND : abr;
         float d;
-        Vtx *o = run_slot(passes[p], pabr, sc, tex, 3, &d);
-        o[0] = t[0], o[0].d = d;
-        o[1] = t[1], o[1].d = d;
-        o[2] = t[2], o[2].d = d;
+        Vtx *o = run_slot(passes[p], pabr, sc, tex, nout, &d);
+        if (ta) {
+            o[0] = t[0], o[0].d = d;
+            o[1] = t[1], o[1].d = d;
+            o[2] = t[2], o[2].d = d;
+            o += 3;
+        }
+        if (tb) {
+            o[0] = t[1], o[0].d = d;
+            o[1] = t[3], o[1].d = d;
+            o[2] = t[2], o[2].d = d;
+        }
     }
+#undef PK_XY
+#undef PK_COL
+#undef PK_UV
 }
 
 /* A chain of the world map's ground packets (world_faces.c: G3s and GT3s, the walk's order from head, count of them):
- * r_tri3's case decided once for them all, each drawn by tri3_k; one in a window's packets (never, in practice) by
+ * r_poly1's case decided once for them all, each drawn by poly_k; one in a window's packets (never, in practice) by
  * the decoder as the walk would. 0: not taken (they are drawn one by one) */
 void DrawPrim(void *p); /* (gpu.c: a packet decoded and drawn as the walk would) */
 int port_terrain_chain(u32 *head, u32 count) {
@@ -2616,14 +2698,16 @@ int port_terrain_chain(u32 *head, u32 count) {
     if (ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2) return 0;
     u32 *p = head;
     unsigned n = 0;
+    TriCtx c;
+    tri_ctx(&c);
     for (u32 i = 0; i < count; i++) {
         const u32 cmd = p[1] >> 24;
         if ((cmd & 0xF8) != 0x30 || (p[0] >> 24) != ((cmd & 4) ? 9u : 6u) ||
             (menu_state != 3 && in_window_packets(p)))
-            DrawPrim(p);
+            DrawPrim(p), tri_ctx(&c); /* (as the walk would: the state as it leaves it) */
         else {
-            if (cmd & 4) tri3_k((const unsigned *)p + 1, 1);
-            else tri3_k((const unsigned *)p + 1, 0);
+            if (cmd & 4) poly_k((const unsigned *)p + 1, 5, &c);
+            else poly_k((const unsigned *)p + 1, 4, &c);
             n++;
         }
         p = (u32 *)(((uintptr_t)psx_ram & 0xFF000000) | (p[0] & 0xFFFFFF));
@@ -2893,6 +2977,7 @@ static int button_icon(const Gp0Mode *m, int u, int v, int w, int h) {
 static int in_window_packets(const void *p);
 static void clear_cpu(int x0, int y0, int x1, int y1, const u8 was_ok[VH / CELL][VW / CELL]) {
     for (int y = y0; y < y1; y++) memset(psx_vram + y * VW + x0, 0, (size_t)(x1 - x0) * 2);
+    cells_ver++;
     int cx0, cy0, cx1, cy1;
     if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
     for (int cy = cy0; cy < cy1; cy++)
@@ -3125,7 +3210,7 @@ static int r_copy(int sx, int sy, int dx, int dy, int w, int h) {
     return 1;
 }
 static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc);
-static const Gp0Backend pica_backend = {r_poly, r_line, r_rect, 0, 0, r_sprite16, r_copy, r_tri3};
+static const Gp0Backend pica_backend = {r_poly, r_line, r_rect, 0, 0, r_sprite16, r_copy, r_poly1};
 
 /* gpu.c: the end of an ordering table */
 void psx_gpu_ot_done(void);
@@ -4440,6 +4525,7 @@ void ctr_video_init(void) {
     /* the mirror starts as the shadow does: black, and current */
     memset(shadow_ok, 1, sizeof shadow_ok);
     memset(mirror_ok, 0, sizeof mirror_ok);
+    cells_ver++;
     memset(cell_cols, 0, sizeof cell_cols);
     gp0_backend = &pica_backend;
     if (mirror_depth) C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
