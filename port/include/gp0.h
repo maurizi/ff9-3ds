@@ -45,13 +45,17 @@ typedef struct {
     /* optional: a VRAM-to-VRAM copy (no mask check, no wrap; set_mask as gp0_state has it) done by the renderer itself,
      * 1 if it took it (0: by the CPU, in the shadow) */
     int (*copy)(int sx, int sy, int dx, int dy, int w, int h);
+    /* optional: a gouraud triangle's packet words (G3, GT3: GP0 30-37, all of its words there), the decoder's
+     * bookkeeping done; 1 if it took it, the texture page of a GT3 then set by it (0: decoded and given to poly) */
+    int (*tri3)(const unsigned int *w);
 } Gp0Backend;
 
 extern const Gp0Backend *gp0_backend;
 
 void gp0_run(const unsigned int *w, unsigned int len);
 unsigned int gp0_run_plain(const unsigned int *w, unsigned int len);
-int gp0_tpage_sprite16(const unsigned int *w); /* a texture page + SPRT_16 packet; 0: not run */
+int gp0_tpage_sprite16(const unsigned int *w);
+int gp0_tri3_packet(const unsigned int *w, unsigned int len); /* a packet of one G3 or GT3; 0: not run */ /* a texture page + SPRT_16 packet; 0: not run */
 void gp0_note_sprites(unsigned int texpage, unsigned int n); /* its bookkeeping for n at once (gxh_bg_run) */
 void gp0_sprite16_setup(const unsigned int *t, Gp0Mode *m, Gp0Vtx *v); /* its sprite's mode and vertex */
 void psx_gpu_draw_area(int *x, int *y, int *w, int *h);

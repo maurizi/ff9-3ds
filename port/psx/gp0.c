@@ -432,6 +432,30 @@ void gp0_note_sprites(unsigned int texpage, unsigned int n) {
     psx_gpu_scene_prims += n;
 }
 
+/* A packet of exactly one gouraud triangle (G3 or GT3, GP0 30-37: the world map's ground and its fog), given to the
+ * backend's tri3 with command()'s bookkeeping for it, without its dispatch. 0: not run (command() runs it). */
+int gp0_tri3_packet(const unsigned int *w, unsigned int len) {
+#if defined(PORT_GP0_PROBE) || defined(PORT_PROBE_AT)
+    (void)w; (void)len;
+    return 0;
+#else
+    const unsigned int cmd = w[0] >> 24;
+    if ((cmd & 0xF8) != 0x30 || len != ((cmd & 4) ? 9u : 6u) || !gp0_backend || !gp0_backend->tri3) return 0;
+    if (!psx_display_drawing_on) psx_display_drawing();
+    if (!area_hits_valid || area_hits_version != psx_display_watch_version) {
+        area_hits = psx_display_hits(gp0_state.area_x0, gp0_state.area_y0, gp0_state.area_x1 - gp0_state.area_x0 + 1,
+                                     gp0_state.area_y1 - gp0_state.area_y0 + 1);
+        area_hits_version = psx_display_watch_version;
+        area_hits_valid = 1;
+    }
+    if (!gp0_backend->tri3(w)) return 0;
+    psx_vram_generation++;
+    if (area_hits) psx_display_generation++;
+    ++psx_gpu_scene_prims;
+    return 1;
+#endif
+}
+
 /* The commands from w on that are drawing primitives (polygons, lines, rectangles) or drawing state (E0 up), up to
  * the first other one: their words used. One loop for a packet's run of them (gpu.c draw_packet). */
 unsigned int gp0_run_plain(const unsigned int *w, unsigned int len) {

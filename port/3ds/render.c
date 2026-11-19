@@ -1324,6 +1324,7 @@ typedef struct {
     u32 hash[64];  /* per block: its source texels' hash when converted */
     u32 chash[64]; /* ... and its CLUT's */
     u64 cur;       /* blocks known current (stamp set, epoch == cur_epoch): texture_for's test of them at once */
+    u64 fl1, fl2;  /* blocks whose flags have 1, 2 (as flags[]: texture_for's flags of current blocks at once) */
     u32 cur_epoch;
 } TexSlot;
 
@@ -1648,6 +1649,8 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
         }
     }
     s->flags[b] = flags;
+    s->fl1 = (s->fl1 & ~((u64)1 << b)) | (u64)(flags & 1) << b;
+    s->fl2 = (s->fl2 & ~((u64)1 << b)) | (u64)(flags >> 1 & 1) << b;
     s->stamp[b] = gen_counter;
     s->epoch[b] = tex_epoch;
     mark_source(sx0, sy0, sx0 + sw, sy0 + 32);
@@ -1932,23 +1935,27 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
      * block, of a model's faces from one texture block, are most lookups) */
     static struct { u32 key, twin, epoch, serial; int b; TexSlot *s; unsigned f; } last;
     const int blocks = bx0 | bx1 << 3 | by0 << 6 | by1 << 9 | cx0 << 12 | cx1 << 15 | cy0 << 18 | cy1 << 21;
-    if (last.s && last.key == key && last.twin == twin && last.epoch == tex_epoch && last.serial == frame_serial &&
-        last.b == blocks && last.s->key == key && last.s->twin == twin) {
-        *flags = last.f;
-        tex_ou = last.s->ox, tex_ov = last.s->oy;
-        co_last = (int)(last.s - slots);
-        return slot_tex(last.s);
-    }
-    TexSlot *s = slot_for(key, twin);
+    TexSlot *s;
+    if (last.s && last.key == key && last.twin == twin && last.serial == frame_serial && last.s->key == key &&
+        last.s->twin == twin) {
+        if (last.epoch == tex_epoch && last.b == blocks) {
+            *flags = last.f;
+            tex_ou = last.s->ox, tex_ov = last.s->oy;
+            co_last = (int)(last.s - slots);
+            return slot_tex(last.s);
+        }
+        s = last.s; /* (the same page as the last lookup, other blocks: the world map's ground, face after face) */
+    } else
+        s = slot_for(key, twin);
     unsigned f = 0;
     /* (the blocks wanted, as a mask: when every one is known current, convert_block's first test for each at once.
      * Nearly every lookup misses the one before (a model's faces alternate between pages, CLUTs and blocks)) */
-    const u64 row = (u64)(((2u << cx1) - 1) & ~((1u << cx0) - 1));
-    u64 want = 0;
-    for (int by = cy0; by <= cy1; by++) want |= row << (by * 8);
+    static const u64 rows[8] = {0x01, 0x0101, 0x010101, 0x01010101, 0x0101010101ull, 0x010101010101ull,
+                                0x01010101010101ull, 0x0101010101010101ull}; /* (n + 1 rows from row 0) */
+    const u64 want = (u64)(((2u << cx1) - 1) & ~((1u << cx0) - 1)) * (rows[cy1 - cy0] << (cy0 * 8));
     if (s->cur_epoch == tex_epoch && !(want & ~s->cur)) {
-        for (int by = by0; by <= by1; by++)
-            for (int bx = bx0; bx <= bx1; bx++) f |= s->flags[by * 8 + bx];
+        const u64 own = (u64)(((2u << bx1) - 1) & ~((1u << bx0) - 1)) * (rows[by1 - by0] << (by0 * 8));
+        f = (own & s->fl1 ? 1 : 0) | (own & s->fl2 ? 2 : 0);
     } else {
         for (int by = cy0; by <= cy1; by++)
             for (int bx = cx0; bx <= cx1; bx++) {
@@ -2509,6 +2516,94 @@ static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     }
 }
 
+/* A gouraud triangle (G3, GT3: GP0 30-37) from its packet words (gp0.h tri3), in r_poly_plain's case: what r_poly
+ * and r_poly_plain do with it, without the decoded mode and vertices between (the world map's ground is ~3300 of them a
+ * frame, its far fog under them; their decode was some 2 us each on an Old 3DS). 0: not that case, decoded as before */
+static inline __attribute__((always_inline)) void tri3_k(const unsigned *w, const int textured);
+static int r_tri3(const unsigned *w) {
+#ifdef PORT_PROBE_AT
+    (void)w;
+    return 0;
+#else
+    if (ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2 ||
+        (menu_state != 3 && in_window_packets(psx_gpu_packet)))
+        return 0;
+    if (w[0] & 0x04000000) tri3_k(w, 1); /* (each kind its own code: the vertices' words at constant places) */
+    else tri3_k(w, 0);
+    return 1;
+#endif
+}
+static inline __attribute__((always_inline)) void tri3_k(const unsigned *w, const int textured) {
+    const unsigned cmd = w[0] >> 24, st = textured ? 3 : 2; /* (words a vertex) */
+    const unsigned tp = textured ? w[5] >> 16 : gp0_state.texpage;
+    Gp0Mode m;
+    m.textured = textured, m.raw = cmd & 1, m.semi = (cmd >> 1) & 1, m.gouraud = 1;
+    m.tx = (tp & 15) * 64, m.ty = ((tp >> 4) & 1) * 256, m.abr = (tp >> 5) & 3, m.depth = (tp >> 7) & 3;
+    if (m.depth == 3) m.depth = 2;
+    m.clut_x = textured ? ((w[2] >> 16) & 0x3F) * 16 : 0, m.clut_y = textured ? (w[2] >> 22) & 0x1FF : 0;
+    if (textured) gp0_state.texpage = (gp0_state.texpage & ~0x9FFu) | (tp & 0x9FF);
+    const int ox = gp0_state.ofs_x, oy = gp0_state.ofs_y;
+    int x[3], y[3];
+    Vtx t[3];
+    const u32 rawc = textured && m.raw ? 0xFF808080 : 0;
+#pragma GCC unroll 3
+    for (int i = 0; i < 3; i++) {
+        const unsigned xy = w[st * i + 1];
+        x[i] = (int)(xy & 0x7FF) - (int)((xy & 0x400) << 1) + ox;
+        y[i] = (int)((xy >> 16) & 0x7FF) - (int)((xy >> 15) & 0x800) + oy;
+        t[i].rgba = rawc ? rawc : 0xFF000000u | (w[st * i] & 0xFFFFFF);
+    }
+    unsigned tflags = 0;
+    C3D_Tex *tex = NULL;
+    int u[3] = {0, 0, 0}, v[3] = {0, 0, 0};
+    if (textured) {
+#pragma GCC unroll 3
+        for (int i = 0; i < 3; i++) u[i] = w[st * i + 2] & 0xFF, v[i] = (w[st * i + 2] >> 8) & 0xFF;
+        tex = texture_for(&m, imin(imin(u[0], u[1]), u[2]), imin(imin(v[0], v[1]), v[2]), imax(imax(u[0], u[1]), u[2]),
+                          imax(imax(v[0], v[1]), v[2]), &tflags);
+    }
+    ctr_depth_stats[1] += 3;
+    const float ou = tex ? (float)tex_ou : 0, ov = tex ? (float)tex_ov : 0;
+    const float uvh = world_ground ? 0.5f : 0;
+#pragma GCC unroll 3
+    for (int i = 0; i < 3; i++) {
+        t[i].x = (float)x[i] + 5.0f / 16;
+        t[i].y = (float)y[i] + 7.0f / 16;
+        t[i].z = 0;
+        t[i].u = (float)u[i] + uvh;
+        t[i].v = (float)v[i] + uvh;
+        if (tex) t[i].u += ou, t[i].v += ov;
+    }
+    const int x0 = imin(imin(x[0], x[1]), x[2]), x1 = imax(imax(x[0], x[1]), x[2]);
+    const int y0 = imin(imin(y[0], y[1]), y[2]), y1 = imax(imax(y[0], y[1]), y[2]);
+    if (x1 - x0 > 1023 || y1 - y0 > 511) return;
+    u16 sc[4];
+    if (!area_scissor(sc)) return;
+    int bx0 = imax(x0, sc[0]), by0 = imax(y0, sc[1]), bx1 = imin(x1 + 1, sc[2]), by1 = imin(y1 + 1, sc[3]);
+    if (bx0 >= bx1 || by0 >= by1) return;
+    gpu_draws(bx0, by0, bx1, by1);
+    cur_target = 0;
+    cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0) |
+               ((gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
+    ctr_render_stats[1]++;
+    int passes[2], np = 0, abr = m.semi ? m.abr : NO_BLEND;
+    if (!textured) passes[np++] = K_UNTEX;
+    else if (!m.semi) passes[np++] = K_TEX;
+    else if (tflags & 8) passes[np++] = K_PAGE_OP, passes[np++] = K_PAGE_SEMI;
+    else {
+        if (tflags & 1) passes[np++] = K_TEX_P1;
+        if (tflags & 2) passes[np++] = K_TEX_P2;
+    }
+    for (int p = 0; p < np; p++) {
+        const int pabr = passes[p] == K_TEX_P1 || passes[p] == K_PAGE_OP ? NO_BLEND : abr;
+        float d;
+        Vtx *o = run_slot(passes[p], pabr, sc, tex, 3, &d);
+        o[0] = t[0], o[0].d = d;
+        o[1] = t[1], o[1].d = d;
+        o[2] = t[2], o[2].d = d;
+    }
+}
+
 static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     if (battle_list_replaced()) return;
     /* (emit's case for a primitive into the mirror: not in a window's packets (in_window_packets: ui_packet's test
@@ -3001,7 +3096,7 @@ static int r_copy(int sx, int sy, int dx, int dy, int w, int h) {
     return 1;
 }
 static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc);
-static const Gp0Backend pica_backend = {r_poly, r_line, r_rect, 0, 0, r_sprite16, r_copy};
+static const Gp0Backend pica_backend = {r_poly, r_line, r_rect, 0, 0, r_sprite16, r_copy, r_tri3};
 
 /* gpu.c: the end of an ordering table */
 void psx_gpu_ot_done(void);
@@ -3078,6 +3173,7 @@ void ctr_ui_layer_keep(void) {
  * reused and a stale range would take the scene's packets there (a boss's ceiling went to the bottom screen). */
 static struct { const u8 *lo, *hi; int hit, age; } ranges[8];
 static int nranges;
+static unsigned ranges_ver; /* (counts changes to them: in_window_packets' interval) */
 int port_game_mode(void);
 void port_bottom_packets(const void *lo, const void *hi);
 /* packets [lo, hi) of this frame are drawn on the bottom screen scaled by factor, (cx, cy) of them in the middle of
@@ -3273,6 +3369,7 @@ void port_bottom_packets(const void *lo, const void *hi) {
     ranges[nranges].hi = hi;
     ranges[nranges].hit = ranges[nranges].age = 0;
     nranges++;
+    ranges_ver++;
 }
 extern const u32 *psx_gpu_packet;
 static int flat_packet(void) {
@@ -3287,18 +3384,32 @@ static int ui_packet(void) {
         if (p >= ranges[i].lo && p < ranges[i].hi) return ranges[i].hit = 1;
     return 0;
 }
-static int in_window_packets(const void *p) { /* (ui_packet's test, without marking the range drawn from) */
-    for (int i = 0; i < nranges; i++)
-        if ((const u8 *)p >= ranges[i].lo && (const u8 *)p < ranges[i].hi) return 1;
+/* (ui_packet's test, without marking the range drawn from. The last packet outside them leaves the addresses between the
+ * ranges around it, which the next packets, from the same buffer, mostly fall in: each primitive tested every range,
+ * some 0.8 us of the world map's ~3300 a frame on an Old 3DS) */
+static int in_window_packets(const void *pv) {
+    static const u8 *clo, *chi;
+    static unsigned cver = ~0u;
+    const u8 *p = (const u8 *)pv;
+    if (p >= clo && p < chi && cver == ranges_ver) return 0;
+    const u8 *lo = NULL, *hi = (const u8 *)~(uintptr_t)0;
+    for (int i = 0; i < nranges; i++) {
+        if (p >= ranges[i].lo && p < ranges[i].hi) return 1;
+        if (ranges[i].hi <= p && ranges[i].hi > lo) lo = ranges[i].hi;
+        if (ranges[i].lo > p && ranges[i].lo < hi) hi = ranges[i].lo;
+    }
+    clo = lo, chi = hi, cver = ranges_ver;
     return 0;
 }
 static void ranges_drawn(void) { /* (an ordering table is done: what it drew from is spent) */
     for (int i = 0; i < nranges; i++)
         if (ranges[i].hit) ranges[i] = ranges[--nranges], i--;
+    ranges_ver++;
 }
 static void ranges_age(void) {
     for (int i = 0; i < nranges; i++)
         if (++ranges[i].age > 2) ranges[i] = ranges[--nranges], i--;
+    ranges_ver++;
 }
 
 /* gpu.c: an ordering table drawn into a framebuffer starts that frame's UI layer afresh, once it has been shown */
