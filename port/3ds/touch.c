@@ -42,11 +42,15 @@ static void tap(int x, int y) {
     timer = 0;
 }
 
+#if defined(PORT_AGENT) && !defined(PORT_AUTOTOUCH)
+#define PORT_AUTOTOUCH ""
+#endif
 #ifdef PORT_AUTOTOUCH
+const char *ctr_touch_script = PORT_AUTOTOUCH; /* (a job's: agent.c) */
 static struct { int x, y, x2, y2; long frame, hold; } script[512];
 static int nscript, script_parsed;
 static void parse_script(void) {
-    const char *p = PORT_AUTOTOUCH;
+    const char *p = ctr_touch_script;
     script_parsed = 1;
     while (*p && nscript < 512) {
         char *e;

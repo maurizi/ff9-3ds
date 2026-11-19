@@ -174,3 +174,6 @@ extras: cel-shading outlines (an extra pass), high-resolution replacement models
   game's log (`svcOutputDebugString`). `make 3ds SCENARIO=sdmc:/3ds/ff9/scenarios/X.cfg PROFILE=1` boots
   straight into a fixture with per-category timers.
 - Hardware: not yet (an Old 3DS for performance sign-off when available).
+- Hardware, driven from the PC: `make 3ds AGENT=<pc-ip>` is a test build that, launched once, takes jobs from
+  `tools/hwrun.py` (a scenario, presses, switches set at given frames, frames to capture), sends back the log and
+  the screens' own buffers, and starts itself again for the next job (`docs/hardware-harness.md`).

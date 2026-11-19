@@ -4510,13 +4510,27 @@ void __wrap_GX_BindQueue(gxCmdQueue_s *queue) {
     c3d_queue = queue;
     __real_GX_BindQueue(queue);
 }
+#ifdef PORT_AGENT
+static volatile unsigned top_presents;
+#endif
 static void top_present(int b, int stereo) {
     u32 mode = GSP_BGR8_OES | (stereo ? BIT(5) : BIT(6)) | 1 << 8; /* (3D or 2D; linear memory: as libctru's gfx.c) */
     const u8 *a = top_fb[b];
     /* (true: the present before was still pending, so replaced and never shown; else it is the one on the screen) */
     if (!gspPresentBuffer(GFX_TOP, (unsigned)b & 1, a, stereo ? a + TOP_FB_SIZE : a, 240 * 3, mode)) top_shown = top_presented;
     top_presented = b;
+#ifdef PORT_AGENT
+    top_presents++;
+#endif
 }
+#ifdef PORT_AGENT
+/* the top screen's buffer last presented (the left eye: 400 columns of 240 pixels, BGR8) and how many presents there
+ * have been, for a capture (agent.c): complete, and not written again before two more frames are queued */
+const unsigned char *ctr_capture_top(unsigned *serial) {
+    *serial = top_presents;
+    return top_presented >= 0 && top_fb[0] ? top_fb[top_presented] : NULL;
+}
+#endif
 static void queue_done(gxCmdQueue_s *queue) { /* (the GSP's event thread) */
     if (c3d_queue_done) c3d_queue_done(queue);
     int b = top_queued;

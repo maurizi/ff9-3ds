@@ -159,6 +159,9 @@ static void watchdog_main(void *unused) {
             ctr_console_raw(line, n);
             if (still == 3) { void ctr_trace_dump(void); ctr_trace_dump(); }
         }
+#ifdef PORT_AGENT
+        { void ctr_agent_hang(unsigned); ctr_agent_hang(still); } /* (a hung job ends: its log to the PC, the next job) */
+#endif
     }
     watchdog_done = 1;
 }
@@ -246,6 +249,9 @@ void plat_wait_frame(void) {
 #ifdef PORT_DUMP_AT
     if (frames == PORT_DUMP_AT) { void ctr_render_dump(void); ctr_render_dump(); }
 #endif
+#ifdef PORT_AGENT
+    { void ctr_agent_frame(long); ctr_agent_frame(frames); } /* (the job's switches, captures and end: agent.c) */
+#endif
     /* each virtual frame ends at its own VBlank: wait for it unless the game is already late (then catch up, but
      * never by more than 4: after a long stall, start again from now) */
 #ifndef PORT_SOFT_PRESENT
@@ -280,6 +286,9 @@ void plat_vlog(const char *fmt, va_list ap) {
 }
 
 void plat_halt(void) {
+#ifdef PORT_AGENT
+    { void ctr_agent_end(const char *); ctr_agent_end("fatal"); } /* (a job: its log to the PC, then the next) */
+#endif
     ctr_console_show();
     printf("\nstopped. START: exit\n");
     while (aptMainLoop()) {
@@ -365,6 +374,10 @@ int main(void) {
     plat_mkdir(plat_data_dir()); /* (sdmc:/3ds/ff9: its log, settings and memory cards) */
     ctr_console_init();
     ctr_exception_install();
+#ifdef PORT_AGENT
+    const char *ctr_agent_start(void);
+    const char *agent_cfg = ctr_agent_start(); /* (waits for a job from the PC: agent.c) */
+#endif
     find_disc_pack();
     port_log("ff9-3ds (%s 3DS)\n", is_new3ds ? "New" : "Old");
     ctr_audio_init();
@@ -375,6 +388,9 @@ int main(void) {
 #endif
 #ifdef PORT_SCENARIO
     port_scenario_load(PORT_SCENARIO);
+#endif
+#ifdef PORT_AGENT
+    if (agent_cfg) port_scenario_load(agent_cfg);
 #endif
     psx_spu_set_rendering(1);
     psx_run_game();

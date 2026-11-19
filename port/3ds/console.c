@@ -55,6 +55,9 @@ void ctr_console_vlog(const char *fmt, va_list ap) {
             }
         }
         if (netlog) { fwrite(line, 1, len, stderr); fflush(stderr); }
+#ifdef PORT_AGENT
+        { void ctr_agent_log(const char *, int); ctr_agent_log(line, len); } /* (to the PC with the job's results: agent.c) */
+#endif
         snprintf(lines[next_line], sizeof lines[0], "%.*s", len, line);
         next_line = (next_line + 1) % KEEP;
         len = 0;
@@ -76,4 +79,7 @@ void ctr_console_raw(const char *text, int n) {
     svcOutputDebugString(text, n);
     if (logfile) { fwrite(text, 1, n, logfile); fflush(logfile); }
     if (netlog) { fwrite(text, 1, n, stderr); fflush(stderr); }
+#ifdef PORT_AGENT
+    { void ctr_agent_log(const char *, int); ctr_agent_log(text, n); }
+#endif
 }
