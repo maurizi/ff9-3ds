@@ -418,6 +418,8 @@ void port_dialogue_log(const u8 *text) {
 /* ---- the port's options (settings.c), a page in the log's place: OPTIONS from the log view ---- */
 __attribute__((weak)) int port_setting_get(int k) { (void)k; return 0; }
 __attribute__((weak)) void port_setting_set(int k, int v) { (void)k; (void)v; }
+/* (a setting this machine has no use for: its row is shown dim with the reason, and nothing changes it) */
+__attribute__((weak)) int port_setting_available(int k) { (void)k; return 1; }
 static const struct { const char *name; int n; const char *choice[3]; } opts[] = {
     {"3D DEPTH", 3, {"LOW", "NORMAL", "HIGH"}},
     {"TOP SCREEN", 2, {"FIT", "SHARP"}},
@@ -431,12 +433,25 @@ static void bar_mark(int x, int y, int w, int h) { /* a small bright bar (as the
 }
 static RECT opt_rect(int row, int c) { RECT r = {(s16)(112 + c * 66), (s16)(64 + row * 36), 60, 28}; return r; }
 static int opt_row; /* the row the D-pad is on (the panel by buttons: port_pad_filter) */
+static void opt_step(int d) { /* to the next row there is something to set on */
+    for (int i = 0; i < 3; i++) {
+        opt_row = (opt_row + 3 + d) % 3;
+        if (port_setting_available(opt_row)) return;
+    }
+}
 static void draw_options(void) {
     static const u8 label[] = "OPTIONS";
     RECT box = r_logbox;
     ui_drawLabel(box.x + 8, box.y - 3, 2, (s32)label, 0);
+    if (!port_setting_available(opt_row)) opt_step(1);
     for (int i = 0; i < 3; i++) {
         ui_drawLabel(box.x + 10, 64 + i * 36 + 11, 2, (s32)opts[i].name, i == opt_row ? 0 : 2);
+        if (!port_setting_available(i)) {
+            static const char why[] = "NEW 3DS ONLY";
+            RECT r = opt_rect(i, 0);
+            ui_drawLabel(r.x + 8, r.y + 11, 2, (s32)why, 2);
+            continue;
+        }
         if (i == opt_row) ui_drawSprite(box.x + 2, 64 + i * 36 + 9, 2, 1, 0); /* (the hand: where the D-pad is) */
         int v = port_setting_get(i);
         for (int c = 0; c < opts[i].n; c++) {
@@ -451,7 +466,7 @@ static void draw_options(void) {
 }
 static int options_tap(int x, int y) {
     for (int i = 0; i < 3; i++)
-        for (int c = 0; c < opts[i].n; c++) {
+        for (int c = 0; c < opts[i].n && port_setting_available(i); c++) {
             RECT r = opt_rect(i, c);
             if (inside(&r, x, y)) { port_setting_set(i, c); snd_playSe(SE_CURSOR); return 1; }
         }
@@ -564,7 +579,7 @@ static int config_overlay_tap(int x, int y) {
 static unsigned pad_prev, pad_swallow;
 static void set_opt(int row, int dir) {
     int v = port_setting_get(row) + dir;
-    if (v < 0 || v >= opts[row].n) return;
+    if (v < 0 || v >= opts[row].n || !port_setting_available(row)) return;
     port_setting_set(row, v);
     snd_playSe(SE_CURSOR);
 }
@@ -575,8 +590,8 @@ unsigned int port_pad_filter(unsigned int b) {
     if (!g_gameState || !g_gameState->gameData) return b;
     int *open = title_opts ? &title_opts : cfg_opts ? &cfg_opts : (log_on && opts_on) ? &opts_on : NULL;
     if (open) {
-        if (pressed & 0x0010) opt_row = (opt_row + 2) % 3, snd_playSe(SE_CURSOR);
-        if (pressed & 0x0040) opt_row = (opt_row + 1) % 3, snd_playSe(SE_CURSOR);
+        if (pressed & 0x0010) opt_step(-1), snd_playSe(SE_CURSOR);
+        if (pressed & 0x0040) opt_step(1), snd_playSe(SE_CURSOR);
         if (pressed & 0x0080) set_opt(opt_row, -1);
         if (pressed & 0x0020) set_opt(opt_row, +1);
         if (pressed & (0x2000 | 0x8000)) { *open = 0; snd_playSe(SE_CANCEL); pad_swallow = b; }

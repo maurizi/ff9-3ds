@@ -4017,7 +4017,9 @@ void ctr_present(long frame) {
     submit(); /* (with the parallax its runs were ordered for: stereo_k changes below) */
     button_icons_frame(); /* (for the next frame's sprites) */
     float slider = osGet3DSliderState();
-    int want_stereo = slider > 0.01f;
+    /* (3D on a New 3DS only: the second eye's drawing is more than an Old 3DS has time for in the busy scenes, and
+     * its options page has no depth to set: settings.c port_setting_available) */
+    int want_stereo = slider > 0.01f && ctr_is_new3ds();
     int port_setting_get(int k); /* (settings.c: 0 depth (50/100/150%), 1 sharp top screen) */
     slider *= 0.5f + 0.5f * (float)port_setting_get(0);
     stereo_k = slider * STEREO_MAX_PX / stereo_inv_zc; /* up to STEREO_MAX_PX of parallax at infinity */

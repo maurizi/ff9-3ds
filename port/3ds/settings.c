@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "platform.h"
+#include "ctr.h"
 
 enum { SET_DEPTH, SET_SHARP, SET_VOICES, SET_COUNT };
 static const char *const names[SET_COUNT] = {"depth", "sharp", "voices"};
@@ -31,6 +32,9 @@ int port_setting_get(int k) {
     if (!loaded) load();
     return k >= 0 && k < SET_COUNT ? values[k] : 0;
 }
+
+/* (an Old 3DS draws no 3D: render.c ctr_present; its depth has nothing to set there) */
+int port_setting_available(int k) { return k != SET_DEPTH || ctr_is_new3ds(); }
 
 void port_setting_set(int k, int v) {
     if (!loaded) load();
