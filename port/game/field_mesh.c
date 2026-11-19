@@ -7,8 +7,27 @@
 #include "ovl_0a.h"
 #include "port_hw.h"
 #include "native_mesh.h"
+#include <stdint.h>
 
 void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1);
+
+/* the game's bone matrix: m = RT x bone, each column as rtir (MVMVA sf=1 lm=0 of the column through IR1-3: the sum
+ * shifted, saturated to 16 bits), t = RT x bone.t + TR as rtv0tr (V0 the translation's low halves, MAC1-3 the sum
+ * shifted to 32 bits), as gte.c's MVMVA works them out. What those commands leave in the GTE (V0, IR1-3, MAC1-3,
+ * FLAG) the routine's last RTPT overwrites, and the view matrix they ran on is replaced by m before anything reads
+ * it: in port code, without the two matrix loads, three column loads and four commands a bone */
+static inline void fm_bone(const MATRIX *rt, const MATRIX *bone, MATRIX *m) {
+    for (int j = 0; j < 3; j++) {
+        const int64_t x = bone->m[0][j], y = bone->m[1][j], z = bone->m[2][j];
+        for (int i = 0; i < 3; i++) {
+            s32 v = (s32)((rt->m[i][0] * x + rt->m[i][1] * y + rt->m[i][2] * z) >> 12);
+            m->m[i][j] = (s16)(v > 0x7FFF ? 0x7FFF : v < -0x8000 ? -0x8000 : v);
+        }
+    }
+    const int64_t x = (s16)bone->t[0], y = (s16)bone->t[1], z = (s16)bone->t[2];
+    for (int i = 0; i < 3; i++)
+        m->t[i] = (s32)((((int64_t)rt->t[i] << 12) + rt->m[i][0] * x + rt->m[i][1] * y + rt->m[i][2] * z) >> 12);
+}
 
 PORT_OVERLAY_CODE(0a) void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1) {
     MATRIX m;
@@ -22,21 +41,7 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_projectMesh(ModelObj *arg0, u8 arg1) {
     for (u32 i = 0; i < cnt; bone++) {
         s32 n = ((u16 *)g->boneVertexCounts)[i++];
         if (n == 0) continue;
-        /* the bone's matrix: m = RT x bone (columns through rtir), t = RT x bone.t + TR (rtv0tr) */
-        gte_SetRotMatrix(&g_gameState->gameData->viewMatrix);
-        gte_SetTransMatrix(&g_gameState->gameData->viewMatrix);
-        gte_ldclmv(bone);
-        gte_rtir_b();
-        gte_stclmv(&m);
-        gte_ldclmv(&bone->m[0][1]);
-        gte_rtir();
-        gte_stclmv(&m.m[0][1]);
-        gte_ldclmv(&bone->m[0][2]);
-        gte_rtir_n1();
-        gte_stclmv(&m.m[0][2]);
-        gte_ldlv0(bone->t);
-        gte_rtv0tr_n1();
-        gte_stlvnl(m.t);
+        fm_bone(&g_gameState->gameData->viewMatrix, bone, &m);
         gte_SetRotMatrix(&m);
         gte_SetTransMatrix(&m);
         /* whole groups of three, as the game's loop (it reads and writes up to two past the bone's vertices) */
