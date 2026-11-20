@@ -251,6 +251,9 @@ void plat_wait_frame(void) {
                            "%u to another page's; %u waits for the frame in flight\n", ctr_tex_n[0] - t0[0], ctr_tex_n[1] - t0[1], ctr_tex_n[2] - t0[2],
                            ctr_tex_n[3] - t0[3], ctr_tex_n[4] - t0[4], ctr_tex_n[5] - t0[5]);
               for (int i = 0; i < 6; i++) t0[i] = ctr_tex_n[i]; }
+            { extern unsigned ctr_late_skips; static unsigned l0;
+              if (ctr_late_skips != l0) port_log("presents left out (late, the UI's alone): %u\n", ctr_late_skips - l0);
+              l0 = ctr_late_skips; }
             { extern volatile unsigned long long ctr_gpu_us; static unsigned long long g0;
               port_log("the GPU busy %u ms of the beat (each frame's end to its queue done)\n", (unsigned)((ctr_gpu_us - g0) / 1000));
               g0 = ctr_gpu_us; }
@@ -306,6 +309,7 @@ void plat_wait_frame(void) {
     }
     { /* (the present's time on this thread, for the heartbeat) */
         const unsigned long long t0 = plat_time_us();
+        { extern int ctr_present_late; ctr_present_late = (s32)(C3D_FrameCounter(0) - next_vblank) >= 1; }
         ctr_present(frames);
         ctr_present_us += plat_time_us() - t0;
     }

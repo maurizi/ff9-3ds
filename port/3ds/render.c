@@ -442,6 +442,9 @@ static int have_freeze; /* freeze_tex holds a scene */
 #define UNDIM_FRAMES 12 /* a closed menu's paused scene undimmed over these presents */
 static int prev_mode;
 static int prev_menu, closing; /* (ctr_present: the menu at the last present; a closed menu's undimming, in presents) */
+int ctr_sw_lateskip, ctr_present_late; /* (ctr_present; platform.c says when a frame's VBlank has passed) */
+unsigned ctr_late_skips;
+static PsxDisplayInfo present_last; /* (the display as the last present showed it) */
 static u32 present_gen;        /* gen_counter at the last present (cells drawn since: cell_gen past it) */
 int port_game_mode(void);
 int port_fade_busy(void);
@@ -4928,6 +4931,22 @@ void ctr_present(long frame) {
     extern volatile const char *ctr_where;
     ctr_where = "present";
     (void)frame;
+    /* (ctr_sw_lateskip, off: a present that would change only the bottom screen's UI, in a frame whose VBlank has already
+     * passed, is left out: what was recorded for it is drawn with the next one. A battle presents its UI every VBlank;
+     * when a frame is late they come one right after another, each waiting some 6 ms for the GPU to finish the one
+     * before: 23 ms of an 80 ms frame in the Ark's summon on an Old 3DS. At most three in a row.) */
+    {
+        static int skipped;
+        PsxDisplayInfo di;
+        psx_gpu_display_info(&di);
+        const int dw = di.w ? (di.w > 400 ? 400 : di.w) : 320, dh = di.h ? (di.h > 240 ? 240 : di.h) : 240;
+        if (ctr_sw_lateskip && ctr_present_late && skipped < 3 && !di.rgb24 && !memcmp(&di, &present_last, sizeof di) &&
+            !cells_newer(di.x, di.y, di.x + dw, di.y + dh, present_gen)) {
+            skipped++, ctr_late_skips++;
+            return;
+        }
+        skipped = 0;
+    }
     submit(); /* (with the parallax its runs were ordered for: stereo_k changes below) */
     button_icons_frame(); /* (for the next frame's sprites) */
     float slider = osGet3DSliderState();
@@ -4961,9 +4980,8 @@ void ctr_present(long frame) {
     psx_gpu_display_info(&d);
     /* the displayed buffer is redrawn when something was drawn or the display moved (a static screen flips between
      * two finished buffers) */
-    static PsxDisplayInfo last;
-    int moved = memcmp(&d, &last, sizeof d) != 0;
-    last = d;
+    int moved = memcmp(&d, &present_last, sizeof d) != 0;
+    present_last = d;
     if (!moved && psx_display_generation == display_shown_gen && !nbatches) return;
     display_shown_gen = psx_display_generation;
     int w = d.w ? d.w : 320, h = d.h ? d.h : 240;
