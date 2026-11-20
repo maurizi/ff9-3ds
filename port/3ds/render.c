@@ -119,6 +119,8 @@ int ctr_sw_timing;
 int ctr_ko;
 unsigned long long ctr_part_us[8];
 unsigned ctr_part_n[8];
+unsigned ctr_tex_why[7]; /* (blocks converted: new to the slot, texels and CLUT changed, texels, CLUT; and by depth: 4, 8, 15 bits) */
+unsigned ctr_batches; /* (batches submitted) */
 unsigned ctr_tex_n[6]; /* (the heartbeat's: blocks converted; of them for the first time in their slot; pages given another
                         * slot: one of their own back, a free or new one, another page's; waits for the frame in flight) */
 unsigned long long plat_time_us(void);
@@ -1295,6 +1297,7 @@ static void submit_do(void) {
         GSEG(target == 0 ? GS_MIRROR : target == 3 ? GS_TOPUI : target == 4 ? GS_OUTLINE : GS_LAYERS);
     }
     ctr_render_stats[0] += nbatches;
+    ctr_batches += nbatches;
     nbatches = 0;
     /* (the other eye's values were past this submit's: the next ones are past those) */
     depth_next += depth_next - depth_submitted;
@@ -1901,6 +1904,8 @@ static __attribute__((noinline)) int convert_block_do(TexSlot *s, const Gp0Mode 
     /* (the frame in flight's: it finishes first. By block, none: a block in use was made current then) */
     if (gpu_busy && (ctr_sw_blockuse ? block_in_use(s, b) : s->serial + 1 == frame_serial)) ctr_tex_n[5]++, frame_begin();
     ctr_tex_n[0]++, ctr_tex_n[1] += !s->stamp[b];
+    ctr_tex_why[!s->stamp[b] ? 0 : s->hash[b] != hsh && s->chash[b] != chsh ? 1 : s->hash[b] != hsh ? 2 : 3]++;
+    ctr_tex_why[4 + (m->depth > 2 ? 2 : m->depth)]++;
     const unsigned long long ct0 = ctr_sw_timing ? plat_time_us() : 0;
     s->hash[b] = hsh;
     s->chash[b] = chsh;

@@ -251,6 +251,12 @@ void plat_wait_frame(void) {
                            "%u to another page's; %u waits for the frame in flight\n", ctr_tex_n[0] - t0[0], ctr_tex_n[1] - t0[1], ctr_tex_n[2] - t0[2],
                            ctr_tex_n[3] - t0[3], ctr_tex_n[4] - t0[4], ctr_tex_n[5] - t0[5]);
               for (int i = 0; i < 6; i++) t0[i] = ctr_tex_n[i]; }
+            { extern unsigned ctr_tex_why[7], ctr_batches; static unsigned w0[7], b0;
+              port_log("blocks converted by cause: %u new to the slot, %u texels and CLUT, %u texels, %u CLUT; by depth: %u 4-bit, %u 8-bit, %u 15-bit; "
+                       "%u batches drawn\n", ctr_tex_why[0] - w0[0], ctr_tex_why[1] - w0[1], ctr_tex_why[2] - w0[2], ctr_tex_why[3] - w0[3],
+                       ctr_tex_why[4] - w0[4], ctr_tex_why[5] - w0[5], ctr_tex_why[6] - w0[6], ctr_batches - b0);
+              for (int i = 0; i < 7; i++) w0[i] = ctr_tex_why[i];
+              b0 = ctr_batches; }
             { extern unsigned ctr_sync_line[8], ctr_sync_n[8]; char b[160]; int o = 0; /* (the GPU waited for mid-frame: render.c's lines) */
               for (int i = 0; i < 8; i++) {
                   if (ctr_sync_n[i]) o += snprintf(b + o, sizeof b - o, " %u:%u", ctr_sync_line[i], ctr_sync_n[i]);
