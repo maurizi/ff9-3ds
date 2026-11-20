@@ -43,6 +43,10 @@
 #include "prim_shbin.h"
 
 extern unsigned short *psx_vram;
+/* What every primitive's drawing runs, side by side in the program (one section): an Old 3DS's instruction cache is
+ * 16 KB, and these lay scattered through 70 KB of this file, a different lot of them sharing cache lines each time
+ * anything before them grew or shrank (a few lines added to gpu_draws: the world map 4% slower there, on a 3DS). */
+#define HOT_DRAW __attribute__((section(".text.hotdraw")))
 extern int ctr_sw_chain, ctr_sw_poly1, ctr_sw_drawmemo, ctr_sw_reorder, ctr_sw_overlap; /* (below, at ctr_defer) */
 
 /* The scene's walk may be on the other core (gpu.c psx_gpu_sync): every way in here from outside the walk waits for it
@@ -497,7 +501,7 @@ static void blit_cells(int cx0, int cy0, int cx1, int cy1);
 static inline int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 /* cells of [x0,x1)x[y0,y1), clipped to VRAM; 0 if empty */
-static inline int cell_range(int x0, int y0, int x1, int y1, int *cx0, int *cy0, int *cx1, int *cy1) {
+HOT_DRAW static inline int cell_range(int x0, int y0, int x1, int y1, int *cx0, int *cy0, int *cx1, int *cy1) {
     x0 = clampi(x0, 0, VW); x1 = clampi(x1, 0, VW);
     y0 = clampi(y0, 0, VH); y1 = clampi(y1, 0, VH);
     if (x0 >= x1 || y0 >= y1) return 0;
@@ -511,21 +515,12 @@ static inline int cell_range(int x0, int y0, int x1, int y1, int *cx0, int *cy0,
  * stamped against its sources' cells, none of these): it is skipped. The world map's ground draws small triangles one
  * after another in the same cells) */
 static unsigned cells_ver;
-static u32 *bg_rec_rows; /* a background run being recorded (bg_memo): the cells it draws into, a row's a word */
-static int bg_rec_box[4]; /* ... and the box of what it draws */
-static void gpu_draws(int x0, int y0, int x1, int y1) {
+HOT_DRAW static void gpu_draws(int x0, int y0, int x1, int y1) {
     static int last_cells = -1;
     static unsigned last_ver;
     int cx0, cy0, cx1, cy1;
     if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
     const int cells = cx0 | cy0 << 6 | cx1 << 12 | cy1 << 18;
-    if (bg_rec_rows) {
-        for (int cy = cy0; cy < cy1; cy++) bg_rec_rows[cy] |= (cx1 >= 32 ? ~0u : (1u << cx1) - 1) & ~((1u << cx0) - 1);
-        if (x0 < bg_rec_box[0]) bg_rec_box[0] = x0;
-        if (y0 < bg_rec_box[1]) bg_rec_box[1] = y0;
-        if (x1 > bg_rec_box[2]) bg_rec_box[2] = x1;
-        if (y1 > bg_rec_box[3]) bg_rec_box[3] = y1;
-    }
     if (ctr_sw_drawmemo && cells == last_cells && last_ver == cells_ver) return;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++)
@@ -731,7 +726,7 @@ typedef struct {
 static Batch batches[MAX_BATCHES];
 
 static void run_flush(void);
-static Vtx *alloc_vtx(unsigned n) {
+HOT_DRAW static Vtx *alloc_vtx(unsigned n) {
     run_flush(); /* (an open run holds the rest of the buffer: run_open) */
     if (vb_used + n > VB_MAX) gpu_sync();
     Vtx *v = vb + vb_used;
@@ -792,7 +787,7 @@ static Vtx *alloc_vtx(unsigned n);
 static void gpu_sync(void);
 
 /* the open batches into the batch list, in order, their depth values from here */
-static void run_flush(void) {
+HOT_DRAW static void run_flush(void) {
     int n = run_n;
     if (!n) return;
     run_n = 0;
@@ -871,7 +866,7 @@ static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
 
 /* where a primitive's n vertices go in the run (cur_target 0, n <= RUN_V, mirror_depth: run_add's case), *d their
  * depth value */
-static Vtx *run_slot(int kind, int abr, const u16 sc[4], C3D_Tex *tex, unsigned n, float *d) {
+HOT_DRAW static Vtx *run_slot(int kind, int abr, const u16 sc[4], C3D_Tex *tex, unsigned n, float *d) {
     if (run_n && run_prims >= run_max) run_flush();
     if (run_n) {
         int last = run_n - 1;
@@ -905,7 +900,7 @@ static void run_add(int kind, int abr, const u16 sc[4], C3D_Tex *tex, const Vtx 
     for (unsigned k = 0; k < n; k++) o[k] = v[k], o[k].d = d;
 }
 
-static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n) {
+HOT_DRAW static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n) {
     if (run_n) run_flush(); /* (anything else drawn ends the run: it keeps its place after it) */
     if (nbatches) {
         Batch *b = &batches[nbatches - 1];
@@ -1532,7 +1527,7 @@ static void hash_remove(int i) {
     }
 }
 static unsigned slots_made; /* (slot_for: slots given a new key, a scene's change) */
-static TexSlot *slot_for(u32 key, u32 twin) {
+HOT_DRAW static TexSlot *slot_for(u32 key, u32 twin) {
     static int last = -1;
     if (last >= 0 && slots[last].key == key && slots[last].twin == twin) return &slots[last];
     for (unsigned h = hash_of(key, twin); slot_hash[h]; h = (h + 1) & (SLOT_HASH - 1)) {
@@ -2126,7 +2121,7 @@ static void bg_rec_blocks(const Gp0Mode *m, TexSlot *s, int cx0, int cx1, int cy
                                 0x01010101010101ull, 0x0101010101010101ull};
     bg_rec_slots[i].mask |= (u64)(((2u << cx1) - 1) & ~((1u << cx0) - 1)) * (rows[cy1 - cy0] << (cy0 * 8));
 }
-static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
+HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
     /* A semi-transparent 15-bit texture read from VRAM the GPU has drawn, outside the area being drawn into (the
      * field-to-battle swirl: the frame on screen warped into the next): the mirror sampled where it is, its alpha the
      * texels' bit 15 (the mask bit), which the two page passes split as the PS1 does (opaque without it, blended with
@@ -2233,7 +2228,7 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
 
 /* ---- primitives --------------------------------------------------------------------------------------------- */
 
-static int area_scissor(u16 sc[4]) {
+HOT_DRAW static int area_scissor(u16 sc[4]) {
     sc[0] = (u16)gp0_state.area_x0;
     sc[1] = (u16)gp0_state.area_y0;
     sc[2] = (u16)(gp0_state.area_x1 + 1);
@@ -2785,7 +2780,7 @@ static inline int poly_plain(void) {
     return !(ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2 ||
              (menu_state != 3 && in_window_packets(psx_gpu_packet)));
 }
-static int r_poly1(const unsigned *w) {
+HOT_DRAW static int r_poly1(const unsigned *w) {
 #ifdef PORT_PROBE_AT
     (void)w;
     return 0;
@@ -2807,7 +2802,7 @@ static int r_poly1(const unsigned *w) {
     return 1;
 #endif
 }
-static inline __attribute__((always_inline)) void poly_k(const unsigned *w, const unsigned kind, const TriCtx *c) {
+HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned *w, const unsigned kind, const TriCtx *c) {
     const int textured = kind & 1, nv = (kind & 2) ? 4 : 3, gouraud = (kind >> 2) & 1;
     const unsigned cmd = w[0] >> 24;
     if (ctr_ko == 4) return;
@@ -2935,14 +2930,14 @@ static inline __attribute__((always_inline)) void poly_k(const unsigned *w, cons
  * the decoder as the walk would. 0: not taken (they are drawn one by one) */
 void DrawPrim(void *p); /* (gpu.c: a packet decoded and drawn as the walk would) */
 static int terrain_chain_do(u32 *head, u32 count);
-int port_terrain_chain(u32 *head, u32 count) {
+HOT_DRAW int port_terrain_chain(u32 *head, u32 count) {
     psx_gpu_sync();
     PART_BEGIN();
     const int r = terrain_chain_do(head, count);
     PART_END(4);
     return r;
 }
-static int terrain_chain_do(u32 *head, u32 count) {
+HOT_DRAW static int terrain_chain_do(u32 *head, u32 count) {
     if (ctr_ko == 3) return 1;
 #ifdef PORT_PROBE_AT
     (void)head, (void)count;
@@ -3336,7 +3331,7 @@ static int in_window_packets(const void *p);
 static inline int bg_plain(void) { return !ui_mode && !stereo_on && !ctr_outline && menu_state != 2; }
 /* one tile (t: its page word, then the sprite's three) inside the scissor sc, as r_rect and emit would draw it; 0: not
  * this way (its texels wrap past its page's edge) */
-static int bg_tile(const unsigned t[4], const u16 sc[4]) {
+HOT_DRAW static int bg_tile(const unsigned t[4], const u16 sc[4]) {
     if ((t[3] & 0xFF) > 240 || ((t[3] >> 8) & 0xFF) > 240) return 0;
     Gp0Mode m;
     Gp0Vtx v;
@@ -3386,7 +3381,7 @@ static int bg_tile(const unsigned t[4], const u16 sc[4]) {
     return 1;
 }
 /* gp0_tpage_sprite16's (every texture page + SPRT_16 packet: a field background's tiles), its bookkeeping done */
-static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc) {
+HOT_DRAW static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc) {
     u16 sc[4];
     if (!bg_plain() || in_window_packets(psx_gpu_packet) || !area_scissor(sc)) return 0;
     const unsigned t[4] = {tp, cmd, xy, uvc};
@@ -3394,7 +3389,7 @@ static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsign
 }
 static inline const u32 *bg_tile_next(const u32 *p) { return (const u32 *)(((u32)(uintptr_t)psx_ram & 0xFF000000) | (*p & 0xFFFFFF)); }
 static int bg_run_do(unsigned int *head, int count);
-int gxh_bg_run(unsigned int *head, int count) {
+HOT_DRAW int gxh_bg_run(unsigned int *head, int count) {
     psx_gpu_sync();
     PART_BEGIN();
     const int r = bg_run_do(head, count);
@@ -3439,7 +3434,7 @@ static BgMemo bg_memo[BG_MEMOS];
 int ctr_sw_bgmemo = 1; /* (0: every run tile by tile, for comparing) */
 unsigned ctr_bg_replays, ctr_bg_records;
 
-static int bg_memo_textures(const BgMemo *m) {
+HOT_DRAW static int bg_memo_textures(const BgMemo *m) {
     const u32 *h = m->hashes;
     for (int i = 0; i < m->nslots; i++) {
         const BgSlot *k = &m->slots[i];
@@ -3454,7 +3449,7 @@ static int bg_memo_textures(const BgMemo *m) {
     }
     return 1;
 }
-static int bg_memo_same(const BgMemo *m, const u32 *head, int count, const u16 sc[4]) {
+HOT_DRAW static int bg_memo_same(const BgMemo *m, const u32 *head, int count, const u16 sc[4]) {
     if (!m->valid || m->count != count || window_ranges_touch(m->lo, m->hi) || !bg_memo_textures(m) || m->ofs_x != gp0_state.ofs_x ||
         m->ofs_y != gp0_state.ofs_y || m->set_mask != gp0_state.set_mask || m->check_mask != gp0_state.check_mask ||
         !sc_same(m->sc, sc))
@@ -3465,7 +3460,7 @@ static int bg_memo_same(const BgMemo *m, const u32 *head, int count, const u16 s
     return 1;
 }
 /* the copy drawn: 0 if there was no room this frame (the caller draws the tiles) */
-static int bg_memo_draw(BgMemo *m, const u32 *head) {
+HOT_DRAW static int bg_memo_draw(BgMemo *m, const u32 *head) {
     run_flush();
     if (run_room() < m->prims + 16 || vb_used + m->nv + 64 > VB_MAX || nbatches + (unsigned)m->nb + 2 > MAX_BATCHES) {
         gpu_sync();
@@ -3511,7 +3506,7 @@ static int bg_memo_draw(BgMemo *m, const u32 *head) {
     return 1;
 }
 static int bg_run_tiles(unsigned int *head, int count, const u16 sc[4]);
-static int bg_run_do(unsigned int *head, int count) {
+HOT_DRAW static int bg_run_do(unsigned int *head, int count) {
     u16 sc[4];
     if (ctr_ko == 1) return 1;
     if (!bg_plain() || count <= 0 || !area_scissor(sc)) return 0;
@@ -3537,16 +3532,12 @@ static int bg_run_do(unsigned int *head, int count) {
     run_flush();
     const unsigned v0 = vb_used, nb0 = nbatches, d0 = depth_next, sub0 = nsubmits, ser0 = frame_serial;
     const unsigned before = nb0 ? batches[nb0 - 1].count : 0;
-    memset(m->rows, 0, sizeof m->rows);
-    m->box[0] = m->box[1] = 1 << 20, m->box[2] = m->box[3] = -(1 << 20);
-    bg_rec_rows = m->rows, bg_rec_box[0] = bg_rec_box[1] = 1 << 20, bg_rec_box[2] = bg_rec_box[3] = -(1 << 20);
     bg_rec_on = 1, bg_rec_nslots = 0, bg_rec_nco = 0;
 
     const int r = bg_run_tiles(head, count, sc);
     run_flush();
     const int rec = bg_rec_on;
-    bg_rec_rows = NULL, bg_rec_on = 0;
-    memcpy(m->box, bg_rec_box, sizeof m->box);
+    bg_rec_on = 0;
     if (!r || rec != 1 || nsubmits != sub0 || frame_serial != ser0 || nbatches < nb0 || vb_used < v0) return r;
     const unsigned nv = vb_used - v0, merged = nb0 ? batches[nb0 - 1].count - before : 0;
     const int nb = (int)(nbatches - nb0) + (merged ? 1 : 0);
@@ -3560,8 +3551,24 @@ static int bg_run_do(unsigned int *head, int count) {
     m->words = words;
     const u32 *p = (const u32 *)head;
     m->lo = m->hi = (const u8 *)head;
+    /* (and the cells it drew into, as bg_tile gave each tile's rectangle to gpu_draws: not noted there, in every
+     * primitive's path) */
+    memset(m->rows, 0, sizeof m->rows);
+    m->box[0] = m->box[1] = 1 << 20, m->box[2] = m->box[3] = -(1 << 20);
     for (int i = 0; i < count; i++, p = bg_tile_next(p), words += 5) {
         memcpy(words, p + 1, 5 * sizeof(u32));
+        {
+            const u32 xy = p[4];
+            const int x = (int)(xy & 0x7FF) - (int)((xy & 0x400) << 1) + gp0_state.ofs_x;
+            const int y = (int)((xy >> 16) & 0x7FF) - (int)((xy >> 15) & 0x800) + gp0_state.ofs_y;
+            const int bx0 = imax(x, sc[0]), by0 = imax(y, sc[1]), bx1 = imin(x + 16, sc[2]), by1 = imin(y + 16, sc[3]);
+            int cx0, cy0, cx1, cy1;
+            if (bx0 < bx1 && by0 < by1 && cell_range(bx0, by0, bx1, by1, &cx0, &cy0, &cx1, &cy1)) {
+                for (int cy = cy0; cy < cy1; cy++) m->rows[cy] |= (cx1 >= 32 ? ~0u : (1u << cx1) - 1) & ~((1u << cx0) - 1);
+                m->box[0] = imin(m->box[0], bx0), m->box[1] = imin(m->box[1], by0);
+                m->box[2] = imax(m->box[2], bx1), m->box[3] = imax(m->box[3], by1);
+            }
+        }
         if ((const u8 *)p < m->lo) m->lo = (const u8 *)p;
         if ((const u8 *)(p + 6) > m->hi) m->hi = (const u8 *)(p + 6);
     }
@@ -3603,7 +3610,7 @@ static int bg_run_do(unsigned int *head, int count) {
     ctr_bg_records++;
     return r;
 }
-static int bg_run_tiles(unsigned int *head, int count, const u16 sc[4]) {
+HOT_DRAW static int bg_run_tiles(unsigned int *head, int count, const u16 sc[4]) {
     /* (every tile a page + SPRT_16 packet as the game builds them (MargePrim'd: the sprite's tag a NOP between), none
      * on the font pages gp0_tpage_sprite16 leaves to the command path, none in a window's packets, none wrapping) */
     const u32 *p = (const u32 *)head;
@@ -3978,7 +3985,7 @@ static int ui_packet(void) {
 /* (ui_packet's test, without marking the range drawn from. The last packet outside them leaves the addresses between the
  * ranges around it, which the next packets, from the same buffer, mostly fall in: each primitive tested every range,
  * some 0.8 us of the world map's ~3300 a frame on an Old 3DS) */
-static int in_window_packets(const void *pv) {
+HOT_DRAW static int in_window_packets(const void *pv) {
     static const u8 *clo, *chi;
     static unsigned cver = ~0u;
     const u8 *p = (const u8 *)pv;
