@@ -237,6 +237,12 @@ void plat_wait_frame(void) {
                 port_log("walks: %u on the other core, %u finished here; a walk: %u us there, %u us to stop it, %u us here; idle %u ms\n", n,
                          psx_gpu_defer_helped - h0, (unsigned)((psx_gpu_defer_us[0] - u0[0]) / n), (unsigned)((psx_gpu_defer_us[1] - u0[1]) / n),
                          (unsigned)((psx_gpu_defer_us[2] - u0[2]) / n), (unsigned)((ctr_idle_us - idle0) / 1000));
+            { extern unsigned ctr_tex_n[6]; static unsigned t0[6];
+              if (ctr_tex_n[0] != t0[0])
+                  port_log("textures: %u blocks converted (%u new to their slot); pages moved: %u to a slot of their own, %u to a free one, "
+                           "%u to another page's; %u waits for the frame in flight\n", ctr_tex_n[0] - t0[0], ctr_tex_n[1] - t0[1], ctr_tex_n[2] - t0[2],
+                           ctr_tex_n[3] - t0[3], ctr_tex_n[4] - t0[4], ctr_tex_n[5] - t0[5]);
+              for (int i = 0; i < 6; i++) t0[i] = ctr_tex_n[i]; }
             { extern unsigned ctr_bg_replays, ctr_bg_records; static unsigned r0, k0;
               if (ctr_bg_replays != r0 || ctr_bg_records != k0)
                   port_log("background runs: %u drawn from their copies, %u kept anew\n", ctr_bg_replays - r0, ctr_bg_records - k0);

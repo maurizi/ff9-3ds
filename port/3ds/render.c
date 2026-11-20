@@ -109,6 +109,8 @@ int ctr_sw_timing;
 int ctr_ko;
 unsigned long long ctr_part_us[5];
 unsigned ctr_part_n[5];
+unsigned ctr_tex_n[6]; /* (the heartbeat's: blocks converted; of them for the first time in their slot; pages given another
+                        * slot: one of their own back, a free or new one, another page's; waits for the frame in flight) */
 unsigned long long plat_time_us(void);
 #define PART_BEGIN() const unsigned long long part_t0 = ctr_sw_timing ? plat_time_us() : 0
 #define PART_END(k) do { if (ctr_sw_timing) ctr_part_us[k] += plat_time_us() - part_t0, ctr_part_n[k]++; } while (0)
@@ -1633,7 +1635,7 @@ static TexSlot *slot_renew(TexSlot *s) {
              * So the one whose block that asked for the change (convert_block: renew_b) already is what it must become:
              * the state of a cycle met again. A page keeps up to RENEW_OWN of them; past that its oldest is taken. */
             if (ctr_slot_keep && r->was_key == key && r->was_twin == twin) {
-                if (r->stamp[b] && r->hash[b] == renew_hash && r->chash[b] == renew_chash) return slot_back(r, key, twin);
+                if (r->stamp[b] && r->hash[b] == renew_hash && r->chash[b] == renew_chash) { ctr_tex_n[2]++; return slot_back(r, key, twin); }
                 own++;
                 if (!own_oldest || r->serial < own_oldest->serial) own_oldest = r;
                 continue;
@@ -1643,8 +1645,8 @@ static TexSlot *slot_renew(TexSlot *s) {
         }
         if (!lru || r->serial < lru->serial) lru = r;
     }
-    if (own >= RENEW_OWN) return slot_back(own_oldest, key, twin);
-    if (free_one) return slot_take(free_one, key, twin);
+    if (own >= RENEW_OWN) { ctr_tex_n[2]++; return slot_back(own_oldest, key, twin); }
+    if (free_one) { ctr_tex_n[3]++; return slot_take(free_one, key, twin); }
     if (nslots < MAX_SLOTS && slots_held_at != nslots)
         for (int a = 0; a < natlases; a++) {
             if (a == s->atlas || atlases[a].tex.width != atlases[s->atlas].tex.width) continue;
@@ -1655,10 +1657,11 @@ static TexSlot *slot_renew(TexSlot *s) {
             cell_xy(a, (int)c, r);
             r->key = 0, r->serial = 0;
             ctr_render_stats[5] = nslots;
+            ctr_tex_n[3]++;
             return slot_take(r, key, twin);
         }
-    if (own_oldest) return slot_back(own_oldest, key, twin);
-    if (lru) return slot_take(lru, key, twin);
+    if (own_oldest) { ctr_tex_n[2]++; return slot_back(own_oldest, key, twin); }
+    if (lru) { ctr_tex_n[4]++; return slot_take(lru, key, twin); }
     /* none in its place (the cache full: the world map's camera turned): the GPU waited for (what this frame recorded
      * so far drawn, or the frame in flight finished) and the page rewritten where it is. Moved to any free slot, as
      * before, its place changed, and on a 3DS so did the texels its pixels by a texel's edge pick: the world map's far
@@ -1798,7 +1801,8 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
         renew_b = b, renew_hash = hsh, renew_chash = chsh;
         return 1;
     }
-    if (gpu_busy && s->serial + 1 == frame_serial) frame_begin(); /* (the frame in flight's: it finishes first) */
+    if (gpu_busy && s->serial + 1 == frame_serial) ctr_tex_n[5]++, frame_begin(); /* (the frame in flight's: it finishes first) */
+    ctr_tex_n[0]++, ctr_tex_n[1] += !s->stamp[b];
     s->hash[b] = hsh;
     s->chash[b] = chsh;
     u32 clut[256];
