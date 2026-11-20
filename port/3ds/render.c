@@ -119,7 +119,6 @@ int ctr_sw_timing;
 int ctr_ko;
 unsigned long long ctr_part_us[8];
 unsigned ctr_part_n[8];
-unsigned ctr_tex_path[5]; /* (texture_for's lookups: the last one's again, every block known current, blocks checked; blocks hashed; lookups in all) */
 unsigned ctr_tex_n[6]; /* (the heartbeat's: blocks converted; of them for the first time in their slot; pages given another
                         * slot: one of their own back, a free or new one, another page's; waits for the frame in flight) */
 unsigned long long plat_time_us(void);
@@ -1477,17 +1476,21 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
 typedef struct {
     /* (what every lookup reads, together at the front: two cache lines. The masks stood past the per-block tables,
      * 1.3 KB on: a line of their own for each polygon's lookup, on an Old 3DS a read from memory) */
+    /* (the first line: what every lookup reads and writes) */
     u32 key;     /* depth << 30 | page x / 64 << 26 | page y / 256 << 25 | CLUT x / 16 << 9 | CLUT y; 0 = free */
     u32 twin;    /* the texture window baked in (GP0 E2: mask x, y, offset x, y in 8-texel units), 0 = none */
     u32 serial;  /* frame_serial when last drawn with */
     u32 cur_epoch;
-    u32 ver;       /* counts every change of its page or place (a background run's kept vertices: bg_memo) */
     u64 cur;       /* blocks known current (stamp set, epoch == cur_epoch): texture_for's test of them at once */
+    u64 used;      /* blocks drawn with in the frame of `serial` */
+    /* (the second: its flags and place) */
     u64 fl1, fl2;  /* blocks whose flags have 1, 2 (as flags[]: texture_for's flags of current blocks at once) */
     u16 ox, oy;  /* its 256x256 place in its atlas (texels) */
     u8 atlas;    /* the atlas it is in (atlases[]) */
+    /* (the third: now and then) */
+    u32 ver;       /* counts every change of its page or place (a background run's kept vertices: bg_memo) */
     u32 ch_epoch, ch_val; /* its CLUT's hash (ch_val) as of tex_epoch ch_epoch (convert_block) */
-    u64 used, used_prev; /* blocks drawn with in the frame of `serial`, and in the one before if it was drawn with then too */
+    u64 used_prev; /* blocks drawn with in the frame before `serial`'s, if it was drawn with then too */
     u32 was_key, was_twin; /* given up by slot_renew (key 0): the page its blocks still hold, as stamp, hash and chash say */
     u32 stamp[64]; /* per 32x32 block: gen_counter when converted (0 = not yet) */
     u32 epoch[64]; /* per block: tex_epoch when it was last known current (no write to any source cell since) */
@@ -1654,7 +1657,7 @@ static TexSlot *slot_back(TexSlot *r, u32 key, u32 twin) {
     hash_insert((int)(r - slots));
     return r;
 }
-static TexSlot *slot_renew(TexSlot *s) {
+static __attribute__((noinline)) TexSlot *slot_renew(TexSlot *s) {
     u32 key = s->key, twin = s->twin;
     hash_remove((int)(s - slots));
     s->key = 0;
@@ -1832,9 +1835,16 @@ static inline int block_in_use(const TexSlot *s, int b) {
 
 /* Make block (bx, by) of the page's texture current; 1 (nothing done) when it must be converted again while a frame
  * not yet drawn uses the slot: texture_for gives the page another (slot_renew). */
-static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
-    int b = by * 8 + bx;
+/* (out of line and out of the per-primitive section: inlined into texture_for, its loops moved everything after them
+ * there, and Lindblum's castle station's walk went from 18.1 to 20.4 ms on an Old 3DS with none of them run) */
+static __attribute__((noinline)) int convert_block_do(TexSlot *s, const Gp0Mode *m, int bx, int by);
+static inline int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
+    const int b = by * 8 + bx;
     if (s->stamp[b] && s->epoch[b] == tex_epoch) return 0; /* (current: nearly every call) */
+    return convert_block_do(s, m, bx, by);
+}
+static __attribute__((noinline)) int convert_block_do(TexSlot *s, const Gp0Mode *m, int bx, int by) {
+    int b = by * 8 + bx;
     if (ctr_ko == 9 && s->stamp[b]) return 0; /* (what keeping the textures current costs: a block once converted stays) */
     int shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
     int sx0 = m->tx + ((bx * 32) >> shift), sw = 32 >> shift, sy0 = m->ty + by * 32;
@@ -1860,7 +1870,6 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
      * the font's CLUTs, and every block of the font pages hashed its texels again with them (with a texture window,
      * the page's whole width: 130 of them a frame, 8.5 ms in Azahar as an Old 3DS) */
     u32 hsh = s->hash[b], chsh = s->chash[b];
-    ctr_tex_path[3]++;
     if (texels_new) cpu_reads(sx0, sy0, sx0 + sw, sy0 + 32), hsh = shadow_hash(sx0, sy0, sw, 32, 0x811C9DC5u);
     if (clut_new) {
         /* (the CLUT is the page's, the same for each of its blocks: hashed once for them all while nothing a block
@@ -2214,7 +2223,7 @@ static int gpu_owned(int x0, int y0, int x1, int y1) {
 }
 static void submit(void);
 /* (alpha: the mirror's alpha (the mask bit) copied too, else 1) */
-static C3D_Tex *mirror_page(int tx, int ty, int alpha) {
+static __attribute__((noinline)) C3D_Tex *mirror_page(int tx, int ty, int alpha) {
     trace("mirror_page", tx, ty);
     if (!page_rt) return NULL; /* (made at init: ctr_init) */
     if (page_x == tx && page_y == ty && page_alpha == alpha && page_serial == frame_serial && page_pending == nsubmits)
@@ -2260,7 +2269,7 @@ static void page_copy(const Batch *b) {
 /* A background run being kept (bg_memo): the slots it draws with, each one's mode (what convert_block checks its
  * blocks by: a slot is one page and CLUT) and which of its blocks */
 /* whether a block's texels lie in cells only the mirror holds (convert_block would read them back) */
-static int block_texels_gpu(const TexSlot *s, const Gp0Mode *m, int bx, int by) {
+static __attribute__((noinline)) int block_texels_gpu(const TexSlot *s, const Gp0Mode *m, int bx, int by) {
     const int shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
     int sx0 = m->tx + ((bx * 32) >> shift), sw = 32 >> shift, sy0 = m->ty + by * 32;
     if (s->twin) sx0 = m->tx, sw = 256 >> shift, sy0 = m->ty;
@@ -2357,7 +2366,6 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
     if (last.s && last.key == key && last.twin == twin && last.serial == frame_serial && last.s->key == key &&
         last.s->twin == twin) {
         if (last.epoch == tex_epoch && last.b == blocks) {
-            ctr_tex_path[0]++;
             *flags = last.f;
             tex_ou = last.s->ox, tex_ov = last.s->oy;
             if (bg_rec_on) bg_rec_blocks(m, last.s, cx0, cx1, cy0, cy1);
@@ -2377,9 +2385,7 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
     if (s->cur_epoch == tex_epoch && !(want & ~s->cur)) {
         const u64 own = (u64)(((2u << bx1) - 1) & ~((1u << bx0) - 1)) * (rows[by1 - by0] << (by0 * 8));
         f = (own & s->fl1 ? 1 : 0) | (own & s->fl2 ? 2 : 0);
-        ctr_tex_path[1]++;
     } else {
-        ctr_tex_path[2]++;
         for (int by = cy0; by <= cy1; by++)
             for (int bx = cx0; bx <= cx1; bx++) {
                 /* (a block only a texel beyond the primitive's own, converted before, whose texels the GPU has drawn
@@ -2994,7 +3000,6 @@ HOT_DRAW static int r_poly1(const unsigned *w) {
 #endif
 }
 HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned *w, const unsigned kind, const TriCtx *c) {
-    ctr_tex_path[4]++;
     const int textured = kind & 1, nv = (kind & 2) ? 4 : 3, gouraud = (kind >> 2) & 1;
     const unsigned cmd = w[0] >> 24;
     if (ctr_ko == 4) return;
