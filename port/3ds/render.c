@@ -450,15 +450,20 @@ unsigned int ctr_depth_stats[2]; /* vertices with / without GTE depth */ /* batc
 
 /* ---- cell bookkeeping ------------------------------------------------------------------------------------- */
 
-static u8 shadow_ok[CH][CW]; /* the shadow holds the cell's current pixels */
-static u8 mirror_ok[CH][CW]; /* the mirror (both eyes) holds them */
+/* A cell's state in one place (16 bytes, two cells a cache line): whether the shadow holds its current pixels
+ * (shadow_ok), whether the mirror, both eyes, does (mirror_ok), its write counter (gen: texture blocks made from the
+ * cell are stale when it moves), whether texture sources lie in it (is_source) and their counters (src_gen, src_seen:
+ * below). They were six tables of 0.5 to 2 KB each, read and written at each one's own place for every primitive
+ * drawn: on an Old 3DS, whose data cache is 16 KB with none behind it, a polygon's cells' bookkeeping cost more than
+ * finding its texture (Lindblum's castle station: 4.7 ms a frame and more). */
+typedef struct { u32 gen, src_gen, src_seen; u8 shadow_ok, mirror_ok, is_source, pad; } Cell;
+static Cell cell[CH][CW];
 /* A cell the GPU owned that CPU writes covered in part, each over its whole height: the columns written (bit i =
  * column i), held in the shadow, the others still only in the mirror (neither side ok). Read back (those other columns
  * only) when anything needs the cell before writes have covered it whole. A movie background's frames are loaded in
  * slices 16 pixels wide over the field the GPU drew: each slice read its cells back first, 320 readbacks a frame,
  * each a wait for the GPU, though the next slice wrote the rest */
 static u32 cell_cols[CH][CW];
-static u32 cell_gen[CH][CW]; /* write counter: texture blocks made from the cell are stale when it moves */
 /* Where in a cell its texture sources lie (the box of every source rectangle marked there, pixels within the cell:
  * x0, y0, x1, y1), and the counter of the last write into that box: what convert_block compares with a block's stamp.
  * A cell is 32 pixels high and FF9 keeps CLUTs in the rows under its 240-row framebuffers (y 240-255, the cell row
@@ -466,16 +471,14 @@ static u32 cell_gen[CH][CW]; /* write counter: texture blocks made from the cell
  * 241 times a frame at Lindblum's castle station, each ending texture_for's known-current state, and 2340 blocks a
  * frame were checked again (their CLUTs hashed) for nothing. */
 static u8 src_box[CH][CW][4];
-static u32 src_gen[CH][CW];
 /* tex_epoch when a block was last found current against sources in the cell (convert_block). Only then can anything
  * be relying on "nothing written since" (texture_for's known-current blocks, all of this epoch): a write into the box
  * of a cell no block has been checked against in this epoch moves src_gen, which the next check of such a block
  * meets, and leaves tex_epoch. (A page drawn with once, its sources in the picture itself, kept its cells marked:
  * Lindblum's castle station's background tiles at the picture's left edge moved the epoch 297 times a frame.) */
-static u32 src_seen[CH][CW];
 static inline void src_seen_now(int x0, int y0, int x1, int y1, u32 epoch) {
     for (int cy = y0 / CELL; cy <= (y1 - 1) / CELL; cy++)
-        for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++) src_seen[cy & (CH - 1)][cx & (CW - 1)] = epoch;
+        for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++) cell[cy & (CH - 1)][cx & (CW - 1)].src_seen = epoch;
 }
 static inline int src_hit(int cx, int cy, int x0, int y0, int x1, int y1) {
     const u8 *b = src_box[cy][cx];
@@ -486,7 +489,6 @@ static u32 gen_counter = 1;
 /* Cells some texture block was made from (texels or CLUT), and a counter bumped by any write to one: a texture whose
  * epoch is current needs no check of its blocks' cells. Draws into the framebuffers, which aren't sources, don't
  * bump it; uploads (rare per frame) do. */
-static u8 cell_is_source[CH][CW];
 static u32 tex_epoch = 1;
 
 static void readback_cells(int cx0, int cy0, int cx1, int cy1);
@@ -518,17 +520,17 @@ static void gpu_draws(int x0, int y0, int x1, int y1) {
     if (ctr_sw_drawmemo && cells == last_cells && last_ver == cells_ver) return;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++)
-            if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); goto ok; }
+            if (!cell[cy][cx].mirror_ok) { blit_cells(cx0, cy0, cx1, cy1); goto ok; }
 ok:
     gen_counter++;
     int source = 0, moved = 0;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
-            shadow_ok[cy][cx] = 0;
-            cell_gen[cy][cx] = gen_counter;
-            if (cell_is_source[cy][cx]) {
+            cell[cy][cx].shadow_ok = 0;
+            cell[cy][cx].gen = gen_counter;
+            if (cell[cy][cx].is_source) {
                 source = 1; /* (no skip of the next call on these cells: another rectangle may reach the sources) */
-                if (src_hit(cx, cy, x0, y0, x1, y1)) src_gen[cy][cx] = gen_counter, moved |= src_seen[cy][cx] == tex_epoch;
+                if (src_hit(cx, cy, x0, y0, x1, y1)) cell[cy][cx].src_gen = gen_counter, moved |= cell[cy][cx].src_seen == tex_epoch;
             }
         }
     if (moved) tex_epoch++;
@@ -542,7 +544,7 @@ static void cpu_reads(int x0, int y0, int x1, int y1) {
     if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++)
-            if (!shadow_ok[cy][cx]) { readback_cells(cx0, cy0, cx1, cy1); return; }
+            if (!cell[cy][cx].shadow_ok) { readback_cells(cx0, cy0, cx1, cy1); return; }
 }
 
 static int filling; /* psx_vram_filled -> psx_vram_touch: a fill the GPU draws itself */
@@ -574,7 +576,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
         columns = 1;
         for (int cy = cy0; cy < cy1 && columns; cy++)
             for (int cx = cx0; cx < cx1; cx++) {
-                if (!shadow_ok[cy][cx] && !(cy * CELL >= y && (cy + 1) * CELL <= ye)) { columns = 0; break; }
+                if (!cell[cy][cx].shadow_ok && !(cy * CELL >= y && (cy + 1) * CELL <= ye)) { columns = 0; break; }
             }
         if (!columns) cpu_reads(x, y, x + w, y + h);
     }
@@ -586,26 +588,26 @@ void psx_vram_touch(int x, int y, int w, int h) {
     int touched_seen = 0;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
-            if (cell_is_source[cy][cx] && (wraps || src_hit(cx, cy, x, y, x + w, y + h)))
-                src_gen[cy][cx] = gen_counter, touched_seen |= src_seen[cy][cx] == epoch_was;
+            if (cell[cy][cx].is_source && (wraps || src_hit(cx, cy, x, y, x + w, y + h)))
+                cell[cy][cx].src_gen = gen_counter, touched_seen |= cell[cy][cx].src_seen == epoch_was;
             if (filling) {
                 /* the fill is drawn into the mirror too (psx_vram_filled): both sides current where it covers a
                  * whole cell; a partly covered cell keeps the GPU's state */
                 int whole = cx * CELL >= x && (cx + 1) * CELL <= x + w && cy * CELL >= y && (cy + 1) * CELL <= y + h;
-                if (whole) mirror_ok[cy][cx] = 1, shadow_ok[cy][cx] = !fill_kept, cell_cols[cy][cx] = 0; /* (kept: the CPU's copy not filled) */
-                else if (!shadow_ok[cy][cx]) { /* (the shadow part is updated too, but other pixels are stale) */ }
-            } else if (columns && !shadow_ok[cy][cx]) {
+                if (whole) cell[cy][cx].mirror_ok = 1, cell[cy][cx].shadow_ok = !fill_kept, cell_cols[cy][cx] = 0; /* (kept: the CPU's copy not filled) */
+                else if (!cell[cy][cx].shadow_ok) { /* (the shadow part is updated too, but other pixels are stale) */ }
+            } else if (columns && !cell[cy][cx].shadow_ok) {
                 const int a = x > cx * CELL ? x - cx * CELL : 0, b = xe < (cx + 1) * CELL ? xe - cx * CELL : CELL;
                 const u32 cols = cell_cols[cy][cx] | (b - a == 32 ? ~0u : ((1u << (b - a)) - 1) << a);
-                if (cols == ~0u) shadow_ok[cy][cx] = 1, cell_cols[cy][cx] = 0;
+                if (cols == ~0u) cell[cy][cx].shadow_ok = 1, cell_cols[cy][cx] = 0;
                 else cell_cols[cy][cx] = cols;
-                mirror_ok[cy][cx] = 0;
+                cell[cy][cx].mirror_ok = 0;
             } else {
-                shadow_ok[cy][cx] = 1;
-                mirror_ok[cy][cx] = 0;
+                cell[cy][cx].shadow_ok = 1;
+                cell[cy][cx].mirror_ok = 0;
                 cell_cols[cy][cx] = 0;
             }
-            cell_gen[cy][cx] = gen_counter;
+            cell[cy][cx].gen = gen_counter;
         }
     if (touched_seen) tex_epoch++;
     filling = fill_kept = 0;
@@ -1383,9 +1385,9 @@ static void blit_cells(int cx0, int cy0, int cx1, int cy1) {
             if (cell_cols[cy][cx]) readback_cells(cx, cy, cx + 1, cy + 1);
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1;) {
-            if (mirror_ok[cy][cx]) { cx++; continue; }
+            if (cell[cy][cx].mirror_ok) { cx++; continue; }
             int run = cx;
-            while (run < cx1 && !mirror_ok[cy][run]) mirror_ok[cy][run++] = 1;
+            while (run < cx1 && !cell[cy][run].mirror_ok) cell[cy][run++].mirror_ok = 1;
             blit_run(cx, run, cy);
             cx = run;
         }
@@ -1401,14 +1403,14 @@ static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
     const u16 *m = mirror_tex[0].data;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
-            if (shadow_ok[cy][cx]) continue;
+            if (cell[cy][cx].shadow_ok) continue;
             const u32 kept = cell_cols[cy][cx]; /* (columns the CPU wrote since: not the mirror's) */
             for (int y = cy * CELL; y < (cy + 1) * CELL; y++) {
                 u16 *dst = psx_vram + y * VW;
                 for (int x = cx * CELL; x < (cx + 1) * CELL; x++)
                     if (!(kept >> (x - cx * CELL) & 1)) dst[x] = rgba5551_to_bgr555(m[tiled(x, y, VW)]);
             }
-            shadow_ok[cy][cx] = 1;
+            cell[cy][cx].shadow_ok = 1;
             cell_cols[cy][cx] = 0;
         }
     ctr_render_stats[3]++;
@@ -1435,20 +1437,22 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
 /* ---- textures ----------------------------------------------------------------------------------------------- */
 
 typedef struct {
+    /* (what every lookup reads, together at the front: two cache lines. The masks stood past the per-block tables,
+     * 1.3 KB on: a line of their own for each polygon's lookup, on an Old 3DS a read from memory) */
     u32 key;     /* depth << 30 | page x / 64 << 26 | page y / 256 << 25 | CLUT x / 16 << 9 | CLUT y; 0 = free */
     u32 twin;    /* the texture window baked in (GP0 E2: mask x, y, offset x, y in 8-texel units), 0 = none */
     u32 serial;  /* frame_serial when last drawn with */
+    u32 cur_epoch;
+    u64 cur;       /* blocks known current (stamp set, epoch == cur_epoch): texture_for's test of them at once */
+    u64 fl1, fl2;  /* blocks whose flags have 1, 2 (as flags[]: texture_for's flags of current blocks at once) */
     u16 ox, oy;  /* its 256x256 place in its atlas (texels) */
     u8 atlas;    /* the atlas it is in (atlases[]) */
+    u32 was_key, was_twin; /* given up by slot_renew (key 0): the page its blocks still hold, as stamp, hash and chash say */
     u32 stamp[64]; /* per 32x32 block: gen_counter when converted (0 = not yet) */
     u32 epoch[64]; /* per block: tex_epoch when it was last known current (no write to any source cell since) */
     u8 flags[64];  /* per block: 1 = has opaque texels, 2 = has semi-transparent ones */
     u32 hash[64];  /* per block: its source texels' hash when converted */
     u32 chash[64]; /* ... and its CLUT's */
-    u64 cur;       /* blocks known current (stamp set, epoch == cur_epoch): texture_for's test of them at once */
-    u64 fl1, fl2;  /* blocks whose flags have 1, 2 (as flags[]: texture_for's flags of current blocks at once) */
-    u32 cur_epoch;
-    u32 was_key, was_twin; /* given up by slot_renew (key 0): the page its blocks still hold, as stamp, hash and chash say */
 } TexSlot;
 
 #define MAX_SLOTS 96
@@ -1695,7 +1699,7 @@ static int slot_shrink(void) {
 static inline int cells_newer(int x0, int y0, int x1, int y1, u32 stamp) {
     for (int cy = y0 / CELL; cy <= (y1 - 1) / CELL; cy++)
         for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++)
-            if (cell_gen[cy & (CH - 1)][cx & (CW - 1)] > stamp) return 1;
+            if (cell[cy & (CH - 1)][cx & (CW - 1)].gen > stamp) return 1;
     return 0;
 }
 
@@ -1708,21 +1712,21 @@ static void mark_source(int x0, int y0, int x1, int y1) {
             /* (the rectangle's part in this cell, in the cell's own pixels) */
             const int a0 = x0 > cx * CELL ? x0 - cx * CELL : 0, a1 = x1 < (cx + 1) * CELL ? x1 - cx * CELL : CELL;
             const int c0 = y0 > cy * CELL ? y0 - cy * CELL : 0, c1 = y1 < (cy + 1) * CELL ? y1 - cy * CELL : CELL;
-            if (!cell_is_source[wy][wx]) b[0] = (u8)a0, b[1] = (u8)c0, b[2] = (u8)a1, b[3] = (u8)c1;
+            if (!cell[wy][wx].is_source) b[0] = (u8)a0, b[1] = (u8)c0, b[2] = (u8)a1, b[3] = (u8)c1;
             else {
                 if (a0 < b[0]) b[0] = (u8)a0;
                 if (c0 < b[1]) b[1] = (u8)c0;
                 if (a1 > b[2]) b[2] = (u8)a1;
                 if (c1 > b[3]) b[3] = (u8)c1;
             }
-            cell_is_source[wy][wx] = 1;
+            cell[wy][wx].is_source = 1;
         }
 }
 /* a source rectangle written since the stamp (its cells' sources' boxes: src_gen) */
 static inline int src_newer(int x0, int y0, int x1, int y1, u32 stamp) {
     for (int cy = y0 / CELL; cy <= (y1 - 1) / CELL; cy++)
         for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++)
-            if (src_gen[cy & (CH - 1)][cx & (CW - 1)] > stamp) return 1;
+            if (cell[cy & (CH - 1)][cx & (CW - 1)].src_gen > stamp) return 1;
     return 0;
 }
 
@@ -2028,7 +2032,7 @@ static int gpu_owned(int x0, int y0, int x1, int y1) {
             /* (a cell written in part (cell_cols) is the shadow's once the rest is read back, as before such cells were
              * kept: the same texture path as then for a page sampled there) */
             if (cell_cols[cy][cx]) readback_cells(cx, cy, cx + 1, cy + 1);
-            if (!shadow_ok[cy][cx]) return 1;
+            if (!cell[cy][cx].shadow_ok) return 1;
         }
     return 0;
 }
@@ -2046,7 +2050,7 @@ static C3D_Tex *mirror_page(int tx, int ty, int alpha) {
     if (cell_range(tx, ty, tx + 256, ty + 256, &cx0, &cy0, &cx1, &cy1))
         for (int cy = cy0; cy < cy1; cy++)
             for (int cx = cx0; cx < cx1; cx++)
-                if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
+                if (!cell[cy][cx].mirror_ok) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
     /* recorded as a batch of its own, in the mirror's pass: drawn after what was drawn before this primitive and before
      * what samples it, in order with the rest (submit). It was drawn at once: everything recorded before it submitted
      * and the GPU's previous frame waited for, early in the frame (an Old 3DS's battle: 7-8 ms a frame waiting for the
@@ -2091,7 +2095,7 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
             if (cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1))
                 for (int cy = cy0; cy < cy1; cy++)
                     for (int cx = cx0; cx < cx1; cx++)
-                        if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
+                        if (!cell[cy][cx].mirror_ok) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
             *flags = 8;
             tex_ou = (float)m->tx, tex_ov = (float)m->ty;
             return &mirror_tex[0];
@@ -3183,7 +3187,7 @@ static void clear_cpu(int x0, int y0, int x1, int y1, const u8 was_ok[VH / CELL]
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
             const int whole = cx * CELL >= x0 && (cx + 1) * CELL <= x1 && cy * CELL >= y0 && (cy + 1) * CELL <= y1;
-            shadow_ok[cy][cx] = whole || was_ok[cy][cx];
+            cell[cy][cx].shadow_ok = whole || was_ok[cy][cx];
             if (whole) cell_cols[cy][cx] = 0;
         }
 #ifdef PORT_CLEAR_CHECK
@@ -3237,12 +3241,13 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
                       (!stereo_on || (cx1 - cx0 >= 300 && cy1 - cy0 >= 200)) && !ctr_outline;
     u8 was_ok[VH / CELL][VW / CELL];
     if (clear) {
-        memcpy(was_ok, shadow_ok, sizeof was_ok);
+        for (int cy = 0; cy < CH; cy++)
+            for (int cx = 0; cx < CW; cx++) was_ok[cy][cx] = cell[cy][cx].shadow_ok;
         /* (the cells it covers whole are black after it whatever the mirror had: not brought up to date first (gpu_draws
          * blits a stale cell's shadow into the mirror before drawing over it): each movie frame's slices, loaded into
          * the shadow, were blitted into the mirror only to be cleared there at the next frame) */
         for (int cy = (cy0 + CELL - 1) / CELL; cy < cy1 / CELL; cy++)
-            for (int cx = (cx0 + CELL - 1) / CELL; cx < cx1 / CELL; cx++) mirror_ok[cy][cx] = 1, cell_cols[cy][cx] = 0;
+            for (int cx = (cx0 + CELL - 1) / CELL; cx < cx1 / CELL; cx++) cell[cy][cx].mirror_ok = 1, cell_cols[cy][cx] = 0;
     }
     int ou = tex ? tex_ou : 0, ov = tex ? tex_ov : 0;
     for (int py = 0; py < h;) {
@@ -3403,7 +3408,7 @@ static int r_copy(int sx, int sy, int dx, int dy, int w, int h) {
     if (cell_range(sx, sy, sx + w, sy + h, &cx0, &cy0, &cx1, &cy1))
         for (int cy = cy0; cy < cy1; cy++)
             for (int cx = cx0; cx < cx1; cx++)
-                if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
+                if (!cell[cy][cx].mirror_ok) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
     gpu_draws(dx, dy, dx + w, dy + h);
     int saved = cur_target, saved_mask = cur_mask;
     cur_target = 0;
@@ -4228,7 +4233,7 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
         if (cell_range(d->x, d->y, d->x + (w * 3 + 1) / 2, d->y + h, &cx0, &cy0, &cx1, &cy1))
             for (int cy = cy0; cy < cy1; cy++)
                 for (int cx = cx0; cx < cx1; cx++)
-                    if (cell_gen[cy][cx] > newest) newest = cell_gen[cy][cx];
+                    if (cell[cy][cx].gen > newest) newest = cell[cy][cx].gen;
         if (movie_cur < 0 || newest > movie_gen || memcmp(key, movie_key, sizeof key)) {
             /* (the other one: drawn with last two presents ago at the latest, by a frame done once this one's began) */
             int next = movie_cur < 0 ? 0 : movie_cur ^ 1;
@@ -4256,7 +4261,7 @@ static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy)
     if (cell_range(d->x, d->y, d->x + (w * 3 + 1) / 2, d->y + h, &cx0, &cy0, &cx1, &cy1))
         for (int cy = cy0; cy < cy1; cy++)
             for (int cx = cx0; cx < cx1; cx++)
-                if (cell_gen[cy][cx] > newest) newest = cell_gen[cy][cx];
+                if (cell[cy][cx].gen > newest) newest = cell[cy][cx].gen;
     if (!kept) kept = malloc(512 * 256 * 3);
     if (kept && newest <= kept_gen && !memcmp(key, kept_key, sizeof key) && tw * th <= 512 * 256) {
         __builtin_memcpy(px, kept, tw * th * 3);
@@ -4356,7 +4361,7 @@ void ctr_present(long frame) {
         if (cell_range(d.x, d.y, d.x + w, d.y + h, &cx0, &cy0, &cx1, &cy1))
             for (int cy = cy0; cy < cy1; cy++)
                 for (int cx = cx0; cx < cx1; cx++)
-                    if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
+                    if (!cell[cy][cx].mirror_ok) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
         submit();
         frame_begin();
         /* in stereo, both edges are masked by the largest parallax, in both eyes: what a layer's shift uncovers at
@@ -4637,7 +4642,7 @@ void ctr_render_dump(void) {
     FILE *f = fopen("sdmc:/3ds/ff9/dump/cells.txt", "w");
     if (f) {
         for (int cy = 0; cy < CH; cy++) {
-            for (int cx = 0; cx < CW; cx++) fputc('0' + shadow_ok[cy][cx] + 2 * mirror_ok[cy][cx], f);
+            for (int cx = 0; cx < CW; cx++) fputc('0' + cell[cy][cx].shadow_ok + 2 * cell[cy][cx].mirror_ok, f);
             fputc('\n', f);
         }
         fprintf(f, "stats: batches %u prims %u blits %u readbacks %u blocks %u slots %u syncs %u\n",
@@ -4824,8 +4829,8 @@ void ctr_video_init(void) {
     C3D_RenderTargetSetOutput(bottom_rt, GFX_BOTTOM, GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
     if (!vb || !staging) port_fatal("no linear memory for the renderer");
     /* the mirror starts as the shadow does: black, and current */
-    memset(shadow_ok, 1, sizeof shadow_ok);
-    memset(mirror_ok, 0, sizeof mirror_ok);
+    for (int cy = 0; cy < CH; cy++)
+        for (int cx = 0; cx < CW; cx++) cell[cy][cx].shadow_ok = 1, cell[cy][cx].mirror_ok = 0;
     cells_ver++;
     memset(cell_cols, 0, sizeof cell_cols);
     gp0_backend = &pica_backend;
