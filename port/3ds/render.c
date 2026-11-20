@@ -456,6 +456,19 @@ static u8 mirror_ok[CH][CW]; /* the mirror (both eyes) holds them */
  * each a wait for the GPU, though the next slice wrote the rest */
 static u32 cell_cols[CH][CW];
 static u32 cell_gen[CH][CW]; /* write counter: texture blocks made from the cell are stale when it moves */
+/* Where in a cell its texture sources lie (the box of every source rectangle marked there, pixels within the cell:
+ * x0, y0, x1, y1), and the counter of the last write into that box: what convert_block compares with a block's stamp.
+ * A cell is 32 pixels high and FF9 keeps CLUTs in the rows under its 240-row framebuffers (y 240-255, the cell row
+ * of the picture's rows 224-239): every primitive drawn into the bottom of the screen counted as a write to them,
+ * 241 times a frame at Lindblum's castle station, each ending texture_for's known-current state, and 2340 blocks a
+ * frame were checked again (their CLUTs hashed) for nothing. */
+static u8 src_box[CH][CW][4];
+static u32 src_gen[CH][CW];
+static inline int src_hit(int cx, int cy, int x0, int y0, int x1, int y1) {
+    const u8 *b = src_box[cy][cx];
+    const int bx = cx * CELL, by = cy * CELL;
+    return x0 < bx + b[2] && x1 > bx + b[0] && y0 < by + b[3] && y1 > by + b[1];
+}
 static u32 gen_counter = 1;
 /* Cells some texture block was made from (texels or CLUT), and a counter bumped by any write to one: a texture whose
  * epoch is current needs no check of its blocks' cells. Draws into the framebuffers, which aren't sources, don't
@@ -500,7 +513,10 @@ ok:
         for (int cx = cx0; cx < cx1; cx++) {
             shadow_ok[cy][cx] = 0;
             cell_gen[cy][cx] = gen_counter;
-            if (cell_is_source[cy][cx]) tex_epoch++, source = 1;
+            if (cell_is_source[cy][cx]) {
+                source = 1; /* (no skip of the next call on these cells: another rectangle may reach the sources) */
+                if (src_hit(cx, cy, x0, y0, x1, y1)) src_gen[cy][cx] = gen_counter, tex_epoch++;
+            }
         }
     last_cells = source ? -1 : cells;
     last_ver = cells_ver;
@@ -549,10 +565,12 @@ void psx_vram_touch(int x, int y, int w, int h) {
         if (!columns) cpu_reads(x, y, x + w, y + h);
     }
     gen_counter++;
-    tex_epoch++;
     cells_ver++;
+    /* (a rectangle past VRAM's edge wraps: every source cell it takes in counts) */
+    const int wraps = x < 0 || y < 0 || x + w > VW || y + h > VH;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
+            if (cell_is_source[cy][cx] && (wraps || src_hit(cx, cy, x, y, x + w, y + h))) src_gen[cy][cx] = gen_counter, tex_epoch++;
             if (filling) {
                 /* the fill is drawn into the mirror too (psx_vram_filled): both sides current where it covers a
                  * whole cell; a partly covered cell keeps the GPU's state */
@@ -1666,7 +1684,28 @@ static inline int cells_newer(int x0, int y0, int x1, int y1, u32 stamp) {
 static void mark_source(int x0, int y0, int x1, int y1) {
     cells_ver++;
     for (int cy = y0 / CELL; cy <= (y1 - 1) / CELL; cy++)
-        for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++) cell_is_source[cy & (CH - 1)][cx & (CW - 1)] = 1;
+        for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++) {
+            const int wx = cx & (CW - 1), wy = cy & (CH - 1);
+            u8 *b = src_box[wy][wx];
+            /* (the rectangle's part in this cell, in the cell's own pixels) */
+            const int a0 = x0 > cx * CELL ? x0 - cx * CELL : 0, a1 = x1 < (cx + 1) * CELL ? x1 - cx * CELL : CELL;
+            const int c0 = y0 > cy * CELL ? y0 - cy * CELL : 0, c1 = y1 < (cy + 1) * CELL ? y1 - cy * CELL : CELL;
+            if (!cell_is_source[wy][wx]) b[0] = (u8)a0, b[1] = (u8)c0, b[2] = (u8)a1, b[3] = (u8)c1;
+            else {
+                if (a0 < b[0]) b[0] = (u8)a0;
+                if (c0 < b[1]) b[1] = (u8)c0;
+                if (a1 > b[2]) b[2] = (u8)a1;
+                if (c1 > b[3]) b[3] = (u8)c1;
+            }
+            cell_is_source[wy][wx] = 1;
+        }
+}
+/* a source rectangle written since the stamp (its cells' sources' boxes: src_gen) */
+static inline int src_newer(int x0, int y0, int x1, int y1, u32 stamp) {
+    for (int cy = y0 / CELL; cy <= (y1 - 1) / CELL; cy++)
+        for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++)
+            if (src_gen[cy & (CH - 1)][cx & (CW - 1)] > stamp) return 1;
+    return 0;
 }
 
 /* a hash of w x h halfwords of the shadow at (x, y) (a rectangle within one VRAM row band; x even or not) */
@@ -1691,8 +1730,8 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
                    ofy = (s->twin >> 15 & 31) * 8;
     if (s->twin) sx0 = m->tx, sw = 256 >> shift, sy0 = m->ty;
     int ncl = m->depth == 0 ? 16 : m->depth == 1 ? 256 : 0;
-    int texels_new = !s->stamp[b] || cells_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]);
-    int clut_new = ncl && (!s->stamp[b] || cells_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b]));
+    int texels_new = !s->stamp[b] || src_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]);
+    int clut_new = ncl && (!s->stamp[b] || src_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b]));
     if (!texels_new && !clut_new) {
         s->epoch[b] = tex_epoch;
         return 0;
