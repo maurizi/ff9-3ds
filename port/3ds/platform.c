@@ -243,6 +243,12 @@ void plat_wait_frame(void) {
                            "%u to another page's; %u waits for the frame in flight\n", ctr_tex_n[0] - t0[0], ctr_tex_n[1] - t0[1], ctr_tex_n[2] - t0[2],
                            ctr_tex_n[3] - t0[3], ctr_tex_n[4] - t0[4], ctr_tex_n[5] - t0[5]);
               for (int i = 0; i < 6; i++) t0[i] = ctr_tex_n[i]; }
+            { extern unsigned ctr_sync_line[8], ctr_sync_n[8]; char b[160]; int o = 0; /* (the GPU waited for mid-frame: render.c's lines) */
+              for (int i = 0; i < 8; i++) {
+                  if (ctr_sync_n[i]) o += snprintf(b + o, sizeof b - o, " %u:%u", ctr_sync_line[i], ctr_sync_n[i]);
+                  ctr_sync_n[i] = 0;
+              }
+              if (o) port_log("syncs (render.c line:count):%s\n", b); }
             { extern unsigned ctr_bg_replays, ctr_bg_records; static unsigned r0, k0;
               if (ctr_bg_replays != r0 || ctr_bg_records != k0)
                   port_log("background runs: %u drawn from their copies, %u kept anew\n", ctr_bg_replays - r0, ctr_bg_records - k0);

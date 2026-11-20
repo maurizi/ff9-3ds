@@ -47,6 +47,16 @@ extern unsigned short *psx_vram;
  * 16 KB, and these lay scattered through 70 KB of this file, a different lot of them sharing cache lines each time
  * anything before them grew or shrank (a few lines added to gpu_draws: the world map 4% slower there, on a 3DS). */
 #define HOT_DRAW __attribute__((section(".text.hotdraw")))
+static void gpu_sync_do(void);
+/* (which call asked for it: the heartbeat counts them by line. Each is a command list sent and the GPU waited for) */
+unsigned ctr_sync_line[8], ctr_sync_n[8];
+static inline void gpu_sync_from(unsigned line) {
+    int i;
+    for (i = 0; i < 7 && ctr_sync_line[i] && ctr_sync_line[i] != line; i++) ;
+    ctr_sync_line[i] = line, ctr_sync_n[i]++;
+    gpu_sync_do();
+}
+#define gpu_sync() gpu_sync_from(__LINE__)
 extern int ctr_sw_chain, ctr_sw_poly1, ctr_sw_drawmemo, ctr_sw_reorder, ctr_sw_overlap; /* (below, at ctr_defer) */
 
 /* The scene's walk may be on the other core (gpu.c psx_gpu_sync): every way in here from outside the walk waits for it
@@ -688,7 +698,7 @@ static void half_restart(void) {
 }
 
 /* everything recorded so far executed and finished (the CPU may then read the mirror, or rewrite a texture) */
-static void gpu_sync(void) {
+static void gpu_sync_do(void) {
     trace("gpu_sync", vb_used, in_frame);
     submit();
     if (in_frame) {
@@ -786,7 +796,7 @@ unsigned ctr_run_reorders;
 
 static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n);
 static Vtx *alloc_vtx(unsigned n);
-static void gpu_sync(void);
+static void gpu_sync_do(void);
 
 /* the open batches into the batch list, in order, their depth values from here */
 HOT_DRAW static void run_flush(void) {
@@ -2096,6 +2106,18 @@ static void page_copy(const Batch *b) {
 
 /* A background run being kept (bg_memo): the slots it draws with, each one's mode (what convert_block checks its
  * blocks by: a slot is one page and CLUT) and which of its blocks */
+/* whether a block's texels lie in cells only the mirror holds (convert_block would read them back) */
+static int block_texels_gpu(const TexSlot *s, const Gp0Mode *m, int bx, int by) {
+    const int shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
+    int sx0 = m->tx + ((bx * 32) >> shift), sw = 32 >> shift, sy0 = m->ty + by * 32;
+    if (s->twin) sx0 = m->tx, sw = 256 >> shift, sy0 = m->ty;
+    int cx0, cy0, cx1, cy1;
+    if (!cell_range(sx0, sy0, sx0 + sw, sy0 + 32, &cx0, &cy0, &cx1, &cy1)) return 0;
+    for (int cy = cy0; cy < cy1; cy++)
+        for (int cx = cx0; cx < cx1; cx++)
+            if (!cell[cy][cx].shadow_ok) return 1;
+    return 0;
+}
 #define BG_MEMO_SLOTS 128
 typedef struct { TexSlot *s; u32 ver; u64 mask; Gp0Mode m; } BgSlot;
 static int bg_rec_on, bg_rec_nslots;
@@ -2204,6 +2226,15 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
     } else {
         for (int by = cy0; by <= cy1; by++)
             for (int bx = cx0; bx <= cx1; bx++) {
+                /* (a block only a texel beyond the primitive's own, converted before, whose texels the GPU has drawn
+                 * since: left as it is. It is there so that a sample past the primitive's edge finds texels and not
+                 * what the slot held before; to make it current its cells would be read back from the GPU, a command
+                 * list sent and waited for. Kuja's Flare Star draws into the rows under a page it draws with, layer
+                 * after layer: 20 to 25 readbacks a frame for texels no pixel of it shows, its frames at half speed
+                 * on an Old 3DS) */
+                if ((bx < bx0 || bx > bx1 || by < by0 || by > by1) && s->stamp[by * 8 + bx] && s->epoch[by * 8 + bx] != tex_epoch &&
+                    block_texels_gpu(s, m, bx, by))
+                    continue;
                 PART_BEGIN();
                 const int again = convert_block(s, m, bx, by);
                 PART_END(0);
