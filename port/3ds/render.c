@@ -206,9 +206,119 @@ static void hz_done(void) { hz_nfly = hz_nrec = 0; } /* (the GPU finished all th
 #define hz_done() ((void)0)
 #define HZ_TEX(t, what) ((void)0)
 #endif
+/* ---- a batch's draw without citro3d's (raw_draw) --------------------------------------------------------------
+ * C3D_DrawArrays first brings the GPU up to citro3d's state: with anything changed since the last draw (and a batch is
+ * a change) that is 18 us on an Old 3DS (any change of blending, alpha test or depth test sends all fourteen of their
+ * registers, a texture its unit's seven, each through a call; then both shaders' 96 uniforms are looked over), and the
+ * draw's own eleven registers 11 us more: 29 us a batch, where the Ark's summon has 350 a frame and the airship's
+ * flight 250. Here the state a batch may change is kept as its registers' words as it is set (the setters below, which
+ * still tell citro3d: its own next draw sends what it holds, the same), and raw_draw writes the words that changed and
+ * the draw's straight into the command buffer. A pass's first batch is drawn by citro3d (which sends everything else it
+ * has pending: the target, the projection), and so is anything not a batch. ctr_sw_rawdraw 0: citro3d's draw for all. */
+int ctr_sw_rawdraw = 1;
+static int u_stereo, u_texscale;
+enum { RD_SCISSOR = 1, RD_TEX = 2, RD_ALPHA = 4, RD_DEPTH = 8, RD_BLEND = 16, RD_STEREO = 32, RD_TEXSCALE = 64, RD_TEV = 256 };
+static unsigned raw_dirty;
+static u32 raw_sc[3], raw_alpha, raw_depth, raw_bfunc, raw_bcolor;
+static C3D_Tex *raw_tex;
+static C3D_TexEnv raw_tev[6];
+static inline void rw_AlphaBlend(GPU_BLENDEQUATION ce, GPU_BLENDEQUATION ae, GPU_BLENDFACTOR sc, GPU_BLENDFACTOR dc,
+                                 GPU_BLENDFACTOR sa, GPU_BLENDFACTOR da) {
+    C3D_AlphaBlend(ce, ae, sc, dc, sa, da);
+    const u32 v = (u32)ce | (u32)ae << 8 | (u32)sc << 16 | (u32)dc << 20 | (u32)sa << 24 | (u32)da << 28;
+    if (v != raw_bfunc) raw_bfunc = v, raw_dirty |= RD_BLEND;
+}
+static inline void rw_BlendingColor(u32 c) {
+    C3D_BlendingColor(c);
+    if (c != raw_bcolor) raw_bcolor = c, raw_dirty |= RD_BLEND;
+}
+static inline void rw_AlphaTest(bool en, GPU_TESTFUNC f, int ref) {
+    C3D_AlphaTest(en, f, ref);
+    const u32 v = (u32)(!!en) | ((u32)f & 7) << 4 | (u32)ref << 8;
+    if (v != raw_alpha) raw_alpha = v, raw_dirty |= RD_ALPHA;
+}
+static inline void rw_DepthTest(bool en, GPU_TESTFUNC f, GPU_WRITEMASK m) {
+    C3D_DepthTest(en, f, m);
+    const u32 v = (u32)(!!en) | ((u32)f & 7) << 4 | (u32)m << 8;
+    if (v != raw_depth) raw_depth = v, raw_dirty |= RD_DEPTH;
+}
+static inline void rw_SetScissor(GPU_SCISSORMODE mode, u32 left, u32 top, u32 right, u32 bottom) {
+    C3D_SetScissor(mode, left, top, right, bottom);
+    raw_sc[0] = mode;
+    if (mode != GPU_SCISSOR_DISABLE) raw_sc[1] = top << 16 | (left & 0xFFFF), raw_sc[2] = (bottom - 1) << 16 | ((right - 1) & 0xFFFF);
+    raw_dirty |= RD_SCISSOR;
+}
+static inline void rw_FVUnifSet(GPU_SHADER_TYPE type, int id, float x, float y, float z, float w) {
+    C3D_FVUnifSet(type, id, x, y, z, w);
+    if (type == GPU_VERTEX_SHADER) raw_dirty |= id == u_stereo ? RD_STEREO : id == u_texscale ? RD_TEXSCALE : 0;
+}
+#define C3D_AlphaBlend rw_AlphaBlend
+#define C3D_BlendingColor rw_BlendingColor
+#define C3D_AlphaTest rw_AlphaTest
+#define C3D_DepthTest rw_DepthTest
+#define C3D_SetScissor rw_SetScissor
+#define C3D_FVUnifSet rw_FVUnifSet
+/* (a command: its first parameter, its header (the register, all four bytes written, how many more parameters and whether
+ * they go to the registers after it), the other parameters, to a whole number of pairs: libctru's GPUCMD_Add) */
+#define RC_W(reg, v) (p[0] = (v), p[1] = (u32)(reg) | 0xF0000u, p += 2)
+#define RC_MW(reg, mask, v) (p[0] = (v), p[1] = (u32)(reg) | (u32)(mask) << 16, p += 2)
+static inline u32 *rc_many(u32 *p, u32 reg, const u32 *v, unsigned n, u32 incremental) {
+    p[0] = v[0];
+    p[1] = reg | 0xF0000u | (n - 1) << 20 | incremental << 31;
+    p += 2;
+    for (unsigned i = 1; i < n; i++) *p++ = v[i];
+    if ((n - 1) & 1) *p++ = 0;
+    return p;
+}
+static void raw_draw(unsigned first, unsigned n) {
+    if (gpuCmdBufOffset + 160 > gpuCmdBufSize) { /* (no room for the most this writes: citro3d's, which says so) */
+        C3D_DrawArrays(GPU_TRIANGLES, (int)first, (int)n);
+        raw_dirty = 0;
+        return;
+    }
+    u32 *p = gpuCmdBuf + gpuCmdBufOffset;
+    const unsigned d = raw_dirty;
+    if (d) {
+        raw_dirty = 0;
+        if (d & RD_SCISSOR) p = rc_many(p, GPUREG_SCISSORTEST_MODE, raw_sc, 3, 1);
+        if ((d & RD_TEX) && raw_tex) {
+            const u32 reg[5] = {raw_tex->border, raw_tex->dim, raw_tex->param, raw_tex->lodParam, osConvertVirtToPhys(raw_tex->data) >> 3};
+            p = rc_many(p, GPUREG_TEXUNIT0_BORDER_COLOR, reg, 5, 1);
+            RC_W(GPUREG_TEXUNIT0_TYPE, raw_tex->fmt);
+            RC_MW(GPUREG_TEXUNIT_CONFIG, 0x4, BIT(16)); /* (the GPU's texture cache cleared, as citro3d after a bind) */
+        }
+        if (d >= RD_TEV)
+            for (int k = 0; k < 6; k++)
+                if (d & (RD_TEV << k)) p = rc_many(p, GPUREG_TEXENV0_SOURCE + (u32)(k >= 4 ? k + 2 : k) * 8, (const u32 *)&raw_tev[k], 5, 1);
+        if (d & RD_ALPHA) RC_W(GPUREG_FRAGOP_ALPHA_TEST, raw_alpha);
+        if (d & RD_DEPTH) RC_W(GPUREG_DEPTH_COLOR_MASK, raw_depth);
+        if (d & RD_BLEND) RC_W(GPUREG_BLEND_COLOR, raw_bcolor), RC_W(GPUREG_BLEND_FUNC, raw_bfunc);
+        if (d & RD_STEREO) {
+            RC_W(GPUREG_VSH_FLOATUNIFORM_CONFIG, 0x80000000u | (u32)u_stereo);
+            p = rc_many(p, GPUREG_VSH_FLOATUNIFORM_DATA, (const u32 *)&C3D_FVUnif[GPU_VERTEX_SHADER][u_stereo], 4, 0);
+        }
+        if (d & RD_TEXSCALE) {
+            RC_W(GPUREG_VSH_FLOATUNIFORM_CONFIG, 0x80000000u | (u32)u_texscale);
+            p = rc_many(p, GPUREG_VSH_FLOATUNIFORM_DATA, (const u32 *)&C3D_FVUnif[GPU_VERTEX_SHADER][u_texscale], 4, 0);
+        }
+    }
+    RC_MW(GPUREG_PRIMITIVE_CONFIG, 2, GPU_TRIANGLES);
+    RC_W(GPUREG_RESTART_PRIMITIVE, 1);
+    RC_W(GPUREG_INDEXBUFFER_CONFIG, 0x80000000u);
+    RC_W(GPUREG_NUMVERTICES, n);
+    RC_W(GPUREG_VERTEX_OFFSET, first);
+    RC_MW(GPUREG_GEOSTAGE_CONFIG2, 1, 1);
+    RC_MW(GPUREG_START_DRAW_FUNC0, 1, 0);
+    RC_W(GPUREG_DRAWARRAYS, 1);
+    RC_MW(GPUREG_START_DRAW_FUNC0, 1, 1);
+    RC_MW(GPUREG_GEOSTAGE_CONFIG2, 1, 0);
+    RC_W(GPUREG_VTX_FUNC, 1);
+    gpuCmdBufOffset = (u32)(p - gpuCmdBuf);
+}
 static inline void tex_bind(int unit, C3D_Tex *t) {
     HZ_TEX(t, "texture");
     C3D_TexBind(unit, t);
+    if (unit == 0) raw_tex = t, raw_dirty |= RD_TEX;
 }
 static void mark_dirty(void *p, unsigned n) {
     hz_check(p, n, "cpu write");
@@ -479,6 +589,8 @@ static inline void draw_tris(unsigned first, unsigned n) {
 #endif
     C3D_DrawArrays(GPU_TRIANGLES, first, n);
 }
+volatile unsigned long long ctr_gpu_us; /* (the heartbeat's: from a frame's end to the GPU's queue done) */
+static volatile unsigned long long gpu_sent_at;
 static void frame_end(void) {
     trace("frame_end", vb_used, (int)staging_used);
     flush_pending();
@@ -487,6 +599,7 @@ static void frame_end(void) {
     gq_sending(GS_END); /* (C3D_FrameEnd sends what is left as a list) */
     gs_frame_est += GPU_COST_END, gs_ends++;
 #endif
+    if (!gpu_sent_at) gpu_sent_at = svcGetSystemTick();
     C3D_FrameEnd(GX_CMDLIST_FLUSH) /* (we flush what we write ourselves: not the whole linear heap) */;
 }
 static float stereo_inv_zc = 1.0f / 1500.0f;
@@ -1188,6 +1301,11 @@ static void set_tev_for(int kind, int layer) {
     else if (kind == K_PAGE_OP) C3D_AlphaTest(true, GPU_GREATER, 0x3F);
     else if (kind == K_TEX_P1 || kind == K_TEX_P2 || kind == K_PAGE_SEMI || kind == K_T5_P1 || kind == K_T5_P2) C3D_AlphaTest(true, GPU_GREATER, 0x7F);
     else C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    { /* (raw_draw's: the stages that are other than the GPU has) */
+        C3D_TexEnv *const e[6] = {e0, e1, e2, e3, e4, e5};
+        for (int k = 0; k < 6; k++)
+            if (memcmp(e[k], &raw_tev[k], sizeof raw_tev[k])) raw_tev[k] = *e[k], raw_dirty |= RD_TEV << k;
+    }
 }
 
 /* The PS1's modes. In a UI layer (layer != 0) the alpha channel tracks how much of the scene, composited under the
@@ -1311,7 +1429,7 @@ static void submit_do(void) {
             set_proj_ortho(VW, VH, 0.0f);
             C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, eye ? stereo_k : -stereo_k, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
         }
-        int kind = -1, abr = -1, bmask = -1, ordered = 0;
+        int kind = -1, abr = -1, bmask = -1, ordered = 0, raw_ok = 0;
         C3D_Tex *tex = (C3D_Tex *)-1;
         u16 sc[4] = {0xFFFF, 0, 0, 0};
         float k = eye ? stereo_k : -stereo_k;
@@ -1326,7 +1444,7 @@ static void submit_do(void) {
                 C3D_FrameDrawOn(mirror_rt[eye]);
                 set_proj_ortho(VW, VH, 0.0f);
                 C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, k, stereo_inv_zc, 1.0f / 4096.0f, -0.5f);
-                ordered = 0, kind = abr = bmask = -1, tex = (C3D_Tex *)-1, sc[0] = 0xFFFF;
+                ordered = 0, kind = abr = bmask = -1, tex = (C3D_Tex *)-1, sc[0] = 0xFFFF, raw_ok = 0;
                 continue;
             }
             if (b->ordered != ordered) {
@@ -1361,6 +1479,7 @@ static void submit_do(void) {
                     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
                 }
                 draw_tris(b->first, b->count);
+                raw_dirty = 0;
                 continue;
             }
             if (target != 3 && memcmp(sc, b->sc, sizeof sc)) {
@@ -1368,7 +1487,11 @@ static void submit_do(void) {
                 /* (in window coordinates, which run bottom-up) */
                 C3D_SetScissor(GPU_SCISSOR_NORMAL, sc[0], height - sc[3], sc[2], height - sc[1]);
             }
+#ifndef PORT_PROFILE
+            if (raw_ok && ctr_sw_rawdraw) { raw_draw(b->first, b->count); continue; }
+#endif
             draw_tris(b->first, b->count);
+            raw_dirty = 0, raw_ok = 1; /* (citro3d's draw: the GPU has all that was set; the batches after it by raw_draw) */
         }
         if (ordered) C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
         GSEG(target == 0 ? GS_MIRROR : target == 3 ? GS_TOPUI : target == 4 ? GS_OUTLINE : GS_LAYERS);
@@ -5209,7 +5332,8 @@ const unsigned char *ctr_capture_top(unsigned *serial) {
     return top_presented >= 0 && top_fb[0] ? top_fb[top_presented] : NULL;
 }
 #endif
-static void queue_done(gxCmdQueue_s *queue) { /* (the GSP's event thread) */
+static void queue_done(gxCmdQueue_s *queue) {
+    if (gpu_sent_at) ctr_gpu_us += (svcGetSystemTick() - gpu_sent_at) / (SYSCLOCK_ARM11 / 1000000), gpu_sent_at = 0; /* (the GSP's event thread) */
     if (c3d_queue_done) c3d_queue_done(queue);
     int b = top_queued;
     if (b >= 0) top_present(b, top_queued_stereo), top_queued = -1;

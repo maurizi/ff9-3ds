@@ -251,6 +251,9 @@ void plat_wait_frame(void) {
                            "%u to another page's; %u waits for the frame in flight\n", ctr_tex_n[0] - t0[0], ctr_tex_n[1] - t0[1], ctr_tex_n[2] - t0[2],
                            ctr_tex_n[3] - t0[3], ctr_tex_n[4] - t0[4], ctr_tex_n[5] - t0[5]);
               for (int i = 0; i < 6; i++) t0[i] = ctr_tex_n[i]; }
+            { extern volatile unsigned long long ctr_gpu_us; static unsigned long long g0;
+              port_log("the GPU busy %u ms of the beat (each frame's end to its queue done)\n", (unsigned)((ctr_gpu_us - g0) / 1000));
+              g0 = ctr_gpu_us; }
             { extern unsigned ctr_tex_why[7], ctr_batches; static unsigned w0[7], b0;
               port_log("blocks converted by cause: %u new to the slot, %u texels and CLUT, %u texels, %u CLUT; by depth: %u 4-bit, %u 8-bit, %u 15-bit; "
                        "%u batches drawn\n", ctr_tex_why[0] - w0[0], ctr_tex_why[1] - w0[1], ctr_tex_why[2] - w0[2], ctr_tex_why[3] - w0[3],
