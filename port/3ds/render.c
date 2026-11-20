@@ -105,7 +105,7 @@ static int gpu_busy; /* a frame sent and not waited for (frame_begin waits) */
  * CPU wrote for it is flushed then, each buffer once (a flush is a request to the GSP service: one per vertex quad or
  * texture block cost more than the drawing). Vertices and staging grow contiguously; texture blocks are listed. */
 #define MAX_DIRTY 64
-static struct { u8 *p; unsigned n; } dirty[MAX_DIRTY];
+static struct { u8 *p; unsigned n; u8 *band; } dirty[MAX_DIRTY];
 static unsigned ndirty;
 unsigned ctr_flushes, ctr_batch_why[6], ctr_kind_pairs[8][8];
 unsigned ctr_flush_failed, ctr_flush_error; /* flushes the system refused, and the last one's result (the heartbeat) */
@@ -117,8 +117,9 @@ int ctr_sw_timing;
  * packet (poly_k) left 4 at its start, 5 once its texture is found, 6 once its cells are noted, 7 before its vertices
  * are written, 8 with one pass's alone) */
 int ctr_ko;
-unsigned long long ctr_part_us[5];
-unsigned ctr_part_n[5];
+unsigned long long ctr_part_us[8];
+unsigned ctr_part_n[8];
+unsigned ctr_tex_path[5]; /* (texture_for's lookups: the last one's again, every block known current, blocks checked; blocks hashed; lookups in all) */
 unsigned ctr_tex_n[6]; /* (the heartbeat's: blocks converted; of them for the first time in their slot; pages given another
                         * slot: one of their own back, a free or new one, another page's; waits for the frame in flight) */
 unsigned long long plat_time_us(void);
@@ -134,7 +135,9 @@ static void flush_range(void *p, unsigned n) {
     /* (the kernel's flush, as audio.c's: GSPGPU_FlushDataCache asks the GSP service, which on an Old 3DS runs on the
      * second core in the system's share of it, and waits for its turn there) */
     if (!ctr_sw_flush) return; /* (what the flushes cost, by a run without them: garbage) */
+    const unsigned long long ft0 = ctr_sw_timing ? plat_time_us() : 0;
     Result r = ctr_sw_kflush ? svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)p, n) : GSPGPU_FlushDataCache(p, n);
+    if (ctr_sw_timing) ctr_part_us[7] += plat_time_us() - ft0, ctr_part_n[7]++, ctr_part_us[6] += n;
     if (R_FAILED(r)) {
         ctr_flush_failed++, ctr_flush_error = (unsigned)r;
         if (ctr_flush_failed <= 12 || ctr_flush_failed % 500 == 0)
@@ -208,6 +211,25 @@ static void mark_dirty(void *p, unsigned n) {
     }
     if (ndirty == MAX_DIRTY) flush_pending();
     dirty[ndirty].p = b;
+    dirty[ndirty].band = NULL;
+    dirty[ndirty++].n = n;
+}
+/* ... a texture block's part (n bytes at p) of its slot's row of tiles (band: 256 texels of 8 rows, 8 KB contiguous):
+ * one range a band, from the first byte written in it to the last. (The whole band for each block, as before, was 8 KB
+ * written out of the cache for 1 KB changed: on an Old 3DS some 40 us a call, 6 ms a frame of the airship's flight as
+ * new ground came into view) */
+static void mark_dirty_in(u8 *band, void *p, unsigned n) {
+    hz_check(p, n, "cpu write");
+    u8 *b = p;
+    for (unsigned i = 0; i < ndirty; i++)
+        if (dirty[i].band == band) {
+            u8 *lo = dirty[i].p < b ? dirty[i].p : b, *hi = dirty[i].p + dirty[i].n > b + n ? dirty[i].p + dirty[i].n : b + n;
+            dirty[i].p = lo, dirty[i].n = (unsigned)(hi - lo);
+            return;
+        }
+    if (ndirty == MAX_DIRTY) flush_pending();
+    dirty[ndirty].p = b;
+    dirty[ndirty].band = band;
     dirty[ndirty++].n = n;
 }
 static void flush_pending(void) {
@@ -1464,6 +1486,8 @@ typedef struct {
     u64 fl1, fl2;  /* blocks whose flags have 1, 2 (as flags[]: texture_for's flags of current blocks at once) */
     u16 ox, oy;  /* its 256x256 place in its atlas (texels) */
     u8 atlas;    /* the atlas it is in (atlases[]) */
+    u32 ch_epoch, ch_val; /* its CLUT's hash (ch_val) as of tex_epoch ch_epoch (convert_block) */
+    u64 used, used_prev; /* blocks drawn with in the frame of `serial`, and in the one before if it was drawn with then too */
     u32 was_key, was_twin; /* given up by slot_renew (key 0): the page its blocks still hold, as stamp, hash and chash say */
     u32 stamp[64]; /* per 32x32 block: gen_counter when converted (0 = not yet) */
     u32 epoch[64]; /* per block: tex_epoch when it was last known current (no write to any source cell since) */
@@ -1573,6 +1597,7 @@ HOT_DRAW static TexSlot *slot_for(u32 key, u32 twin) {
     s->key = key;
     s->twin = twin;
     s->was_key = 0;
+    s->ch_epoch = 0;
     memset(s->epoch, 0, sizeof s->epoch);
     s->cur = 0;
     unsigned h = hash_of(key, twin);
@@ -1603,6 +1628,7 @@ static TexSlot *slot_take(TexSlot *r, u32 key, u32 twin) {
     r->key = key;
     r->twin = twin;
     r->was_key = 0;
+    r->ch_epoch = 0;
     memset(r->epoch, 0, sizeof r->epoch);
     memset(r->stamp, 0, sizeof r->stamp);
     r->cur = 0;
@@ -1613,10 +1639,16 @@ static TexSlot *slot_take(TexSlot *r, u32 key, u32 twin) {
 #define RENEW_OWN 4
 /* (0: a page given another slot never takes one of its own back, as before 1f4231c: for comparing on a 3DS) */
 int ctr_slot_keep = 1;
+int ctr_sw_cluthash = 1; /* (0: a CLUT hashed for each block that asks) */
+int ctr_sw_tiles = 1; /* (0: a texture block's texels row by row, as before) */
+#ifdef PORT_TEXCHECK
+unsigned ctr_texcheck[2]; /* (blocks checked, blocks wrong) */
+#endif
 static int renew_b;                  /* convert_block: the block that must change, and what its sources hash to now */
 static u32 renew_hash, renew_chash;
 static TexSlot *slot_back(TexSlot *r, u32 key, u32 twin) {
     r->key = key, r->twin = twin, r->was_key = 0;
+    r->ch_epoch = 0;
     memset(r->epoch, 0, sizeof r->epoch);
     r->cur = 0;
     hash_insert((int)(r - slots));
@@ -1755,6 +1787,18 @@ static inline int src_newer(int x0, int y0, int x1, int y1, u32 stamp) {
 /* a hash of w x h halfwords of the shadow at (x, y) (a rectangle within one VRAM row band; x even or not) */
 static u32 shadow_hash(int x, int y, int w, int h, u32 seed) {
     u32 hsh = seed;
+    x &= 1023;
+    if (!(w & 3) && x + w <= 1024) { /* (not across VRAM's right edge, the usual: two halfwords a step, two sums in turn.
+                                      * A halfword a step, each index masked, was some 30 us for an 8-bit block and its
+                                      * CLUT on an Old 3DS: 200 of them a frame over the sea in the airship) */
+        u32 h2 = seed ^ 0x9E3779B1u;
+        for (int j = 0; j < h; j++) {
+            typedef u32 __attribute__((may_alias, aligned(2))) u32h; /* (x may be odd) */
+            const u32h *p = (const u32h *)(psx_vram + ((y + j) & 511) * VW + x);
+            for (int i = 0; i < w / 2; i += 2) hsh = (hsh ^ p[i]) * 0x01000193u, h2 = (h2 ^ p[i + 1]) * 0x01000193u;
+        }
+        return hsh ^ (h2 * 0x85EBCA6Bu);
+    }
     for (int j = 0; j < h; j++) {
         const u16 *row = psx_vram + ((y + j) & 511) * VW;
         for (int i = 0; i < w; i++) hsh = (hsh ^ row[(x + i) & 1023]) * 0x01000193u;
@@ -1762,11 +1806,36 @@ static u32 shadow_hash(int x, int y, int w, int h, u32 seed) {
     return hsh;
 }
 
+/* The slot drawn with now: these blocks of it (a primitive's own and those a texel beyond: texture_for) */
+static inline void slot_used(TexSlot *s, u64 blocks) {
+    if (s->serial != frame_serial) {
+        s->used_prev = s->serial + 1 == frame_serial ? s->used : 0;
+        s->used = 0;
+        s->serial = frame_serial;
+    }
+    s->used |= blocks;
+}
+/* Block b of the slot is drawn with by what this frame has recorded, or by the frame the GPU may still be drawing. The
+ * question was asked of the whole slot: any block changed in a page the frame in flight drew with sent the page to
+ * another slot (and one new to its slot waited for the GPU), where every block it draws with is converted again. The
+ * world map's pages are shared by many pieces of ground, and in the airship new pieces' texels arrive (and old ones'
+ * go) in pages whose other blocks are on screen: there some 100 pages a beat (120 VBlanks) went to a fresh slot and
+ * 1700 blocks were converted for it, a third of the walk's time on an Old 3DS. (ctr_sw_blockuse 0: as before.) */
+int ctr_sw_blockuse = 1;
+static inline int block_in_use(const TexSlot *s, int b) {
+    if (!ctr_sw_blockuse) return s->serial == frame_serial || (gpu_busy && s->serial + 1 == frame_serial);
+    u64 m = 0;
+    if (s->serial == frame_serial) m = gpu_busy ? s->used | s->used_prev : s->used;
+    else if (gpu_busy && s->serial + 1 == frame_serial) m = s->used;
+    return (int)(m >> b & 1);
+}
+
 /* Make block (bx, by) of the page's texture current; 1 (nothing done) when it must be converted again while a frame
  * not yet drawn uses the slot: texture_for gives the page another (slot_renew). */
 static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     int b = by * 8 + bx;
     if (s->stamp[b] && s->epoch[b] == tex_epoch) return 0; /* (current: nearly every call) */
+    if (ctr_ko == 9 && s->stamp[b]) return 0; /* (what keeping the textures current costs: a block once converted stays) */
     int shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
     int sx0 = m->tx + ((bx * 32) >> shift), sw = 32 >> shift, sy0 = m->ty + by * 32;
     /* a texture window reads only inside it: check (and read back) the whole page instead of the block */
@@ -1791,10 +1860,19 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
      * the font's CLUTs, and every block of the font pages hashed its texels again with them (with a texture window,
      * the page's whole width: 130 of them a frame, 8.5 ms in Azahar as an Old 3DS) */
     u32 hsh = s->hash[b], chsh = s->chash[b];
+    ctr_tex_path[3]++;
     if (texels_new) cpu_reads(sx0, sy0, sx0 + sw, sy0 + 32), hsh = shadow_hash(sx0, sy0, sw, 32, 0x811C9DC5u);
-    if (clut_new)
-        cpu_reads(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1),
-            chsh = shadow_hash(m->clut_x, m->clut_y, ncl, 1, 0x811C9DC5u);
+    if (clut_new) {
+        /* (the CLUT is the page's, the same for each of its blocks: hashed once for them all while nothing a block
+         * depends on is written, its cells noted as looked at so that a write to them ends that) */
+        if (s->ch_epoch != tex_epoch || !ctr_sw_cluthash) {
+            cpu_reads(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
+            s->ch_val = shadow_hash(m->clut_x, m->clut_y, ncl, 1, 0x811C9DC5u);
+            src_seen_now(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, tex_epoch);
+            s->ch_epoch = tex_epoch;
+        }
+        chsh = s->ch_val;
+    }
     if (s->stamp[b] && s->hash[b] == hsh && s->chash[b] == chsh) {
         s->stamp[b] = gen_counter;
         s->epoch[b] = tex_epoch;
@@ -1807,12 +1885,14 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
      * 10-15 waits a frame in Burmecia)) */
     /* (... and known current since the slot took the page, so maybe drawn with: a slot taken back by slot_renew holds
      * blocks of its time before, which nothing has drawn with since) */
-    if (s->stamp[b] && s->epoch[b] && (s->serial == frame_serial || (gpu_busy && s->serial + 1 == frame_serial))) {
+    if (s->stamp[b] && s->epoch[b] && block_in_use(s, b)) {
         renew_b = b, renew_hash = hsh, renew_chash = chsh;
         return 1;
     }
-    if (gpu_busy && s->serial + 1 == frame_serial) ctr_tex_n[5]++, frame_begin(); /* (the frame in flight's: it finishes first) */
+    /* (the frame in flight's: it finishes first. By block, none: a block in use was made current then) */
+    if (gpu_busy && (ctr_sw_blockuse ? block_in_use(s, b) : s->serial + 1 == frame_serial)) ctr_tex_n[5]++, frame_begin();
     ctr_tex_n[0]++, ctr_tex_n[1] += !s->stamp[b];
+    const unsigned long long ct0 = ctr_sw_timing ? plat_time_us() : 0;
     s->hash[b] = hsh;
     s->chash[b] = chsh;
     u32 clut[256];
@@ -1824,7 +1904,74 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     u32 *dst = at->data;
     const unsigned aw = at->width;
     unsigned flags = 0;
-    if (!s->twin) { /* (no texture window, the usual: each depth's loop, the tiled address as a row's and a column's part) */
+    const unsigned sxs = (unsigned)sx0 & 1023;
+    if (!s->twin && sxs + (unsigned)sw <= 1024 && ctr_sw_tiles) {
+        /* No texture window and its texels not across VRAM's right edge (every block, in practice): tile by tile in the
+         * order the texture holds them, a tile's 16 quads of 2x2 texels each (texels (2qx, 2qy), (2qx + 1, 2qy) and the
+         * two below: quad_x, quad_y by the quad's place), so each tile's 256 bytes are written front to back. Row by row
+         * across the block, as before (below), every pair of texels went to its own place in four tiles in turn: 127 us
+         * a block on an Old 3DS, a third of the walk's time over new ground in the airship. The alphas are 0, 0x80 or
+         * 0xFF (rgba_lut): one of 0xFF is the OR's bit 0, one of 0x80 the OR of c ^ c >> 7's. */
+        static const u8 quad_x[16] = {0, 1, 0, 1, 2, 3, 2, 3, 0, 1, 0, 1, 2, 3, 2, 3},
+                        quad_y[16] = {0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 3, 3};
+        u32 f1 = 0, f2 = 0;
+        for (int tr = 0; tr < 4; tr++) {
+            const u16 *r[8];
+            for (int y = 0; y < 8; y++) r[y] = psx_vram + ((m->ty + by * 32 + tr * 8 + y) & 511) * VW + sxs;
+            u32 *d = dst + (((unsigned)(s->oy + by * 32) >> 3) + (unsigned)tr) * (aw >> 3) * 64 + ((unsigned)(s->ox + bx * 32) >> 3) * 64;
+            if (m->depth == 0)
+                for (int tc = 0; tc < 4; tc++)
+                    for (int q = 0; q < 16; q++, d += 4) {
+                        const unsigned qx = quad_x[q], sh = (qx & 1) * 8, at = (unsigned)tc * 2 + (qx >> 1);
+                        const unsigned a = (unsigned)r[quad_y[q] * 2][at] >> sh, b2 = (unsigned)r[quad_y[q] * 2 + 1][at] >> sh;
+                        const u32 c0 = clut[a & 15], c1 = clut[a >> 4 & 15], c2 = clut[b2 & 15], c3 = clut[b2 >> 4 & 15];
+                        d[0] = c0, d[1] = c1, d[2] = c2, d[3] = c3;
+                        f1 |= c0 | c1 | c2 | c3;
+                        f2 |= (c0 ^ c0 >> 7) | (c1 ^ c1 >> 7) | (c2 ^ c2 >> 7) | (c3 ^ c3 >> 7);
+                    }
+            else if (m->depth == 1)
+                for (int tc = 0; tc < 4; tc++)
+                    for (int q = 0; q < 16; q++, d += 4) {
+                        const unsigned at = (unsigned)tc * 4 + quad_x[q];
+                        const unsigned a = r[quad_y[q] * 2][at], b2 = r[quad_y[q] * 2 + 1][at];
+                        const u32 c0 = clut[a & 255], c1 = clut[a >> 8], c2 = clut[b2 & 255], c3 = clut[b2 >> 8];
+                        d[0] = c0, d[1] = c1, d[2] = c2, d[3] = c3;
+                        f1 |= c0 | c1 | c2 | c3;
+                        f2 |= (c0 ^ c0 >> 7) | (c1 ^ c1 >> 7) | (c2 ^ c2 >> 7) | (c3 ^ c3 >> 7);
+                    }
+            else
+                for (int tc = 0; tc < 4; tc++)
+                    for (int q = 0; q < 16; q++, d += 4) {
+                        const unsigned at = (unsigned)tc * 8 + quad_x[q] * 2;
+                        const u16 *ra = r[quad_y[q] * 2] + at, *rb = r[quad_y[q] * 2 + 1] + at;
+                        const u32 c0 = rgba_lut[ra[0]], c1 = rgba_lut[ra[1]], c2 = rgba_lut[rb[0]], c3 = rgba_lut[rb[1]];
+                        d[0] = c0, d[1] = c1, d[2] = c2, d[3] = c3;
+                        f1 |= c0 | c1 | c2 | c3;
+                        f2 |= (c0 ^ c0 >> 7) | (c1 ^ c1 >> 7) | (c2 ^ c2 >> 7) | (c3 ^ c3 >> 7);
+                    }
+        }
+        flags = (f1 & 1) | (f2 & 1) << 1;
+#ifdef PORT_TEXCHECK /* (each texel and the flags against the loops below) */
+        {
+            extern unsigned ctr_texcheck[2];
+            unsigned fl = 0, bad = 0;
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    const u16 *row = psx_vram + ((m->ty + by * 32 + y) & 511) * VW;
+                    u32 c;
+                    if (m->depth == 0) c = clut[row[(m->tx + ((bx * 32 + x) >> 2)) & 1023] >> ((x & 3) * 4) & 15];
+                    else if (m->depth == 1) c = clut[row[(m->tx + ((bx * 32 + x) >> 1)) & 1023] >> ((x & 1) * 8) & 255];
+                    else c = rgba_lut[row[(m->tx + bx * 32 + x) & 1023]];
+                    fl |= (c & 0xFF) == 0xFF ? 1 : (c & 0xFF) == 0x80 ? 2 : 0;
+                    bad += dst[tiled(s->ox + bx * 32 + x, s->oy + by * 32 + y, aw)] != c;
+                }
+            ctr_texcheck[0]++;
+            if (bad || fl != flags) {
+                if (ctr_texcheck[1]++ < 20) port_log("texcheck: depth %d block %d,%d: %u texels differ, flags %u for %u\n", m->depth, bx, by, bad, flags, fl);
+            }
+        }
+#endif
+    } else if (!s->twin) { /* (as it was: each depth's loop, the tiled address as a row's and a column's part) */
         unsigned col[32];
         for (int x = 0; x < 32; x++) {
             unsigned u = s->ox + bx * 32 + x;
@@ -1869,6 +2016,7 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
             dst[tiled(s->ox + u, s->oy + v, aw)] = c;
         }
     }
+    if (ctr_sw_timing) ctr_part_us[5] += plat_time_us() - ct0, ctr_part_n[5]++;
     s->flags[b] = flags;
     s->fl1 = (s->fl1 & ~((u64)1 << b)) | (u64)(flags & 1) << b;
     s->fl2 = (s->fl2 & ~((u64)1 << b)) | (u64)(flags >> 1 & 1) << b;
@@ -1879,7 +2027,12 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     if (ncl) mark_source(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
 
     /* (the block's four rows of tiles, each the slot's 256 texels across: contiguous) */
-    for (int r = 0; r < 4; r++) mark_dirty(dst + tiled(s->ox, s->oy + by * 32 + r * 8, aw), 256 * 8 * 4);
+    if (s->twin) /* (a texture window's block is made from anywhere in the page, and only it is written) */
+        for (int r = 0; r < 4; r++) mark_dirty(dst + tiled(s->ox, s->oy + by * 32 + r * 8, aw), 256 * 8 * 4);
+    else
+        for (int r = 0; r < 4; r++)
+            mark_dirty_in((u8 *)(dst + tiled(s->ox, s->oy + by * 32 + r * 8, aw)),
+                          dst + tiled(s->ox + bx * 32, s->oy + by * 32 + r * 8, aw), 32 * 8 * 4);
     ctr_render_stats[4]++;
     return 0;
 }
@@ -2204,6 +2357,7 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
     if (last.s && last.key == key && last.twin == twin && last.serial == frame_serial && last.s->key == key &&
         last.s->twin == twin) {
         if (last.epoch == tex_epoch && last.b == blocks) {
+            ctr_tex_path[0]++;
             *flags = last.f;
             tex_ou = last.s->ox, tex_ov = last.s->oy;
             if (bg_rec_on) bg_rec_blocks(m, last.s, cx0, cx1, cy0, cy1);
@@ -2223,7 +2377,9 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
     if (s->cur_epoch == tex_epoch && !(want & ~s->cur)) {
         const u64 own = (u64)(((2u << bx1) - 1) & ~((1u << bx0) - 1)) * (rows[by1 - by0] << (by0 * 8));
         f = (own & s->fl1 ? 1 : 0) | (own & s->fl2 ? 2 : 0);
+        ctr_tex_path[1]++;
     } else {
+        ctr_tex_path[2]++;
         for (int by = cy0; by <= cy1; by++)
             for (int bx = cx0; bx <= cx1; bx++) {
                 /* (a block only a texel beyond the primitive's own, converted before, whose texels the GPU has drawn
@@ -2248,7 +2404,7 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
                 if (s->stamp[b] && s->epoch[b] == tex_epoch) s->cur |= (u64)1 << b;
             }
     }
-    s->serial = frame_serial;
+    slot_used(s, want);
     if (bg_rec_on) bg_rec_blocks(m, s, cx0, cx1, cy0, cy1);
     *flags = f;
     tex_ou = s->ox, tex_ov = s->oy;
@@ -2838,6 +2994,7 @@ HOT_DRAW static int r_poly1(const unsigned *w) {
 #endif
 }
 HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned *w, const unsigned kind, const TriCtx *c) {
+    ctr_tex_path[4]++;
     const int textured = kind & 1, nv = (kind & 2) ? 4 : 3, gouraud = (kind >> 2) & 1;
     const unsigned cmd = w[0] >> 24;
     if (ctr_ko == 4) return;
@@ -3528,7 +3685,7 @@ HOT_DRAW static int bg_memo_draw(BgMemo *m, const u32 *head) {
     cur_ordered = 0;
     cur_target = saved_target, cur_mask = saved_mask;
     depth_next += m->prims;
-    for (int i = 0; i < m->nslots; i++) m->slots[i].s->serial = frame_serial;
+    for (int i = 0; i < m->nslots; i++) slot_used(m->slots[i].s, m->slots[i].mask);
     for (int i = 0; i < m->nco; i++) { /* (texture_for's notes for slot_regroup, lookup by lookup) */
         const int id = m->co[i] & 0x7FFF;
         if ((m->co[i] & 0x8000) && co_last >= 0 && co_last != id && co[co_last][id] < 0xFFFF) co[co_last][id]++;
@@ -4176,6 +4333,9 @@ int psx_gpu_defer_ok(void) {
     const int mode = port_game_mode();
     return mode == 1 || mode == 2 || (mode == 3 && ctr_defer_world); /* (field, battle, world map) */
 }
+/* (gpu.c DrawSync: 1 on the world map, 2 wherever a walk is on the other core, 0 nowhere) */
+int ctr_sw_early = 1;
+int psx_gpu_early_ok(void) { return ctr_sw_early == 2 || (ctr_sw_early && port_game_mode() == 3); }
 /* gpu.c: the drawing goes to the other thread. What this one wrote for the GPU since the last flush (vertices, staging,
  * texture blocks) is written out of this core's data cache here, by this core: a flush asked later by the other
  * thread, on the other core, need not reach lines this core still holds, and the GPU reads memory. (An Old 3DS's

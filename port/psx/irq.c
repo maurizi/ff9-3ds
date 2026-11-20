@@ -18,7 +18,7 @@
 __attribute__((weak)) void port_canary(const char *where) { (void)where; } /* also in gp0.c */
 
 static unsigned int vblanks;      /* VSync(-1) */
-static unsigned int last_vsync;   /* vblank count at the previous VSync(n >= 0) */
+static unsigned int last_vsync;   /* frames given to the platform (shown, below) at the previous VSync(n >= 0) */
 static void (*vsync_cb)(void);
 static unsigned int polls; /* VSync(-1) calls since the last frame */
 #define POLLS_PER_FRAME 512 /* (VSync below) */
@@ -207,28 +207,72 @@ void psx_poll_wait(void) {
     if (++polls >= POLLS_PER_FRAME && !in_frame) { psx_poll_frame = 1; psx_frame(); psx_poll_frame = 0; }
 }
 
-void psx_frame(void) {
-    port_canary("game code before psx_frame");
-    polls = 0;
+/* A VBlank's interrupt work run ahead (psx_frame_early): on the PS1 the VBlank's interrupts come whenever it does, so
+ * also while the game waits for the GPU in DrawSync. Here a frame's parts follow one another on the game's thread: the
+ * scene's walk finished (gpu.c: on another core while the game built the next frame, the rest here), then each VBlank's
+ * CD pump, root counter events (AKAO) and callbacks, then the present. Where the walk is what a frame waits for (an
+ * Old 3DS over new ground in the airship: the other core walks at some 60% of this one's speed) those 2 ms a VBlank
+ * stood between one walk and the next. DrawSync now does them first, for as many VBlanks as the last VSync ran, while
+ * the other core walks on; psx_frame then finds them done. The game's own count of VBlanks (VSync(-1)) moves with
+ * them, as the PS1's does during a wait; VSync's waits and its return count the frames given to the platform. */
+static unsigned int shown;    /* frames given to the platform (psx_frame) */
+static unsigned int early;    /* VBlanks whose interrupt work was run ahead */
+static unsigned int last_run = 1; /* frames the last waiting VSync ran */
+volatile unsigned long long psx_irq_us; /* (the heartbeat's: this work's time) */
+__attribute__((weak)) unsigned long long plat_time_us(void);
+int psx_frame_early(void) {
+    if (in_frame || early >= last_run || early >= 4) return 0;
+    const unsigned long long t0 = plat_time_us ? plat_time_us() : 0;
     in_frame++;
-    movie_fv_idle(); /* (a transcoded movie's decoding goes on between the frame's parts) */
     psx_cd_frame();
-    port_canary("CD frame");
-    psx_drawsync_pending();
-    port_canary("DrawSync callback");
+    port_canary("CD frame (early)");
     rcnt_frame();
-    port_canary("root counters (SPU/AKAO)");
-    psx_spu_irq_poll(); /* (an SPU IRQ the mixer saw: its callback, here on the game thread) */
-    movie_fv_idle();
+    port_canary("root counters (SPU/AKAO) (early)");
+    psx_spu_irq_poll();
     vblanks++;
     psx_pad_update();
     if (vsync_cb) {
         vsync_cb();
     }
-    port_canary("VSync callback");
+    port_canary("VSync callback (early)");
+    early++;
+    in_frame--;
+    if (plat_time_us) psx_irq_us += plat_time_us() - t0;
+    return 1;
+}
+
+void psx_frame(void) {
+    port_canary("game code before psx_frame");
+    polls = 0;
+    in_frame++;
+    const unsigned long long t0 = plat_time_us ? plat_time_us() : 0;
+    movie_fv_idle(); /* (a transcoded movie's decoding goes on between the frame's parts) */
+    if (early) { /* (its interrupt work was done while DrawSync waited) */
+        early--;
+        psx_drawsync_pending();
+        port_canary("DrawSync callback");
+        movie_fv_idle();
+    } else {
+        psx_cd_frame();
+        port_canary("CD frame");
+        psx_drawsync_pending();
+        port_canary("DrawSync callback");
+        rcnt_frame();
+        port_canary("root counters (SPU/AKAO)");
+        psx_spu_irq_poll(); /* (an SPU IRQ the mixer saw: its callback, here on the game thread) */
+        movie_fv_idle();
+        vblanks++;
+        psx_pad_update();
+        if (vsync_cb) {
+            vsync_cb();
+        }
+        port_canary("VSync callback");
+    }
+    shown++;
     if (gp0_backend && gp0_backend->frame) {
         gp0_backend->frame();
     }
+    if (plat_time_us) psx_irq_us += plat_time_us() - t0;
     plat_wait_frame();
     port_canary("present/wait");
     in_frame--;
@@ -251,17 +295,18 @@ long VSync(long mode) {
         return 0;
     }
     unsigned int want = mode == 0 ? 1 : (unsigned int)mode;
-    unsigned int start = vblanks;
-    unsigned int passed = vblanks - last_vsync;
+    unsigned int start = shown;
+    unsigned int passed = shown - last_vsync;
     plat_vsync_begin(mode == 0 || passed >= want ? 1 : want - passed); /* the frames the loop below runs */
-    while (vblanks - last_vsync < want || vblanks == start) {
+    while (shown - last_vsync < want || shown == start) {
         psx_frame();
         if (mode == 0) {
             break;
         }
     }
-    long h = (long)(vblanks - last_vsync) * 263;
-    last_vsync = vblanks;
+    last_run = shown - start;
+    long h = (long)(shown - last_vsync) * 263;
+    last_vsync = shown;
     return h;
 }
 

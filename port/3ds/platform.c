@@ -76,7 +76,7 @@ unsigned int plat_pad_buttons(int port) {
  * game worked count toward a VSync(n) (plat_vsync_begin), as on the PS1, so a slow frame doesn't wait again. */
 static unsigned int vsync_owed;
 static unsigned long long ctr_idle_us; /* waited for a VBlank (the heartbeat's) */
-static unsigned long long ctr_present_us, ctr_hud_us;
+static unsigned long long ctr_present_us, ctr_hud_us, ctr_plat_us; /* (... and plat_wait_frame's whole time) */
 unsigned long long plat_time_us(void);
 unsigned long long plat_time_us(void) { return svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000000); }
 unsigned int ctr_vblank_waits, ctr_vblank_skips;
@@ -179,6 +179,7 @@ void ctr_watchdog_start(void) {
 }
 
 void plat_wait_frame(void) {
+    const unsigned long long pf0 = plat_time_us();
     frames++;
     wd_frames = (unsigned)frames;
     ctr_where = "game frame";
@@ -229,20 +230,33 @@ void plat_wait_frame(void) {
                 for (int i = 0; i < 8; i++) k0[i] = ctr_gx_cmd_kind[i];
                 for (int i = 0; i < 4; i++) q0[i] = ctr_gx_irq_kind[i];
             }
-            extern volatile unsigned long long psx_gpu_defer_us[3];
-            static unsigned long long u0[3], idle0;
+            extern volatile unsigned long long psx_gpu_defer_us[4];
+            static unsigned long long u0[4], idle0;
             const unsigned n = psx_gpu_deferred - d0;
             if (n) /* (per walk: what the other core walked, the wait for it to stop, the rest walked here; and the time
                     * this thread waited for a VBlank, of the beat) */
                 port_log("walks: %u on the other core, %u finished here; a walk: %u us there, %u us to stop it, %u us here; idle %u ms\n", n,
                          psx_gpu_defer_helped - h0, (unsigned)((psx_gpu_defer_us[0] - u0[0]) / n), (unsigned)((psx_gpu_defer_us[1] - u0[1]) / n),
                          (unsigned)((psx_gpu_defer_us[2] - u0[2]) / n), (unsigned)((ctr_idle_us - idle0) / 1000));
+            { static unsigned long long pl0; /* (the rest of this thread's beat: the calls kept for the sync, and everything else here) */
+              extern volatile unsigned long long psx_irq_us; extern unsigned int psx_gpu_early_frames;
+              static unsigned long long iq0; static unsigned ef0;
+              if (n) port_log("this thread: the kept calls %u us a walk; the VBlanks' interrupt work %u ms of the beat (%u VBlanks' while DrawSync "
+                              "waited); this function %u ms (idle, presents and UI within)\n", (unsigned)((psx_gpu_defer_us[3] - u0[3]) / n),
+                              (unsigned)((psx_irq_us - iq0) / 1000), psx_gpu_early_frames - ef0, (unsigned)((ctr_plat_us - pl0) / 1000));
+              pl0 = ctr_plat_us, iq0 = psx_irq_us, ef0 = psx_gpu_early_frames; }
             { extern unsigned ctr_tex_n[6]; static unsigned t0[6];
               if (ctr_tex_n[0] != t0[0])
                   port_log("textures: %u blocks converted (%u new to their slot); pages moved: %u to a slot of their own, %u to a free one, "
                            "%u to another page's; %u waits for the frame in flight\n", ctr_tex_n[0] - t0[0], ctr_tex_n[1] - t0[1], ctr_tex_n[2] - t0[2],
                            ctr_tex_n[3] - t0[3], ctr_tex_n[4] - t0[4], ctr_tex_n[5] - t0[5]);
               for (int i = 0; i < 6; i++) t0[i] = ctr_tex_n[i]; }
+            { extern unsigned ctr_tex_path[5]; static unsigned q0[5];
+              if (ctr_tex_path[4] != q0[4])
+                  port_log("polygons %u; their texture lookups: %u the one before's again, %u with every block known current, %u with blocks "
+                           "checked (%u blocks' sources hashed)\n", ctr_tex_path[4] - q0[4], ctr_tex_path[0] - q0[0], ctr_tex_path[1] - q0[1],
+                           ctr_tex_path[2] - q0[2], ctr_tex_path[3] - q0[3]);
+              for (int i = 0; i < 5; i++) q0[i] = ctr_tex_path[i]; }
             { extern unsigned ctr_sync_line[8], ctr_sync_n[8]; char b[160]; int o = 0; /* (the GPU waited for mid-frame: render.c's lines) */
               for (int i = 0; i < 8; i++) {
                   if (ctr_sync_n[i]) o += snprintf(b + o, sizeof b - o, " %u:%u", ctr_sync_line[i], ctr_sync_n[i]);
@@ -257,18 +271,22 @@ void plat_wait_frame(void) {
               port_log("presents %u ms, the bottom screen's and battle's UI %u ms of the beat\n", (unsigned)((ctr_present_us - p0) / 1000), (unsigned)((ctr_hud_us - hd0) / 1000));
               p0 = ctr_present_us, hd0 = ctr_hud_us; }
             { /* (the walk's parts, when they are timed: render.c ctr_sw_timing) */
-                extern int ctr_sw_timing; extern unsigned long long ctr_part_us[5]; extern unsigned ctr_part_n[5];
-                static unsigned long long pu[5]; static unsigned pn[5];
+                extern int ctr_sw_timing; extern unsigned long long ctr_part_us[8]; extern unsigned ctr_part_n[8];
+                static unsigned long long pu[8]; static unsigned pn[8];
                 if (ctr_sw_timing)
                     port_log("parts, ms and calls a beat: texture blocks %u (%u), submits %u (%u), GPU waits %u (%u), background runs %u (%u), "
                              "chains %u (%u, their texture blocks within)\n", (unsigned)((ctr_part_us[0] - pu[0]) / 1000), ctr_part_n[0] - pn[0],
                              (unsigned)((ctr_part_us[1] - pu[1]) / 1000), ctr_part_n[1] - pn[1], (unsigned)((ctr_part_us[2] - pu[2]) / 1000),
                              ctr_part_n[2] - pn[2], (unsigned)((ctr_part_us[3] - pu[3]) / 1000), ctr_part_n[3] - pn[3],
                              (unsigned)((ctr_part_us[4] - pu[4]) / 1000), ctr_part_n[4] - pn[4]);
-                for (int i = 0; i < 5; i++) pu[i] = ctr_part_us[i], pn[i] = ctr_part_n[i];
+                if (ctr_sw_timing)
+                    port_log("parts: texel loops %u ms (%u); flushes %u ms (%u, %u KB)\n", (unsigned)((ctr_part_us[5] - pu[5]) / 1000),
+                             ctr_part_n[5] - pn[5], (unsigned)((ctr_part_us[7] - pu[7]) / 1000), ctr_part_n[7] - pn[7],
+                             (unsigned)((ctr_part_us[6] - pu[6]) / 1024));
+                for (int i = 0; i < 8; i++) pu[i] = ctr_part_us[i], pn[i] = ctr_part_n[i];
             }
             d0 = psx_gpu_deferred, h0 = psx_gpu_defer_helped, idle0 = ctr_idle_us;
-            for (int i = 0; i < 3; i++) u0[i] = psx_gpu_defer_us[i];
+            for (int i = 0; i < 4; i++) u0[i] = psx_gpu_defer_us[i];
         }
         void port_world_where(void);
         port_world_where(); /* (on the world map: where, for a spot to rebuild) */
@@ -334,6 +352,7 @@ void plat_wait_frame(void) {
     port_profile_wait_end(w);
 #endif
     ctr_profile_frame();
+    ctr_plat_us += plat_time_us() - pf0;
 }
 
 /* ---- misc ------------------------------------------------------------------------------------------------- */

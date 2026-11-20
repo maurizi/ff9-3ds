@@ -772,7 +772,7 @@ unsigned int psx_gpu_deferred, psx_gpu_defer_helped; /* walks sent to the worker
 /* (the heartbeat's: microseconds the worker walked, the game's thread waited for it to stop, and walked the rest) */
 __attribute__((weak)) unsigned long long plat_time_us(void) { return 0; }
 void psx_gpu_handoff(void);
-volatile unsigned long long psx_gpu_defer_us[3];
+volatile unsigned long long psx_gpu_defer_us[4];
 
 /* 0 when *stop was set before the walk's end (s says where it is) */
 static int ot_walk(OtWalk *s, const volatile int *stop) {
@@ -884,7 +884,9 @@ void psx_gpu_sync(void) {
         psx_gpu_defer_us[2] += plat_time_us() - t1;
     }
     port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
+    const unsigned long long t2 = plat_time_us();
     stage_replay();
+    psx_gpu_defer_us[3] += plat_time_us() - t2; /* (the calls kept for the sync, made) */
 }
 
 /* A call that only notes something for the next walk: 1 if it was kept for the sync (a walk is on the worker; the
@@ -977,8 +979,18 @@ void psx_drawsync_pending(void) {
     }
 }
 
+/* 1 where the VBlanks' interrupt work may be done while DrawSync waits for a walk on the worker (irq.c
+ * psx_frame_early; the renderer says where: port/3ds/render.c) */
+__attribute__((weak)) int psx_gpu_early_ok(void) { return 0; }
+int psx_frame_early(void);
+unsigned int psx_gpu_early_frames; /* (the heartbeat's) */
+
 int DrawSync(int mode) {
-    psx_gpu_sync(); /* (the game's own wait for the GPU) */
+    /* (the game's own wait for the GPU: with the walk still on the worker, the coming VBlanks' interrupt work first,
+     * as a PS1's interrupts come during the wait; anything in it that goes to the GPU ends the walk as ever) */
+    if (mode == 0 && ot_job_on && !ot_on_job && psx_gpu_early_ok())
+        while (ot_job_on && !ot_job_finished && psx_frame_early()) psx_gpu_early_frames++;
+    psx_gpu_sync();
     if (mode == 0) {
         psx_drawsync_pending();
     }
