@@ -269,6 +269,7 @@ def handle(conn, addr, st):
         if job.get('put'):  # (a file for the console's card: a new agent build)
             import zlib
             data = open(job['put'], 'rb').read()
+            conn.settimeout(600)  # (sendall's timeout is for the whole file: minutes over an Old 3DS's Wi-Fi)
             conn.sendall(f'PUT {job["path"]} {len(data)} {zlib.adler32(data) & 0xffffffff:x}\n'.encode() + data)
             conn.settimeout(60)
             reply = b''

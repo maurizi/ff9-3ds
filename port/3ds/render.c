@@ -106,9 +106,10 @@ static void flush_pending(void);
  * finished when it has counted as many interrupts as it sent commands, and C3D_FrameBegin waits for that. One more
  * interrupt than commands and the wait ends while the GPU still draws. */
 volatile unsigned ctr_gx_commands, ctr_gx_interrupts;
+volatile unsigned ctr_gx_cmd_kind[8], ctr_gx_irq_kind[4]; /* commands by GX id; interrupts: PSC0, PPF, P3D, DMA */
 static gxCmdQueue_s *c3d_queue;
 #ifndef PORT_PROFILE
-static void gx_irq(void *unused) { (void)unused; ctr_gx_interrupts++; }
+static void gx_irq(void *which) { ctr_gx_interrupts++; ctr_gx_irq_kind[(uintptr_t)which & 3]++; }
 #endif
 /* HAZARD=1 (test builds): what the GPU reads in a frame it may still be drawing (the frame sent at a present, drawn
  * while the next is recorded) against what the CPU writes meanwhile. On hardware such a write changes what that frame
@@ -567,7 +568,10 @@ static void frame_begin(void) {
     extern volatile const char *ctr_where;
     const char *was = (const char *)ctr_where;
     ctr_where = "C3D_FrameBegin (waiting for the GPU)";
-    if (c3d_queue) ctr_gx_commands += c3d_queue->numEntries; /* (the frame before's, and what was sent outside one) */
+    if (c3d_queue) { /* (the frame before's, and what was sent outside one) */
+        ctr_gx_commands += c3d_queue->numEntries;
+        for (int i = 0; i < c3d_queue->numEntries; i++) ctr_gx_cmd_kind[c3d_queue->entries[i].data[0] & 7]++;
+    }
     C3D_FrameBegin(0); /* waits for the GPU to finish what was sent: the other half is free */
     ctr_where = was;
     if (depth_clear) { /* (runs' depth values used up: submit) */
@@ -4597,10 +4601,10 @@ static int top_queue(int stereo) {
 void ctr_video_init(void) {
     C3D_Init(0x100000);
 #ifndef PORT_PROFILE
-    gspSetEventCallback(GSPGPU_EVENT_PSC0, gx_irq, NULL, false);
-    gspSetEventCallback(GSPGPU_EVENT_PPF, gx_irq, NULL, false);
-    gspSetEventCallback(GSPGPU_EVENT_P3D, gx_irq, NULL, false);
-    gspSetEventCallback(GSPGPU_EVENT_DMA, gx_irq, NULL, false);
+    gspSetEventCallback(GSPGPU_EVENT_PSC0, gx_irq, (void *)0, false);
+    gspSetEventCallback(GSPGPU_EVENT_PPF, gx_irq, (void *)1, false);
+    gspSetEventCallback(GSPGPU_EVENT_P3D, gx_irq, (void *)2, false);
+    gspSetEventCallback(GSPGPU_EVENT_DMA, gx_irq, (void *)3, false);
 #endif
     /* (two of the three are libctru's own top framebuffers, sized for both eyes, the right one half way, and unused
      * once citro3d no longer copies to them: only the third is allocated. Three of our own took 1.7 MB of linear

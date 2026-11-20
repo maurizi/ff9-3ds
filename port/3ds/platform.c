@@ -213,8 +213,16 @@ void plat_wait_frame(void) {
             { /* (the GX commands sent and their interrupts: render.c) */
                 extern volatile unsigned ctr_gx_commands, ctr_gx_interrupts;
                 static unsigned c0, i0;
-                port_log("gx: %u commands, %u interrupts\n", ctr_gx_commands - c0, ctr_gx_interrupts - i0);
+                extern volatile unsigned ctr_gx_cmd_kind[8], ctr_gx_irq_kind[4];
+                static unsigned k0[8], q0[4];
+                port_log("gx: %u commands, %u interrupts | commands: lists %u, fills %u, transfers %u, copies %u, others %u | "
+                         "interrupts: fill %u, transfer/copy %u, list %u, dma %u\n", ctr_gx_commands - c0, ctr_gx_interrupts - i0,
+                         ctr_gx_cmd_kind[1] - k0[1], ctr_gx_cmd_kind[2] - k0[2], ctr_gx_cmd_kind[3] - k0[3], ctr_gx_cmd_kind[4] - k0[4],
+                         ctr_gx_cmd_kind[0] - k0[0] + ctr_gx_cmd_kind[5] - k0[5], ctr_gx_irq_kind[0] - q0[0], ctr_gx_irq_kind[1] - q0[1],
+                         ctr_gx_irq_kind[2] - q0[2], ctr_gx_irq_kind[3] - q0[3]);
                 c0 = ctr_gx_commands, i0 = ctr_gx_interrupts;
+                for (int i = 0; i < 8; i++) k0[i] = ctr_gx_cmd_kind[i];
+                for (int i = 0; i < 4; i++) q0[i] = ctr_gx_irq_kind[i];
             }
             extern volatile unsigned long long psx_gpu_defer_us[3];
             static unsigned long long u0[3], idle0;
