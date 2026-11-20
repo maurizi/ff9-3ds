@@ -740,7 +740,9 @@ static void gpu_quiet(void) {
 
 /* ---- batches ------------------------------------------------------------------------------------------------ */
 
-enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE, K_SCENE, K_PAGE_OP, K_PAGE_SEMI, K_PAGE_COPY };
+enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE, K_SCENE, K_PAGE_OP, K_PAGE_SEMI, K_PAGE_COPY,
+       /* (K_TEX, K_TEX_P1 and K_TEX_P2 with a slot's texture, RGBA5551: submit_do draws them so; set_tev_for) */
+       K_T5, K_T5_P1, K_T5_P2 };
 #define MASK_SET 1   /* drawn pixels get the mask bit (alpha 1); else the texel's (textured) or 0 */
 #define MASK_CHECK 2 /* pixels with the mask bit keep their colour (opaque draws) */
 #define MASK_COPY 4  /* an upload: the source's mask bits as they are */
@@ -1024,6 +1026,32 @@ static void set_tev_for(int kind, int layer) {
         C3D_TexEnvFunc(e1, C3D_Alpha, GPU_ADD);
         C3D_TexEnvScale(e1, C3D_Alpha, GPU_TEVSCALE_4);
         break;
+    case K_T5: case K_T5_P1: case K_T5_P2:
+        /* A slot's texel is the PS1's: 0x0000 all zero, else its colour and bit 15 as the alpha bit. "Any colour" is
+         * ((R + G) x 4 + B) x 4 x 4 over stages 0 to 2 (at least 0.5 for a channel's least value, 0 for black). P2,
+         * texels with bit 15: the alpha bit. P1, those without it and not 0x0000: x (1 - a) x 4 in stage 3, 1 or 0.
+         * A primitive that isn't semi-transparent draws every texel but 0x0000 and gives the mirror its bit 15:
+         * "any colour" x 1/4 + a in stage 3, 1 with the bit, 0.125 to 0.25 without (stored as 0), 0 for none (the
+         * alpha test); into a UI layer, (any colour + a) x 4: 1 or 0. (Stages 3 on: after the dithering's, below.) */
+        C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+        C3D_TexEnvFunc(e0, C3D_RGB, GPU_MODULATE);
+        C3D_TexEnvScale(e0, C3D_RGB, GPU_TEVSCALE_2);
+        if (kind == K_T5_P2) {
+            C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, 0, 0);
+            C3D_TexEnvFunc(e0, C3D_Alpha, GPU_REPLACE);
+            break;
+        }
+        C3D_TexEnvSrc(e0, C3D_Alpha, GPU_TEXTURE0, GPU_TEXTURE0, 0);
+        C3D_TexEnvOpAlpha(e0, GPU_TEVOP_A_SRC_R, GPU_TEVOP_A_SRC_G, 0);
+        C3D_TexEnvFunc(e0, C3D_Alpha, GPU_ADD);
+        C3D_TexEnvScale(e0, C3D_Alpha, GPU_TEVSCALE_4);
+        C3D_TexEnvSrc(e1, C3D_RGB, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(e1, C3D_RGB, GPU_REPLACE);
+        C3D_TexEnvSrc(e1, C3D_Alpha, GPU_PREVIOUS, GPU_TEXTURE0, 0);
+        C3D_TexEnvOpAlpha(e1, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_SRC_B, 0);
+        C3D_TexEnvFunc(e1, C3D_Alpha, GPU_ADD);
+        C3D_TexEnvScale(e1, C3D_Alpha, GPU_TEVSCALE_4);
+        break;
     default: /* textured: texel x vertex colour x 2 */
         C3D_TexEnvSrc(e0, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
         C3D_TexEnvFunc(e0, C3D_RGB, GPU_MODULATE);
@@ -1111,9 +1139,46 @@ static void set_tev_for(int kind, int layer) {
         C3D_TexEnvFunc(e4, C3D_Alpha, GPU_REPLACE);
         C3D_TexEnvScale(e4, C3D_Alpha, GPU_TEVSCALE_4);
     }
-    if (kind == K_TEX) C3D_AlphaTest(true, GPU_GREATER, 0);
+    C3D_TexEnv *e5 = C3D_GetTexEnv(5);
+    C3D_TexEnvInit(e5);
+    if (kind == K_T5 || kind == K_T5_P1) {
+        C3D_TexEnvSrc(e2, C3D_Alpha, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(e2, C3D_Alpha, GPU_REPLACE);
+        C3D_TexEnvScale(e2, C3D_Alpha, GPU_TEVSCALE_4);
+        C3D_TexEnvInit(e3);
+        C3D_TexEnvSrc(e3, C3D_RGB, GPU_PREVIOUS, 0, 0);
+        C3D_TexEnvFunc(e3, C3D_RGB, GPU_REPLACE);
+        if (kind == K_T5_P1) {
+            C3D_TexEnvSrc(e3, C3D_Alpha, GPU_PREVIOUS, GPU_TEXTURE0, 0);
+            C3D_TexEnvOpAlpha(e3, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA, 0);
+            C3D_TexEnvFunc(e3, C3D_Alpha, GPU_MODULATE);
+            C3D_TexEnvScale(e3, C3D_Alpha, GPU_TEVSCALE_4);
+        } else if (layer) {
+            C3D_TexEnvSrc(e3, C3D_Alpha, GPU_PREVIOUS, GPU_TEXTURE0, 0);
+            C3D_TexEnvFunc(e3, C3D_Alpha, GPU_ADD);
+            C3D_TexEnvScale(e3, C3D_Alpha, GPU_TEVSCALE_4);
+        } else {
+            C3D_TexEnvSrc(e3, C3D_Alpha, GPU_PREVIOUS, GPU_CONSTANT, GPU_TEXTURE0);
+            C3D_TexEnvFunc(e3, C3D_Alpha, GPU_MULTIPLY_ADD);
+            C3D_TexEnvColor(e3, 0x40000000);
+        }
+        C3D_TexEnvInit(e4);
+        if (tev_setmask) { /* (as above, a stage on: each drawn pixel's alpha to 1) */
+            C3D_TexEnvSrc(e4, C3D_RGB, GPU_PREVIOUS, 0, 0);
+            C3D_TexEnvFunc(e4, C3D_RGB, GPU_REPLACE);
+            C3D_TexEnvSrc(e4, C3D_Alpha, GPU_PREVIOUS, 0, 0);
+            C3D_TexEnvFunc(e4, C3D_Alpha, GPU_REPLACE);
+            C3D_TexEnvScale(e4, C3D_Alpha, GPU_TEVSCALE_4);
+            C3D_TexEnvSrc(e5, C3D_RGB, GPU_PREVIOUS, 0, 0);
+            C3D_TexEnvFunc(e5, C3D_RGB, GPU_REPLACE);
+            C3D_TexEnvSrc(e5, C3D_Alpha, GPU_PREVIOUS, 0, 0);
+            C3D_TexEnvFunc(e5, C3D_Alpha, GPU_REPLACE);
+            C3D_TexEnvScale(e5, C3D_Alpha, GPU_TEVSCALE_4);
+        }
+    }
+    if (kind == K_TEX || kind == K_T5) C3D_AlphaTest(true, GPU_GREATER, 0);
     else if (kind == K_PAGE_OP) C3D_AlphaTest(true, GPU_GREATER, 0x3F);
-    else if (kind == K_TEX_P1 || kind == K_TEX_P2 || kind == K_PAGE_SEMI) C3D_AlphaTest(true, GPU_GREATER, 0x7F);
+    else if (kind == K_TEX_P1 || kind == K_TEX_P2 || kind == K_PAGE_SEMI || kind == K_T5_P1 || kind == K_T5_P2) C3D_AlphaTest(true, GPU_GREATER, 0x7F);
     else C3D_AlphaTest(false, GPU_ALWAYS, 0);
 }
 
@@ -1197,6 +1262,7 @@ static void outline_proj(int x0, int y0);
 static inline int outline_buf(int x, int y) { return x >= 256 || y >= 256; }
 static void page_copy(const Batch *b);
 static unsigned nsubmits, page_pending = ~0u; /* (submits so far; the one a page copy is recorded in: mirror_page) */
+static int is_slot_tex(const C3D_Tex *t);
 static void submit_do(void);
 static void submit(void) {
     PART_BEGIN();
@@ -1261,15 +1327,18 @@ static void submit_do(void) {
                 C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, target && target != 4 ? 0 : k, stereo_inv_zc, 1.0f / 4096.0f,
                               ordered ? -depth_off * (1.0f / 16384) : -0.5f);
             }
-            if (b->abr != abr || b->mask != bmask || b->kind != kind) {
-                if (b->kind != kind || ((b->mask ^ bmask) & (MASK_DITHER | MASK_SET))) {
+            /* (a slot's texture is RGBA5551: its own combiners for the same three kinds) */
+            const int bk = b->kind >= K_TEX && b->kind <= K_TEX_P2 && is_slot_tex(b->tex)
+                               ? b->kind - K_TEX + K_T5 : b->kind;
+            if (b->abr != abr || b->mask != bmask || bk != kind) {
+                if (bk != kind || ((b->mask ^ bmask) & (MASK_DITHER | MASK_SET))) {
                     tev_dither = !target && (b->mask & MASK_DITHER);
                     tev_setmask = !target && (b->mask & MASK_SET) && !(b->mask & MASK_COPY);
-                    set_tev_for(kind = b->kind, target != 0 && target != 4);
+                    set_tev_for(kind = bk, target != 0 && target != 4);
                     tev_dither = tev_setmask = 0;
                 }
                 if (target == 4) abr = b->abr, bmask = b->mask, set_blend(NO_BLEND, 0);
-                else set_blend_mask(abr = b->abr, target != 0, bmask = b->mask, kind);
+                else set_blend_mask(abr = b->abr, target != 0, bmask = b->mask, b->kind);
             }
             if (b->tex != tex) {
                 tex = b->tex;
@@ -1533,8 +1602,8 @@ static int slot_place(TexSlot *s) {
     int ok = 0;
     for (int k = 0; k < 3 && !ok; k++) {
         unsigned w = sizes[k];
-        if (linearSpaceFree() < w * w * 4 + SLOT_RESERVE) continue;
-        ok = C3D_TexInit(&atlases[natlases].tex, w, w, GPU_RGBA8);
+        if (linearSpaceFree() < w * w * 2 + SLOT_RESERVE) continue;
+        ok = C3D_TexInit(&atlases[natlases].tex, w, w, GPU_RGBA5551);
     }
     if (!ok) return 0;
     C3D_TexSetFilter(&atlases[natlases].tex, GPU_NEAREST, GPU_NEAREST);
@@ -1545,6 +1614,7 @@ static int slot_place(TexSlot *s) {
     return 1;
 }
 static inline C3D_Tex *slot_tex(const TexSlot *s) { return &atlases[s->atlas].tex; }
+static int is_slot_tex(const C3D_Tex *t) { return (uintptr_t)t - (uintptr_t)atlases < sizeof atlases; }
 static int tex_ou, tex_ov; /* texture_for: the returned texture's offset of the primitive's page (texels) */
 static int slots_held_at = -1; /* (slot_for: the size the cache stopped growing at) */
 static u32 rgba_lut[65536];
@@ -1646,7 +1716,6 @@ static TexSlot *slot_take(TexSlot *r, u32 key, u32 twin) {
 /* (0: a page given another slot never takes one of its own back, as before 1f4231c: for comparing on a 3DS) */
 int ctr_slot_keep = 1;
 int ctr_sw_cluthash = 1; /* (0: a CLUT hashed for each block that asks) */
-int ctr_sw_tiles = 1; /* (0: a texture block's texels row by row, as before) */
 #ifdef PORT_TEXCHECK
 unsigned ctr_texcheck[2]; /* (blocks checked, blocks wrong) */
 #endif
@@ -1909,113 +1978,61 @@ static __attribute__((noinline)) int convert_block_do(TexSlot *s, const Gp0Mode 
     const unsigned long long ct0 = ctr_sw_timing ? plat_time_us() : 0;
     s->hash[b] = hsh;
     s->chash[b] = chsh;
+    /* The slots' textures are RGBA5551, the PS1's texel as it is (its colour's 15 bits, bit 15 as the alpha bit, 0x0000
+     * all zero), drawn by the kinds that read one so (set_tev_for: K_T5...): half the bytes of RGBA8 to write for a block
+     * (on an Old 3DS a block's time is its cache lines: 128 of them, some 90 us, for 32x32 texels of four bytes), to
+     * flush and to keep. A texel here: its 16 bits, and above them what flags[] says of it (1: drawn and without bit
+     * 15, 2: with it). */
+#define TX5(c) ((c) ? (u32)(((c) & 31) << 11 | ((c) & 0x3E0) << 1 | ((c) >> 9 & 0x3E) | (c) >> 15) | ((c) & 0x8000 ? 0x20000u : 0x10000u) : 0)
     u32 clut[256];
     if (ncl) {
         const u16 *c = psx_vram + (m->clut_y & 511) * VW;
-        for (int i = 0; i < ncl; i++) clut[i] = rgba_lut[c[(m->clut_x + i) & 1023]];
+        for (int i = 0; i < ncl; i++) { const unsigned t = c[(m->clut_x + i) & 1023]; clut[i] = TX5(t); }
     }
     C3D_Tex *at = slot_tex(s);
-    u32 *dst = at->data;
+    u16 *dst = at->data;
     const unsigned aw = at->width;
-    unsigned flags = 0;
+    u32 fl = 0;
     const unsigned sxs = (unsigned)sx0 & 1023;
-    if (!s->twin && sxs + (unsigned)sw <= 1024 && ctr_sw_tiles) {
+    if (!s->twin && sxs + (unsigned)sw <= 1024) {
         /* No texture window and its texels not across VRAM's right edge (every block, in practice): tile by tile in the
          * order the texture holds them, a tile's 16 quads of 2x2 texels each (texels (2qx, 2qy), (2qx + 1, 2qy) and the
-         * two below: quad_x, quad_y by the quad's place), so each tile's 256 bytes are written front to back. Row by row
-         * across the block, as before (below), every pair of texels went to its own place in four tiles in turn: 127 us
-         * a block on an Old 3DS, a third of the walk's time over new ground in the airship. The alphas are 0, 0x80 or
-         * 0xFF (rgba_lut): one of 0xFF is the OR's bit 0, one of 0x80 the OR of c ^ c >> 7's. */
+         * two below: quad_x, quad_y by the quad's place), so each tile is written front to back. */
         static const u8 quad_x[16] = {0, 1, 0, 1, 2, 3, 2, 3, 0, 1, 0, 1, 2, 3, 2, 3},
                         quad_y[16] = {0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 3, 3};
-        u32 f1 = 0, f2 = 0;
         for (int tr = 0; tr < 4; tr++) {
             const u16 *r[8];
             for (int y = 0; y < 8; y++) r[y] = psx_vram + ((m->ty + by * 32 + tr * 8 + y) & 511) * VW + sxs;
-            u32 *d = dst + (((unsigned)(s->oy + by * 32) >> 3) + (unsigned)tr) * (aw >> 3) * 64 + ((unsigned)(s->ox + bx * 32) >> 3) * 64;
+            u16 *d = dst + (((unsigned)(s->oy + by * 32) >> 3) + (unsigned)tr) * (aw >> 3) * 64 + ((unsigned)(s->ox + bx * 32) >> 3) * 64;
             if (m->depth == 0)
                 for (int tc = 0; tc < 4; tc++)
                     for (int q = 0; q < 16; q++, d += 4) {
-                        const unsigned qx = quad_x[q], sh = (qx & 1) * 8, at = (unsigned)tc * 2 + (qx >> 1);
-                        const unsigned a = (unsigned)r[quad_y[q] * 2][at] >> sh, b2 = (unsigned)r[quad_y[q] * 2 + 1][at] >> sh;
+                        const unsigned qx = quad_x[q], sh = (qx & 1) * 8, at2 = (unsigned)tc * 2 + (qx >> 1);
+                        const unsigned a = (unsigned)r[quad_y[q] * 2][at2] >> sh, b2 = (unsigned)r[quad_y[q] * 2 + 1][at2] >> sh;
                         const u32 c0 = clut[a & 15], c1 = clut[a >> 4 & 15], c2 = clut[b2 & 15], c3 = clut[b2 >> 4 & 15];
-                        d[0] = c0, d[1] = c1, d[2] = c2, d[3] = c3;
-                        f1 |= c0 | c1 | c2 | c3;
-                        f2 |= (c0 ^ c0 >> 7) | (c1 ^ c1 >> 7) | (c2 ^ c2 >> 7) | (c3 ^ c3 >> 7);
+                        d[0] = (u16)c0, d[1] = (u16)c1, d[2] = (u16)c2, d[3] = (u16)c3;
+                        fl |= c0 | c1 | c2 | c3;
                     }
             else if (m->depth == 1)
                 for (int tc = 0; tc < 4; tc++)
                     for (int q = 0; q < 16; q++, d += 4) {
-                        const unsigned at = (unsigned)tc * 4 + quad_x[q];
-                        const unsigned a = r[quad_y[q] * 2][at], b2 = r[quad_y[q] * 2 + 1][at];
+                        const unsigned at2 = (unsigned)tc * 4 + quad_x[q];
+                        const unsigned a = r[quad_y[q] * 2][at2], b2 = r[quad_y[q] * 2 + 1][at2];
                         const u32 c0 = clut[a & 255], c1 = clut[a >> 8], c2 = clut[b2 & 255], c3 = clut[b2 >> 8];
-                        d[0] = c0, d[1] = c1, d[2] = c2, d[3] = c3;
-                        f1 |= c0 | c1 | c2 | c3;
-                        f2 |= (c0 ^ c0 >> 7) | (c1 ^ c1 >> 7) | (c2 ^ c2 >> 7) | (c3 ^ c3 >> 7);
+                        d[0] = (u16)c0, d[1] = (u16)c1, d[2] = (u16)c2, d[3] = (u16)c3;
+                        fl |= c0 | c1 | c2 | c3;
                     }
             else
                 for (int tc = 0; tc < 4; tc++)
                     for (int q = 0; q < 16; q++, d += 4) {
-                        const unsigned at = (unsigned)tc * 8 + quad_x[q] * 2;
-                        const u16 *ra = r[quad_y[q] * 2] + at, *rb = r[quad_y[q] * 2 + 1] + at;
-                        const u32 c0 = rgba_lut[ra[0]], c1 = rgba_lut[ra[1]], c2 = rgba_lut[rb[0]], c3 = rgba_lut[rb[1]];
-                        d[0] = c0, d[1] = c1, d[2] = c2, d[3] = c3;
-                        f1 |= c0 | c1 | c2 | c3;
-                        f2 |= (c0 ^ c0 >> 7) | (c1 ^ c1 >> 7) | (c2 ^ c2 >> 7) | (c3 ^ c3 >> 7);
+                        const unsigned at2 = (unsigned)tc * 8 + quad_x[q] * 2;
+                        const u16 *ra = r[quad_y[q] * 2] + at2, *rb = r[quad_y[q] * 2 + 1] + at2;
+                        const u32 c0 = TX5(ra[0]), c1 = TX5(ra[1]), c2 = TX5(rb[0]), c3 = TX5(rb[1]);
+                        d[0] = (u16)c0, d[1] = (u16)c1, d[2] = (u16)c2, d[3] = (u16)c3;
+                        fl |= c0 | c1 | c2 | c3;
                     }
         }
-        flags = (f1 & 1) | (f2 & 1) << 1;
-#ifdef PORT_TEXCHECK /* (each texel and the flags against the loops below) */
-        {
-            extern unsigned ctr_texcheck[2];
-            unsigned fl = 0, bad = 0;
-            for (int y = 0; y < 32; y++)
-                for (int x = 0; x < 32; x++) {
-                    const u16 *row = psx_vram + ((m->ty + by * 32 + y) & 511) * VW;
-                    u32 c;
-                    if (m->depth == 0) c = clut[row[(m->tx + ((bx * 32 + x) >> 2)) & 1023] >> ((x & 3) * 4) & 15];
-                    else if (m->depth == 1) c = clut[row[(m->tx + ((bx * 32 + x) >> 1)) & 1023] >> ((x & 1) * 8) & 255];
-                    else c = rgba_lut[row[(m->tx + bx * 32 + x) & 1023]];
-                    fl |= (c & 0xFF) == 0xFF ? 1 : (c & 0xFF) == 0x80 ? 2 : 0;
-                    bad += dst[tiled(s->ox + bx * 32 + x, s->oy + by * 32 + y, aw)] != c;
-                }
-            ctr_texcheck[0]++;
-            if (bad || fl != flags) {
-                if (ctr_texcheck[1]++ < 20) port_log("texcheck: depth %d block %d,%d: %u texels differ, flags %u for %u\n", m->depth, bx, by, bad, flags, fl);
-            }
-        }
-#endif
-    } else if (!s->twin) { /* (as it was: each depth's loop, the tiled address as a row's and a column's part) */
-        unsigned col[32];
-        for (int x = 0; x < 32; x++) {
-            unsigned u = s->ox + bx * 32 + x;
-            col[x] = (u >> 3) * 64 + morton_x[u & 7];
-        }
-        for (int y = 0; y < 32; y++) {
-            unsigned v = s->oy + by * 32 + y;
-            u32 *d = dst + (v >> 3) * (aw >> 3) * 64 + morton_y[v & 7];
-            const u16 *row = psx_vram + ((m->ty + by * 32 + y) & 511) * VW;
-            u32 c;
-#define PUT(x) (d[col[x]] = c, flags |= (c & 0xFF) == 0xFF ? 1 : (c & 0xFF) == 0x80 ? 2 : 0)
-            if (m->depth == 0)
-                for (int x = 0; x < 32; x += 4) {
-                    unsigned w = row[(m->tx + ((bx * 32 + x) >> 2)) & 1023];
-                    c = clut[w & 15], PUT(x);
-                    c = clut[w >> 4 & 15], PUT(x + 1);
-                    c = clut[w >> 8 & 15], PUT(x + 2);
-                    c = clut[w >> 12], PUT(x + 3);
-                }
-            else if (m->depth == 1)
-                for (int x = 0; x < 32; x += 2) {
-                    unsigned w = row[(m->tx + ((bx * 32 + x) >> 1)) & 1023];
-                    c = clut[w & 255], PUT(x);
-                    c = clut[w >> 8], PUT(x + 1);
-                }
-            else
-                for (int x = 0; x < 32; x++) c = rgba_lut[row[(m->tx + bx * 32 + x) & 1023]], PUT(x);
-#undef PUT
-        }
-    } else
+    } else /* (a texture window, or across the edge: texel by texel, each from where the window has it) */
     for (int y = 0; y < 32; y++) {
         int v = by * 32 + y, sv = (int)(((unsigned)v & ~my) | (ofy & my));
         const u16 *row = psx_vram + ((m->ty + sv) & 511) * VW;
@@ -2024,12 +2041,39 @@ static __attribute__((noinline)) int convert_block_do(TexSlot *s, const Gp0Mode 
             u32 c;
             if (m->depth == 0) c = clut[(row[(m->tx + (su >> 2)) & 1023] >> ((su & 3) * 4)) & 15];
             else if (m->depth == 1) c = clut[(row[(m->tx + (su >> 1)) & 1023] >> ((su & 1) * 8)) & 255];
-            else c = rgba_lut[row[(m->tx + su) & 1023]];
-            unsigned a = c & 0xFF;
-            flags |= a == 0xFF ? 1 : a == 0x80 ? 2 : 0;
-            dst[tiled(s->ox + u, s->oy + v, aw)] = c;
+            else { const unsigned t = row[(m->tx + su) & 1023]; c = TX5(t); }
+            fl |= c;
+            dst[tiled(s->ox + u, s->oy + v, aw)] = (u16)c;
         }
     }
+#ifdef PORT_TEXCHECK /* (each texel and the flags as the RGBA8 texels had them: rgba_lut's colour and alpha) */
+    {
+        extern unsigned ctr_texcheck[2];
+        unsigned f8 = 0, bad = 0;
+        for (int y = 0; y < 32; y++)
+            for (int x = 0; x < 32; x++) {
+                int v = by * 32 + y, sv = (int)(((unsigned)v & ~my) | (ofy & my)), u = bx * 32 + x, su = (int)(((unsigned)u & ~mx) | (ofx & mx));
+                const u16 *row = psx_vram + ((m->ty + sv) & 511) * VW;
+                unsigned t;
+                if (m->depth == 0) t = psx_vram[(m->clut_y & 511) * VW + ((m->clut_x + ((row[(m->tx + (su >> 2)) & 1023] >> ((su & 3) * 4)) & 15)) & 1023)];
+                else if (m->depth == 1) t = psx_vram[(m->clut_y & 511) * VW + ((m->clut_x + ((row[(m->tx + (su >> 1)) & 1023] >> ((su & 1) * 8)) & 255)) & 1023)];
+                else t = row[(m->tx + su) & 1023];
+                const u32 c8 = rgba_lut[t];
+                f8 |= (c8 & 0xFF) == 0xFF ? 1 : (c8 & 0xFF) == 0x80 ? 2 : 0;
+                const unsigned g = dst[tiled(s->ox + u, s->oy + v, aw)]; /* (5 bits a channel widened as the GPU does, the alpha bit) */
+                const unsigned r5 = g >> 11, g5 = g >> 6 & 31, b5 = g >> 1 & 31;
+                const u32 want = (r5 << 3 | r5 >> 2) << 24 | (g5 << 3 | g5 >> 2) << 16 | (b5 << 3 | b5 >> 2) << 8;
+                bad += (c8 & 0xFFFFFF00u) != want || (g & 1) != ((c8 & 0xFF) == 0x80) || (!g) != (!c8);
+            }
+        ctr_texcheck[0]++;
+        if (bad || f8 != ((fl >> 16) & 3)) {
+            if (ctr_texcheck[1]++ < 20) port_log("texcheck: depth %d block %d,%d: %u texels differ, flags %u for %u\n", m->depth, bx, by, bad, (unsigned)((fl >> 16) & 3), f8);
+        }
+        if (ctr_texcheck[0] % 2000 == 0) port_log("texcheck: %u blocks, %u wrong\n", ctr_texcheck[0], ctr_texcheck[1]);
+    }
+#endif
+#undef TX5
+    const unsigned flags = (fl >> 16) & 3;
     if (ctr_sw_timing) ctr_part_us[5] += plat_time_us() - ct0, ctr_part_n[5]++;
     s->flags[b] = flags;
     s->fl1 = (s->fl1 & ~((u64)1 << b)) | (u64)(flags & 1) << b;
@@ -2041,12 +2085,9 @@ static __attribute__((noinline)) int convert_block_do(TexSlot *s, const Gp0Mode 
     if (ncl) mark_source(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
 
     /* (the block's four rows of tiles, each the slot's 256 texels across: contiguous) */
-    if (s->twin) /* (a texture window's block is made from anywhere in the page, and only it is written) */
-        for (int r = 0; r < 4; r++) mark_dirty(dst + tiled(s->ox, s->oy + by * 32 + r * 8, aw), 256 * 8 * 4);
-    else
-        for (int r = 0; r < 4; r++)
-            mark_dirty_in((u8 *)(dst + tiled(s->ox, s->oy + by * 32 + r * 8, aw)),
-                          dst + tiled(s->ox + bx * 32, s->oy + by * 32 + r * 8, aw), 32 * 8 * 4);
+    for (int r = 0; r < 4; r++)
+        mark_dirty_in((u8 *)(dst + tiled(s->ox, s->oy + by * 32 + r * 8, aw)),
+                      dst + tiled(s->ox + bx * 32, s->oy + by * 32 + r * 8, aw), 32 * 8 * 2);
     ctr_render_stats[4]++;
     return 0;
 }
@@ -2062,11 +2103,11 @@ static inline int cell_of(const TexSlot *t) {
 }
 /* a 256x256 cell copied on the GPU's transfer engine (no CPU time): its 32 rows of 8x8 tiles, each 256 texels across
  * and contiguous, with the gap to the next row in each texture */
-static void copy_cell(u32 *dst, unsigned dw, unsigned dx, unsigned dy, const u32 *src, unsigned sw, unsigned sx,
+static void copy_cell(u16 *dst, unsigned dw, unsigned dx, unsigned dy, const u16 *src, unsigned sw, unsigned sx,
                       unsigned sy) {
-    const unsigned line = 256 * 8 * 4 / 16; /* (in 16-byte units) */
-    C3D_SyncTextureCopy((u32 *)(src + tiled(sx, sy, sw)), GX_BUFFER_DIM(line, (sw - 256) * 8 * 4 / 16),
-                        dst + tiled(dx, dy, dw), GX_BUFFER_DIM(line, (dw - 256) * 8 * 4 / 16), 256 * 256 * 4,
+    const unsigned line = 256 * 8 * 2 / 16; /* (in 16-byte units) */
+    C3D_SyncTextureCopy((u32 *)(src + tiled(sx, sy, sw)), GX_BUFFER_DIM(line, (sw - 256) * 8 * 2 / 16),
+                        (u32 *)(dst + tiled(dx, dy, dw)), GX_BUFFER_DIM(line, (dw - 256) * 8 * 2 / 16), 256 * 256 * 2,
                         GX_TRANSFER_RAW_COPY(1));
 }
 static void slot_regroup(void) {
@@ -2155,8 +2196,8 @@ static void slot_regroup(void) {
     /* move: nothing in flight may draw from the atlases meanwhile, and the GPU's copies run outside a frame */
     gpu_sync();
     if (in_frame) frame_end(), in_frame = 0;
-    static u32 *tmp; /* (in linear memory: the GPU copies through it) */
-    if (!tmp) tmp = linearAlloc(256 * 256 * 4);
+    static u16 *tmp; /* (in linear memory: the GPU copies through it) */
+    if (!tmp) tmp = linearAlloc(256 * 256 * 2);
     if (!tmp) return;
     /* cell ids a * 16 + c. Any slot whose new cell is free moves; again until none can; a cycle left is broken by
      * parking one slot's texels in tmp (its cell then free), and the rest follow */
@@ -2170,7 +2211,7 @@ static void slot_regroup(void) {
         ncell[i] = na[i] * 16 + nc[i];
         owner[ocell[i]] = i;
     }
-#define CELL_OF(k) (u32 *)atlases[(k) / 16].tex.data, atlases[(k) / 16].tex.width, \
+#define CELL_OF(k) (u16 *)atlases[(k) / 16].tex.data, atlases[(k) / 16].tex.width, \
                    (unsigned)((k) % 16 % (atlases[(k) / 16].tex.width / 256) * 256), \
                    (unsigned)((k) % 16 / (atlases[(k) / 16].tex.width / 256) * 256)
     int parked = -1;
