@@ -96,6 +96,14 @@ static unsigned ndirty;
 unsigned ctr_flushes, ctr_batch_why[6], ctr_kind_pairs[8][8];
 unsigned ctr_flush_failed, ctr_flush_error; /* flushes the system refused, and the last one's result (the heartbeat) */
 int ctr_sw_flush = 1;
+/* (1: the walk's parts timed for the heartbeat, on a 3DS where Azahar's shares don't hold: texture blocks checked or
+ * converted, submits, the wait for the GPU, background runs, the world map's chains; some 2 clock reads each) */
+int ctr_sw_timing;
+unsigned long long ctr_part_us[5];
+unsigned ctr_part_n[5];
+unsigned long long plat_time_us(void);
+#define PART_BEGIN() const unsigned long long part_t0 = ctr_sw_timing ? plat_time_us() : 0
+#define PART_END(k) do { if (ctr_sw_timing) ctr_part_us[k] += plat_time_us() - part_t0, ctr_part_n[k]++; } while (0)
 int ctr_sw_kflush = 1;                      /* (0: the GSP service's flush, as libctru's own code asks for) */
 static const char *flush_what = "?";
 static int vb_run_open;     /* a run holds the vertex buffer's room (run_open ... run_flush) */
@@ -594,12 +602,14 @@ static void frame_begin(void) {
     unsigned profile_start = port_profile_begin();
     extern volatile const char *ctr_where;
     const char *was = (const char *)ctr_where;
+    PART_BEGIN();
     ctr_where = "C3D_FrameBegin (waiting for the GPU)";
     if (c3d_queue) { /* (the frame before's, and what was sent outside one) */
         ctr_gx_commands += c3d_queue->numEntries;
         for (int i = 0; i < c3d_queue->numEntries; i++) ctr_gx_cmd_kind[c3d_queue->entries[i].data[0] & 7]++;
     }
     C3D_FrameBegin(0); /* waits for the GPU to finish what was sent: the other half is free */
+    PART_END(2);
     ctr_where = was;
     if (depth_clear) { /* (runs' depth values used up: submit) */
         C3D_RenderTargetClear(mirror_rt[0], C3D_CLEAR_DEPTH, 0, 0);
@@ -1109,7 +1119,13 @@ static void outline_proj(int x0, int y0);
 static inline int outline_buf(int x, int y) { return x >= 256 || y >= 256; }
 static void page_copy(const Batch *b);
 static unsigned nsubmits, page_pending = ~0u; /* (submits so far; the one a page copy is recorded in: mirror_page) */
+static void submit_do(void);
 static void submit(void) {
+    PART_BEGIN();
+    submit_do();
+    PART_END(1);
+}
+static void submit_do(void) {
     trace("submit", (int)nbatches, (int)vb_used);
     run_flush();
     if (!nbatches) return;
@@ -2073,7 +2089,10 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
     } else {
         for (int by = cy0; by <= cy1; by++)
             for (int bx = cx0; bx <= cx1; bx++) {
-                if (convert_block(s, m, bx, by)) { s = slot_renew(s), f = 0, by = cy0, bx = cx0 - 1; continue; }
+                PART_BEGIN();
+                const int again = convert_block(s, m, bx, by);
+                PART_END(0);
+                if (again) { s = slot_renew(s), f = 0, by = cy0, bx = cx0 - 1; continue; }
                 if (bx >= bx0 && bx <= bx1 && by >= by0 && by <= by1) f |= s->flags[by * 8 + bx];
             }
         if (s->cur_epoch != tex_epoch) s->cur = 0, s->cur_epoch = tex_epoch;
@@ -2791,8 +2810,15 @@ static inline __attribute__((always_inline)) void poly_k(const unsigned *w, cons
  * r_poly1's case decided once for them all, each drawn by poly_k; one in a window's packets (never, in practice) by
  * the decoder as the walk would. 0: not taken (they are drawn one by one) */
 void DrawPrim(void *p); /* (gpu.c: a packet decoded and drawn as the walk would) */
+static int terrain_chain_do(u32 *head, u32 count);
 int port_terrain_chain(u32 *head, u32 count) {
     psx_gpu_sync();
+    PART_BEGIN();
+    const int r = terrain_chain_do(head, count);
+    PART_END(4);
+    return r;
+}
+static int terrain_chain_do(u32 *head, u32 count) {
 #ifdef PORT_PROBE_AT
     (void)head, (void)count;
     return 0;
@@ -3241,8 +3267,15 @@ static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsign
     return bg_tile(t, sc);
 }
 static inline const u32 *bg_tile_next(const u32 *p) { return (const u32 *)(((u32)(uintptr_t)psx_ram & 0xFF000000) | (*p & 0xFFFFFF)); }
+static int bg_run_do(unsigned int *head, int count);
 int gxh_bg_run(unsigned int *head, int count) {
     psx_gpu_sync();
+    PART_BEGIN();
+    const int r = bg_run_do(head, count);
+    PART_END(3);
+    return r;
+}
+static int bg_run_do(unsigned int *head, int count) {
     u16 sc[4];
     if (!bg_plain() || count <= 0 || !area_scissor(sc)) return 0;
     /* (every tile a page + SPRT_16 packet as the game builds them (MargePrim'd: the sprite's tag a NOP between), none

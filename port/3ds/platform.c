@@ -235,6 +235,17 @@ void plat_wait_frame(void) {
                 port_log("walks: %u on the other core, %u finished here; a walk: %u us there, %u us to stop it, %u us here; idle %u ms\n", n,
                          psx_gpu_defer_helped - h0, (unsigned)((psx_gpu_defer_us[0] - u0[0]) / n), (unsigned)((psx_gpu_defer_us[1] - u0[1]) / n),
                          (unsigned)((psx_gpu_defer_us[2] - u0[2]) / n), (unsigned)((ctr_idle_us - idle0) / 1000));
+            { /* (the walk's parts, when they are timed: render.c ctr_sw_timing) */
+                extern int ctr_sw_timing; extern unsigned long long ctr_part_us[5]; extern unsigned ctr_part_n[5];
+                static unsigned long long pu[5]; static unsigned pn[5];
+                if (ctr_sw_timing)
+                    port_log("parts, ms and calls a beat: texture blocks %u (%u), submits %u (%u), GPU waits %u (%u), background runs %u (%u), "
+                             "chains %u (%u, their texture blocks within)\n", (unsigned)((ctr_part_us[0] - pu[0]) / 1000), ctr_part_n[0] - pn[0],
+                             (unsigned)((ctr_part_us[1] - pu[1]) / 1000), ctr_part_n[1] - pn[1], (unsigned)((ctr_part_us[2] - pu[2]) / 1000),
+                             ctr_part_n[2] - pn[2], (unsigned)((ctr_part_us[3] - pu[3]) / 1000), ctr_part_n[3] - pn[3],
+                             (unsigned)((ctr_part_us[4] - pu[4]) / 1000), ctr_part_n[4] - pn[4]);
+                for (int i = 0; i < 5; i++) pu[i] = ctr_part_us[i], pn[i] = ctr_part_n[i];
+            }
             d0 = psx_gpu_deferred, h0 = psx_gpu_defer_helped, idle0 = ctr_idle_us;
             for (int i = 0; i < 3; i++) u0[i] = psx_gpu_defer_us[i];
         }
