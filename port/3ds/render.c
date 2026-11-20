@@ -102,6 +102,14 @@ static void flush_range(void *p, unsigned n) {
     ctr_flushes++;
 }
 static void flush_pending(void);
+/* The GX commands sent and the completion interrupts seen (the heartbeat logs both): libctru's queue takes a frame for
+ * finished when it has counted as many interrupts as it sent commands, and C3D_FrameBegin waits for that. One more
+ * interrupt than commands and the wait ends while the GPU still draws. */
+volatile unsigned ctr_gx_commands, ctr_gx_interrupts;
+static gxCmdQueue_s *c3d_queue;
+#ifndef PORT_PROFILE
+static void gx_irq(void *unused) { (void)unused; ctr_gx_interrupts++; }
+#endif
 /* HAZARD=1 (test builds): what the GPU reads in a frame it may still be drawing (the frame sent at a present, drawn
  * while the next is recorded) against what the CPU writes meanwhile. On hardware such a write changes what that frame
  * shows; an emulator draws a frame at once, so it shows nothing there. Each one is logged: "hazard: ..." */
@@ -559,6 +567,7 @@ static void frame_begin(void) {
     extern volatile const char *ctr_where;
     const char *was = (const char *)ctr_where;
     ctr_where = "C3D_FrameBegin (waiting for the GPU)";
+    if (c3d_queue) ctr_gx_commands += c3d_queue->numEntries; /* (the frame before's, and what was sent outside one) */
     C3D_FrameBegin(0); /* waits for the GPU to finish what was sent: the other half is free */
     ctr_where = was;
     if (depth_clear) { /* (runs' depth values used up: submit) */
@@ -3719,7 +3728,13 @@ void psx_gpu_ot_done(void) {
  * decoded), gpu_draws' skip of a repeated call (0: every call), opaque primitives joining an earlier group of a run
  * (0: none), and a frame drawn by the GPU while the next is recorded (0: waited for at each present, one half). */
 int ctr_sw_chain = 1, ctr_sw_poly1 = 1, ctr_sw_drawmemo = 1, ctr_sw_reorder = 1, ctr_sw_overlap = 1;
-int ctr_defer = 1;
+/* Off (2026-11-19): on an Old 3DS a walk on the other core drew garbage polygons, a frame at a time: in Kuja's battle
+ * every other frame of the scene (118 of 576 frames against 6, those six the spells' own flashes), on the sailing
+ * boat's world map 11 of 797 against 1, at Lindblum's castle station a block or two in 1151; Azahar draws none. With
+ * the GPU waited for at each present and the same vertex half used again (ctr_sw_overlap 0), 161 of 800 on one thread:
+ * what the renderer takes for "the GPU has finished" does not hold there, and a walk that starts at once on another
+ * core meets it far more often. Until that is found. */
+int ctr_defer = 0;
 int ctr_defer_world; /* (the world map too: off for now, below; a switch for comparing on a 3DS) */
 int psx_gpu_defer_ok(void) {
     if (!ctr_defer || ctr_is_new3ds() || stereo_on || ui_mode || menu_state || ctr_keep_layers || ctr_outline) return 0;
@@ -4581,6 +4596,12 @@ static int top_queue(int stereo) {
 
 void ctr_video_init(void) {
     C3D_Init(0x100000);
+#ifndef PORT_PROFILE
+    gspSetEventCallback(GSPGPU_EVENT_PSC0, gx_irq, NULL, false);
+    gspSetEventCallback(GSPGPU_EVENT_PPF, gx_irq, NULL, false);
+    gspSetEventCallback(GSPGPU_EVENT_P3D, gx_irq, NULL, false);
+    gspSetEventCallback(GSPGPU_EVENT_DMA, gx_irq, NULL, false);
+#endif
     /* (two of the three are libctru's own top framebuffers, sized for both eyes, the right one half way, and unused
      * once citro3d no longer copies to them: only the third is allocated. Three of our own took 1.7 MB of linear
      * memory from the texture cache: 63 pages instead of 71, and the texture-heavy scenes slowed on the 3DS) */

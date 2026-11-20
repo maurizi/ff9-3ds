@@ -210,6 +210,12 @@ void plat_wait_frame(void) {
         { /* (the scene's walks sent to the other core since the last beat, and those of them finished here: gpu.c) */
             extern unsigned int psx_gpu_deferred, psx_gpu_defer_helped;
             static unsigned int d0, h0;
+            { /* (the GX commands sent and their interrupts: render.c) */
+                extern volatile unsigned ctr_gx_commands, ctr_gx_interrupts;
+                static unsigned c0, i0;
+                port_log("gx: %u commands, %u interrupts\n", ctr_gx_commands - c0, ctr_gx_interrupts - i0);
+                c0 = ctr_gx_commands, i0 = ctr_gx_interrupts;
+            }
             extern volatile unsigned long long psx_gpu_defer_us[3];
             static unsigned long long u0[3], idle0;
             const unsigned n = psx_gpu_deferred - d0;

@@ -62,8 +62,8 @@ def parse_capture(spec, frames):
     for p in parts[1:]:
         if p in ('top', 'bottom', 'both'):
             screens = {'top': 1, 'bottom': 2, 'both': 3}[p]
-        elif p in ('half', 'third', 'quarter'):
-            scale = {'half': 2, 'third': 3, 'quarter': 4}[p]
+        elif p in ('half', 'third', 'quarter', 'eighth'):  # (eighth: 50x30 thumbnails, next to no time a frame)
+            scale = {'half': 2, 'third': 3, 'quarter': 4, 'eighth': 8}[p]
         else:
             raise SystemExit(f'--capture {spec}: unknown option {p}')
     return f'capture {a} {b} {step} {scale} {screens}'
