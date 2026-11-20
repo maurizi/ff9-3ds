@@ -215,6 +215,9 @@ void plat_wait_frame(void) {
                 static unsigned c0, i0;
                 extern volatile unsigned ctr_gx_cmd_kind[8], ctr_gx_irq_kind[4];
                 static unsigned k0[8], q0[4];
+                { extern unsigned ctr_flushes, ctr_flush_failed, ctr_flush_error; static unsigned f0, x0;
+                  port_log("flush: %u calls, %u refused (last result %08x)\n", ctr_flushes - f0, ctr_flush_failed - x0, ctr_flush_error);
+                  f0 = ctr_flushes, x0 = ctr_flush_failed; }
                 port_log("gx: %u commands, %u interrupts | commands: lists %u, fills %u, transfers %u, copies %u, others %u | "
                          "interrupts: fill %u, transfer/copy %u, list %u, dma %u\n", ctr_gx_commands - c0, ctr_gx_interrupts - i0,
                          ctr_gx_cmd_kind[1] - k0[1], ctr_gx_cmd_kind[2] - k0[2], ctr_gx_cmd_kind[3] - k0[3], ctr_gx_cmd_kind[4] - k0[4],

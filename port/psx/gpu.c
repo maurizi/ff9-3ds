@@ -848,6 +848,9 @@ static void ot_job_main(void *arg) {
  * done): a renderer whose GPU reads memory writes out what this thread's core still holds in its cache (a 3DS:
  * port/3ds/render.c). */
 __attribute__((weak)) void psx_gpu_handoff(void) {}
+/* 0: a walk that may go to the worker is only put off, and walked whole by the game's thread at the sync (for telling
+ * what the other thread does from what the later walk does: port/3ds/render.c ctr_sw_defer_thread) */
+__attribute__((weak)) int psx_gpu_defer_thread(void) { return 1; }
 /* 1 if the scene's walk may run on the worker now (the renderer: port/3ds/render.c) */
 __attribute__((weak)) int psx_gpu_defer_ok(void) { return 0; }
 __attribute__((weak)) int plat_draw_async(void (*fn)(void *), void *arg) { (void)fn; (void)arg; return 0; }
@@ -936,7 +939,7 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
         ot_job = w;
         ot_job_finished = 0;
         ot_job_on = 1;
-        if (plat_draw_async(ot_job_main, &ot_job)) {
+        if (!psx_gpu_defer_thread() || plat_draw_async(ot_job_main, &ot_job)) {
             psx_gpu_deferred++;
             port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
             return;

@@ -94,11 +94,23 @@ static int gpu_busy; /* a frame sent and not waited for (frame_begin waits) */
 static struct { u8 *p; unsigned n; } dirty[MAX_DIRTY];
 static unsigned ndirty;
 unsigned ctr_flushes, ctr_batch_why[6], ctr_kind_pairs[8][8];
+unsigned ctr_flush_failed, ctr_flush_error; /* flushes the system refused, and the last one's result (the heartbeat) */
+int ctr_sw_kflush = 1;                      /* (0: the GSP service's flush, as libctru's own code asks for) */
+static const char *flush_what = "?";
+static int vb_run_open;     /* a run holds the vertex buffer's room (run_open ... run_flush) */
+static unsigned vb_run_at;  /* ... from this vertex on */
+static unsigned vb_used, vb_flushed, staging_used, staging_flushed;
 static void flush_range(void *p, unsigned n) {
     if (!n) return;
     /* (the kernel's flush, as audio.c's: GSPGPU_FlushDataCache asks the GSP service, which on an Old 3DS runs on the
      * second core in the system's share of it, and waits for its turn there) */
-    svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)p, n);
+    Result r = ctr_sw_kflush ? svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)p, n) : GSPGPU_FlushDataCache(p, n);
+    if (R_FAILED(r)) {
+        ctr_flush_failed++, ctr_flush_error = (unsigned)r;
+        if (ctr_flush_failed <= 12 || ctr_flush_failed % 500 == 0)
+            port_log("flush refused: %s %p + %u (result %08x; vertices %u flushed of %u, staging %u of %u)\n", flush_what, p, n,
+                     (unsigned)r, vb_flushed, vb_used, staging_flushed, staging_used);
+    }
     ctr_flushes++;
 }
 static void flush_pending(void);
@@ -169,10 +181,23 @@ static void mark_dirty(void *p, unsigned n) {
     dirty[ndirty++].n = n;
 }
 static void flush_pending(void) {
-    flush_range(vb + vb_flushed, (vb_used - vb_flushed) * sizeof(Vtx));
-    vb_flushed = vb_used;
+    flush_what = "vertices";
+    /* While a run is open (run_open) vb_used is the buffer's end, its room taken, and the vertices written lie from
+     * where the run began: only what was written before it is flushed here, the run's own once it has closed
+     * (run_flush: they are moved then). Flushed to vb_used, as before, the mark stood at the buffer's end; the closed
+     * run put vb_used back below it, and every flush from there to the frame's end asked for a negative size, which
+     * the system refuses (e0e01bf5, unseen: the result was not looked at): none of the frame's later vertices was
+     * written out of the CPU's cache, and the GPU drew with what memory held. An Old 3DS's garbage triangles and its
+     * screens' own quads broken, the more the sooner a frame is sent after it is recorded (a walk on the other core, or
+     * put off: every frame of Kuja's battle's scene in three) and the more often a flush comes within a run (the texture
+     * blocks' list full: the world map's water). Azahar has no cache. */
+    const unsigned upto = vb_run_open ? vb_run_at : vb_used;
+    if (upto > vb_flushed) flush_range(vb + vb_flushed, (upto - vb_flushed) * sizeof(Vtx));
+    if (upto > vb_flushed || !vb_run_open) vb_flushed = upto;
+    flush_what = "staging";
     flush_range(staging + staging_flushed, staging_used - staging_flushed);
     staging_flushed = staging_used;
+    flush_what = "texture";
     for (unsigned i = 0; i < ndirty; i++) flush_range(dirty[i].p, dirty[i].n);
     ndirty = 0;
 }
@@ -722,6 +747,7 @@ static void run_flush(void) {
         end += run_g[i].nv;
     }
     vb_used = end;
+    vb_run_open = 0;
     int saved_target = cur_target, saved_mask = cur_mask;
     for (int i = 0; i < n; i++) {
         RunGroup *g = &run_g[i];
@@ -773,6 +799,7 @@ static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
         if (run_cap[0] > RUN_V) run_cap[0] = RUN_V;
         for (int k = 1; k < RUN_GROUPS; k++) run_at[k] = VB_MAX - others + (k - 1) * RUN_V2, run_cap[k] = RUN_V2;
         hz_check(vb + vb_used, (VB_MAX - vb_used) * sizeof(Vtx), "vertices");
+        vb_run_open = 1, vb_run_at = vb_used;
         vb_used = VB_MAX;
         run_d0 = (float)depth_next;
     }
@@ -1505,11 +1532,8 @@ static TexSlot *slot_take(TexSlot *r, u32 key, u32 twin) {
 }
 /* (slot_renew: a slot the page gave up, the page's again with the blocks it holds) */
 #define RENEW_OWN 4
-/* Off: on an Old 3DS the world map's water showed dark streaks and black triangles a frame at a time, far worse with
- * this on than off (one build switching halfway, 2026-11-19; Azahar draws neither). What a kept slot's blocks hold
- * when they are drawn with there is not yet understood: 0 until it is (a page given another slot then never takes one
- * of its own back, as before 1f4231c). */
-int ctr_slot_keep = 0;
+/* (0: a page given another slot never takes one of its own back, as before 1f4231c: for comparing on a 3DS) */
+int ctr_slot_keep = 1;
 static int renew_b;                  /* convert_block: the block that must change, and what its sources hash to now */
 static u32 renew_hash, renew_chash;
 static TexSlot *slot_back(TexSlot *r, u32 key, u32 twin) {
@@ -3732,21 +3756,17 @@ void psx_gpu_ot_done(void) {
  * decoded), gpu_draws' skip of a repeated call (0: every call), opaque primitives joining an earlier group of a run
  * (0: none), and a frame drawn by the GPU while the next is recorded (0: waited for at each present, one half). */
 int ctr_sw_chain = 1, ctr_sw_poly1 = 1, ctr_sw_drawmemo = 1, ctr_sw_reorder = 1, ctr_sw_overlap = 1;
-/* Off (2026-11-19): on an Old 3DS a walk on the other core drew garbage polygons, a frame at a time: in Kuja's battle
- * every other frame of the scene (118 of 576 frames against 6, those six the spells' own flashes), on the sailing
- * boat's world map 11 of 797 against 1, at Lindblum's castle station a block or two in 1151; Azahar draws none. With
- * the GPU waited for at each present and the same vertex half used again (ctr_sw_overlap 0), 161 of 800 on one thread:
- * what the renderer takes for "the GPU has finished" does not hold there, and a walk that starts at once on another
- * core meets it far more often. Until that is found. */
-int ctr_defer = 0;
-int ctr_defer_world; /* (the world map too: off for now, below; a switch for comparing on a 3DS) */
+int ctr_sw_defer_thread = 1; /* (0: a deferred walk is only walked later, by the game's thread: gpu.c) */
+int psx_gpu_defer_thread(void) { return ctr_sw_defer_thread; }
+/* (On an Old 3DS a walk on the other core, or only put off, showed garbage polygons until flush_pending's mark was
+ * put right, 2026-11-19: the frame is sent sooner after it is recorded, and what a refused flush left in the CPU's
+ * cache had not reached memory by itself.) */
+int ctr_defer = 1;
+int ctr_defer_world = 1; /* (the world map too: a switch for comparing on a 3DS) */
 int psx_gpu_defer_ok(void) {
     if (!ctr_defer || ctr_is_new3ds() || stereo_on || ui_mode || menu_state || ctr_keep_layers || ctr_outline) return 0;
     const int mode = port_game_mode();
-    /* (field, battle. Not the world map, mode 3, for now: an Old 3DS drew garbage triangles among its water's there, a
-     * frame at a time, the sailing boat's across both screens (2026-11-19: with this or without was not yet told
-     * apart; Azahar draws none)) */
-    return mode == 1 || mode == 2 || (mode == 3 && ctr_defer_world);
+    return mode == 1 || mode == 2 || (mode == 3 && ctr_defer_world); /* (field, battle, world map) */
 }
 /* gpu.c: the drawing goes to the other thread. What this one wrote for the GPU since the last flush (vertices, staging,
  * texture blocks) is written out of this core's data cache here, by this core: a flush asked later by the other
