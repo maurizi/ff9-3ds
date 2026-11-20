@@ -95,6 +95,7 @@ static struct { u8 *p; unsigned n; } dirty[MAX_DIRTY];
 static unsigned ndirty;
 unsigned ctr_flushes, ctr_batch_why[6], ctr_kind_pairs[8][8];
 unsigned ctr_flush_failed, ctr_flush_error; /* flushes the system refused, and the last one's result (the heartbeat) */
+int ctr_sw_flush = 1;
 int ctr_sw_kflush = 1;                      /* (0: the GSP service's flush, as libctru's own code asks for) */
 static const char *flush_what = "?";
 static int vb_run_open;     /* a run holds the vertex buffer's room (run_open ... run_flush) */
@@ -104,6 +105,7 @@ static void flush_range(void *p, unsigned n) {
     if (!n) return;
     /* (the kernel's flush, as audio.c's: GSPGPU_FlushDataCache asks the GSP service, which on an Old 3DS runs on the
      * second core in the system's share of it, and waits for its turn there) */
+    if (!ctr_sw_flush) return; /* (what the flushes cost, by a run without them: garbage) */
     Result r = ctr_sw_kflush ? svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)p, n) : GSPGPU_FlushDataCache(p, n);
     if (R_FAILED(r)) {
         ctr_flush_failed++, ctr_flush_error = (unsigned)r;

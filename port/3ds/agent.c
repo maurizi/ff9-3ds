@@ -50,7 +50,7 @@
  * Weak: a build without one still links, and says so when a job names it. */
 extern int ctr_defer __attribute__((weak)), ctr_slot_keep __attribute__((weak)), ctr_defer_world __attribute__((weak)),
     ctr_sw_chain __attribute__((weak)), ctr_sw_poly1 __attribute__((weak)), ctr_sw_drawmemo __attribute__((weak)),
-    ctr_sw_reorder __attribute__((weak)), ctr_sw_overlap __attribute__((weak)), ctr_sw_defer_thread __attribute__((weak)), ctr_sw_kflush __attribute__((weak));
+    ctr_sw_reorder __attribute__((weak)), ctr_sw_overlap __attribute__((weak)), ctr_sw_defer_thread __attribute__((weak)), ctr_sw_kflush __attribute__((weak)), ctr_sw_flush __attribute__((weak));
 static const struct { const char *name; int *p; } switches[] = {
     {"ctr_defer", &ctr_defer},
     {"ctr_slot_keep", &ctr_slot_keep},
@@ -62,6 +62,7 @@ static const struct { const char *name; int *p; } switches[] = {
     {"ctr_sw_overlap", &ctr_sw_overlap},
     {"ctr_sw_defer_thread", &ctr_sw_defer_thread},
     {"ctr_sw_kflush", &ctr_sw_kflush},
+    {"ctr_sw_flush", &ctr_sw_flush},
 };
 
 extern volatile const char *ctr_where;
@@ -78,6 +79,7 @@ static struct {
     char id[32];
     long frames;
     int hang;
+    int quiet; /* the network down while the job runs (its sysmodules take some 12% of an Old 3DS: speed jobs) */
     unsigned bufkb;
     struct { long a, b; int step, scale, screens; } cap[8];
     int ncap;
@@ -87,6 +89,9 @@ static struct {
 
 static int sock = -1;
 static volatile int net_busy, finishing;
+static u32 *soc, soc_size;
+static const char *agent_host;
+static int *agent_port, quiet_now, radio_off;
 static volatile u64 net_idle_at; /* when the last send ended: the watchdog's seconds without a frame include it */
 static int can_relaunch;
 
@@ -367,6 +372,22 @@ static void capture_screen(int screen, long frame, int scale) {
 static void finish(const char *status) __attribute__((noreturn));
 static void finish(const char *status) {
     if (finishing++) for (;;) svcSleepThread(1000000000LL); /* (the other thread is ending it) */
+    if (quiet_now) { /* (the network up again, the job taken up with the PC where it left it) */
+        quiet_now = 0;
+        if (radio_off && R_SUCCEEDED(nwmExtInit())) {
+            NWMEXT_ControlWirelessEnabled(true);
+            nwmExtExit();
+            svcSleepThread(4000000000LL); /* (the access point found again) */
+        }
+        if (R_SUCCEEDED(socInit(soc, soc_size)))
+            for (int i = 0; i < (radio_off ? 90 : 20) && sock < 0; i++) {
+                if (net_connect(agent_host, *agent_port) == 0) {
+                    char line[96];
+                    int n = snprintf(line, sizeof line, "HELLO 1 model=%s resume=%s\n", ctr_is_new3ds() ? "new" : "old", job.id);
+                    send_all(line, (unsigned)n);
+                } else svcSleepThread(500000000LL);
+            }
+    }
     frames_flush();
     say("agent: job %s %s at frame %ld: %u frames captured in %u ms (longest %u us), %u sends %u ms\n", job.id, status,
         last_frame, n_captured, capture_us / 1000, capture_max_us, n_flushes, flush_ms);
@@ -425,7 +446,14 @@ void ctr_agent_frame(long frame) {
             if (job.cap[i].screens & 2) capture_screen(1, frame, job.cap[i].scale);
             break;
         }
-    if (frame % 120 == 0 || loglen > (int)sizeof logbuf / 2) log_flush();
+    /* (the log to the PC every 20 s, right after a heartbeat's line, and its time said: a send every 120 frames took
+     * some 250 ms of each heartbeat on an Old 3DS, small packets waiting for their acknowledgements: every job read
+     * 12% slow. The beat after a send's line holds it.) */
+    if (frame % 1200 == 1 || loglen > (int)sizeof logbuf / 2) {
+        u64 t = svcGetSystemTick();
+        log_flush();
+        say("agent: log sent at frame %ld, %u ms (in the heartbeat that follows)\n", frame, ms_since(t));
+    }
     if (frame >= job.frames) finish("done");
 }
 
@@ -455,6 +483,7 @@ static const char *job_parse(char *text, FILE *cfg, int *ncfg) {
         if (!strcmp(line, "frames")) job.frames = strtol(arg, NULL, 10);
         else if (!strcmp(line, "hang")) job.hang = (int)strtol(arg, NULL, 10);
         else if (!strcmp(line, "bufkb")) job.bufkb = (unsigned)strtoul(arg, NULL, 10);
+        else if (!strcmp(line, "quiet")) job.quiet = (int)strtol(arg, NULL, 10);
         else if (!strcmp(line, "cfg")) fprintf(cfg, "%s\n", arg), ++*ncfg;
         else if (!strcmp(line, "press")) {
             if (!input_script_add_list(arg)) return "press: not BUTTON@FRAME[+FRAMES],...";
@@ -529,8 +558,10 @@ static void leave(const char *why) {
  * the title screen. Leaves for the launcher on QUIT, on START, or after GIVE_UP_S without the PC. */
 const char *ctr_agent_start(void) {
     static PrintConsole con;
-    char host[64] = PORT_AGENT, line[128];
-    int port = 5009;
+    static char host[64] = PORT_AGENT;
+    char line[128];
+    static int port = 5009;
+    agent_host = host, agent_port = &port;
     aptSetSleepAllowed(false); /* (the lid may close: the console stays up for the next job) */
     consoleInit(GFX_BOTTOM, &con);
     FILE *f = fopen("sdmc:/3ds/ff9/agent.txt", "r"); /* (the PC's address changed: ip[:port] here, no rebuild) */
@@ -542,12 +573,12 @@ const char *ctr_agent_start(void) {
     char *colon = strchr(host, ':');
     if (colon) *colon = 0, port = atoi(colon + 1);
     printf("FF9 test agent\n\nPC: %s port %d\nSTART: back to the launcher\n\n", host, port);
-    static u32 *soc; /* (console.c has it up already when 3dslink sent the build: then this fails, and that is fine) */
+    /* (console.c has it up already when 3dslink sent the build: then this fails, and that is fine) */
     for (u32 size = 0x100000; !soc && size >= 0x40000; size >>= 1)
         if ((soc = memalign(0x1000, size)) && R_FAILED(socInit(soc, size))) {
             free(soc);
             break;
-        }
+        } else soc_size = size;
     can_relaunch = relaunch_possible();
     if (!can_relaunch) printf("no hb:ldr: one job, then the launcher\n");
     mkdir(AGENT_DIR, 0777);
@@ -656,6 +687,22 @@ const char *ctr_agent_start(void) {
         }
         say("agent: job %s: %ld frames, %d capture windows, %d switches, heap %u KB free, relaunch %d\n", job.id,
             job.frames, job.ncap, job.nset, heap_free_kb(), can_relaunch);
+        if (job.quiet && soc) { /* (the PC told, the network down: finish brings it up again and resumes the job there) */
+            send_chunk('Q', job.id, strlen(job.id));
+            shutdown(sock, SHUT_WR);
+            for (int i = 0; i < 20; i++) gspWaitForVBlank();
+            net_close();
+            socExit();
+            /* (quiet 2: the radio off as well. With the socket service down the console stays on the access point,
+             * and that alone is measured here) */
+            if (job.quiet >= 2 && R_SUCCEEDED(nwmExtInit())) {
+                Result r = NWMEXT_ControlWirelessEnabled(false);
+                say("agent: wireless off (%08lx)\n", (unsigned long)r);
+                nwmExtExit();
+                radio_off = 1;
+            }
+            quiet_now = 1;
+        }
         job.active = 1;
         for (int i = 0; i < job.nset; i++)
             if (job.set[i].frame <= 0) {

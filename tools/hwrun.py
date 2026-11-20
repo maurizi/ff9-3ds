@@ -71,6 +71,8 @@ def parse_capture(spec, frames):
 
 def job_text(args):
     lines = [f'frames {args.frames}', f'hang {args.hang}']
+    if getattr(args, 'quiet', False):
+        lines.append(f'quiet {args.quiet}')  # (the console off the network while the job runs: true speeds)
     if args.bufkb:
         lines.append(f'bufkb {args.bufkb}')
     for p in args.press or []:
@@ -254,44 +256,60 @@ def handle(conn, addr, st):
         info = dict(w.split('=', 1) for w in words[2:] if '=' in w)
         info['addr'] = addr[0]
         log('console ' + ' '.join(f'{k}={v}' for k, v in info.items()))
-        while True:
-            info['seen'] = time.time()
-            st.write('console.json', info)
-            job = st.take()
-            if job:
-                break
-            conn.sendall(b'WAIT\n')  # (raises once the console is gone)
-            time.sleep(2)
-        if job.get('quit'):
-            conn.sendall(b'QUIT\n')
-            log('quit sent')
-            return
-        if job.get('put'):  # (a file for the console's card: a new agent build)
-            import zlib
-            data = open(job['put'], 'rb').read()
-            conn.settimeout(600)  # (sendall's timeout is for the whole file: minutes over an Old 3DS's Wi-Fi)
-            conn.sendall(f'PUT {job["path"]} {len(data)} {zlib.adler32(data) & 0xffffffff:x}\n'.encode() + data)
-            conn.settimeout(60)
-            reply = b''
+        detached_path = os.path.join(st.dir, 'detached.json')
+        job, started = None, time.time()
+        if 'resume' in info:  # (a quiet job's console, its network up again: the job where it left it)
             try:
-                while True:
-                    b = conn.recv(4096)
-                    if not b:
-                        break
-                    reply += b
-            except OSError:
+                det = json.load(open(detached_path))
+                if det['job']['id'] == info['resume']:
+                    job, started = det['job'], det['started']
+                    out = job['out']
+                    log(f'job {job["id"]} resumed')
+                os.remove(detached_path)
+            except (OSError, ValueError, KeyError):
                 pass
-            log(f'put {job["put"]} -> {job["path"]}: {reply[-80:]!r}')
-            return
-        out = job['out']
-        text = job['text'].encode()
-        try:
-            conn.sendall(f'JOB {job["id"]} {len(text)}\n'.encode() + text)
-        except OSError:
-            enqueue(st, job)  # (the console had gone: the job back for the next one)
-            raise
-        log(f'job {job["id"]} sent -> {out}')
-        status = {'id': job['id'], 'status': 'lost', 'console': info, 'started': time.time()}
+            if job is None:
+                log(f'resume {info["resume"]}: no such job')
+                return
+        if 'resume' not in info:
+            while True:
+                info['seen'] = time.time()
+                st.write('console.json', info)
+                job = st.take()
+                if job:
+                    break
+                conn.sendall(b'WAIT\n')  # (raises once the console is gone)
+                time.sleep(2)
+            if job.get('quit'):
+                conn.sendall(b'QUIT\n')
+                log('quit sent')
+                return
+            if job.get('put'):  # (a file for the console's card: a new agent build)
+                import zlib
+                data = open(job['put'], 'rb').read()
+                conn.settimeout(600)  # (sendall's timeout is for the whole file: minutes over an Old 3DS's Wi-Fi)
+                conn.sendall(f'PUT {job["path"]} {len(data)} {zlib.adler32(data) & 0xffffffff:x}\n'.encode() + data)
+                conn.settimeout(60)
+                reply = b''
+                try:
+                    while True:
+                        b = conn.recv(4096)
+                        if not b:
+                            break
+                        reply += b
+                except OSError:
+                    pass
+                log(f'put {job["put"]} -> {job["path"]}: {reply[-80:]!r}')
+                return
+            out = job['out']
+            text = job['text'].encode()
+            try:
+                conn.sendall(f'JOB {job["id"]} {len(text)}\n'.encode() + text)
+            except OSError:
+                enqueue(st, job)  # (the console had gone: the job back for the next one)
+                raise
+            log(f'job {job["id"]} sent -> {out}')
+        status = {'id': job['id'], 'status': 'lost', 'console': info, 'started': started}
         conn.settimeout(SILENT_S)
         nframes = 0
         with open(os.path.join(out, 'log.txt'), 'ab') as flog:
@@ -313,6 +331,10 @@ def handle(conn, addr, st):
                         with open(os.path.join(out, 'frames.bin'), 'ab') as f:
                             f.write(data)
                         nframes += len(data)
+                    elif kind == 'Q':  # (a quiet job: the console's network is down until it ends)
+                        json.dump({'job': job, 'started': status['started']}, open(detached_path, 'w'))
+                        log(f'job {job["id"]} running with the console off the network')
+                        return
                     elif kind == 'E':
                         end = dict(w.split('=', 1) for w in data.decode(errors='replace').split(' ') if '=' in w)
                         if end.get('status') == 'refused':
@@ -573,6 +595,7 @@ def main():
     p.add_argument('--out', required=True)
     p.add_argument('--timeout', type=float, help='seconds to wait for the result (frames/10 + 300)')
     p.add_argument('--no-wait', action='store_true')
+    p.add_argument('--quiet', type=int, nargs='?', const=1, default=0, help='the console off the network while the job runs (no capture, no live log): its heartbeats are then the speeds a player gets')
     sub.add_parser('quit')
     p = sub.add_parser('update')
     p.add_argument('file', nargs='?', default='build/ff9-agent.3dsx')
