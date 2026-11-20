@@ -511,12 +511,21 @@ static inline int cell_range(int x0, int y0, int x1, int y1, int *cx0, int *cy0,
  * stamped against its sources' cells, none of these): it is skipped. The world map's ground draws small triangles one
  * after another in the same cells) */
 static unsigned cells_ver;
+static u32 *bg_rec_rows; /* a background run being recorded (bg_memo): the cells it draws into, a row's a word */
+static int bg_rec_box[4]; /* ... and the box of what it draws */
 static void gpu_draws(int x0, int y0, int x1, int y1) {
     static int last_cells = -1;
     static unsigned last_ver;
     int cx0, cy0, cx1, cy1;
     if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
     const int cells = cx0 | cy0 << 6 | cx1 << 12 | cy1 << 18;
+    if (bg_rec_rows) {
+        for (int cy = cy0; cy < cy1; cy++) bg_rec_rows[cy] |= (cx1 >= 32 ? ~0u : (1u << cx1) - 1) & ~((1u << cx0) - 1);
+        if (x0 < bg_rec_box[0]) bg_rec_box[0] = x0;
+        if (y0 < bg_rec_box[1]) bg_rec_box[1] = y0;
+        if (x1 > bg_rec_box[2]) bg_rec_box[2] = x1;
+        if (y1 > bg_rec_box[3]) bg_rec_box[3] = y1;
+    }
     if (ctr_sw_drawmemo && cells == last_cells && last_ver == cells_ver) return;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++)
@@ -1443,6 +1452,7 @@ typedef struct {
     u32 twin;    /* the texture window baked in (GP0 E2: mask x, y, offset x, y in 8-texel units), 0 = none */
     u32 serial;  /* frame_serial when last drawn with */
     u32 cur_epoch;
+    u32 ver;       /* counts every change of its page or place (a background run's kept vertices: bg_memo) */
     u64 cur;       /* blocks known current (stamp set, epoch == cur_epoch): texture_for's test of them at once */
     u64 fl1, fl2;  /* blocks whose flags have 1, 2 (as flags[]: texture_for's flags of current blocks at once) */
     u16 ox, oy;  /* its 256x256 place in its atlas (texels) */
@@ -1453,7 +1463,7 @@ typedef struct {
     u8 flags[64];  /* per block: 1 = has opaque texels, 2 = has semi-transparent ones */
     u32 hash[64];  /* per block: its source texels' hash when converted */
     u32 chash[64]; /* ... and its CLUT's */
-} TexSlot;
+} __attribute__((aligned(32))) TexSlot; /* (its front on two cache lines of its own) */
 
 #define MAX_SLOTS 96
 #define SLOT_RESERVE (512u << 10)
@@ -1469,6 +1479,7 @@ static struct { C3D_Tex tex; u8 cells, used; u16 occ; } atlases[MAX_ATLASES]; /*
 static int natlases;
 /* a new slot's place: a free cell (the last atlas's first), or a new atlas (largest that fits); 0 if none */
 static void cell_xy(int a, int c, TexSlot *s) {
+    s->ver++;
     unsigned per = atlases[a].tex.width / 256;
     s->atlas = (u8)a, s->ox = (u16)((c % per) * 256), s->oy = (u16)((c / per) * 256);
 }
@@ -1506,6 +1517,7 @@ static u32 rgba_lut[65536];
 static u16 slot_hash[SLOT_HASH];
 static inline unsigned hash_of(u32 key, u32 twin) { return ((key ^ twin * 0x9E3779B1u) * 0x85EBCA6Bu) >> 23; }
 static void hash_remove(int i) {
+    slots[i].ver++;
     unsigned h = hash_of(slots[i].key, slots[i].twin);
     while (slot_hash[h] && slot_hash[h] != i + 1) h = (h + 1) & (SLOT_HASH - 1);
     if (!slot_hash[h]) return;
@@ -1559,6 +1571,7 @@ static TexSlot *slot_for(u32 key, u32 twin) {
     unsigned h = hash_of(key, twin);
     while (slot_hash[h]) h = (h + 1) & (SLOT_HASH - 1);
     slot_hash[h] = (u16)(victim + 1);
+    s->ver++;
     memset(s->stamp, 0, sizeof s->stamp);
     return s;
 }
@@ -1668,6 +1681,7 @@ static void hash_insert(int i) {
     unsigned h = hash_of(slots[i].key, slots[i].twin);
     while (slot_hash[h]) h = (h + 1) & (SLOT_HASH - 1);
     slot_hash[h] = (u16)(i + 1);
+    slots[i].ver++;
 }
 static int slot_shrink(void) {
     if (!natlases) return 0;
@@ -2081,6 +2095,37 @@ static void page_copy(const Batch *b) {
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
 }
 
+/* A background run being kept (bg_memo): the slots it draws with, each one's mode (what convert_block checks its
+ * blocks by: a slot is one page and CLUT) and which of its blocks */
+#define BG_MEMO_SLOTS 128
+typedef struct { TexSlot *s; u32 ver; u64 mask; Gp0Mode m; } BgSlot;
+static int bg_rec_on, bg_rec_nslots;
+static BgSlot bg_rec_slots[BG_MEMO_SLOTS];
+/* ... and its lookups' slots in order, as texture_for notes them for slot_regroup (co: which slots are drawn with one
+ * after another): a run drawn from its copy notes the same, or the atlases would be grouped otherwise and pages sit
+ * elsewhere (a texture's place moves the pixels on its texels' edges) */
+#define BG_MEMO_CO 2048
+static u16 bg_rec_co[BG_MEMO_CO]; /* (the slot, + 0x8000 where the pair with the one before is counted) */
+static int bg_rec_nco;
+static void bg_rec_co_add(int id, int counted) {
+    if (bg_rec_nco == BG_MEMO_CO) { bg_rec_on = 2; return; }
+    bg_rec_co[bg_rec_nco++] = (u16)(id | (counted ? 0x8000 : 0));
+}
+static void bg_rec_blocks(const Gp0Mode *m, TexSlot *s, int cx0, int cx1, int cy0, int cy1) {
+    static int last;
+    int i = last < bg_rec_nslots && bg_rec_slots[last].s == s ? last : -1;
+    for (int k = bg_rec_nslots - 1; i < 0 && k >= 0; k--)
+        if (bg_rec_slots[k].s == s) i = k;
+    if (i < 0) {
+        if (bg_rec_nslots == BG_MEMO_SLOTS) { bg_rec_on = 2; return; } /* (too many: not kept) */
+        i = bg_rec_nslots++;
+        bg_rec_slots[i] = (BgSlot){s, 0, 0, *m};
+    }
+    last = i;
+    static const u64 rows[8] = {0x01, 0x0101, 0x010101, 0x01010101, 0x0101010101ull, 0x010101010101ull,
+                                0x01010101010101ull, 0x0101010101010101ull};
+    bg_rec_slots[i].mask |= (u64)(((2u << cx1) - 1) & ~((1u << cx0) - 1)) * (rows[cy1 - cy0] << (cy0 * 8));
+}
 static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
     /* A semi-transparent 15-bit texture read from VRAM the GPU has drawn, outside the area being drawn into (the
      * field-to-battle swirl: the frame on screen warped into the next): the mirror sampled where it is, its alpha the
@@ -2140,7 +2185,9 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
         if (last.epoch == tex_epoch && last.b == blocks) {
             *flags = last.f;
             tex_ou = last.s->ox, tex_ov = last.s->oy;
+            if (bg_rec_on) bg_rec_blocks(m, last.s, cx0, cx1, cy0, cy1);
             co_last = (int)(last.s - slots);
+            if (bg_rec_on) bg_rec_co_add(co_last, 0);
             return slot_tex(last.s);
         }
         s = last.s; /* (the same page as the last lookup, other blocks: the world map's ground, face after face) */
@@ -2172,6 +2219,7 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
             }
     }
     s->serial = frame_serial;
+    if (bg_rec_on) bg_rec_blocks(m, s, cx0, cx1, cy0, cy1);
     *flags = f;
     tex_ou = s->ox, tex_ov = s->oy;
     last.key = key, last.twin = twin, last.epoch = tex_epoch, last.serial = frame_serial, last.b = blocks, last.s = s,
@@ -2179,6 +2227,7 @@ static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, un
     int id = (int)(s - slots);
     if (co_last >= 0 && co_last != id && co[co_last][id] < 0xFFFF) co[co_last][id]++;
     co_last = id;
+    if (bg_rec_on) bg_rec_co_add(id, 1);
     return slot_tex(s);
 }
 
@@ -3352,10 +3401,209 @@ int gxh_bg_run(unsigned int *head, int count) {
     PART_END(3);
     return r;
 }
+/* A background run drawn again as it was (bg_memo). A field's background layers are the same tiles frame after frame
+ * while the picture doesn't scroll, and each tile costs its packet's decoding, a texture lookup (a slot by its page
+ * and CLUT: they differ tile by tile), its cells' bookkeeping and its place in the run: on an Old 3DS 13 us a tile,
+ * 5.7 ms a frame at Lindblum's castle station, a sixth of a frame. A run's vertices and batches are kept as it draws
+ * them, by its first tile (each draw buffer's tiles are their own), with its tiles' words; while those words, the
+ * drawing state, its slots' pages and places and its texture blocks (each checked as a lookup would, convert_block, and
+ * still converted from what it was) are what they were, the run is drawn from the copy: the same
+ * vertices in the same batches (their depth values moved to this frame's place in the order), its cells noted, its
+ * slots marked used. Anything else, and it is drawn tile by tile and kept again. */
+static int window_ranges_touch(const void *lo, const void *hi); /* (below, with the window packets' ranges) */
+#define BG_MEMOS 12
+#define BG_MEMO_BATCHES 24
+typedef struct {
+    const u32 *head;
+    int count, valid;
+    unsigned used;             /* frames_drawn when last drawn from or kept (the oldest is replaced) */
+    unsigned fails, hold;      /* times kept anew since it was last drawn from its copy; not kept again before frame `hold`
+                                * (a layer that scrolls or whose tiles are animated: keeping it costs, for nothing) */
+    int ofs_x, ofs_y, set_mask, check_mask;
+    u16 sc[4];
+    BgSlot *slots;             /* its slots: each one's page and place as they were (ver), its mode, its blocks */
+    u32 *hashes;               /* ... and what each of those blocks was converted from (texels', CLUT's), slot by slot */
+    u16 *co;                   /* its lookups' slots in order (bg_rec_co) */
+    int nco;
+    unsigned texpage_after;
+    const u8 *lo, *hi;         /* its tiles' packets lie in here: no window packets' range may (a tile in one is the walk's) */ /* (ranges_ver: the window packets' ranges, which a tile is tested against) */
+    u32 *words;                /* the tiles' packets, 5 words each */
+    Vtx *v;
+    unsigned nv, vcap, prims, d0;
+    Batch b[BG_MEMO_BATCHES];  /* (first: from the copy's start) */
+    int nb, nslots;
+    u32 rows[CH];
+    int box[4];
+} BgMemo;
+static BgMemo bg_memo[BG_MEMOS];
+int ctr_sw_bgmemo = 1; /* (0: every run tile by tile, for comparing) */
+unsigned ctr_bg_replays, ctr_bg_records;
+
+static int bg_memo_textures(const BgMemo *m) {
+    const u32 *h = m->hashes;
+    for (int i = 0; i < m->nslots; i++) {
+        const BgSlot *k = &m->slots[i];
+        TexSlot *s = k->s;
+        if (s->ver != k->ver) return 0;
+        for (u64 r = k->mask; r; r &= r - 1, h += 2) {
+            const int b = __builtin_ctzll(r);
+            /* (current, or made so here; one that must be converted again while a frame uses it (1), or was
+             * converted from something else, ends the copy) */
+            if (convert_block(s, &k->m, b & 7, b >> 3) || s->hash[b] != h[0] || s->chash[b] != h[1]) return 0;
+        }
+    }
+    return 1;
+}
+static int bg_memo_same(const BgMemo *m, const u32 *head, int count, const u16 sc[4]) {
+    if (!m->valid || m->count != count || window_ranges_touch(m->lo, m->hi) || !bg_memo_textures(m) || m->ofs_x != gp0_state.ofs_x ||
+        m->ofs_y != gp0_state.ofs_y || m->set_mask != gp0_state.set_mask || m->check_mask != gp0_state.check_mask ||
+        !sc_same(m->sc, sc))
+        return 0;
+    const u32 *p = head, *w = m->words;
+    for (int i = 0; i < count; i++, p = bg_tile_next(p), w += 5)
+        if (p[1] != w[0] || p[2] != w[1] || p[3] != w[2] || p[4] != w[3] || p[5] != w[4]) return 0;
+    return 1;
+}
+/* the copy drawn: 0 if there was no room this frame (the caller draws the tiles) */
+static int bg_memo_draw(BgMemo *m, const u32 *head) {
+    run_flush();
+    if (run_room() < m->prims + 16 || vb_used + m->nv + 64 > VB_MAX || nbatches + (unsigned)m->nb + 2 > MAX_BATCHES) {
+        gpu_sync();
+        if (run_room() < m->prims + 16 || !bg_memo_textures(m)) return 0;
+    }
+    gp0_note_sprites(head[1], (unsigned)m->count);
+    /* (its cells, as gpu_draws notes each tile's: row by row, each stretch of them) */
+    for (int cy = 0; cy < CH; cy++)
+        for (u32 r = m->rows[cy]; r;) {
+            const int cx0 = __builtin_ctz(r);
+            int cx1 = cx0;
+            while (cx1 < 32 && (r >> cx1 & 1)) cx1++;
+            r &= cx1 >= 32 ? 0 : ~((1u << cx1) - 1);
+            const int x0 = imax(cx0 * CELL, m->box[0]), y0 = imax(cy * CELL, m->box[1]);
+            const int x1 = imin(cx1 * CELL, m->box[2]), y1 = imin((cy + 1) * CELL, m->box[3]);
+            if (x0 < x1 && y0 < y1) gpu_draws(x0, y0, x1, y1);
+        }
+    Vtx *o = alloc_vtx(m->nv);
+    const unsigned at = (unsigned)(o - vb);
+    memcpy(o, m->v, m->nv * sizeof(Vtx));
+    const float dd = (float)depth_next - (float)m->d0;
+    if (dd != 0)
+        for (unsigned i = 0; i < m->nv; i++) o[i].d += dd;
+    const int saved_target = cur_target, saved_mask = cur_mask;
+    for (int i = 0; i < m->nb; i++) {
+        const Batch *b = &m->b[i];
+        cur_target = b->target, cur_mask = b->mask, cur_ordered = b->ordered;
+        add_batch(b->kind, b->abr, b->eyes, b->sc, b->tex, at + b->first, b->count);
+    }
+    cur_ordered = 0;
+    cur_target = saved_target, cur_mask = saved_mask;
+    depth_next += m->prims;
+    for (int i = 0; i < m->nslots; i++) m->slots[i].s->serial = frame_serial;
+    for (int i = 0; i < m->nco; i++) { /* (texture_for's notes for slot_regroup, lookup by lookup) */
+        const int id = m->co[i] & 0x7FFF;
+        if ((m->co[i] & 0x8000) && co_last >= 0 && co_last != id && co[co_last][id] < 0xFFFF) co[co_last][id]++;
+        co_last = id;
+    }
+    gp0_state.texpage = m->texpage_after;
+    ctr_render_stats[1] += (unsigned)m->count;
+    m->used = frames_drawn;
+    ctr_bg_replays++;
+    return 1;
+}
+static int bg_run_tiles(unsigned int *head, int count, const u16 sc[4]);
 static int bg_run_do(unsigned int *head, int count) {
     u16 sc[4];
     if (ctr_ko == 1) return 1;
     if (!bg_plain() || count <= 0 || !area_scissor(sc)) return 0;
+    if (!ctr_sw_bgmemo || !mirror_depth || count < 8) return bg_run_tiles(head, count, sc);
+    BgMemo *m = NULL, *old = &bg_memo[0];
+    for (int i = 0; i < BG_MEMOS; i++) {
+        if (bg_memo[i].head == (const u32 *)head) { m = &bg_memo[i]; break; }
+        if (bg_memo[i].used < old->used) old = &bg_memo[i];
+    }
+    if (m && frames_drawn - m->hold < 0x80000000u && m->fails >= 4) { /* (held off) */
+        if (frames_drawn - m->hold < 240) return bg_run_tiles(head, count, sc);
+        m->fails = 0;
+    }
+    if (m && bg_memo_same(m, (const u32 *)head, count, sc)) {
+        psx_gpu_packet = (const u32 *)head;
+        if (bg_memo_draw(m, (const u32 *)head)) { m->fails = 0; return 1; }
+    }
+    if (!m) m = old, m->fails = 0;
+    if (++m->fails >= 4) m->hold = frames_drawn;
+    /* drawn tile by tile, and kept: a run of its own (nothing before or after in its batches), what it adds noted */
+    m->valid = 0;
+    m->head = (const u32 *)head;
+    run_flush();
+    const unsigned v0 = vb_used, nb0 = nbatches, d0 = depth_next, sub0 = nsubmits, ser0 = frame_serial;
+    const unsigned before = nb0 ? batches[nb0 - 1].count : 0;
+    memset(m->rows, 0, sizeof m->rows);
+    m->box[0] = m->box[1] = 1 << 20, m->box[2] = m->box[3] = -(1 << 20);
+    bg_rec_rows = m->rows, bg_rec_box[0] = bg_rec_box[1] = 1 << 20, bg_rec_box[2] = bg_rec_box[3] = -(1 << 20);
+    bg_rec_on = 1, bg_rec_nslots = 0, bg_rec_nco = 0;
+
+    const int r = bg_run_tiles(head, count, sc);
+    run_flush();
+    const int rec = bg_rec_on;
+    bg_rec_rows = NULL, bg_rec_on = 0;
+    memcpy(m->box, bg_rec_box, sizeof m->box);
+    if (!r || rec != 1 || nsubmits != sub0 || frame_serial != ser0 || nbatches < nb0 || vb_used < v0) return r;
+    const unsigned nv = vb_used - v0, merged = nb0 ? batches[nb0 - 1].count - before : 0;
+    const int nb = (int)(nbatches - nb0) + (merged ? 1 : 0);
+    if (!nv || nb > BG_MEMO_BATCHES) return r;
+    if (m->vcap < nv) {
+        free(m->v);
+        m->v = malloc(nv * sizeof(Vtx)), m->vcap = m->v ? nv : 0;
+    }
+    u32 *words = realloc(m->words, (size_t)count * 5 * sizeof(u32));
+    if (!m->v || !words) { free(words); m->words = NULL; return r; }
+    m->words = words;
+    const u32 *p = (const u32 *)head;
+    m->lo = m->hi = (const u8 *)head;
+    for (int i = 0; i < count; i++, p = bg_tile_next(p), words += 5) {
+        memcpy(words, p + 1, 5 * sizeof(u32));
+        if ((const u8 *)p < m->lo) m->lo = (const u8 *)p;
+        if ((const u8 *)(p + 6) > m->hi) m->hi = (const u8 *)(p + 6);
+    }
+    memcpy(m->v, vb + v0, nv * sizeof(Vtx));
+    m->nv = nv, m->nb = 0;
+    if (merged) { /* (its first batch went on the end of the one before it) */
+        m->b[0] = batches[nb0 - 1];
+        m->b[0].first = batches[nb0 - 1].first + before - v0, m->b[0].count = merged;
+        m->nb = 1;
+    }
+    for (unsigned i = nb0; i < nbatches; i++) m->b[m->nb] = batches[i], m->b[m->nb++].first -= v0;
+    m->count = count, m->prims = depth_next - d0, m->d0 = d0;
+    m->ofs_x = gp0_state.ofs_x, m->ofs_y = gp0_state.ofs_y, m->set_mask = gp0_state.set_mask, m->check_mask = gp0_state.check_mask;
+    memcpy(m->sc, sc, sizeof m->sc);
+    m->texpage_after = gp0_state.texpage;
+    unsigned nblk = 0;
+    for (int i = 0; i < bg_rec_nslots; i++) nblk += (unsigned)__builtin_popcountll(bg_rec_slots[i].mask);
+    BgSlot *sl = realloc(m->slots, sizeof(BgSlot) * (size_t)(bg_rec_nslots ? bg_rec_nslots : 1));
+    if (sl) m->slots = sl;
+    u32 *hs = realloc(m->hashes, sizeof(u32) * 2 * (nblk ? nblk : 1));
+    if (hs) m->hashes = hs;
+    if (!sl || !hs) return r;
+    /* (each slot and block as it is now the run has drawn: one converted during it has its new hashes) */
+    for (int i = 0; i < bg_rec_nslots; i++) {
+        sl[i] = bg_rec_slots[i];
+        sl[i].ver = sl[i].s->ver;
+        for (u64 q = sl[i].mask; q; q &= q - 1, hs += 2) {
+            const int b = __builtin_ctzll(q);
+            hs[0] = sl[i].s->hash[b], hs[1] = sl[i].s->chash[b];
+        }
+    }
+    m->nslots = bg_rec_nslots;
+    u16 *cs = realloc(m->co, sizeof(u16) * (size_t)(bg_rec_nco ? bg_rec_nco : 1));
+    if (!cs) return r;
+    m->co = cs, m->nco = bg_rec_nco;
+    memcpy(cs, bg_rec_co, sizeof(u16) * (size_t)bg_rec_nco);
+    m->used = frames_drawn;
+    m->valid = 1;
+    ctr_bg_records++;
+    return r;
+}
+static int bg_run_tiles(unsigned int *head, int count, const u16 sc[4]) {
     /* (every tile a page + SPRT_16 packet as the game builds them (MargePrim'd: the sprite's tag a NOP between), none
      * on the font pages gp0_tpage_sprite16 leaves to the command path, none in a window's packets, none wrapping) */
     const u32 *p = (const u32 *)head;
@@ -3504,6 +3752,11 @@ void ctr_ui_layer_keep(void) {
 static struct { const u8 *lo, *hi; int hit, age; } ranges[8];
 static int nranges;
 static unsigned ranges_ver; /* (counts changes to them: in_window_packets' interval) */
+static int window_ranges_touch(const void *lo, const void *hi) {
+    for (int i = 0; i < nranges; i++)
+        if ((const u8 *)lo < ranges[i].hi && (const u8 *)hi > ranges[i].lo) return 1;
+    return 0;
+}
 int port_game_mode(void);
 void port_bottom_packets(const void *lo, const void *hi);
 /* packets [lo, hi) of this frame are drawn on the bottom screen scaled by factor, (cx, cy) of them in the middle of

@@ -76,6 +76,8 @@ unsigned int plat_pad_buttons(int port) {
  * game worked count toward a VSync(n) (plat_vsync_begin), as on the PS1, so a slow frame doesn't wait again. */
 static unsigned int vsync_owed;
 static unsigned long long ctr_idle_us; /* waited for a VBlank (the heartbeat's) */
+static unsigned long long ctr_present_us, ctr_hud_us;
+unsigned long long plat_time_us(void);
 unsigned long long plat_time_us(void) { return svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000000); }
 unsigned int ctr_vblank_waits, ctr_vblank_skips;
 static u32 next_vblank; /* the VBlank count (citro3d's) at which the current virtual frame ends */
@@ -235,6 +237,13 @@ void plat_wait_frame(void) {
                 port_log("walks: %u on the other core, %u finished here; a walk: %u us there, %u us to stop it, %u us here; idle %u ms\n", n,
                          psx_gpu_defer_helped - h0, (unsigned)((psx_gpu_defer_us[0] - u0[0]) / n), (unsigned)((psx_gpu_defer_us[1] - u0[1]) / n),
                          (unsigned)((psx_gpu_defer_us[2] - u0[2]) / n), (unsigned)((ctr_idle_us - idle0) / 1000));
+            { extern unsigned ctr_bg_replays, ctr_bg_records; static unsigned r0, k0;
+              if (ctr_bg_replays != r0 || ctr_bg_records != k0)
+                  port_log("background runs: %u drawn from their copies, %u kept anew\n", ctr_bg_replays - r0, ctr_bg_records - k0);
+              r0 = ctr_bg_replays, k0 = ctr_bg_records; }
+            { static unsigned long long p0, hd0;
+              port_log("presents %u ms, the bottom screen's and battle's UI %u ms of the beat\n", (unsigned)((ctr_present_us - p0) / 1000), (unsigned)((ctr_hud_us - hd0) / 1000));
+              p0 = ctr_present_us, hd0 = ctr_hud_us; }
             { /* (the walk's parts, when they are timed: render.c ctr_sw_timing) */
                 extern int ctr_sw_timing; extern unsigned long long ctr_part_us[5]; extern unsigned ctr_part_n[5];
                 static unsigned long long pu[5]; static unsigned pn[5];
@@ -254,11 +263,19 @@ void plat_wait_frame(void) {
     }
     void port_voice_poll(void);
     port_voice_poll();
-    void port_bottom_hud(void);
-    port_bottom_hud();
-    void port_battle_ui_frame(void);
-    port_battle_ui_frame();
-    ctr_present(frames);
+    {
+        const unsigned long long t0 = plat_time_us();
+        void port_bottom_hud(void);
+        port_bottom_hud();
+        void port_battle_ui_frame(void);
+        port_battle_ui_frame();
+        ctr_hud_us += plat_time_us() - t0;
+    }
+    { /* (the present's time on this thread, for the heartbeat) */
+        const unsigned long long t0 = plat_time_us();
+        ctr_present(frames);
+        ctr_present_us += plat_time_us() - t0;
+    }
 #ifdef PORT_DUMP_EVERY
     if (frames % PORT_DUMP_EVERY == 0) {
         void ctr_render_dump_display(long);
