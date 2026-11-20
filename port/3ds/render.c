@@ -99,7 +99,10 @@ int ctr_sw_flush = 1;
 /* (1: the walk's parts timed for the heartbeat, on a 3DS where Azahar's shares don't hold: texture blocks checked or
  * converted, submits, the wait for the GPU, background runs, the world map's chains; some 2 clock reads each) */
 int ctr_sw_timing;
-int ctr_ko; /* (what a part costs on a 3DS, by a run without it: 1 no background runs, 2 no polygon packets, 3 no chains) */
+/* (what a part costs on a 3DS, by a run without it: 1 no background runs, 2 no polygon packets, 3 no chains; a polygon
+ * packet (poly_k) left 4 at its start, 5 once its texture is found, 6 once its cells are noted, 7 before its vertices
+ * are written, 8 with one pass's alone) */
+int ctr_ko;
 unsigned long long ctr_part_us[5];
 unsigned ctr_part_n[5];
 unsigned long long plat_time_us(void);
@@ -464,6 +467,16 @@ static u32 cell_gen[CH][CW]; /* write counter: texture blocks made from the cell
  * frame were checked again (their CLUTs hashed) for nothing. */
 static u8 src_box[CH][CW][4];
 static u32 src_gen[CH][CW];
+/* tex_epoch when a block was last found current against sources in the cell (convert_block). Only then can anything
+ * be relying on "nothing written since" (texture_for's known-current blocks, all of this epoch): a write into the box
+ * of a cell no block has been checked against in this epoch moves src_gen, which the next check of such a block
+ * meets, and leaves tex_epoch. (A page drawn with once, its sources in the picture itself, kept its cells marked:
+ * Lindblum's castle station's background tiles at the picture's left edge moved the epoch 297 times a frame.) */
+static u32 src_seen[CH][CW];
+static inline void src_seen_now(int x0, int y0, int x1, int y1, u32 epoch) {
+    for (int cy = y0 / CELL; cy <= (y1 - 1) / CELL; cy++)
+        for (int cx = x0 / CELL; cx <= (x1 - 1) / CELL; cx++) src_seen[cy & (CH - 1)][cx & (CW - 1)] = epoch;
+}
 static inline int src_hit(int cx, int cy, int x0, int y0, int x1, int y1) {
     const u8 *b = src_box[cy][cx];
     const int bx = cx * CELL, by = cy * CELL;
@@ -508,16 +521,17 @@ static void gpu_draws(int x0, int y0, int x1, int y1) {
             if (!mirror_ok[cy][cx]) { blit_cells(cx0, cy0, cx1, cy1); goto ok; }
 ok:
     gen_counter++;
-    int source = 0;
+    int source = 0, moved = 0;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
             shadow_ok[cy][cx] = 0;
             cell_gen[cy][cx] = gen_counter;
             if (cell_is_source[cy][cx]) {
                 source = 1; /* (no skip of the next call on these cells: another rectangle may reach the sources) */
-                if (src_hit(cx, cy, x0, y0, x1, y1)) src_gen[cy][cx] = gen_counter, tex_epoch++;
+                if (src_hit(cx, cy, x0, y0, x1, y1)) src_gen[cy][cx] = gen_counter, moved |= src_seen[cy][cx] == tex_epoch;
             }
         }
+    if (moved) tex_epoch++;
     last_cells = source ? -1 : cells;
     last_ver = cells_ver;
 }
@@ -568,9 +582,12 @@ void psx_vram_touch(int x, int y, int w, int h) {
     cells_ver++;
     /* (a rectangle past VRAM's edge wraps: every source cell it takes in counts) */
     const int wraps = x < 0 || y < 0 || x + w > VW || y + h > VH;
+    const u32 epoch_was = tex_epoch;
+    int touched_seen = 0;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
-            if (cell_is_source[cy][cx] && (wraps || src_hit(cx, cy, x, y, x + w, y + h))) src_gen[cy][cx] = gen_counter, tex_epoch++;
+            if (cell_is_source[cy][cx] && (wraps || src_hit(cx, cy, x, y, x + w, y + h)))
+                src_gen[cy][cx] = gen_counter, touched_seen |= src_seen[cy][cx] == epoch_was;
             if (filling) {
                 /* the fill is drawn into the mirror too (psx_vram_filled): both sides current where it covers a
                  * whole cell; a partly covered cell keeps the GPU's state */
@@ -590,6 +607,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
             }
             cell_gen[cy][cx] = gen_counter;
         }
+    if (touched_seen) tex_epoch++;
     filling = fill_kept = 0;
 }
 
@@ -1732,8 +1750,13 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     int ncl = m->depth == 0 ? 16 : m->depth == 1 ? 256 : 0;
     int texels_new = !s->stamp[b] || src_newer(sx0, sy0, sx0 + sw, sy0 + 32, s->stamp[b]);
     int clut_new = ncl && (!s->stamp[b] || src_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b]));
+#define SRC_SEEN() do { \
+        src_seen_now(sx0, sy0, sx0 + sw, sy0 + 32, tex_epoch); \
+        if (ncl) src_seen_now(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, tex_epoch); \
+    } while (0)
     if (!texels_new && !clut_new) {
         s->epoch[b] = tex_epoch;
+        SRC_SEEN();
         return 0;
     }
     /* a write near its sources (the 32x32 cells are coarse: the world map scrolls 16-wide strips of water and cycles
@@ -1749,6 +1772,7 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     if (s->stamp[b] && s->hash[b] == hsh && s->chash[b] == chsh) {
         s->stamp[b] = gen_counter;
         s->epoch[b] = tex_epoch;
+        SRC_SEEN();
         return 0;
     }
     /* (drawn with earlier in this frame, or in the frame in flight: those draws keep the old texels. Only a block
@@ -1823,6 +1847,7 @@ static int convert_block(TexSlot *s, const Gp0Mode *m, int bx, int by) {
     s->fl2 = (s->fl2 & ~((u64)1 << b)) | (u64)(flags >> 1 & 1) << b;
     s->stamp[b] = gen_counter;
     s->epoch[b] = tex_epoch;
+    SRC_SEEN();
     mark_source(sx0, sy0, sx0 + sw, sy0 + 32);
     if (ncl) mark_source(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
 
@@ -2732,6 +2757,7 @@ static int r_poly1(const unsigned *w) {
 static inline __attribute__((always_inline)) void poly_k(const unsigned *w, const unsigned kind, const TriCtx *c) {
     const int textured = kind & 1, nv = (kind & 2) ? 4 : 3, gouraud = (kind >> 2) & 1;
     const unsigned cmd = w[0] >> 24;
+    if (ctr_ko == 4) return;
     /* (the words of vertex i: colour, position, texture coordinates) */
 #define PK_XY(i) (1 + (i) * (1 + textured) + (gouraud ? (i) : 0))
 #define PK_COL(i) ((i) == 0 || !gouraud ? 0 : PK_XY(i) - 1)
@@ -2761,6 +2787,7 @@ static inline __attribute__((always_inline)) void poly_k(const unsigned *w, cons
         if (nv == 4) u0 = imin(u0, u[3]), u1 = imax(u1, u[3]), v0 = imin(v0, v[3]), v1 = imax(v1, v[3]);
         tex = texture_for(&m, u0, v0, u1, v1, &tflags);
     }
+    if (ctr_ko == 5) return;
     ctr_depth_stats[1] += nv;
     /* (the PS1's triangles (0,1,2) and (1,3,2), each skipped 1024 or more wide or 512 or more high: r_poly) */
     int x0 = imin(imin(x[0], x[1]), x[2]), x1 = imax(imax(x[0], x[1]), x[2]);
@@ -2779,6 +2806,7 @@ static inline __attribute__((always_inline)) void poly_k(const unsigned *w, cons
     int bx0 = imax(x0, sc[0]), by0 = imax(y0, sc[1]), bx1 = imin(x1 + 1, sc[2]), by1 = imin(y1 + 1, sc[3]);
     if (bx0 >= bx1 || by0 >= by1) return;
     gpu_draws(bx0, by0, bx1, by1);
+    if (ctr_ko == 6) return;
     cur_target = 0;
     cur_mask = c->mask | ((gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
     ctr_render_stats[1]++;
@@ -2795,6 +2823,8 @@ static inline __attribute__((always_inline)) void poly_k(const unsigned *w, cons
     const u32 rawc = textured && m.raw ? 0xFF808080 : 0;
     const float ou = tex ? (float)tex_ou : 0, ov = tex ? (float)tex_ov : 0;
     const float uvh = c->uvh;
+    if (ctr_ko == 7) return;
+    if (ctr_ko == 8 && np > 1) np = 1;
     if (nv == 3) { /* (a triangle's vertices straight into the run, once a pass) */
         for (int p = 0; p < np; p++) {
             const int pabr = passes[p] == K_TEX_P1 || passes[p] == K_PAGE_OP ? NO_BLEND : abr;
