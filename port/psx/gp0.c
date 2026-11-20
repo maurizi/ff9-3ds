@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include "blackbox.h"
 #include "gp0.h"
+#ifndef PORT_HOT_ANCHOR
+#define PORT_HOT_ANCHOR(n)
+#endif
 #include "profile.h"
 #include "psx_display.h"
 #include "psx_runtime.h"
@@ -191,7 +194,8 @@ static inline __attribute__((always_inline)) unsigned int poly_command(const uns
     return need;
 }
 
-GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int avail) {
+/* (PORT_HOT_ANCHOR: at a 4 KiB boundary, see render.c's) */
+PORT_HOT_ANCHOR(0) GP0_HOT_THUMB static unsigned int command(const unsigned int *w, unsigned int avail) {
     unsigned int cmd = w[0] >> 24;
     if (cmd >= 0xE0) return state_command(w[0]);
     if ((cmd >= 0x20 && cmd < 0x80) || cmd == 2) {

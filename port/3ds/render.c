@@ -47,6 +47,14 @@ extern unsigned short *psx_vram;
  * 16 KB, and these lay scattered through 70 KB of this file, a different lot of them sharing cache lines each time
  * anything before them grew or shrank (a few lines added to gpu_draws: the world map 4% slower there, on a 3DS). */
 #define HOT_DRAW __attribute__((section(".text.hotdraw")))
+/* An Old 3DS's instruction cache is 16 KB in four ways of 4 KB: what every primitive runs (the walk in gpu.c, the
+ * decoder in gp0.c, the functions here) fits or not by where each piece lies within its 4 KB, and that moved with every
+ * change to any file linked before them: Lindblum's castle station 2010 -> 2085 ms per 120 VBlanks from a change to the
+ * CD's code alone. One function of each of the three is put at a 4 KiB boundary (the Makefile's PORT_HOT_ANCHOR for an
+ * Old 3DS's build: aligned(4096)), the rest of each keeping its place by it: their layout is then theirs alone. */
+#ifndef PORT_HOT_ANCHOR
+#define PORT_HOT_ANCHOR(n)
+#endif
 static void gpu_sync_do(void);
 /* (which call asked for it: the heartbeat counts them by line. Each is a command list sent and the GPU waited for) */
 unsigned ctr_sync_line[8], ctr_sync_n[8];
@@ -550,7 +558,7 @@ HOT_DRAW static inline int cell_range(int x0, int y0, int x1, int y1, int *cx0, 
  * stamped against its sources' cells, none of these): it is skipped. The world map's ground draws small triangles one
  * after another in the same cells) */
 static unsigned cells_ver;
-HOT_DRAW static void gpu_draws(int x0, int y0, int x1, int y1) {
+PORT_HOT_ANCHOR(704) HOT_DRAW static void gpu_draws(int x0, int y0, int x1, int y1) {
     static int last_cells = -1;
     static unsigned last_ver;
     int cx0, cy0, cx1, cy1;

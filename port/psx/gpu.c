@@ -775,7 +775,11 @@ void psx_gpu_handoff(void);
 volatile unsigned long long psx_gpu_defer_us[4];
 
 /* 0 when *stop was set before the walk's end (s says where it is) */
-static int ot_walk(OtWalk *s, const volatile int *stop) {
+#ifndef PORT_HOT_ANCHOR
+#define PORT_HOT_ANCHOR(n)
+#endif
+/* (PORT_HOT_ANCHOR: at a 4 KiB boundary, see render.c's) */
+PORT_HOT_ANCHOR(384) static int ot_walk(OtWalk *s, const volatile int *stop) {
     u32 *p = s->p;
     const u32 *const head = s->head;
     unsigned int *const main_ot = s->main_ot;

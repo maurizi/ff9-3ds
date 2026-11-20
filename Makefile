@@ -188,7 +188,7 @@ endef
 # ARM11. 3dsx relocations are word relocations only (-mword-relocations: no movw/movt pairs).
 DEVKITPRO ?= /opt/devkitpro
 CTRULIB   := $(DEVKITPRO)/libctru
-CTR_ARCH  := -D__3DS__ -DPORT_3DS -DPORT_GTE_DEPTH -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -marm -mword-relocations
+CTR_ARCH  := -D__3DS__ -DPORT_3DS '-DPORT_HOT_ANCHOR(n)=__attribute__((aligned(4096),patchable_function_entry(n,n)))' -DPORT_GTE_DEPTH -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -marm -mword-relocations
 PORT_EXTRA_3ds := -DPORT_DISC_PACK -DPORT_SPU_WORKER -DPORT_BG_RUNS -I$(DEVKITPRO)/portlibs/3ds/include -I$(DEVKITPRO)/portlibs/3ds/include/opus -I$(CTRULIB)/include \
                   $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') \
                   $(if $(filter 1 3,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 3,$(PROFILE)),-DPORT_PROFILE_VOICES) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(DUMP_EVERY),-DPORT_DUMP_EVERY=$(DUMP_EVERY)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(PROBE_AT),-DPORT_PROBE_AT=$(PROBE_AT)) $(if $(filter 1,$(SPUSYNC)),-DPORT_SPU_SYNC) $(if $(filter 1,$(VOICELOG)),-DPORT_VOICE_LOG) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') $(if $(filter 1,$(NOOVERLAP)),-DPORT_NO_OVERLAP) $(if $(filter 1,$(HAZARD)),-DPORT_HAZARD) $(if $(filter 1,$(CLEARCHECK)),-DPORT_CLEAR_CHECK) -I$(BUILD)/3ds/shaders $(if $(AGENT),-DPORT_AGENT='"$(AGENT)"') -I$(BUILD)/3ds/shaders
