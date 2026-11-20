@@ -202,8 +202,17 @@ static unsigned int le32(const u8 *p);
  * consecutive sectors a second; one file read each cost real time on a 3DS's SD card (the game fell to ~88% speed in
  * movies and their sound ran dry), one read per 128 KiB doesn't. */
 #define RA_BYTES (128 * 1024)
-static u8 *ra_buf;
-static long ra_at = -1, ra_len;
+/* The blocks kept: RA_N of them, each RA_BYTES of the file from a multiple of RA_BYTES, the one unused longest given up
+ * for another. One block from wherever a read began held a stream's sectors but not the world map's terrain, read a few
+ * sectors at a time from places near one another and not in order: over new ground in the airship nearly every VBlank's
+ * few sectors read a block again (25 ms each on an Old 3DS's card: up to 1.4 s of a two-second stretch). */
+#define RA_N 6
+static struct { u8 *buf; long blk, len; unsigned int used; } ra_c[RA_N];
+static unsigned int ra_tick;
+static int ra_init;
+unsigned long long psx_cd_file_us; /* (irq.c's log of a slow pump: the file reads and their time) */
+unsigned int psx_cd_file_reads;
+__attribute__((weak)) unsigned long long plat_time_us(void);
 /* The next block, read by the platform's I/O thread (plat_io_async) with a file of its own while the game uses this one,
  * once reads reach this block's second half: a movie's stream (or any read going on in order) then never waits for the
  * card. Each block read waited ~30 ms on a 3DS, three times a second in a movie (field 1464's movie background: the game
@@ -226,6 +235,7 @@ static void prefetch_job(void *unused) {
 }
 static void prefetch(long at) {
     if (ra_next_at == at || pf_failed) return;
+    for (int i = 0; i < RA_N; i++) if (ra_c[i].buf && ra_c[i].blk == at / RA_BYTES) return; /* (kept already) */
     plat_io_wait(); /* (one in flight at most: an older one, not taken) */
     if (!ra_next && !(ra_next = malloc(RA_BYTES))) { pf_failed = 1; return; }
     if (pf_fd < 0 && (pf_fd = open(pack_path, O_RDONLY)) < 0) { pf_failed = 1; return; }
@@ -236,42 +246,68 @@ static void prefetch_drop(void) { /* (another disc: its file the same, the block
     plat_io_wait();
     ra_next_at = -1;
 }
-static void pack_read(long at, void *buf, unsigned int bytes) {
-    if (bytes <= RA_BYTES) {
-        if (!ra_buf) ra_buf = malloc(RA_BYTES);
-        if (ra_buf && !(at >= ra_at && at + (long)bytes <= ra_at + ra_len) && ra_next_at >= 0 && at >= ra_next_at &&
-            at < ra_next_at + RA_BYTES) { /* (the block read ahead: taken when done) */
-            plat_io_wait();
-            if (at + (long)bytes <= ra_next_at + ra_next_len) {
-                u8 *b = ra_buf;
-                ra_buf = ra_next, ra_next = b;
-                ra_at = ra_next_at, ra_len = ra_next_len;
-            }
-            ra_next_at = -1;
+/* block `blk` of the file (its bytes in *len), NULL if it can't be had */
+static const u8 *ra_block(long blk, long *len) {
+    if (!ra_init) {
+        ra_init = 1;
+        for (int i = 0; i < RA_N; i++) ra_c[i].blk = -1;
+    }
+    int victim = 0;
+    for (int i = 0; i < RA_N; i++) {
+        if (ra_c[i].buf && ra_c[i].blk == blk) {
+            ra_c[i].used = ++ra_tick;
+            *len = ra_c[i].len;
+            return ra_c[i].buf;
         }
-        if (ra_buf && !(at >= ra_at && at + (long)bytes <= ra_at + ra_len)) {
-            ra_at = -1;
-            if (lseek(disc, at, SEEK_SET) == at) {
-                long got = 0;
-                while (got < RA_BYTES) {
-                    int n = (int)read(disc, ra_buf + got, (size_t)(RA_BYTES - got));
-                    if (n <= 0) break;
-                    got += n;
-                }
-                if (got >= (long)bytes) ra_at = at, ra_len = got;
-            }
-        }
-        if (ra_buf && ra_at >= 0 && at >= ra_at && at + (long)bytes <= ra_at + ra_len) {
-            __builtin_memcpy(buf, ra_buf + (at - ra_at), bytes);
-            disc_at = at + (long)bytes;
-            /* (from a little before this block's end: a record crossing it (2352 bytes) is wholly in the next one) */
-            if (packed && ra_len == RA_BYTES && at - ra_at >= RA_BYTES / 2) prefetch(ra_at + RA_BYTES - 4096);
-            return;
+        if (ra_c[i].used < ra_c[victim].used) victim = i;
+    }
+    if (ra_next_at == blk * RA_BYTES) { /* (the block read ahead: taken when done) */
+        plat_io_wait();
+        ra_next_at = -1;
+        if (ra_next_len > 0) {
+            u8 *b = ra_c[victim].buf;
+            ra_c[victim].buf = ra_next, ra_next = b;
+            ra_c[victim].blk = blk, ra_c[victim].len = ra_next_len, ra_c[victim].used = ++ra_tick;
+            *len = ra_c[victim].len;
+            return ra_c[victim].buf;
         }
     }
-    if (!read_at(disc, at, buf, bytes))
-        port_fatal("disc %d: can't read discs.bin at %ld", disc_no, at);
-    disc_at = at + (long)bytes;
+    if (!ra_c[victim].buf && !(ra_c[victim].buf = malloc(RA_BYTES))) return NULL;
+    const unsigned long long t0 = plat_time_us ? plat_time_us() : 0;
+    psx_cd_file_reads++;
+    ra_c[victim].blk = -1;
+    long got = 0;
+    if (lseek(disc, blk * RA_BYTES, SEEK_SET) == blk * RA_BYTES)
+        while (got < RA_BYTES) {
+            int n = (int)read(disc, ra_c[victim].buf + got, (size_t)(RA_BYTES - got));
+            if (n <= 0) break;
+            got += n;
+        }
+    disc_at = -1;
+    if (plat_time_us) psx_cd_file_us += plat_time_us() - t0;
+    if (got <= 0) return NULL;
+    ra_c[victim].blk = blk, ra_c[victim].len = got, ra_c[victim].used = ++ra_tick;
+    *len = got;
+    return ra_c[victim].buf;
+}
+static void pack_read(long at, void *buf, unsigned int bytes) {
+    u8 *out = buf;
+    long a = at;
+    unsigned int left = bytes;
+    while (left && bytes <= RA_BYTES) {
+        const long blk = a / RA_BYTES, off = a - blk * RA_BYTES;
+        long len = 0;
+        const u8 *b = ra_block(blk, &len);
+        if (!b || off >= len) break;
+        unsigned int n = (unsigned int)(len - off);
+        if (n > left) n = left;
+        __builtin_memcpy(out, b + off, n);
+        out += n, a += n, left -= n;
+        /* (from this block's second half on: the next one read meanwhile) */
+        if (!left && packed && len == RA_BYTES && off >= RA_BYTES / 2) prefetch((blk + 1) * RA_BYTES);
+    }
+    if (left && !read_at(disc, a, out, left)) port_fatal("disc %d: can't read discs.bin at %ld", disc_no, at);
+    disc_at = left ? a + (long)left : -1;
 }
 #endif
 
@@ -341,7 +377,7 @@ void psx_cd_swap(unsigned n) {
     if (disc >= 0) close(disc);
     disc = -1;
 #ifdef PORT_DISC_PACK
-    ra_at = -1; /* (the read-ahead was the old disc's) */
+    for (int i = 0; i < RA_N; i++) ra_c[i].blk = -1; /* (the blocks kept were the old disc's) */
     prefetch_drop();
 #endif
     disc_no = (int)n;
@@ -360,6 +396,29 @@ void psx_cd_swap(unsigned n) {
 #ifdef PORT_DISC_PACK
 /* The run holding `lba`: from the cached block of the table, else the block from it read: the next one when the
  * reads go on past this one's end, else found by a binary search of the table (at a seek). */
+/* (The disc's table in memory, read whole the first time: its searches and blocks went through pack_read's one
+ * read-ahead buffer, each a file read of 128 KiB starting where it asked (a search's steps downwards every one), which
+ * then held the table and not the data read before and after. Over new ground in the airship, its terrain read from
+ * here and there on the disc, an Old 3DS spent up to 1.2 s of 2 in the VBlanks' CD pump.) */
+static u8 *pack_tab;
+static int pack_tab_disc = -1, pack_tab_failed;
+static void pack_tab_read(unsigned int entry, void *buf, unsigned int bytes) {
+    if (pack_tab_disc != disc_no && !pack_tab_failed) {
+        free(pack_tab);
+        pack_tab_disc = -1;
+        const unsigned int size = 16 * pack_runs;
+        if (size <= (4u << 20) && (pack_tab = malloc(size)) && read_at(disc, (long)pack_table, pack_tab, size)) {
+            pack_tab_disc = disc_no;
+            port_log("cd: disc %d's table in memory (%u runs)\n", disc_no, pack_runs);
+        } else {
+            free(pack_tab);
+            pack_tab = NULL, pack_tab_failed = 1;
+        }
+        disc_at = -1;
+    }
+    if (pack_tab_disc == disc_no) __builtin_memcpy(buf, pack_tab + 16 * entry, bytes);
+    else pack_read((long)(pack_table + 16 * entry), buf, bytes);
+}
 static unsigned int pack_run(unsigned int lba) {
     static unsigned int last;
     if (last < pack_n && lba - pack_buf[last].lba < pack_buf[last].count) return last;
@@ -372,12 +431,12 @@ static unsigned int pack_run(unsigned int lba) {
     while (hi - lo > 1) {
         unsigned int mid = (lo + hi) / 2;
         u8 e[4];
-        pack_read((long)(pack_table + 16 * mid), e, 4);
+        pack_tab_read(mid, e, 4);
         if (le32(e) <= lba) lo = mid; else hi = mid;
     }
     pack_first = lo;
     pack_n = pack_runs - lo < PACK_BLOCK ? pack_runs - lo : PACK_BLOCK;
-    pack_read((long)(pack_table + 16 * lo), pack_buf, 16 * pack_n);
+    pack_tab_read(lo, pack_buf, 16 * pack_n);
     for (unsigned int i = 0; i < pack_n; i++) { /* (count | flags << 28: the flags to pad) */
         pack_buf[i].pad = pack_buf[i].count >> 28;
         pack_buf[i].count &= 0x0FFFFFFFu;
@@ -386,11 +445,51 @@ static unsigned int pack_run(unsigned int lba) {
 }
 #endif
 
+#ifdef PORT_DISC_PACK
+/* Whether sector `lba` can be delivered without waiting for the card: its blocks are kept. If not, the one missing is
+ * asked of the I/O thread and the drive delivers nothing this VBlank, as one still seeking; the game's thread never
+ * reads the card for a stream (the world map's terrain: 25 ms a block on an Old 3DS, a frame late each time). With no
+ * I/O thread, or in a build whose runs must repeat exactly (SPUSYNC), every sector is ready: read here, as before. */
+__attribute__((weak)) int plat_io_busy(void) { return 0; }
+static int pack_ready(unsigned int lba) {
+#ifdef PORT_SPU_SYNC
+    (void)lba;
+    return 1;
+#else
+    if (disc < 0 || !packed || pack_tab_disc != disc_no || pf_failed || lba >= pack_sectors) return 1;
+    const unsigned int r = pack_run(lba), flags = pack_buf[r].pad, bytes = flags & PACK_DATA ? 2048 : RAW_SECTOR;
+    const long at = (long)((flags & PACK_DATA ? pack_data : pack_raw) + pack_buf[r].off +
+                           (flags & PACK_REPEAT ? 0 : (lba - pack_buf[r].lba) * bytes));
+    for (long blk = at / RA_BYTES; blk <= (at + (long)bytes - 1) / RA_BYTES; blk++) {
+        int kept = 0;
+        for (int i = 0; i < RA_N; i++) kept |= ra_c[i].buf && ra_c[i].blk == blk;
+        if (kept) continue;
+        if (plat_io_busy()) return 0; /* (this one, or one asked before it: when it is in) */
+        if (ra_next_at == blk * RA_BYTES) { /* (read: kept now) */
+            long len;
+            if (!ra_block(blk, &len)) return 1;
+            continue;
+        }
+        prefetch(blk * RA_BYTES);
+        return pf_failed ? 1 : 0;
+    }
+    return 1;
+#endif
+}
+#endif
+
 static void patch_load(void);
 static void patch_apply(unsigned int lba, u8 *raw);
 static int n_runs = -1, runs_disc;
 unsigned int psx_cd_sectors_read, psx_cd_last_lba; /* (the 3DS's heartbeat) */
+unsigned long long psx_cd_read_us; /* (irq.c's log of a slow pump: the time in read_raw) */
+static void read_raw_do(unsigned int lba, u8 *buf);
 static void read_raw(unsigned int lba, u8 *buf) {
+    const unsigned long long t0 = plat_time_us ? plat_time_us() : 0;
+    read_raw_do(lba, buf);
+    if (plat_time_us) psx_cd_read_us += plat_time_us() - t0;
+}
+static void read_raw_do(unsigned int lba, u8 *buf) {
     unsigned int t = port_profile_begin();
     psx_cd_sectors_read++;
     psx_cd_last_lba = lba;
@@ -854,6 +953,9 @@ static void pump(int max_sectors) {
             continue;
         }
         if (reading && ready_cb && delivered < max_sectors) {
+#ifdef PORT_DISC_PACK
+            if (!pack_ready(read_lba)) break; /* (its block still on the way from the card) */
+#endif
             sector_lba = read_lba;
             read_raw(read_lba++, sector);
 #ifdef PORT_DISC_PACK

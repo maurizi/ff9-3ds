@@ -220,13 +220,33 @@ static unsigned int early;    /* VBlanks whose interrupt work was run ahead */
 static unsigned int last_run = 1; /* frames the last waiting VSync ran */
 volatile unsigned long long psx_irq_us; /* (the heartbeat's: this work's time) */
 __attribute__((weak)) unsigned long long plat_time_us(void);
+/* (a handler that took long: logged, with the CD's sectors) */
+extern unsigned int psx_cd_sectors_read, psx_cd_last_lba;
+void port_log(const char *fmt, ...);
+static void timed_cd_frame(void) {
+    const unsigned long long t0 = plat_time_us ? plat_time_us() : 0;
+    extern unsigned long long psx_cd_read_us, psx_cd_file_us; extern unsigned int psx_cd_file_reads;
+    const unsigned int n0 = psx_cd_sectors_read, f0 = psx_cd_file_reads;
+    const unsigned long long r0 = psx_cd_read_us, fu0 = psx_cd_file_us;
+    psx_cd_frame();
+    const unsigned long long t = plat_time_us ? plat_time_us() - t0 : 0;
+    if (t > 20000) port_log("cd: a VBlank's pump took %u ms (%u sectors, the last %u; %u ms reading them, %u file reads %u ms)\n", (unsigned)(t / 1000),
+                            psx_cd_sectors_read - n0, psx_cd_last_lba, (unsigned)((psx_cd_read_us - r0) / 1000), psx_cd_file_reads - f0,
+                            (unsigned)((psx_cd_file_us - fu0) / 1000));
+}
+static void timed_rcnt_frame(void) {
+    const unsigned long long t0 = plat_time_us ? plat_time_us() : 0;
+    rcnt_frame();
+    const unsigned long long t = plat_time_us ? plat_time_us() - t0 : 0;
+    if (t > 20000) port_log("irq: a VBlank's root counter events (AKAO) took %u ms\n", (unsigned)(t / 1000));
+}
 int psx_frame_early(void) {
     if (in_frame || early >= last_run || early >= 4) return 0;
     const unsigned long long t0 = plat_time_us ? plat_time_us() : 0;
     in_frame++;
-    psx_cd_frame();
+    timed_cd_frame();
     port_canary("CD frame (early)");
-    rcnt_frame();
+    timed_rcnt_frame();
     port_canary("root counters (SPU/AKAO) (early)");
     psx_spu_irq_poll();
     vblanks++;
@@ -253,11 +273,11 @@ void psx_frame(void) {
         port_canary("DrawSync callback");
         movie_fv_idle();
     } else {
-        psx_cd_frame();
+        timed_cd_frame();
         port_canary("CD frame");
         psx_drawsync_pending();
         port_canary("DrawSync callback");
-        rcnt_frame();
+        timed_rcnt_frame();
         port_canary("root counters (SPU/AKAO)");
         psx_spu_irq_poll(); /* (an SPU IRQ the mixer saw: its callback, here on the game thread) */
         movie_fv_idle();

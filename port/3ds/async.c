@@ -148,6 +148,7 @@ int plat_io_async(void (*fn)(void *), void *arg) {
     LightEvent_Signal(&io_go);
     return 1;
 }
+int plat_io_busy(void) { return io_busy; } /* (cd.c: a block still being read) */
 void plat_io_wait(void) {
     while (io_busy) LightEvent_WaitTimeout(&io_done, 20000000);
     __sync_synchronize();
