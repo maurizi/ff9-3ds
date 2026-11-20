@@ -99,6 +99,7 @@ int ctr_sw_flush = 1;
 /* (1: the walk's parts timed for the heartbeat, on a 3DS where Azahar's shares don't hold: texture blocks checked or
  * converted, submits, the wait for the GPU, background runs, the world map's chains; some 2 clock reads each) */
 int ctr_sw_timing;
+int ctr_ko; /* (what a part costs on a 3DS, by a run without it: 1 no background runs, 2 no polygon packets, 3 no chains) */
 unsigned long long ctr_part_us[5];
 unsigned ctr_part_n[5];
 unsigned long long plat_time_us(void);
@@ -2672,6 +2673,7 @@ static int r_poly1(const unsigned *w) {
     (void)w;
     return 0;
 #else
+    if (ctr_ko == 2) return 1;
     if (!ctr_sw_poly1 || !poly_plain()) return 0;
     TriCtx c;
     tri_ctx(&c);
@@ -2819,6 +2821,7 @@ int port_terrain_chain(u32 *head, u32 count) {
     return r;
 }
 static int terrain_chain_do(u32 *head, u32 count) {
+    if (ctr_ko == 3) return 1;
 #ifdef PORT_PROBE_AT
     (void)head, (void)count;
     return 0;
@@ -3277,6 +3280,7 @@ int gxh_bg_run(unsigned int *head, int count) {
 }
 static int bg_run_do(unsigned int *head, int count) {
     u16 sc[4];
+    if (ctr_ko == 1) return 1;
     if (!bg_plain() || count <= 0 || !area_scissor(sc)) return 0;
     /* (every tile a page + SPRT_16 packet as the game builds them (MargePrim'd: the sprite's tag a NOP between), none
      * on the font pages gp0_tpage_sprite16 leaves to the command path, none in a window's packets, none wrapping) */
