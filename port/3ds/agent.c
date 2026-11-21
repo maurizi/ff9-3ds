@@ -107,7 +107,7 @@ static int can_relaunch;
 
 /* ---- the log: every line of console.c's, sent every 2 s -------------------------------------------------------- */
 
-static char logbuf[48 * 1024];
+static char logbuf[256 * 1024]; /* (a quiet job's whole log waits here: some 2 KB a heartbeat) */
 static int loglen, logdropped;
 static LightLock loglock;
 static int loglock_ok;
@@ -459,7 +459,9 @@ void ctr_agent_frame(long frame) {
     /* (the log to the PC every 20 s, right after a heartbeat's line, and its time said: a send every 120 frames took
      * some 250 ms of each heartbeat on an Old 3DS, small packets waiting for their acknowledgements: every job read
      * 12% slow. The beat after a send's line holds it.) */
-    if (frame % 1200 == 1 || loglen > (int)sizeof logbuf / 2) {
+    /* (not in a quiet job: nothing can be sent, and with the buffer half full this ran, and logged, every frame: from
+     * frame 2400 or so a quiet job's beats were twice as long) */
+    if (!quiet_now && (frame % 1200 == 1 || loglen > (int)sizeof logbuf / 2)) {
         u64 t = svcGetSystemTick();
         log_flush();
         say("agent: log sent at frame %ld, %u ms (in the heartbeat that follows)\n", frame, ms_since(t));
