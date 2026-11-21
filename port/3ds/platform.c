@@ -272,6 +272,13 @@ void plat_wait_frame(void) {
                   ctr_sync_n[i] = 0;
               }
               if (o) port_log("syncs (render.c line:count):%s\n", b); }
+            { extern unsigned ctr_rb_n[7]; extern short ctr_rb_rect[7][4]; char b[240]; int o = 0; /* (render.c: RB_CAUSE) */
+              for (int i = 0; i < 7; i++) {
+                  if (ctr_rb_n[i]) o += snprintf(b + o, sizeof b - o, " %d:%u (%d,%d-%d,%d)", i, ctr_rb_n[i], ctr_rb_rect[i][0], ctr_rb_rect[i][1],
+                                                 ctr_rb_rect[i][2], ctr_rb_rect[i][3]);
+                  ctr_rb_n[i] = 0;
+              }
+              if (o) port_log("readbacks (cause:count, its last rectangle):%s\n", b); }
             { extern unsigned ctr_bg_replays, ctr_bg_records; static unsigned r0, k0;
               if (ctr_bg_replays != r0 || ctr_bg_records != k0)
                   port_log("background runs: %u drawn from their copies, %u kept anew\n", ctr_bg_replays - r0, ctr_bg_records - k0);

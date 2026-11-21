@@ -707,6 +707,14 @@ ok:
 }
 
 /* The CPU reads [x0,x1)x[y0,y1) of the shadow. */
+/* (the readbacks of a heartbeat by what asked: 0 a draw into cells written in part, 1 a CPU write covering cells in
+ * part, 2 a CPU read (StoreImage, a copy's source), 3 a block's texels, 4 its CLUT, 5 a movie's frame, 6 a page
+ * sampled where the GPU drew; and the last rectangle of each) */
+unsigned ctr_rb_n[7];
+short ctr_rb_rect[7][4];
+static int rb_cause;
+#define RB_CAUSE(c, x0, y0, x1, y1) (rb_cause = (c), ctr_rb_rect[c][0] = (short)(x0), ctr_rb_rect[c][1] = (short)(y0), \
+                                     ctr_rb_rect[c][2] = (short)(x1), ctr_rb_rect[c][3] = (short)(y1))
 static void cpu_reads(int x0, int y0, int x1, int y1) {
     int cx0, cy0, cx1, cy1;
     if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
@@ -749,7 +757,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
             for (int cx = cx0; cx < cx1; cx++) {
                 if (!cell[cy][cx].shadow_ok && !(cy * CELL >= y && (cy + 1) * CELL <= ye)) { columns = 0; break; }
             }
-        if (!columns) cpu_reads(x, y, x + w, y + h);
+        if (!columns) RB_CAUSE(1, x, y, x + w, y + h), cpu_reads(x, y, x + w, y + h), rb_cause = 0;
     }
     gen_counter++;
     cells_ver++;
@@ -787,7 +795,9 @@ void psx_vram_touch(int x, int y, int w, int h) {
 /* gpu.c: before the CPU reads VRAM (StoreImage, MoveImage's source) */
 void psx_vram_read(int x, int y, int w, int h) {
     psx_gpu_sync();
+    RB_CAUSE(2, x, y, x + w, y + h);
     cpu_reads(x, y, x + w, y + h);
+    rb_cause = 0;
 }
 
 /* ---- the C3D frame ------------------------------------------------------------------------------------------ */
@@ -1654,6 +1664,8 @@ static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
     extern volatile const char *ctr_where;
     ctr_where = "readback";
     gpu_sync();
+    ctr_rb_n[rb_cause]++;
+    rb_cause = 0;
     const u16 *m = mirror_tex[0].data;
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
@@ -2088,12 +2100,14 @@ static __attribute__((noinline)) int convert_block_do(TexSlot *s, const Gp0Mode 
      * the font's CLUTs, and every block of the font pages hashed its texels again with them (with a texture window,
      * the page's whole width: 130 of them a frame, 8.5 ms in Azahar as an Old 3DS) */
     u32 hsh = s->hash[b], chsh = s->chash[b];
-    if (texels_new) cpu_reads(sx0, sy0, sx0 + sw, sy0 + 32), hsh = shadow_hash(sx0, sy0, sw, 32, 0x811C9DC5u);
+    if (texels_new) RB_CAUSE(3, sx0, sy0, sx0 + sw, sy0 + 32), cpu_reads(sx0, sy0, sx0 + sw, sy0 + 32), rb_cause = 0, hsh = shadow_hash(sx0, sy0, sw, 32, 0x811C9DC5u);
     if (clut_new) {
         /* (the CLUT is the page's, the same for each of its blocks: hashed once for them all while nothing a block
          * depends on is written, its cells noted as looked at so that a write to them ends that) */
         if (s->ch_epoch != tex_epoch || !ctr_sw_cluthash) {
+            RB_CAUSE(4, m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
             cpu_reads(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1);
+            rb_cause = 0;
             s->ch_val = shadow_hash(m->clut_x, m->clut_y, ncl, 1, 0x811C9DC5u);
             src_seen_now(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, tex_epoch);
             s->ch_epoch = tex_epoch;
@@ -2462,7 +2476,7 @@ static int gpu_owned(int x0, int y0, int x1, int y1) {
         for (int cx = cx0; cx < cx1; cx++) {
             /* (a cell written in part (cell_cols) is the shadow's once the rest is read back, as before such cells were
              * kept: the same texture path as then for a page sampled there) */
-            if (cell_cols[cy][cx]) readback_cells(cx, cy, cx + 1, cy + 1);
+            if (cell_cols[cy][cx]) RB_CAUSE(6, x0, y0, x1, y1), readback_cells(cx, cy, cx + 1, cy + 1);
             if (!cell[cy][cx].shadow_ok) return 1;
         }
     return 0;
@@ -3077,12 +3091,37 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
 static inline int imin(int a, int b) { return a < b ? a : b; }
 static inline int imax(int a, int b) { return a > b ? a : b; }
 
+/* A polygon's largest u or v, when a block's first (a multiple of 32) and held only by vertices on its bottom row or
+ * only by vertices in its rightmost column: no pixel drawn has it (the PS1 draws neither that row nor that column, and
+ * everywhere else the coordinate is less), so the block it begins isn't the polygon's. Limit Glove, Holy, Meteor and
+ * others draw a page's upper half (v to 128) into its lower half in strips every frame: each strip ending at v 128
+ * asked for the lower half's blocks, which the strip before had just drawn into: read back from the GPU, 12 to 16
+ * waits a frame (an Old 3DS: 2.1 to 2.9 s per 120 VBlanks). */
+int ctr_sw_trim = 1;
+static __attribute__((noinline)) void trim_max(const int *x, const int *y, const int *u, const int *v, int nv, int u0, int v0, int *u1, int *v1) {
+    if (!ctr_sw_trim) return;
+    int xm = x[0], ym = y[0];
+    for (int i = 1; i < nv; i++) xm = imax(xm, x[i]), ym = imax(ym, y[i]);
+    for (int k = 0; k < 2; k++) {
+        const int *t = k ? v : u, lo = k ? v0 : u0; int *hi = k ? v1 : u1;
+        if ((*hi & 31) || *hi <= lo) continue;
+        int bottom = 1, right = 1;
+        for (int i = 0; i < nv; i++)
+            if (t[i] == *hi) bottom &= y[i] == ym, right &= x[i] == xm;
+        if (bottom || right) --*hi;
+    }
+}
 static C3D_Tex *prim_texture(const Gp0Mode *m, const Gp0Vtx *v, int n, unsigned *tflags) {
     if (!m->textured) return NULL;
     int u0 = 255, u1 = 0, v0 = 255, v1 = 0;
     for (int i = 0; i < n; i++) {
         u0 = imin(u0, v[i].u); u1 = imax(u1, v[i].u);
         v0 = imin(v0, v[i].v); v1 = imax(v1, v[i].v);
+    }
+    if (__builtin_expect(!(u1 & 31) || !(v1 & 31), 0) && n <= 4) {
+        int x[4], y[4], uu[4], vv[4];
+        for (int i = 0; i < n; i++) x[i] = v[i].x, y[i] = v[i].y, uu[i] = v[i].u, vv[i] = v[i].v;
+        trim_max(x, y, uu, vv, n, u0, v0, &u1, &v1);
     }
     return texture_for(m, u0, v0, u1, v1, tflags);
 }
@@ -3276,6 +3315,7 @@ HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned
         int u0 = imin(imin(u[0], u[1]), u[2]), u1 = imax(imax(u[0], u[1]), u[2]);
         int v0 = imin(imin(v[0], v[1]), v[2]), v1 = imax(imax(v[0], v[1]), v[2]);
         if (nv == 4) u0 = imin(u0, u[3]), u1 = imax(u1, u[3]), v0 = imin(v0, v[3]), v1 = imax(v1, v[3]);
+        if (__builtin_expect(!(u1 & 31) || !(v1 & 31), 0)) trim_max(x, y, u, v, nv, u0, v0, &u1, &v1);
         tex = texture_for(&m, u0, v0, u1, v1, &tflags);
     }
     if (ctr_ko == 5) return;
@@ -4965,7 +5005,9 @@ static void convert_rgb24(u8 *px, unsigned tw, const PsxDisplayInfo *d, int w, i
 
 static void present_rgb24(const PsxDisplayInfo *d, int w, int h, int ox, int oy) {
     trace("present_rgb24", w, h);
+    RB_CAUSE(5, d->x, d->y, d->x + (w * 3 + 1) / 2, d->y + h);
     cpu_reads(d->x, d->y, d->x + (w * 3 + 1) / 2, d->y + h);
+    rb_cause = 0;
     unsigned tw = pow2_at_least(w), th = pow2_at_least(h);
     movie_idle = 0;
     if (!movie_ok && tw == 512 && th == 256 && linearSpaceFree() > 2 * 512 * 256 * 3 + SLOT_RESERVE) {

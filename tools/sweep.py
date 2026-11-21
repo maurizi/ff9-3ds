@@ -211,12 +211,13 @@ def emu(a):
     in Azahar draws every scene primitive with both and dumps both pictures of a frame, f<frame>_s and f<frame>_ref."""
     from PIL import Image, ImageChops
     cfgs = sorted((Path(a.dir) if a.dir else OUT / "cfg" / a.set).glob("*.cfg"))
-    res = OUT / f"emu_{a.set}.jsonl"
+    tag = f"_{a.tag}" if a.tag else ""  # (--tag: another build's results beside the set's, to compare a change by)
+    res = OUT / f"emu_{a.set}{tag}.jsonl"
     done = {json.loads(l)["name"] for l in res.read_text().splitlines()} if res.exists() else set()
     frames = a.frames or {"fields": 1560, "battles": 2640, "spells": 3360, "enemies": 2640}[a.set]
     every = 60 if a.set != "fields" else 120
     pressed = a.set not in ("fields", "enemies")
-    exe = OUT / f"dual_{'press' if pressed else 'plain'}_{frames}.3dsx"
+    exe = OUT / f"dual_{'press' if pressed else 'plain'}_{frames}{tag}.3dsx"
     if not exe.exists() or a.rebuild:
         args = ["tools/docker.sh", "make", "-j16", "3ds", "SCENARIO=sdmc:/3ds/ff9/scenarios/sweep.cfg", f"DUMP_EVERY={every}",
                 "SPUSYNC=1", "DUAL=1"] + ([f"AUTOPRESS={presses(frames)}"] if pressed else [])
@@ -230,13 +231,13 @@ def emu(a):
     saved = (AZCFG / "qt-config.ini").read_bytes()
     (AZCFG / "qt-config.ini").write_bytes((AZCFG / "qt-config.ini.monofast").read_bytes())  # (an Old 3DS, its CPU and the frame rate unthrottled: the speed is the console's to tell)
     (SD / "scenarios").mkdir(parents=True, exist_ok=True)
-    (OUT / "emu" / a.set).mkdir(parents=True, exist_ok=True)
+    (OUT / "emu" / (a.set + tag)).mkdir(parents=True, exist_ok=True)
     try:
         for i, c in enumerate(todo):
             if (OUT / "STOP_EMU").exists():
                 print("stopped (build/sweep/STOP_EMU)")
                 return
-            work = OUT / "emu" / a.set / c.stem
+            work = OUT / "emu" / (a.set + tag) / c.stem
             subprocess.run(["rm", "-rf", str(work)])
             (SD / "scenarios/sweep.cfg").write_bytes(c.read_bytes())
             dump = SD / "dump"
@@ -270,7 +271,7 @@ def emu(a):
                     sheet = Image.new("RGB", (w * 3, h))
                     sheet.paste(worst[3], (0, 0)), sheet.paste(worst[4], (w, 0))
                     sheet.paste(ImageChops.difference(worst[3], worst[4]).point(lambda v: 255 if v > 48 else v * 4), (2 * w, 0))
-                    sheet.save(OUT / "emu" / a.set / f"{c.stem}.png")
+                    sheet.save(OUT / "emu" / (a.set + tag) / f"{c.stem}.png")
             else:
                 row["compared"] = 0
             log = work / "game.log"
@@ -322,6 +323,7 @@ def main():
     p.add_argument("--only")
     p.add_argument("--redo", action="append", default=[])
     p.add_argument("--rebuild", action="store_true", help="build the test 3dsx again (after a change to the port)")
+    p.add_argument("--tag", help="results in emu_<set>_<tag>.jsonl, from a build of their own (the tree's, built at first use)")
     p.add_argument("--keep", type=float, default=3.0, help="percent of a frame differing that keeps its picture")
     p.set_defaults(fn=emu)
     p = sub.add_parser("report")
