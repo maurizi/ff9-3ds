@@ -243,7 +243,7 @@ def emu(a):
             dump.mkdir(exist_ok=True)
             for f in dump.glob("f*.ppm"):
                 f.unlink()
-            sh("tools/azahar.sh", "-t", int(frames / 60 * 1.7) + 20, "-o", work, exe)  # (drawn twice: slower than the console)
+            sh("tools/azahar.sh", "-t", int(frames / 60 * 2.7) + 25, "-o", work, exe)  # (drawn twice: slower than the console)
             row = {"name": c.stem, "frames": frames}
             rows = []
             for f in range(every, frames + 1, every):
