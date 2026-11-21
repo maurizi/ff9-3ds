@@ -314,6 +314,22 @@ void plat_wait_frame(void) {
                          (unsigned)((psx_span_us[3] - s0[3]) / 1000), (unsigned)((psx_span_us[4] - s0[4]) / 1000));
                 for (int i = 0; i < 5; i++) s0[i] = psx_span_us[i]; }
               memset(ctr_long, 0, sizeof ctr_long); }
+            { extern int psx_packet_timing; extern unsigned int psx_packet_us[2][2][256], psx_packet_n[2][2][256];
+              if (psx_packet_timing) {
+                  for (int th = 0; th < 2; th++) {
+                      char b[400]; int o = 0; unsigned tot = 0, totn = 0;
+                      for (int k = 0; k < 512; k++) tot += psx_packet_us[th][k >> 8][k & 255], totn += psx_packet_n[th][k >> 8][k & 255];
+                      for (int r = 0; r < 12; r++) {
+                          int m = 0;
+                          for (int k = 1; k < 512; k++) if (psx_packet_us[th][k >> 8][k & 255] > psx_packet_us[th][m >> 8][m & 255]) m = k;
+                          if (!psx_packet_us[th][m >> 8][m & 255]) break;
+                          o += snprintf(b + o, sizeof b - o, " %02x%s %u ms (%u)", m & 255, m >> 8 ? "o" : "", psx_packet_us[th][m >> 8][m & 255] / 1000, psx_packet_n[th][m >> 8][m & 255]);
+                          psx_packet_us[th][m >> 8][m & 255] = 0;
+                      }
+                      port_log("packets on %s, by command (o: into an area at y 256 or under): %u ms (%u):%s\n", th ? "the worker" : "this thread", tot / 1000, totn, b);
+                  }
+                  memset(psx_packet_us, 0, sizeof psx_packet_us), memset(psx_packet_n, 0, sizeof psx_packet_n);
+              } }
             { /* (the walk's parts, when they are timed: render.c ctr_sw_timing) */
                 extern int ctr_sw_timing; extern unsigned long long ctr_part_us[8]; extern unsigned ctr_part_n[8];
                 static unsigned long long pu[8]; static unsigned pn[8];

@@ -791,6 +791,19 @@ volatile unsigned long long psx_gpu_defer_us[4];
 #define PORT_HOT_ANCHOR(n)
 #endif
 /* (PORT_HOT_ANCHOR: at a 4 KiB boundary, see render.c's) */
+/* (psx_packet_timing 1: the walk's packets timed by their first primitive's command, by thread (0 the game's, 1 the
+ * worker) and by where they draw (1: a drawing area at y 256 or under, an effect's own): the heartbeat's) */
+int psx_packet_timing;
+unsigned int psx_packet_us[2][2][256], psx_packet_n[2][2][256];
+static __attribute__((noinline)) void draw_packet_timed(u32 *p) {
+    const u32 *w = p + 1;
+    unsigned int len = ((P_TAG *)p)->len, i = 0;
+    while (i + 1 < len && w[i] >> 24 >= 0xE0) i++; /* (the state before it: its primitive's) */
+    const unsigned int cmd = w[i] >> 24, off = gp0_state.area_y0 >= 256, th = ot_on_job;
+    const unsigned long long t0 = plat_time_us();
+    draw_packet(p);
+    psx_packet_us[th][off][cmd] += (unsigned int)(plat_time_us() - t0), psx_packet_n[th][off][cmd]++;
+}
 PORT_HOT_ANCHOR(384) static int ot_walk(OtWalk *s, const volatile int *stop) {
     u32 *p = s->p;
     const u32 *const head = s->head;
@@ -813,8 +826,10 @@ PORT_HOT_ANCHOR(384) static int ot_walk(OtWalk *s, const volatile int *stop) {
             psx_ot_side = from_main && (unsigned int)((unsigned int *)p - main_ot) >= main_ot_n;
         }
         u32 addr = *p & 0xFFFFFF;
-        if (((P_TAG *)p)->len)
-            draw_packet(p);
+        if (((P_TAG *)p)->len) {
+            if (__builtin_expect(psx_packet_timing, 0)) draw_packet_timed(p);
+            else draw_packet(p);
+        }
         else if ((uintptr_t)p - marker_lo < marker_size)
             port_ot_marker(p);
         if (addr == OT_END) {
