@@ -423,8 +423,9 @@ int port_battle_hud_draw(void) {
             port_battle_hud_targets = TARGET_PANEL; /* (the PS1's target window, opening or closing: never beside this screen) */
             return 1;
         }
-        if (!(g_btlUi->windows[2] && g_btlUi->windows[2]->state && g_btlUi->windows[2]->state != 3)) return 0; /* (a list
-                                                                               * this screen has none for: the PS1's) */
+        /* (a list this screen has none for, open: the PS1's. Anything else is a list on its way in or out, its
+         * window not open yet or gone already) */
+        if (g_btlUi->windows[2] && g_btlUi->windows[2]->state == 3 && g_btluiList.cmd) return 0;
         between = 1;
     }
     port_battle_hud_targets = 0;
