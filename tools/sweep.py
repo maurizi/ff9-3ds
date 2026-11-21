@@ -98,7 +98,33 @@ def gen(_):
             lines.append("preset.1=1")
         lines += ["level=99", "story=10000", "seed=1", f"cast={cmd},{a},-1"]
         (cfg / "spells" / f"s{a:03d}_c{cmd:02d}.cfg").write_text("\n".join(lines) + "\n")
-    for d in ("fields", "battles", "spells"):
+    # enemy attacks: each distinct attack (its name and the effects its sequence plays) of the encounters' tables, in the
+    # first encounter with a fixture that has it, played by the scenario's enemy_cast= whenever its own enemy acts
+    sys.path.insert(0, str(ROOT / "decomp/tools"))
+    import effect_labels
+    (cfg / "enemies").mkdir(parents=True, exist_ok=True)
+    battle_cfg = {int(p.stem[1:5]): p for p in sorted((cfg / "battles").glob("b*.cfg"))}
+    attacks = {}
+    for disc in range(1, 5):
+        img = DISKS / f"disc{disc}/FF9.IMG"
+        if not img.exists():
+            continue
+        for fid, d in effect_labels.encounters(img):
+            if fid not in battle_cfg:
+                continue
+            try:
+                enemies, ab = effect_labels.parse_encounter(d)
+            except Exception:
+                continue
+            for k, (name, fx) in enumerate(ab):
+                if name in ("None", "No action", "", "?") or k > 17:
+                    continue
+                attacks.setdefault((name, tuple(fx)), (fid, k, enemies))
+    for n, ((name, fx), (fid, k, enemies)) in enumerate(sorted(attacks.items(), key=lambda x: (x[1][0], x[1][1]))):
+        (cfg / "enemies" / f"e{fid:04d}_a{k:02d}.cfg").write_text(
+            f"# sweep: enemy attack {k} of encounter {fid}\n" + "\n".join(
+                l for l in battle_cfg[fid].read_text().splitlines() if not l.startswith("#")) + f"\nenemy_cast={k}\n")
+    for d in ("fields", "battles", "spells", "enemies"):
         print(d, len(list((cfg / d).glob("*.cfg"))))
 
 
@@ -116,8 +142,8 @@ def hw(a):
     cfgs = sorted((OUT / "cfg" / a.set).glob("*.cfg"))
     res = OUT / f"hw_{a.set}.jsonl"
     done = {json.loads(l)["name"] for l in res.read_text().splitlines()} if res.exists() else set()
-    frames = a.frames or {"fields": 1560, "battles": 2640, "spells": 3360}[a.set]
-    start = {"fields": 600, "battles": 600, "spells": 480}[a.set]  # heartbeats from here on count
+    frames = a.frames or {"fields": 1560, "battles": 2640, "spells": 3360, "enemies": 2640}[a.set]
+    start = {"fields": 600, "battles": 600, "spells": 480, "enemies": 600}[a.set]  # heartbeats from here on count
     todo = [c for c in cfgs if (c.stem not in done or c.stem in a.redo) and (not a.only or re.search(a.only, c.stem))]
     print(f"{a.set}: {len(todo)} to run of {len(cfgs)} ({frames} frames each)", flush=True)
     for i, c in enumerate(todo):
@@ -130,7 +156,7 @@ def hw(a):
             subprocess.run(["rm", "-rf", str(out)])
             # (battles and spells: CROSS every 45 frames picks Attack and its target whenever a command window is up; a
             # spell's fixture turns each Attack into its cast)
-            press = [] if a.set == "fields" else ["--press", ",".join(f"CROSS@{f}+3" for f in range(360, frames, 45))]
+            press = [] if a.set in ("fields", "enemies") else ["--press", ",".join(f"CROSS@{f}+3" for f in range(360, frames, 45))]
             r = sh("python3", "tools/hwrun.py", "run", "--scenario", c, "--frames", frames, "--hang", 0, "--quiet",
                    "--out", out, "--timeout", frames // 10 + 240, *press)
             st = {}
@@ -161,6 +187,9 @@ def hw(a):
             bt = re.findall(r"(\d+) batches drawn", text)
             if bt:
                 row["batches_max"] = max(int(x) for x in bt)
+            m = re.findall(r"scenario: enemy attack \d+ played \(for \d+\), (\d+) times", text)
+            if a.set == "enemies":
+                row["casts"] = int(m[-1]) if m else 0
             if "spu: on the game's core" in text:
                 row.setdefault("flags", []).append("no-threads")
         with res.open("a") as f:
@@ -184,9 +213,9 @@ def emu(a):
     cfgs = sorted((Path(a.dir) if a.dir else OUT / "cfg" / a.set).glob("*.cfg"))
     res = OUT / f"emu_{a.set}.jsonl"
     done = {json.loads(l)["name"] for l in res.read_text().splitlines()} if res.exists() else set()
-    frames = a.frames or {"fields": 1560, "battles": 2640, "spells": 3360}[a.set]
+    frames = a.frames or {"fields": 1560, "battles": 2640, "spells": 3360, "enemies": 2640}[a.set]
     every = 60 if a.set != "fields" else 120
-    pressed = a.set != "fields"
+    pressed = a.set not in ("fields", "enemies")
     exe = OUT / f"dual_{'press' if pressed else 'plain'}_{frames}.3dsx"
     if not exe.exists() or a.rebuild:
         args = ["tools/docker.sh", "make", "-j16", "3ds", "SCENARIO=sdmc:/3ds/ff9/scenarios/sweep.cfg", f"DUMP_EVERY={every}",
@@ -256,7 +285,7 @@ def emu(a):
 
 
 def report(a):
-    for s in ("fields", "battles", "spells"):
+    for s in ("fields", "battles", "spells", "enemies"):
         res = OUT / f"hw_{s}.jsonl"
         if not res.exists():
             continue
@@ -280,13 +309,13 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("gen").set_defaults(fn=gen)
     p = sub.add_parser("hw")
-    p.add_argument("set", choices=("fields", "battles", "spells"))
+    p.add_argument("set", choices=("fields", "battles", "spells", "enemies"))
     p.add_argument("--frames", type=int)
     p.add_argument("--only", help="a regular expression: the fixtures whose name it finds")
     p.add_argument("--redo", action="append", default=[])
     p.set_defaults(fn=hw)
     p = sub.add_parser("emu")
-    p.add_argument("set", choices=("fields", "battles", "spells"))
+    p.add_argument("set", choices=("fields", "battles", "spells", "enemies"))
     p.add_argument("--dir", help="fixtures from this directory instead of the set's (its timing and presses kept)")
     p.add_argument("--frames", type=int)
     p.add_argument("--only")

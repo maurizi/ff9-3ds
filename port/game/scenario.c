@@ -13,6 +13,8 @@ void o14_opening_findSceneSectors(void);
 void port_scenario_set_enemy_hp(const int *values);
 s32 chr_resetToLevel(s32,s32,u8);
 int port_scenario_cast_on; /* (btl_setCmd's patch reads the command only with a cast= key) */
+int port_scenario_enemy_cast_on; /* (btl_setEnemyCmd's patch: only with an enemy_cast= key) */
+static int scenario_enemy_cast=-1;
 static struct {
     int blackjack; /* blackjack=1 with field_exit=4: the ending's movie skipped and The End's code taken (blackjack_ui.c) */
     int wm_set,wm_x,wm_y,wm_z,wm_rot,wm_yaw; /* wmpos=X,Y,Z,ROT,YAW: the world map's player there and its camera turned so (a 3DS capture's log line) */
@@ -117,6 +119,7 @@ void port_scenario_load(const char *path) {
             scenario.cast_cmd=v[0]; scenario.cast_abil=v[1]; scenario.cast_actor=v[2]; scenario.cast_targets=v[3];
             port_scenario_cast_on=1;
         }
+        else if(!__builtin_strcmp(s,"enemy_cast")) {scenario_enemy_cast=number(eq,0,17);port_scenario_enemy_cast_on=1;}
         else if(!__builtin_strncmp(s,"trance.",7)) scenario.trance[number(s+7,0,3)]=number(eq,0,255);
         else if(!__builtin_strncmp(s,"preset.",7)) scenario.preset[number(s+7,0,3)]=number(eq,0,19);
         else if(!__builtin_strncmp(s,"hp.",3)) scenario.hp[number(s+3,0,3)]=number(eq,0,9999);
@@ -437,6 +440,19 @@ int port_scenario_wmpos(int *x, int *y, int *z, int *rot, int *yaw) {
     if(!scenario.enabled || !scenario.wm_set) return 0;
     *x=scenario.wm_x; *y=scenario.wm_y; *z=scenario.wm_z; *rot=scenario.wm_rot; *yaw=scenario.wm_yaw;
     return 1;
+}
+
+/* enemy_cast=K: (btl_setEnemyCmd's counted patch) an enemy's turn plays attack K of the encounter's table instead of the
+ * one its script chose, when K is one of that enemy's own: a sequence's animations are counted from its base in the
+ * encounter's list (Battle.seq.seqFlags, a byte a sequence), which an enemy type's sequences share, so K is taken only
+ * where its base is the chosen attack's. The targets stay the script's. For running each enemy attack's effect
+ * (tools/sweep.py's enemies set); the log says each time one was played. */
+int port_scenario_enemy_cast(int abil, const unsigned char *bases, const int *seqs) {
+    const int k=scenario_enemy_cast;
+    if(!scenario.enabled || k<0 || abil<0 || abil>=0x12 || !seqs[k] || bases[k]!=bases[abil]) return abil;
+    static unsigned n;
+    if(n++<4 || n%16==0) port_log("scenario: enemy attack %d played (for %d), %u times\n",k,abil,n);
+    return k;
 }
 
 /* cast=CMD,ABIL[,ACTOR[,TARGETS]]: (btl_setCmd's counted patch) a party member's Attack (ACTOR: of that character
