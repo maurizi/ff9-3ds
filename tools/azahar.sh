@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run a 3DS build in Azahar on a private X display and capture what it shows.
-#   tools/azahar.sh [-t SECONDS] [-s "T1 T2 ..."] [-o OUTDIR] [build/ff9-test.3dsx]
+#   tools/azahar.sh [-t SECONDS] [-u FILE] [-s "T1 T2 ..."] [-o OUTDIR] [build/ff9-test.3dsx]
+# -u FILE: stop as soon as FILE exists (two seconds after, for what is being written), at SECONDS at the latest.
 # (default: the test build, which make writes when any test option is set, else build/ff9.3dsx)
 # Screenshots of the emulator window at each time in -s go to OUTDIR/shot_<T>.png; the game's log
 # (svcOutputDebugString lines) to OUTDIR/game.log. The display (:47, private to this project) is started if needed and left running.
@@ -9,8 +10,8 @@
 # so a flatpak Azahar run by another session is left alone. Its environment (e.g. AZAHAR_PICA_F24) is passed through.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SECS=30; SHOTS=""; OUT="$ROOT/build/azahar"; DISP=${AZAHAR_DISPLAY:-:47}
-while getopts "t:s:o:" o; do case $o in t) SECS=$OPTARG;; s) SHOTS=$OPTARG;; o) OUT=$OPTARG;; *) exit 1;; esac; done
+SECS=30; UNTIL=""; SHOTS=""; OUT="$ROOT/build/azahar"; DISP=${AZAHAR_DISPLAY:-:47}
+while getopts "t:u:s:o:" o; do case $o in t) SECS=$OPTARG;; u) UNTIL=$OPTARG;; s) SHOTS=$OPTARG;; o) OUT=$OPTARG;; *) exit 1;; esac; done
 shift $((OPTIND - 1))
 DEF="$ROOT/build/ff9.3dsx"
 [ "$ROOT/build/ff9-test.3dsx" -nt "$DEF" ] && DEF="$ROOT/build/ff9-test.3dsx"
@@ -37,7 +38,13 @@ for t in $SHOTS; do
     now=$(date +%s.%N); d=$(echo "$start + $t - $now" | bc); [ "${d:0:1}" = "-" ] || sleep "$d"
     import -display "$DISP" -window root "$OUT/shot_$t.png" 2>/dev/null || true
 done
+if [ -n "$UNTIL" ]; then
+    end=$(( $(date +%s) + SECS ))
+    while [ ! -e "$UNTIL" ] && [ "$(date +%s)" -lt "$end" ]; do sleep 0.5; done
+    [ -e "$UNTIL" ] && sleep 2
+else
 now=$(date +%s.%N); d=$(echo "$start + $SECS - $now" | bc); [ "${d:0:1}" = "-" ] || sleep "$d"
+fi
 # SIGTERM first (exact process name: never a pattern, which could match other shells), so its log is flushed
 if [ -n "${AZAHAR_BIN:-}" ]; then
     kill -TERM $PID 2>/dev/null || true

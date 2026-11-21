@@ -228,7 +228,7 @@ def emu(a):
     todo = [c for c in cfgs if (c.stem not in done or c.stem in a.redo) and (not a.only or re.search(a.only, c.stem))]
     print(f"{a.set}: {len(todo)} to compare of {len(cfgs)} ({frames} frames each)", flush=True)
     saved = (AZCFG / "qt-config.ini").read_bytes()
-    (AZCFG / "qt-config.ini").write_bytes((AZCFG / "qt-config.ini.monoold42").read_bytes())
+    (AZCFG / "qt-config.ini").write_bytes((AZCFG / "qt-config.ini.monofast").read_bytes())  # (an Old 3DS, its CPU and the frame rate unthrottled: the speed is the console's to tell)
     (SD / "scenarios").mkdir(parents=True, exist_ok=True)
     (OUT / "emu" / a.set).mkdir(parents=True, exist_ok=True)
     try:
@@ -243,7 +243,8 @@ def emu(a):
             dump.mkdir(exist_ok=True)
             for f in dump.glob("f*.ppm"):
                 f.unlink()
-            sh("tools/azahar.sh", "-t", int(frames / 60 * 2.7) + 25, "-o", work, exe)  # (drawn twice: slower than the console)
+            # (until the last frame's dump is there; the time is only the limit for a run that never gets to it)
+            sh("tools/azahar.sh", "-t", int(frames / 60 * 2.7) + 25, "-u", dump / f"f{frames:06d}_ref.ppm", "-o", work, exe)
             row = {"name": c.stem, "frames": frames}
             rows = []
             for f in range(every, frames + 1, every):
