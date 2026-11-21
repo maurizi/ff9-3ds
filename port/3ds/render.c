@@ -5479,7 +5479,7 @@ void ctr_present(long frame) {
     world_ground = port_game_mode() == 3;
     int psx_gpu_is_paused(void);
     const int walk_paused = psx_gpu_is_paused(); /* (a walk goes on after this present: its frame is not over) */
-    if (!walk_paused) slot_regroup();
+    slot_regroup();
     extern unsigned int psx_depth_frame;
     psx_depth_frame++;
     if (!walk_paused) ranges_age();
