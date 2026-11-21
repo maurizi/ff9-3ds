@@ -275,7 +275,7 @@ static int draw_list(void) {
     Window *w = g_btlUi->windows[2];
     if (!w || w->state != 3 || !g_btluiList.cmd) return 0;
     MenuList *L = &w->list;
-    if (L->cols != 1 || L->count <= 0) return 0; /* (only single-column lists: battle's are) */
+    /* (a battle's lists are all of one column: btlui.c's one menuList_init. An empty one is drawn empty) */
     int count = L->count, cur = L->top + L->cursor;
     static int idx[256];
     int n = 0, pos = 0;
@@ -423,9 +423,7 @@ int port_battle_hud_draw(void) {
             port_battle_hud_targets = TARGET_PANEL; /* (the PS1's target window, opening or closing: never beside this screen) */
             return 1;
         }
-        /* (a list this screen has none for, open: the PS1's. Anything else is a list on its way in or out, its
-         * window not open yet or gone already) */
-        if (g_btlUi->windows[2] && g_btlUi->windows[2]->state == 3 && g_btluiList.cmd) return 0;
+        /* (a list on its way in or out, its window not open yet or gone already) */
         between = 1;
     }
     port_battle_hud_targets = 0;
