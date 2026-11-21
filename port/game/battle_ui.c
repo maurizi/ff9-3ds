@@ -413,11 +413,19 @@ int port_battle_hud_draw(void) {
     int st = g_btlUi->menuState;
     cmd_shown = list_shown = tgt_shown = 0;
     port_battle_hud_targets = 0;
+    /* (a list's window opening or closing: the commands and the cards stay until the list is up, and are back as it
+     * goes. The PS1's own windows were drawn meanwhile, some 6 VBlanks at its opening and 2 at its closing: the bottom
+     * screen went to their small panels and back. Nothing of the commands is tapped meanwhile) */
+    int between = 0;
     if (st == BTLUI_MENU_LIST) {
-        if (!draw_list()) return 0;
-        port_battle_hud_on = 1;
-        port_battle_hud_targets = TARGET_PANEL; /* (the PS1's target window, opening or closing: never beside this screen) */
-        return 1;
+        if (draw_list()) {
+            port_battle_hud_on = 1;
+            port_battle_hud_targets = TARGET_PANEL; /* (the PS1's target window, opening or closing: never beside this screen) */
+            return 1;
+        }
+        if (!(g_btlUi->windows[2] && g_btlUi->windows[2]->state && g_btlUi->windows[2]->state != 3)) return 0; /* (a list
+                                                                               * this screen has none for: the PS1's) */
+        between = 1;
     }
     port_battle_hud_targets = 0;
     if (st == BTLUI_MENU_TARGET) {
@@ -425,9 +433,10 @@ int port_battle_hud_draw(void) {
         port_battle_hud_on = port_battle_hud_targets = 1;
         return 1;
     }
-    if (st == BTLUI_MENU_CLOSING && g_btlUi->windows[2] && g_btlUi->windows[2]->state) return 0; /* (a list opening) */
+    if (st == BTLUI_MENU_CLOSING && g_btlUi->windows[2] && g_btlUi->windows[2]->state) between = 1;
     draw_commands();
     draw_cards();
+    if (between) cmd_shown = 0;
     sys_shown = 0;
     if (g_btluiState.enabled) { /* PAUSE and RUN: with the party (party_unit), not over the battle's opening alone */
         static const u8 pause[] = "PAUSE", run[] = "HOLD TO RUN";
