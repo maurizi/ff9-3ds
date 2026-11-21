@@ -1163,6 +1163,23 @@ __attribute__((weak)) int port_battle_hud_on, port_battle_hud_targets;
 int psx_ui_list_battle; /* the list being drawn is the battle UI's (its OT has 0x18 entries, head g_ot[0x17]) */
 __attribute__((weak)) void psx_ui_list_end(void) {}
 
+/* The VBlank's list drawn again, from a cleared layer (the port's battle screen, port/game/field_hud.c). Which of the
+ * PS1's windows the list leaves to the port's screen (port_battle_hud_on and the others) is what that screen drew a
+ * VBlank before; when it changes (the target window opening: the port's targets in its place from this VBlank on) the
+ * list has drawn windows the port's screen is about to draw its own for, into the displayed buffer's layer, and
+ * nothing cleared them again: the screen's drawing, the same from then on, was kept as it was. The PS1's target window
+ * showed beside the port's on every second frame (that buffer's) until the screen next changed, some 0.6 s. */
+static u32 *vblank_list;
+unsigned int psx_vblank_list_serial, psx_vblank_list_flags;
+void psx_vblank_list_again(void) {
+    if (!vblank_list) return;
+    psx_ui_list_battle = 1;
+    psx_ui_list_begin();
+    DrawOTag(vblank_list);
+    psx_ui_list_end();
+    psx_ui_list_battle = 0;
+    psx_vblank_list_flags = (port_battle_hud_on != 0) | (port_battle_hud_targets != 0) << 1 | (port_battle_help_on != 0) << 2;
+}
 int psx_scene_only;
 void ContinueDraw(u32 *insaddr, s32 contaddr) {
     /* Even when BreakDraw returns zero, the inserted list must execute. FF9
@@ -1178,6 +1195,8 @@ void ContinueDraw(u32 *insaddr, s32 contaddr) {
         DrawOTag(insaddr);
         psx_ui_list_end();
         psx_ui_list_battle = 0;
+        vblank_list = insaddr, psx_vblank_list_serial++;
+        psx_vblank_list_flags = (port_battle_hud_on != 0) | (port_battle_hud_targets != 0) << 1 | (port_battle_help_on != 0) << 2;
     }
     if (paused) psx_gpu_resume();
     if (contaddr && ((u32)contaddr & 0xFFFFFF) != OT_END)

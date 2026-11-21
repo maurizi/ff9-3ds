@@ -416,6 +416,7 @@ int port_battle_hud_draw(void) {
     if (st == BTLUI_MENU_LIST) {
         if (!draw_list()) return 0;
         port_battle_hud_on = 1;
+        port_battle_hud_targets = TARGET_PANEL; /* (the PS1's target window, opening or closing: never beside this screen) */
         return 1;
     }
     port_battle_hud_targets = 0;
@@ -439,6 +440,8 @@ int port_battle_hud_draw(void) {
         win_drawBox(&r_run, 4, 2);
     }
     port_battle_hud_on = 1;
+    port_battle_hud_targets = TARGET_PANEL; /* (the PS1's target window plays its opening and closing with the menu not yet, or no
+                                             * longer, at its targets: it showed beside the cards for some 4 VBlanks each) */
     return 1;
 }
 

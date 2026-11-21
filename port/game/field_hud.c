@@ -1004,6 +1004,20 @@ void port_bottom_hud(void) {
     g_ot = saved_ot;
     g_primPtr = saved_prim;
     if (used > sizeof hud_mem) port_fatal("field HUD: packet buffer overrun");
+    if (battle) { /* (the battle's list of this VBlank was drawn for another screen than this one: again, for this) */
+        extern unsigned int psx_vblank_list_serial, psx_vblank_list_flags;
+        extern int port_battle_hud_targets, port_battle_help_on;
+        void psx_vblank_list_again(void);
+        static unsigned int seen;
+        const unsigned int now = (port_battle_hud_on != 0) | (port_battle_hud_targets != 0) << 1 | (port_battle_help_on != 0) << 2;
+        if (psx_vblank_list_serial != seen && psx_vblank_list_flags != now) {
+            psx_gpu_sync();
+            Gp0State saved_gp0 = gp0_state;
+            psx_vblank_list_again();
+            gp0_state = saved_gp0;
+        }
+        seen = psx_vblank_list_serial;
+    }
     if (!drew) return;
     /* the screen's drawing as it was drawn last into the displayed buffer's layer (its packets the same, word for word)
      * and that layer neither cleared nor drawn into since (the battle's own list, drawn before it every VBlank, draws
