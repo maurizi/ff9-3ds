@@ -654,6 +654,21 @@ static inline int src_hit(int cx, int cy, int x0, int y0, int x1, int y1) {
     return x0 < bx + b[2] && x1 > bx + b[0] && y0 < by + b[3] && y1 > by + b[1];
 }
 static u32 gen_counter = 1;
+/* For a block that holds texels drawn with beside texels the GPU draws into (block_kept): gen_counter at the last CPU
+ * write into a cell, and the box of everything the GPU has drawn into it since texture sources were first marked there
+ * (pixels within the cell: x0, y0, x1, y1; never made smaller) */
+static u32 cpu_gen[CH][CW];
+static u8 gpu_box[CH][CW][4];
+static __attribute__((noinline)) void gpu_box_add(int cx, int cy, int x0, int y0, int x1, int y1) {
+    u8 *b = gpu_box[cy][cx];
+    const int a0 = x0 > cx * CELL ? x0 - cx * CELL : 0, a1 = x1 < (cx + 1) * CELL ? x1 - cx * CELL : CELL;
+    const int c0 = y0 > cy * CELL ? y0 - cy * CELL : 0, c1 = y1 < (cy + 1) * CELL ? y1 - cy * CELL : CELL;
+    if (a0 >= a1 || c0 >= c1) return;
+    if (a0 < b[0]) b[0] = (u8)a0;
+    if (c0 < b[1]) b[1] = (u8)c0;
+    if (a1 > b[2]) b[2] = (u8)a1;
+    if (c1 > b[3]) b[3] = (u8)c1;
+}
 /* Cells some texture block was made from (texels or CLUT), and a counter bumped by any write to one: a texture whose
  * epoch is current needs no check of its blocks' cells. Draws into the framebuffers, which aren't sources, don't
  * bump it; uploads (rare per frame) do. */
@@ -698,6 +713,7 @@ ok:
             cell[cy][cx].gen = gen_counter;
             if (cell[cy][cx].is_source) {
                 source = 1; /* (no skip of the next call on these cells: another rectangle may reach the sources) */
+                gpu_box_add(cx, cy, x0, y0, x1, y1);
                 if (src_hit(cx, cy, x0, y0, x1, y1)) cell[cy][cx].src_gen = gen_counter, moved |= cell[cy][cx].src_seen == tex_epoch;
             }
         }
@@ -769,6 +785,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
         for (int cx = cx0; cx < cx1; cx++) {
             if (cell[cy][cx].is_source && (wraps || src_hit(cx, cy, x, y, x + w, y + h)))
                 cell[cy][cx].src_gen = gen_counter, touched_seen |= cell[cy][cx].src_seen == epoch_was;
+            cpu_gen[cy][cx] = gen_counter;
             if (filling) {
                 /* the fill is drawn into the mirror too (psx_vram_filled): both sides current where it covers a
                  * whole cell; a partly covered cell keeps the GPU's state */
@@ -1999,7 +2016,10 @@ static void mark_source(int x0, int y0, int x1, int y1) {
             /* (the rectangle's part in this cell, in the cell's own pixels) */
             const int a0 = x0 > cx * CELL ? x0 - cx * CELL : 0, a1 = x1 < (cx + 1) * CELL ? x1 - cx * CELL : CELL;
             const int c0 = y0 > cy * CELL ? y0 - cy * CELL : 0, c1 = y1 < (cy + 1) * CELL ? y1 - cy * CELL : CELL;
-            if (!cell[wy][wx].is_source) b[0] = (u8)a0, b[1] = (u8)c0, b[2] = (u8)a1, b[3] = (u8)c1;
+            if (!cell[wy][wx].is_source) {
+                b[0] = (u8)a0, b[1] = (u8)c0, b[2] = (u8)a1, b[3] = (u8)c1;
+                gpu_box[wy][wx][0] = gpu_box[wy][wx][1] = CELL, gpu_box[wy][wx][2] = gpu_box[wy][wx][3] = 0; /* (nothing yet) */
+            }
             else {
                 if (a0 < b[0]) b[0] = (u8)a0;
                 if (c0 < b[1]) b[1] = (u8)c0;
@@ -2540,6 +2560,39 @@ static __attribute__((noinline)) int block_texels_gpu(const TexSlot *s, const Gp
             if (!cell[cy][cx].shadow_ok) return 1;
     return 0;
 }
+/* A block converted before, some of its cells the GPU's since, whose texels asked for now ([u0,u1]x[v0,v1] of the page,
+ * inclusive) nothing has written since it was converted: no CPU write into any of its cells (cpu_gen), nothing drawn
+ * by the GPU where those texels are (gpu_box), its CLUT's cells unwritten. It is drawn with as it is: its other texels
+ * may be old, and it stays not known current, so the next lookup asks again with its own texels. Holy, Doomsday, Atomos
+ * and LV4 Holy draw with rows of a page and into the rows right under them, in the same 32-row block: made current,
+ * the block was read back from the GPU for every polygon, 12 to 16 command lists sent and waited for a frame. */
+int ctr_sw_keepgpu = 1;
+static __attribute__((noinline)) int block_kept(const TexSlot *s, const Gp0Mode *m, int bx, int by, int u0, int v0, int u1, int v1) {
+    const int b = by * 8 + bx;
+    if (!ctr_sw_keepgpu || s->twin || !s->stamp[b] || u1 < u0 || v1 < v0) return 0;
+    const int shift = m->depth == 0 ? 2 : m->depth == 1 ? 1 : 0;
+    const int sx0 = m->tx + ((bx * 32) >> shift), sw = 32 >> shift, sy0 = m->ty + by * 32;
+    if (sx0 + sw > VW || sy0 + 32 > VH) return 0;
+    int cx0, cy0, cx1, cy1, gpus = 0;
+    if (!cell_range(sx0, sy0, sx0 + sw, sy0 + 32, &cx0, &cy0, &cx1, &cy1)) return 0;
+    for (int cy = cy0; cy < cy1; cy++)
+        for (int cx = cx0; cx < cx1; cx++) {
+            if (cpu_gen[cy][cx] > s->stamp[b] || cell_cols[cy][cx]) return 0;
+            gpus |= !cell[cy][cx].shadow_ok;
+        }
+    if (!gpus) return 0; /* (nothing to read back: made current as ever) */
+    const int nu0 = imax(u0, bx * 32), nu1 = imin(u1, bx * 32 + 31), nv0 = imax(v0, by * 32), nv1 = imin(v1, by * 32 + 31);
+    const int nx0 = m->tx + (nu0 >> shift), nx1 = m->tx + (nu1 >> shift) + 1, ny0 = m->ty + nv0, ny1 = m->ty + nv1 + 1;
+    for (int cy = cy0; cy < cy1; cy++)
+        for (int cx = cx0; cx < cx1; cx++) {
+            const u8 *g = gpu_box[cy][cx];
+            const int gx = cx * CELL, gy = cy * CELL;
+            if (nx0 < gx + g[2] && nx1 > gx + g[0] && ny0 < gy + g[3] && ny1 > gy + g[1]) return 0;
+        }
+    const int ncl = m->depth == 0 ? 16 : m->depth == 1 ? 256 : 0;
+    if (ncl && src_newer(m->clut_x, m->clut_y, m->clut_x + ncl, m->clut_y + 1, s->stamp[b])) return 0; /* (as convert_block asks) */
+    return 1;
+}
 #define BG_MEMO_SLOTS 128
 typedef struct { TexSlot *s; u32 ver; u64 mask; Gp0Mode m; } BgSlot;
 static int bg_rec_on, bg_rec_nslots;
@@ -2637,6 +2690,7 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
     } else
         s = slot_for(key, twin);
     unsigned f = 0;
+    int kept = 0;
     /* (the blocks wanted, as a mask: when every one is known current, convert_block's first test for each at once.
      * Nearly every lookup misses the one before (a model's faces alternate between pages, CLUTs and blocks)) */
     static const u64 rows[8] = {0x01, 0x0101, 0x010101, 0x01010101, 0x0101010101ull, 0x010101010101ull,
@@ -2657,10 +2711,15 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
                 if ((bx < bx0 || bx > bx1 || by < by0 || by > by1) && s->stamp[by * 8 + bx] && s->epoch[by * 8 + bx] != tex_epoch &&
                     block_texels_gpu(s, m, bx, by))
                     continue;
+                if (s->stamp[by * 8 + bx] && s->epoch[by * 8 + bx] != tex_epoch && bx >= bx0 && bx <= bx1 && by >= by0 && by <= by1 &&
+                    block_kept(s, m, bx, by, u0, v0, u1, v1)) {
+                    f |= s->flags[by * 8 + bx], kept = 1;
+                    continue;
+                }
                 PART_BEGIN();
                 const int again = convert_block(s, m, bx, by);
                 PART_END(0);
-                if (again) { s = slot_renew(s), f = 0, by = cy0, bx = cx0 - 1; continue; }
+                if (again) { s = slot_renew(s), f = 0, kept = 0, by = cy0, bx = cx0 - 1; continue; }
                 if (bx >= bx0 && bx <= bx1 && by >= by0 && by <= by1) f |= s->flags[by * 8 + bx];
             }
         if (s->cur_epoch != tex_epoch) s->cur = 0, s->cur_epoch = tex_epoch;
@@ -2676,6 +2735,7 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
     tex_ou = s->ox, tex_ov = s->oy;
     last.key = key, last.twin = twin, last.epoch = tex_epoch, last.serial = frame_serial, last.b = blocks, last.s = s,
     last.f = f;
+    if (kept) last.b = -1; /* (a block kept for these texels alone: the same blocks' other texels ask again) */
     int id = (int)(s - slots);
     if (co_last >= 0 && co_last != id && co[co_last][id] < 0xFFFF) co[co_last][id]++;
     co_last = id;
@@ -3098,13 +3158,29 @@ static inline int imax(int a, int b) { return a > b ? a : b; }
  * asked for the lower half's blocks, which the strip before had just drawn into: read back from the GPU, 12 to 16
  * waits a frame (an Old 3DS: 2.1 to 2.9 s per 120 VBlanks). */
 int ctr_sw_trim = 1;
-static __attribute__((noinline)) void trim_max(const int *x, const int *y, const int *u, const int *v, int nv, int u0, int v0, int *u1, int *v1) {
+static __attribute__((noinline)) void trim_max(const int *x, const int *y, const int *u, const int *v, int nv, int *u0, int *v0, int *u1, int *v1) {
     if (!ctr_sw_trim) return;
+    int done = 0;
+    /* (and a quad that is a rectangle of texels one to a pixel along an axis: only its texels within the drawing area
+     * along that axis. Doomsday and Holy draw rectangles of a page into an area right beside or under them, wider than
+     * the area: the texels of the part clipped away were the area's own pixels) */
+    if (nv == 4 && x[0] == x[2] && x[1] == x[3] && y[0] == y[1] && y[2] == y[3] && u[0] == u[2] && u[1] == u[3] && v[0] == v[1] &&
+        v[2] == v[3]) {
+        if (x[1] > x[0] && u[1] - u[0] == x[1] - x[0]) {
+            const int a = imax(x[0], gp0_state.area_x0), b = imin(x[1], gp0_state.area_x1 + 1);
+            if (b > a) *u0 = u[0] + (a - x[0]), *u1 = u[0] + (b - 1 - x[0]), done |= 1;
+        }
+        if (y[2] > y[0] && v[2] - v[0] == y[2] - y[0]) {
+            const int a = imax(y[0], gp0_state.area_y0), b = imin(y[2], gp0_state.area_y1 + 1);
+            if (b > a) *v0 = v[0] + (a - y[0]), *v1 = v[0] + (b - 1 - y[0]), done |= 2;
+        }
+    }
     int xm = x[0], ym = y[0];
     for (int i = 1; i < nv; i++) xm = imax(xm, x[i]), ym = imax(ym, y[i]);
     for (int k = 0; k < 2; k++) {
-        const int *t = k ? v : u, lo = k ? v0 : u0; int *hi = k ? v1 : u1;
-        if ((*hi & 31) || *hi <= lo) continue;
+        const int *t = k ? v : u, lo = k ? *v0 : *u0;
+        int *hi = k ? v1 : u1;
+        if ((done >> k & 1) || (*hi & 31) || *hi <= lo) continue;
         int bottom = 1, right = 1;
         for (int i = 0; i < nv; i++)
             if (t[i] == *hi) bottom &= y[i] == ym, right &= x[i] == xm;
@@ -3118,10 +3194,10 @@ static C3D_Tex *prim_texture(const Gp0Mode *m, const Gp0Vtx *v, int n, unsigned 
         u0 = imin(u0, v[i].u); u1 = imax(u1, v[i].u);
         v0 = imin(v0, v[i].v); v1 = imax(v1, v[i].v);
     }
-    if (__builtin_expect(!(u1 & 31) || !(v1 & 31), 0) && n <= 4) {
+    if (__builtin_expect(!(u1 & 31) || !(v1 & 31) || gp0_state.area_y0 >= 256, 0) && n <= 4) {
         int x[4], y[4], uu[4], vv[4];
         for (int i = 0; i < n; i++) x[i] = v[i].x, y[i] = v[i].y, uu[i] = v[i].u, vv[i] = v[i].v;
-        trim_max(x, y, uu, vv, n, u0, v0, &u1, &v1);
+        trim_max(x, y, uu, vv, n, &u0, &v0, &u1, &v1);
     }
     return texture_for(m, u0, v0, u1, v1, tflags);
 }
@@ -3315,7 +3391,8 @@ HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned
         int u0 = imin(imin(u[0], u[1]), u[2]), u1 = imax(imax(u[0], u[1]), u[2]);
         int v0 = imin(imin(v[0], v[1]), v[2]), v1 = imax(imax(v[0], v[1]), v[2]);
         if (nv == 4) u0 = imin(u0, u[3]), u1 = imax(u1, u[3]), v0 = imin(v0, v[3]), v1 = imax(v1, v[3]);
-        if (__builtin_expect(!(u1 & 31) || !(v1 & 31), 0)) trim_max(x, y, u, v, nv, u0, v0, &u1, &v1);
+        /* (or drawn into an area that isn't a picture's: the effects' own, among the texture pages) */
+        if (__builtin_expect(!(u1 & 31) || !(v1 & 31) || gp0_state.area_y0 >= 256, 0)) trim_max(x, y, u, v, nv, &u0, &v0, &u1, &v1);
         tex = texture_for(&m, u0, v0, u1, v1, &tflags);
     }
     if (ctr_ko == 5) return;
