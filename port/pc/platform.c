@@ -65,6 +65,32 @@ static void spu_replay_close(void) {
 static long frames;
 static long status_every = 60;
 static long dump_every; /* --dump N: write the displayed area every N frames to build/frames/ */
+
+/* --scene-only: what the port draws on a 3DS's bottom screen (the window packets ui_split.c and world_navi.c name, the
+ * battle's VBlank list: gpu.c) left out of the frame, which is then the scene alone, as a 3DS's mirror holds it
+ * (render.c's f<frame>_s dumps): tools/sweep.py compares the two. A range holds for the frame it was named in and the
+ * next (the buffers alternate). */
+extern int psx_scene_only;
+extern const unsigned int *psx_gpu_packet;
+static struct { const unsigned char *lo, *hi; long frame; } scene_ranges[16];
+static int scene_nranges;
+void port_bottom_packets(const void *lo, const void *hi) {
+    if (!psx_scene_only) return;
+    for (int i = 0; i < scene_nranges; i++)
+        if ((const unsigned char *)lo < scene_ranges[i].hi && (const unsigned char *)hi > scene_ranges[i].lo) scene_ranges[i] = scene_ranges[--scene_nranges], i--;
+    if (scene_nranges == 16) scene_nranges--;
+    scene_ranges[scene_nranges].lo = lo, scene_ranges[scene_nranges].hi = hi, scene_ranges[scene_nranges].frame = frames;
+    scene_nranges++;
+}
+int psx_scene_skip(void) {
+    if (!psx_scene_only) return 0;
+    const unsigned char *p = (const unsigned char *)psx_gpu_packet;
+    for (int i = 0; i < scene_nranges; i++) {
+        if (frames - scene_ranges[i].frame > 4) { scene_ranges[i] = scene_ranges[--scene_nranges], i--; continue; }
+        if (p >= scene_ranges[i].lo && p < scene_ranges[i].hi) return 1;
+    }
+    return 0;
+}
 static const char *dump_dir = "build/frames"; /* --dump-dir DIR: elsewhere (parallel runs) */
 static long vram_at = -1; /* --vram FRAME: also write all of VRAM at that frame */
 int plat_spu_trace_open(const char *path);
@@ -294,6 +320,8 @@ int main(int argc, char **argv) {
                 return 1;
             }
             n_watches++;
+        } else if (!strcmp(argv[i], "--scene-only")) {
+            psx_scene_only = 1;
         } else if (!strcmp(argv[i], "--render")) {
             psx_softgpu_enable(1);
             { void occ_stats_install(void); occ_stats_install(); } /* (FF9_OCC=1: occ_stats.c) */

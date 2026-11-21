@@ -1027,10 +1027,12 @@ __attribute__((weak)) int port_battle_hud_on, port_battle_hud_targets;
 int psx_ui_list_battle; /* the list being drawn is the battle UI's (its OT has 0x18 entries, head g_ot[0x17]) */
 __attribute__((weak)) void psx_ui_list_end(void) {}
 
+int psx_scene_only;
 void ContinueDraw(u32 *insaddr, s32 contaddr) {
     /* Even when BreakDraw returns zero, the inserted list must execute. FF9
      * uses this at VBlank for battle commands, status bars and text. */
     psx_gpu_sync();
+    if (!contaddr && psx_scene_only) return; /* (the host's --scene-only: the battle's UI list is a 3DS's bottom screen's) */
     if (!contaddr && psx_skip_vblank_list()) return;
     if (insaddr && !(!contaddr && psx_vblank_list_native(insaddr))) {
         psx_ui_list_battle = 1;

@@ -169,6 +169,92 @@ def hw(a):
               f"mode {row.get('mode')} field {row.get('field')} {' '.join(row.get('flags', []))}", flush=True)
 
 
+SD = Path.home() / ".var/app/org.azahar_emu.Azahar/data/azahar-emu/sdmc/3ds/ff9"
+AZCFG = Path.home() / ".var/app/org.azahar_emu.Azahar/config/azahar-emu"
+
+
+def presses(frames):
+    return ",".join(f"CROSS@{f}+3" for f in range(360, frames, 45))
+
+
+def emu(a):
+    """The 3DS renderer against the software rasteriser (psx/softgpu.c, the reference) on the same frames: a DUAL=1 build
+    in Azahar draws every scene primitive with both and dumps both pictures of a frame, f<frame>_s and f<frame>_ref."""
+    from PIL import Image, ImageChops
+    cfgs = sorted((Path(a.dir) if a.dir else OUT / "cfg" / a.set).glob("*.cfg"))
+    res = OUT / f"emu_{a.set}.jsonl"
+    done = {json.loads(l)["name"] for l in res.read_text().splitlines()} if res.exists() else set()
+    frames = a.frames or {"fields": 1560, "battles": 2640, "spells": 3360}[a.set]
+    every = 60 if a.set != "fields" else 120
+    pressed = a.set != "fields"
+    exe = OUT / f"dual_{'press' if pressed else 'plain'}_{frames}.3dsx"
+    if not exe.exists() or a.rebuild:
+        args = ["tools/docker.sh", "make", "-j16", "3ds", "SCENARIO=sdmc:/3ds/ff9/scenarios/sweep.cfg", f"DUMP_EVERY={every}",
+                "SPUSYNC=1", "DUAL=1"] + ([f"AUTOPRESS={presses(frames)}"] if pressed else [])
+        (ROOT / "build/ff9-test.3dsx").unlink(missing_ok=True)
+        r = sh(*args)
+        if not (ROOT / "build/ff9-test.3dsx").exists():
+            sys.exit("the 3DS test build failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+        (ROOT / "build/ff9-test.3dsx").rename(exe)
+    todo = [c for c in cfgs if (c.stem not in done or c.stem in a.redo) and (not a.only or re.search(a.only, c.stem))]
+    print(f"{a.set}: {len(todo)} to compare of {len(cfgs)} ({frames} frames each)", flush=True)
+    saved = (AZCFG / "qt-config.ini").read_bytes()
+    (AZCFG / "qt-config.ini").write_bytes((AZCFG / "qt-config.ini.monoold42").read_bytes())
+    (SD / "scenarios").mkdir(parents=True, exist_ok=True)
+    (OUT / "emu" / a.set).mkdir(parents=True, exist_ok=True)
+    try:
+        for i, c in enumerate(todo):
+            if (OUT / "STOP_EMU").exists():
+                print("stopped (build/sweep/STOP_EMU)")
+                return
+            work = OUT / "emu" / a.set / c.stem
+            subprocess.run(["rm", "-rf", str(work)])
+            (SD / "scenarios/sweep.cfg").write_bytes(c.read_bytes())
+            dump = SD / "dump"
+            dump.mkdir(exist_ok=True)
+            for f in dump.glob("f*.ppm"):
+                f.unlink()
+            sh("tools/azahar.sh", "-t", int(frames / 60 * 1.7) + 20, "-o", work, exe)  # (drawn twice: slower than the console)
+            row = {"name": c.stem, "frames": frames}
+            rows = []
+            for f in range(every, frames + 1, every):
+                try:
+                    d3 = Image.open(dump / f"f{f:06d}_s.ppm").convert("RGB")
+                    ref = Image.open(dump / f"f{f:06d}_ref.ppm").convert("RGB")
+                except (OSError, ValueError):
+                    continue
+                if d3.size != ref.size or d3.width < 64:
+                    continue
+                px = list(ImageChops.difference(d3, ref).getdata())
+                n = len(px)
+                big = sum(1 for p in px if max(p) > 48) * 100.0 / n
+                some = sum(1 for p in px if max(p) > 16) * 100.0 / n
+                rows.append((f, round(big, 2), round(some, 2), d3, ref))
+            if rows:
+                worst = max(rows, key=lambda r: r[1])
+                row.update(compared=len(rows), worst=worst[1], worst_frame=worst[0],
+                           mean=round(sum(r[1] for r in rows) / len(rows), 2), mean16=round(sum(r[2] for r in rows) / len(rows), 2),
+                           per_frame=[(r[0], r[1]) for r in rows if r[1] > a.keep])
+                if worst[1] > a.keep:  # (kept to look at: the 3DS's frame, the reference's, where they differ)
+                    w, h = worst[3].size
+                    sheet = Image.new("RGB", (w * 3, h))
+                    sheet.paste(worst[3], (0, 0)), sheet.paste(worst[4], (w, 0))
+                    sheet.paste(ImageChops.difference(worst[3], worst[4]).point(lambda v: 255 if v > 48 else v * 4), (2 * w, 0))
+                    sheet.save(OUT / "emu" / a.set / f"{c.stem}.png")
+            else:
+                row["compared"] = 0
+            log = work / "game.log"
+            if log.exists() and re.search(r"FATAL|port_fatal|exception", log.read_text(errors="replace")):
+                row["flags"] = ["FATAL"]
+            subprocess.run(["rm", "-rf", str(work)])
+            with res.open("a") as f:
+                f.write(json.dumps(row) + "\n")
+            print(f"[{i + 1}/{len(todo)}] {c.stem}: {row.get('compared')} frames, worst {row.get('worst')}% at {row.get('worst_frame')}, "
+                  f"mean {row.get('mean')}% {' '.join(row.get('flags', []))}", flush=True)
+    finally:
+        (AZCFG / "qt-config.ini").write_bytes(saved)
+
+
 def report(a):
     for s in ("fields", "battles", "spells"):
         res = OUT / f"hw_{s}.jsonl"
@@ -199,6 +285,15 @@ def main():
     p.add_argument("--only", help="a regular expression: the fixtures whose name it finds")
     p.add_argument("--redo", action="append", default=[])
     p.set_defaults(fn=hw)
+    p = sub.add_parser("emu")
+    p.add_argument("set", choices=("fields", "battles", "spells"))
+    p.add_argument("--dir", help="fixtures from this directory instead of the set's (its timing and presses kept)")
+    p.add_argument("--frames", type=int)
+    p.add_argument("--only")
+    p.add_argument("--redo", action="append", default=[])
+    p.add_argument("--rebuild", action="store_true", help="build the test 3dsx again (after a change to the port)")
+    p.add_argument("--keep", type=float, default=3.0, help="percent of a frame differing that keeps its picture")
+    p.set_defaults(fn=emu)
     p = sub.add_parser("report")
     p.add_argument("--over", type=int, default=2060)
     p.add_argument("--top", type=int, default=40)

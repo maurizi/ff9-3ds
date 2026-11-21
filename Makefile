@@ -10,6 +10,7 @@
 #   AUTOPRESS="..."   3DS: scripted presses, as the PC's --press ("CROSS@2500,UP@2900+3")
 #   AUTOTOUCH="..."  3DS: scripted taps on the bottom screen ("X,Y@FRAME ...")
 #   TEST_NAME="..."  a test build's name in the Homebrew Launcher ("FF9 TEST: ...")
+#   DUAL=1           3DS: the scene drawn by the software rasteriser too, each dump with both pictures (tools/sweep.py)
 #   HAZARD=1         3DS: log CPU writes to what the frame the GPU may still be drawing uses ("hazard: ..."):
 #                    on hardware they change that frame; an emulator draws at once, so this is how to see them there
 #   SCENARIO=path     3DS: boot straight into a scenario (docs/scenario-testing.md)
@@ -191,7 +192,7 @@ CTRULIB   := $(DEVKITPRO)/libctru
 CTR_ARCH  := -D__3DS__ -DPORT_3DS '-DPORT_HOT_ANCHOR(n)=__attribute__((aligned(4096),patchable_function_entry(n,n)))' -DPORT_GTE_DEPTH -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -marm -mword-relocations
 PORT_EXTRA_3ds := -DPORT_DISC_PACK -DPORT_SPU_WORKER -DPORT_BG_RUNS -I$(DEVKITPRO)/portlibs/3ds/include -I$(DEVKITPRO)/portlibs/3ds/include/opus -I$(CTRULIB)/include \
                   $(if $(AUTOPRESS),-DPORT_AUTOPRESS='"$(AUTOPRESS)"') $(if $(SCENARIO),-DPORT_SCENARIO='"$(SCENARIO)"') \
-                  $(if $(filter 1 3,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 3,$(PROFILE)),-DPORT_PROFILE_VOICES) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(DUMP_EVERY),-DPORT_DUMP_EVERY=$(DUMP_EVERY)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(PROBE_AT),-DPORT_PROBE_AT=$(PROBE_AT)) $(if $(filter 1,$(SPUSYNC)),-DPORT_SPU_SYNC) $(if $(filter 1,$(VOICELOG)),-DPORT_VOICE_LOG) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') $(if $(filter 1,$(NOOVERLAP)),-DPORT_NO_OVERLAP) $(if $(filter 1,$(HAZARD)),-DPORT_HAZARD) $(if $(filter 1,$(CLEARCHECK)),-DPORT_CLEAR_CHECK) -I$(BUILD)/3ds/shaders $(if $(AGENT),-DPORT_AGENT='"$(AGENT)"') -I$(BUILD)/3ds/shaders
+                  $(if $(filter 1 3,$(PROFILE)),-DPORT_PROFILE) $(if $(filter 3,$(PROFILE)),-DPORT_PROFILE_VOICES) $(if $(filter 1,$(SOFT)),-DPORT_SOFT_PRESENT) $(if $(DUMP_AT),-DPORT_DUMP_AT=$(DUMP_AT)) $(if $(DUMP_EVERY),-DPORT_DUMP_EVERY=$(DUMP_EVERY)) $(if $(LOGUI_AT),-DPORT_LOGUI_AT=$(LOGUI_AT)) $(if $(PROBE_AT),-DPORT_PROBE_AT=$(PROBE_AT)) $(if $(filter 1,$(SPUSYNC)),-DPORT_SPU_SYNC) $(if $(filter 1,$(VOICELOG)),-DPORT_VOICE_LOG) $(if $(AUTOTOUCH),-DPORT_AUTOTOUCH='"$(AUTOTOUCH)"') $(if $(filter 1,$(NOOVERLAP)),-DPORT_NO_OVERLAP) $(if $(filter 1,$(HAZARD)),-DPORT_HAZARD) $(if $(filter 1,$(DUAL)),-DPORT_DUAL) $(if $(filter 1,$(CLEARCHECK)),-DPORT_CLEAR_CHECK) -I$(BUILD)/3ds/shaders $(if $(AGENT),-DPORT_AGENT='"$(AGENT)"') -I$(BUILD)/3ds/shaders
 # The world map's vertex pass in 32-bit arithmetic (exact but for overflows the game doesn't reach; the DS port's)
 PORT_ARCH_3ds_game/world_verts := -DPORT_GTE_APPROX
 # Vertex shaders (PICA200 assembly, picasso) are embedded as binaries.
@@ -211,7 +212,7 @@ $(eval $(call target_rules,3ds,arm-none-eabi-gcc,arm-none-eabi-objcopy,$(CTR_ARC
 .PHONY: FORCE_3DS_CONFIG
 $(BUILD)/3ds/runtime-config: FORCE_3DS_CONFIG
 	@mkdir -p $(dir $@)
-	@printf '%s\n' '$(AUTOPRESS)' '$(SCENARIO)' '$(PROFILE)' '$(SOFT)' '$(DUMP_AT)' '$(LOGUI_AT)' '$(AUTOTOUCH)' '$(PROBE_AT)' '$(DUMP_EVERY)' '$(SPUSYNC)' '$(VOICELOG)' '$(NOOVERLAP)' '$(HAZARD)' '$(CLEARCHECK)' '$(AGENT)' > $@.tmp
+	@printf '%s\n' '$(AUTOPRESS)' '$(SCENARIO)' '$(PROFILE)' '$(SOFT)' '$(DUMP_AT)' '$(LOGUI_AT)' '$(AUTOTOUCH)' '$(PROBE_AT)' '$(DUMP_EVERY)' '$(SPUSYNC)' '$(VOICELOG)' '$(NOOVERLAP)' '$(HAZARD)' '$(DUAL)' '$(CLEARCHECK)' '$(AGENT)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp
 $(3ds_PORTOBJS): $(BUILD)/3ds/runtime-config $(3ds_EXTRAOBJS)
@@ -225,7 +226,7 @@ $(BUILD)/ff9.smdh: $(BUILD)/3ds/icon.png
 	@smdhtool --create "$(APP_TITLE)" "$(APP_DESC)" "$(APP_AUTHOR)" $< $@
 # A build with any test option (scripted input, a scenario, dumps, timers...) is build/ff9-test.3dsx, never
 # build/ff9.3dsx: that one is always the game as a player gets it.
-TEST_OPTS := $(strip $(AGENT)$(HAZARD)$(NOOVERLAP)$(AUTOPRESS)$(AUTOTOUCH)$(SCENARIO)$(PROFILE)$(SOFT)$(DUMP_AT)$(DUMP_EVERY)$(LOGUI_AT)$(PROBE_AT)$(SPUSYNC)$(VOICELOG)$(CLEARCHECK))
+TEST_OPTS := $(strip $(AGENT)$(HAZARD)$(DUAL)$(NOOVERLAP)$(AUTOPRESS)$(AUTOTOUCH)$(SCENARIO)$(PROFILE)$(SOFT)$(DUMP_AT)$(DUMP_EVERY)$(LOGUI_AT)$(PROBE_AT)$(SPUSYNC)$(VOICELOG)$(CLEARCHECK))
 OUT_3DSX := $(if $(TEST_OPTS),$(BUILD)/ff9-test.3dsx,$(BUILD)/ff9.3dsx)
 # (a test build's own name in the Homebrew Launcher, never the game's: TEST_NAME="..." says which)
 TEST_NAME ?= $(if $(AGENT),agent for $(AGENT),test build)

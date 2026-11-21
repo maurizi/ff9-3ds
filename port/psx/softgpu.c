@@ -881,7 +881,11 @@ static SG_POLY_HOT void triangle(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx
     }
 }
 
+/* (the host's --scene-only: the packets the port draws on a 3DS's bottom screen are not drawn, so that a frame is the
+ * scene a 3DS's top screen shows: tools/sweep.py's comparison) */
+__attribute__((weak)) int psx_scene_skip(void) { return 0; }
 static void sg_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
+    if (psx_scene_skip()) return;
     if (!psx_vram) {
         return;
     }
@@ -920,6 +924,7 @@ void psx_softgpu_shadow_poly_region(const Gp0Mode *m, const Gp0Vtx *v, int n,
 
 /* Lines are rare in FF9: kept out of ITCM. */
 static void sg_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
+    if (psx_scene_skip()) return;
     palette_ready = 0;
     if (!psx_vram) {
         return;
@@ -1404,6 +1409,7 @@ static __attribute__((noinline)) void tile_semi(const Gp0Mode *m, const Gp0Vtx *
 #endif
 
 static void sg_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
+    if (psx_scene_skip()) return;
     if (!psx_vram) {
         return;
     }

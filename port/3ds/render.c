@@ -723,6 +723,9 @@ static int filling; /* psx_vram_filled -> psx_vram_touch: a fill the GPU draws i
  * its copy of them, which is read back if the CPU ever reads them (a field's frame, cleared every frame, isn't) */
 static int fill_kept;
 int psx_vram_fill_kept(int x, int y, int w, int h, int *ix0, int *iy0, int *ix1, int *iy1) {
+#ifdef PORT_DUAL
+    return 0; /* (the CPU's copy filled too) */
+#endif
     psx_gpu_sync();
     if (!filling || x < 0 || y < 0 || x + w > VW || y + h > VH) return 0;
     const int a0 = (x + CELL - 1) / CELL * CELL, b0 = (y + CELL - 1) / CELL * CELL;
@@ -1644,6 +1647,9 @@ static void blit_cells(int cx0, int cy0, int cx1, int cy1) {
 /* Read cells [cx0,cx1)x[cy0,cy1) whose shadow is stale back from the left eye's mirror. */
 static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
     trace("readback", cx0 | cy0 << 8, cx1 | cy1 << 8);
+#ifdef PORT_DUAL
+    return; /* (the CPU's copy is the software rasteriser's) */
+#endif
     cells_ver++;
     extern volatile const char *ctr_where;
     ctr_where = "readback";
@@ -3380,6 +3386,9 @@ HOT_DRAW static int terrain_chain_do(u32 *head, u32 count) {
     (void)head, (void)count;
     return 0;
 #else
+#ifdef PORT_DUAL
+    return 0;
+#endif
     if (!ctr_sw_chain || ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2) return 0;
     u32 *p = head;
     unsigned n = 0;
@@ -3756,7 +3765,11 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
  * plain case: the scene's mirror in 2D, no outlines, no menu; anything else is the walk's as before. Every other tile
  * the same way through gp0's sprite16 hook (r_sprite16). On an Old 3DS, whose tiles cost some 13 us each (memory
  * without an L2 cache), 1 ms of Lindblum's castle station's VBlank; an emulator showed nothing. */
+#ifdef PORT_DUAL
+int gxh_bg_runs_on(void) { return 0; }
+#else
 int gxh_bg_runs_on(void) { return 1; }
+#endif
 void gxh_bg_runs_reset(void) {}
 int gxh_bg_units_on(void) { return 0; } /* (units move a layer's tiles to one entry: the order changes) */
 int gxh_bg_unit(const unsigned int *head, int count, const unsigned char *sprites, const unsigned int *pos, int z,
@@ -4117,7 +4130,44 @@ static int r_copy(int sx, int sy, int dx, int dy, int w, int h) {
     return 1;
 }
 static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc);
+#ifndef PORT_DUAL
 static const Gp0Backend pica_backend = {r_poly, r_line, r_rect, 0, 0, r_sprite16, r_copy, r_poly1};
+#else
+/* DUAL=1 (test builds): every primitive of the scene is drawn twice, by this renderer into the mirror and by the
+ * software rasteriser (psx/softgpu.c, the PC build's reference) into the CPU's copy of VRAM, from the same packets with
+ * the same state; a dump (DUMP_EVERY) then writes both pictures of the same frame, f<frame>_s and f<frame>_ref, for
+ * tools/sweep.py to compare. The renderer's own takes on a packet (polygons' words, sprites, background runs, the
+ * world map's chains) are off, so each goes through the decoder to both; what goes to a UI layer goes to neither's
+ * scene. The CPU's copy is never read back from the GPU here: it is the reference's. */
+#include "psx_raster.h"
+static int dual_scene(const Gp0Mode *m) {
+    return !(ui_mode || battle_list_replaced() || menu_state == 2 ||
+             (menu_state != 3 && ui_packet() && !(m && m->textured && m->depth == 2)));
+}
+static void dual_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
+    const int scene = dual_scene(m);
+    r_poly(m, v, n);
+    if (scene) psx_softgpu.poly(m, v, n);
+}
+static void dual_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
+    const int scene = dual_scene(m);
+    r_line(m, a, b);
+    if (scene) psx_softgpu.line(m, a, b);
+}
+static void dual_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
+    const int scene = dual_scene(m);
+    r_rect(m, v, w, h);
+    if (scene) psx_softgpu.rect(m, v, w, h);
+}
+static int dual_copy(int sx, int sy, int dx, int dy, int w, int h) {
+    if (!r_copy(sx, sy, dx, dy, w, h)) return 0;
+    const u16 set = gp0_state.set_mask ? 0x8000 : 0; /* (the CPU's copy too: the reference's) */
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) psx_vram[(dy + y) * VW + dx + x] = (u16)(psx_vram[(sy + y) * VW + sx + x] | set);
+    return 1;
+}
+static const Gp0Backend pica_backend = {dual_poly, dual_line, dual_rect, 0, 0, 0, dual_copy, 0};
+#endif
 
 /* gpu.c: the end of an ordering table */
 void psx_gpu_ot_done(void);
@@ -5357,6 +5407,28 @@ static void dump_display_eye(long frame, int eye) {
             u16 p = m[tiled((d.x + x) & 1023, (d.y + y) & 511, VW)];
             crop[y * 320 + x] = (u16)((p & 0xF800) | (p & 0x7C0) | ((p >> 1) & 31));
         }
+#ifdef PORT_DUAL
+    if (!eye) { /* (f<frame>_ref: the same area of the CPU's copy, the software rasteriser's picture of the same frame) */
+        static u16 ref[320 * 240];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                const u16 c = psx_vram[((d.y + y) & 511) * VW + ((d.x + x) & 1023)];
+                ref[y * 320 + x] = (u16)((c & 31) << 11 | (c >> 5 & 31) << 6 | (c >> 10 & 31)); /* (as crop: RGB565, 5 bits each) */
+            }
+        char rname[32];
+        snprintf(rname, sizeof rname, "f%06ld_ref", frame);
+        static u16 *rsrc;
+        rsrc = ref;
+        write_ppm(rname, w, h, px_crop, rsrc);
+    }
+#endif
+    { /* (f<frame>_s: the scene alone, as the mirror has it: what the host's --scene-only frame is compared with) */
+        char sname[32];
+        snprintf(sname, sizeof sname, eye ? "f%06ld_s_r" : "f%06ld_s", frame);
+        static u16 *ssrc;
+        ssrc = crop;
+        write_ppm(sname, w, h, px_crop, ssrc);
+    }
     /* with the displayed buffer's UI layer composited as the PS1 frame has it (premultiplied: layer + scene (1 - a)) */
     int k = layers[0].x == d.x && layers[0].y == d.y ? 0 : layers[1].x == d.x && layers[1].y == d.y ? 1 : -1;
     if (k >= 0 && frames_drawn - layers[k].drawn <= 2) {
