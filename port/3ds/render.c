@@ -5172,9 +5172,13 @@ void ctr_present(long frame) {
         PsxDisplayInfo di;
         psx_gpu_display_info(&di);
         const int dw = di.w ? (di.w > 400 ? 400 : di.w) : 320, dh = di.h ? (di.h > 240 ? 240 : di.h) : 240;
-        if (ctr_sw_lateskip && ctr_present_late && skipped < 3 && !di.rgb24 && !memcmp(&di, &present_last, sizeof di) &&
+        /* (only a battle's or field's own UI: no menu, no top-screen list or models waiting, no menu closing. The
+         * port's own images are recorded again each VBlank: the ones of this present dropped, not drawn twice) */
+        if (ctr_sw_lateskip && ctr_present_late && skipped < 3 && !di.rgb24 && !top_ui_head && !n_model_tris && !closing &&
+            !menu_state && !port_menu_state() && !memcmp(&di, &present_last, sizeof di) &&
             !cells_newer(di.x, di.y, di.x + dw, di.y + dh, present_gen)) {
             skipped++, ctr_late_skips++;
+            n_hud_draw = 0;
             return;
         }
         skipped = 0;
