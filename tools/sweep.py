@@ -140,8 +140,11 @@ def beats_of(log):
 
 def hw(a):
     cfgs = sorted((OUT / "cfg" / a.set).glob("*.cfg"))
-    res = OUT / f"hw_{a.set}.jsonl"
+    tag = f"_{a.tag}" if a.tag else ""  # (--tag: a later build's timings beside the set's, the first kept to compare)
+    res = OUT / f"hw_{a.set}{tag}.jsonl"
     done = {json.loads(l)["name"] for l in res.read_text().splitlines()} if res.exists() else set()
+    names = set(Path(a.names).read_text().split()) if a.names else None
+    cfgs = [c for c in cfgs if names is None or c.stem in names]
     frames = a.frames or {"fields": 1560, "battles": 2640, "spells": 3360, "enemies": 2640}[a.set]
     start = {"fields": 600, "battles": 600, "spells": 480, "enemies": 600}[a.set]  # heartbeats from here on count
     todo = [c for c in cfgs if (c.stem not in done or c.stem in a.redo) and (not a.only or re.search(a.only, c.stem))]
@@ -150,7 +153,7 @@ def hw(a):
         if (OUT / "STOP").exists():
             print("stopped (build/sweep/STOP)")
             return
-        out = OUT / "hw" / a.set / c.stem
+        out = OUT / "hw" / (a.set + tag) / c.stem
         row = {"name": c.stem, "frames": frames}
         for attempt in range(3):
             subprocess.run(["rm", "-rf", str(out)])
@@ -315,6 +318,8 @@ def main():
     p.add_argument("--frames", type=int)
     p.add_argument("--only", help="a regular expression: the fixtures whose name it finds")
     p.add_argument("--redo", action="append", default=[])
+    p.add_argument("--tag", help="results in hw_<set>_<tag>.jsonl (the set's own rows kept)")
+    p.add_argument("--names", help="a file of fixture names: only those")
     p.set_defaults(fn=hw)
     p = sub.add_parser("emu")
     p.add_argument("set", choices=("fields", "battles", "spells", "enemies"))
