@@ -773,6 +773,16 @@ static volatile int ot_job_stop, ot_job_finished;
 unsigned int psx_gpu_deferred, psx_gpu_defer_helped; /* walks sent to the worker; of them, finished here */
 /* (the heartbeat's: microseconds the worker walked, the game's thread waited for it to stop, and walked the rest) */
 __attribute__((weak)) unsigned long long plat_time_us(void) { return 0; }
+/* (the heartbeat's: this thread's time by where a frame is. From a mark to the next: 0 a VBlank's end (the frame being
+ * built), 1 the scene's walk begun on the worker, 2 DrawSync entered, 3 DrawSync left, 4 the VBlank's end entered) */
+unsigned long long psx_span_us[5];
+void psx_span_mark(int k) {
+    static unsigned long long at;
+    static int cur;
+    const unsigned long long now = plat_time_us();
+    if (at) psx_span_us[cur] += now - at;
+    at = now, cur = k;
+}
 void psx_gpu_handoff(void);
 volatile unsigned long long psx_gpu_defer_us[4];
 
@@ -976,6 +986,7 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
         ot_job = w;
         ot_job_finished = 0;
         ot_job_on = 1;
+        psx_span_mark(1);
         if (!psx_gpu_defer_thread() || plat_draw_async(ot_job_main, &ot_job)) {
             psx_gpu_deferred++;
             port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
@@ -1021,6 +1032,7 @@ int psx_frame_early(void);
 unsigned int psx_gpu_early_frames; /* (the heartbeat's) */
 
 int DrawSync(int mode) {
+    psx_span_mark(2);
     /* (the game's own wait for the GPU: with the walk still on the worker, the coming VBlanks' interrupt work first,
      * as a PS1's interrupts come during the wait; anything in it that goes to the GPU ends the walk as ever) */
     if (mode == 0 && ot_job_on && !ot_on_job && psx_gpu_early_ok())
@@ -1029,6 +1041,7 @@ int DrawSync(int mode) {
     if (mode == 0) {
         psx_drawsync_pending();
     }
+    psx_span_mark(3);
     return 0;
 }
 

@@ -76,6 +76,14 @@ unsigned int plat_pad_buttons(int port) {
  * game worked count toward a VSync(n) (plat_vsync_begin), as on the PS1, so a slow frame doesn't wait again. */
 static unsigned int vsync_owed;
 static unsigned long long ctr_idle_us; /* waited for a VBlank (the heartbeat's) */
+/* (the beat's four longest spans of the game's own time between two VBlanks' ends, and of a present: the heartbeat's) */
+static struct { unsigned us; long frame; } ctr_long[2][4];
+static unsigned long long ctr_exit_at;
+static void long_note(int k, unsigned long long us, long frame) {
+    int m = 0;
+    for (int i = 1; i < 4; i++) if (ctr_long[k][i].us < ctr_long[k][m].us) m = i;
+    if (us > ctr_long[k][m].us) ctr_long[k][m].us = (unsigned)us, ctr_long[k][m].frame = frame;
+}
 static unsigned long long ctr_present_us, ctr_hud_us, ctr_plat_us; /* (... and plat_wait_frame's whole time) */
 unsigned long long plat_time_us(void);
 unsigned long long plat_time_us(void) { return svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000000); }
@@ -180,6 +188,8 @@ void ctr_watchdog_start(void) {
 
 void plat_wait_frame(void) {
     const unsigned long long pf0 = plat_time_us();
+    { void psx_span_mark(int); psx_span_mark(4); }
+    if (ctr_exit_at) long_note(0, pf0 - ctr_exit_at, frames); /* (the game's own time since the last VBlank's end) */
     frames++;
     wd_frames = (unsigned)frames;
     ctr_where = "game frame";
@@ -292,6 +302,18 @@ void plat_wait_frame(void) {
             { static unsigned long long p0, hd0;
               port_log("presents %u ms, the bottom screen's and battle's UI %u ms of the beat\n", (unsigned)((ctr_present_us - p0) / 1000), (unsigned)((ctr_hud_us - hd0) / 1000));
               p0 = ctr_present_us, hd0 = ctr_hud_us; }
+            { char b[200]; int o = 0;
+              for (int k = 0; k < 2; k++) {
+                  o += snprintf(b + o, sizeof b - o, k ? "; presents" : " the game's own time");
+                  for (int i = 0; i < 4; i++) o += snprintf(b + o, sizeof b - o, " %u at %ld", ctr_long[k][i].us / 1000, ctr_long[k][i].frame);
+              }
+              port_log("the beat's longest, ms at frame:%s\n", b);
+              { extern unsigned long long psx_span_us[5]; static unsigned long long s0[5];
+                port_log("this thread's ms of the beat: %u before the scene's walk begins, %u from there to DrawSync, %u in DrawSync, %u after it, %u at the VBlanks' ends\n",
+                         (unsigned)((psx_span_us[0] - s0[0]) / 1000), (unsigned)((psx_span_us[1] - s0[1]) / 1000), (unsigned)((psx_span_us[2] - s0[2]) / 1000),
+                         (unsigned)((psx_span_us[3] - s0[3]) / 1000), (unsigned)((psx_span_us[4] - s0[4]) / 1000));
+                for (int i = 0; i < 5; i++) s0[i] = psx_span_us[i]; }
+              memset(ctr_long, 0, sizeof ctr_long); }
             { /* (the walk's parts, when they are timed: render.c ctr_sw_timing) */
                 extern int ctr_sw_timing; extern unsigned long long ctr_part_us[8]; extern unsigned ctr_part_n[8];
                 static unsigned long long pu[8]; static unsigned pn[8];
@@ -328,6 +350,7 @@ void plat_wait_frame(void) {
         { extern int ctr_present_late; ctr_present_late = (s32)(C3D_FrameCounter(0) - next_vblank) >= 1; }
         ctr_present(frames);
         ctr_present_us += plat_time_us() - t0;
+        long_note(1, plat_time_us() - t0, frames);
     }
 #ifdef PORT_DUMP_EVERY
     if (frames % PORT_DUMP_EVERY == 0) {
@@ -376,6 +399,8 @@ void plat_wait_frame(void) {
 #endif
     ctr_profile_frame();
     ctr_plat_us += plat_time_us() - pf0;
+    ctr_exit_at = plat_time_us();
+    { void psx_span_mark(int); psx_span_mark(0); }
 }
 
 /* ---- misc ------------------------------------------------------------------------------------------------- */
