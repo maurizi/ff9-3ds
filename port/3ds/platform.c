@@ -251,6 +251,9 @@ void plat_wait_frame(void) {
                            "%u to another page's; %u waits for the frame in flight\n", ctr_tex_n[0] - t0[0], ctr_tex_n[1] - t0[1], ctr_tex_n[2] - t0[2],
                            ctr_tex_n[3] - t0[3], ctr_tex_n[4] - t0[4], ctr_tex_n[5] - t0[5]);
               for (int i = 0; i < 6; i++) t0[i] = ctr_tex_n[i]; }
+            { extern unsigned ctr_ui_same; static unsigned s0;
+              if (ctr_ui_same != s0) port_log("presents not made (the UI drawn again as it was): %u\n", ctr_ui_same - s0);
+              s0 = ctr_ui_same; }
             { extern unsigned ctr_late_skips; static unsigned l0;
               if (ctr_late_skips != l0) port_log("presents left out (late, the UI's alone): %u\n", ctr_late_skips - l0);
               l0 = ctr_late_skips; }

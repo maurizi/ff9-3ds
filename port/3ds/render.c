@@ -320,8 +320,10 @@ static inline void tex_bind(int unit, C3D_Tex *t) {
     C3D_TexBind(unit, t);
     if (unit == 0) raw_tex = t, raw_dirty |= RD_TEX;
 }
+static unsigned tex_writes; /* (CPU writes to textures, counted: ctr_present's unchanged UI) */
 static void mark_dirty(void *p, unsigned n) {
     hz_check(p, n, "cpu write");
+    tex_writes++;
     u8 *b = p;
     for (unsigned i = 0; i < ndirty; i++) { /* (adjacent blocks of one texture: one range) */
         if (b >= dirty[i].p && b + n <= dirty[i].p + dirty[i].n) return; /* (the same tile rows, another block of them) */
@@ -339,6 +341,7 @@ static void mark_dirty(void *p, unsigned n) {
  * new ground came into view) */
 static void mark_dirty_in(u8 *band, void *p, unsigned n) {
     hz_check(p, n, "cpu write");
+    tex_writes++;
     u8 *b = p;
     for (unsigned i = 0; i < ndirty; i++)
         if (dirty[i].band == band) {
@@ -442,6 +445,8 @@ static int have_freeze; /* freeze_tex holds a scene */
 #define UNDIM_FRAMES 12 /* a closed menu's paused scene undimmed over these presents */
 static int prev_mode;
 static int prev_menu, closing; /* (ctr_present: the menu at the last present; a closed menu's undimming, in presents) */
+int ctr_sw_uisame = 1;
+unsigned ctr_ui_same; /* (the heartbeat's: presents not made, the UI as it was) */
 int ctr_sw_lateskip, ctr_present_late; /* (ctr_present; platform.c says when a frame's VBlank has passed) */
 unsigned ctr_late_skips;
 static PsxDisplayInfo present_last; /* (the display as the last present showed it) */
@@ -1749,6 +1754,7 @@ static int slot_place(TexSlot *s) {
 }
 static inline C3D_Tex *slot_tex(const TexSlot *s) { return &atlases[s->atlas].tex; }
 static int is_slot_tex(const C3D_Tex *t) { return (uintptr_t)t - (uintptr_t)atlases < sizeof atlases; }
+static int is_fixed_tex(const C3D_Tex *t);
 static int tex_ou, tex_ov; /* texture_for: the returned texture's offset of the primitive's page (texels) */
 static int slots_held_at = -1; /* (slot_for: the size the cache stopped growing at) */
 static u32 rgba_lut[65536];
@@ -3450,6 +3456,7 @@ __attribute__((weak)) int port_button_sprites(int out[8][8]) { (void)out; return
 static int btn_def[8][8], n_btn;
 static C3D_Tex btn_tex[8];
 static int btn_made[8];
+static int is_fixed_tex(const C3D_Tex *t) { return (uintptr_t)t - (uintptr_t)btn_tex < sizeof btn_tex; } /* (the button icons') */
 
 static const u8 glyph5x7[][7] = {
     {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}, /* A */
@@ -4946,6 +4953,66 @@ void ctr_present(long frame) {
             return;
         }
         skipped = 0;
+    }
+    /* The bottom screen's UI drawn again as it was: nothing of it is drawn and nothing presented. A battle draws its
+     * UI's list every VBlank, the same triangles for as long as nothing in it moves (a summon's seconds: no gauge fills,
+     * no cursor), and each such present drew the layer again, put it on the screen and had the next thing wait for the
+     * GPU to finish it (some 6 ms on an Old 3DS: with the frame late already, 23 ms of the Ark's summon's 80). When
+     * all that is recorded is for the UI's layers, with the same states, textures and vertices as what the last
+     * present drew, no texture written since and the display as it was, the batches are dropped: the layers hold that
+     * picture and the screen shows it. (ctr_sw_uisame 0: drawn and presented every time.) */
+    {
+        static u32 last_hash;
+        static unsigned last_writes;
+        PsxDisplayInfo di;
+        psx_gpu_display_info(&di);
+        const int dw = di.w ? (di.w > 400 ? 400 : di.w) : 320, dh = di.h ? (di.h > 240 ? 240 : di.h) : 240;
+        u32 hsh = 0;
+        if (ctr_sw_uisame && !run_n && !di.rgb24 && !top_ui_head && !n_model_tris && !closing && !menu_state &&
+            !stereo_on && !memcmp(&di, &present_last, sizeof di) && !cells_newer(di.x, di.y, di.x + dw, di.y + dh, present_gen)) {
+            hsh = 0x811C9DC5u;
+            unsigned vfirst = ~0u;
+            for (unsigned i = 0; i < nbatches && hsh; i++) {
+                const Batch *b = &batches[i];
+                if (b->target < 1 || b->target > 2 || b->kind > K_TEX_P2 || (b->tex && !is_slot_tex(b->tex) && !is_fixed_tex(b->tex))) { hsh = 0; break; }
+                const u32 w[4] = {(u32)b->kind | (u32)b->abr << 8 | (u32)b->eyes << 16 | (u32)b->target << 24,
+                                  (u32)b->mask | (u32)b->ordered << 8 | b->count << 16, (u32)b->sc[0] | (u32)b->sc[1] << 16,
+                                  (u32)b->sc[2] | (u32)b->sc[3] << 16};
+                for (int k = 0; k < 4; k++) hsh = (hsh ^ w[k]) * 0x01000193u;
+                hsh = (hsh ^ (u32)(uintptr_t)b->tex) * 0x01000193u;
+                const u32 *v = (const u32 *)(vb + b->first);
+                for (unsigned k = 0; k < b->count; k++, v += sizeof(Vtx) / 4)
+                    for (int q = 0; q < 6; q++) hsh = (hsh ^ v[q]) * 0x01000193u; /* (x, y, z, u, v, colour) */
+                if (b->first < vfirst) vfirst = b->first;
+                if (!hsh) hsh = 1;
+            }
+            if (hsh) { /* (what else the present draws by: the bottom screen's and the top's fades, the layer shown) */
+                int port_bottom_fade(void), port_top_fade(u8 rgb[3]);
+                u8 sub[3] = {0, 0, 0};
+                const u32 w[3] = {(u32)port_bottom_fade(), (u32)port_top_fade(sub) | (u32)sub[0] << 8 | (u32)sub[1] << 16 | (u32)sub[2] << 24,
+                                  (u32)bottom_layer(&di)};
+                for (int k = 0; k < 3; k++) hsh = (hsh ^ w[k]) * 0x01000193u;
+                if (!hsh) hsh = 1;
+            }
+            for (int i = 0; i < n_hud_draw && hsh; i++) { /* (the port's own images on the bottom screen: which, where) */
+                const u32 w[4] = {(u32)hud_draw[i].slot | (u32)hud_draw[i].x << 8, (u32)hud_draw[i].y | (u32)hud_draw[i].w << 16,
+                                  (u32)hud_draw[i].h | (u32)hud_draw[i].dw << 16, (u32)hud_draw[i].dh};
+                for (int k = 0; k < 4; k++) hsh = (hsh ^ w[k]) * 0x01000193u;
+                if (hud_draw[i].x >= 1000) hsh = 0; /* (one for the top screen: drawn) */
+                else if (!hsh) hsh = 1;
+            }
+            if (hsh && hsh == last_hash && tex_writes == last_writes) {
+                n_hud_draw = 0;
+                nbatches = 0;
+                if (vfirst < vb_used) vb_used = vfirst;
+                if (vb_flushed > vb_used) vb_flushed = vb_used;
+                const int k = bottom_layer(&di);
+                if (k >= 0) layers[k].shown = 1;
+                ctr_ui_same++;
+                return;
+            }
+        }
+        last_hash = hsh, last_writes = tex_writes;
     }
     submit(); /* (with the parallax its runs were ordered for: stereo_k changes below) */
     button_icons_frame(); /* (for the next frame's sprites) */
