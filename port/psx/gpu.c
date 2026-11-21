@@ -899,8 +899,69 @@ static void stage_replay(void);
 /* The scene's walk, if one is on the worker, finished: what follows may use the GPU's state and the renderer's. */
 /* (which call of this file ended a walk the worker had not finished: the heartbeat's, by line; 0 = from elsewhere) */
 unsigned int psx_sync_line[8], psx_sync_n[8];
+/* The walk on the worker paused (psx_gpu_pause ... psx_gpu_resume): the worker is out of it at a packet's end, and this
+ * thread has the renderer for something that is not the scene's (the battle UI's list at a VBlank, a present), as a
+ * PS1's battle breaks the list its GPU is drawing at each VBlank, draws its UI's and continues (BreakDraw,
+ * ContinueDraw). The walk's own state (the drawing state, where in the ordering table it is) is kept and put back; a
+ * list drawn meanwhile is walked here at once; an image load is still kept for the walk's end, as the PS1 queues it
+ * behind the list. A sync asked meanwhile finds nothing to wait for (the renderer's entries ask one each); one this
+ * file asks, which needs the scene drawn, is counted (psx_gpu_pause_syncs: none are expected). */
+static int ot_job_paused;
+static struct { Gp0State gp0; unsigned int slot; int entry, side; const u32 *packet; } pause_ctx;
+static int ot_job_area[4]; /* (the walk's drawing area as it began: x, y, w, h) */
+unsigned int psx_gpu_pauses, psx_gpu_pause_syncs, psx_gpu_sync_ret[4];
+__attribute__((weak)) int psx_gpu_pause_ok(void) { return 0; }
+__attribute__((weak)) void psx_gpu_paused(int on) { (void)on; }
+__attribute__((weak)) void psx_gpu_pause_wait(void) {}
+unsigned long long psx_gpu_pause_us[4]; /* (the heartbeat's: the wait before, the worker's stop, paused, the resume) */
+static unsigned long long pause_at;
+int psx_gpu_is_paused(void) { return ot_job_paused; }
+int psx_gpu_walking(void) { return ot_job_on && !ot_on_job && !ot_job_paused && !ot_job_finished; }
+int psx_gpu_pause(void) {
+    if (!ot_job_on || ot_on_job || ot_job_paused || !psx_gpu_pause_ok()) return 0;
+    { /* (only a walk that draws nowhere in the displayed buffer: what is shown meanwhile is whole) */
+        PsxDisplayInfo d;
+        psx_gpu_display_info(&d);
+        const int dw = d.w ? d.w : 320, dh = d.h ? d.h : 240;
+        if (ot_job_area[0] < d.x + dw && ot_job_area[0] + ot_job_area[2] > d.x && ot_job_area[1] < d.y + dh &&
+            ot_job_area[1] + ot_job_area[3] > d.y) return 0;
+    }
+    const unsigned long long t0 = plat_time_us();
+    psx_gpu_pause_wait(); /* (the renderer's wait for its GPU, if the pause's drawing would make one: before, the walk going on) */
+    const unsigned long long t1 = plat_time_us();
+    ot_job_stop = 1;
+    plat_draw_wait();
+    ot_job_stop = 0;
+    pause_at = plat_time_us();
+    psx_gpu_pause_us[0] += t1 - t0, psx_gpu_pause_us[1] += pause_at - t1;
+    if (ot_job_finished) return 0; /* (done meanwhile: the caller's sync ends it) */
+    pause_ctx.gp0 = gp0_state, pause_ctx.slot = psx_ot_slot, pause_ctx.entry = psx_ot_entry, pause_ctx.side = psx_ot_side;
+    pause_ctx.packet = psx_gpu_packet;
+    psx_ot_slot = ~0u, psx_ot_entry = -1, psx_ot_side = 0;
+    ot_job_paused = 1;
+    psx_gpu_pauses++;
+    psx_gpu_paused(1);
+    return 1;
+}
+void psx_gpu_resume(void) {
+    if (!ot_job_paused) return;
+    psx_gpu_paused(0);
+    gp0_state = pause_ctx.gp0, psx_ot_slot = pause_ctx.slot, psx_ot_entry = pause_ctx.entry, psx_ot_side = pause_ctx.side;
+    psx_gpu_packet = pause_ctx.packet;
+    ot_job_paused = 0;
+    const unsigned long long t0 = plat_time_us();
+    psx_gpu_pause_us[2] += t0 - pause_at;
+    psx_gpu_handoff();
+    if (!plat_draw_async(ot_job_main, &ot_job)) sync_line = __LINE__, psx_gpu_sync(); /* (no worker: the rest here) */
+    psx_gpu_pause_us[3] += plat_time_us() - t0;
+}
 void psx_gpu_sync(void) {
-    if (!ot_job_on || ot_on_job) return;
+    if (!ot_job_on || ot_on_job) { if (!ot_on_job) sync_line = 0; return; }
+    if (ot_job_paused) {
+        if (sync_line) psx_gpu_pause_syncs++;
+        sync_line = 0;
+        return;
+    }
     const unsigned int from = sync_line;
     sync_line = 0;
     unsigned int profile_start = port_profile_begin();
@@ -916,6 +977,7 @@ void psx_gpu_sync(void) {
         int i;
         for (i = 0; i < 7 && psx_sync_n[i] && psx_sync_line[i] != from; i++) ;
         psx_sync_line[i] = from, psx_sync_n[i]++;
+        if (!from) psx_gpu_sync_ret[psx_sync_n[i] & 3] = (unsigned int)(uintptr_t)__builtin_return_address(0);
         if (!ot_job.guard) ot_walk_begin(&ot_job), ot_job.guard = 1;
         ot_walk(&ot_job, NULL);
         ot_walk_end();
@@ -974,14 +1036,14 @@ static void stage_replay(void) {
 }
 
 static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
-    if (ot_job_on && !ot_on_job && psx_gpu_stage_walk_ok()) {
+    if (ot_job_on && !ot_on_job && !ot_job_paused && psx_gpu_stage_walk_ok()) {
         const StagedWalk sw = {p, native_buffer, native_size};
         if (psx_gpu_stage(STAGE_WALK, NULL, 0, &sw, sizeof sw)) {
             if (drawsync_cb) drawsync_owed = 1;
             return;
         }
     }
-    SYNC();
+    if (!ot_job_paused) SYNC();
     unsigned int profile_start = port_profile_begin();
     OtWalk w = {0};
     w.p = p, w.head = p;
@@ -996,9 +1058,18 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     if (drawsync_cb) {
         drawsync_owed = 1;
     }
+    if (ot_job_paused && !ot_on_job) { /* (a list drawn while the scene's walk is paused: here, now; the renderer's
+                                        * walk-begin and -end are the scene's) */
+        w.guard = 1;
+        ot_walk(&w, NULL);
+        psx_ot_slot = ~0u, psx_ot_entry = -1, psx_ot_side = 0;
+        port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
+        return;
+    }
     if (w.from_main && !ot_on_job && !stage_walking && psx_ot_entry < 0 && !native_size && psx_gpu_defer_ok() && !plat_async_busy()) {
         psx_gpu_handoff();
         ot_job = w;
+        psx_gpu_draw_area(&ot_job_area[0], &ot_job_area[1], &ot_job_area[2], &ot_job_area[3]);
         ot_job_finished = 0;
         ot_job_on = 1;
         psx_span_mark(1);
@@ -1052,6 +1123,12 @@ int DrawSync(int mode) {
      * as a PS1's interrupts come during the wait; anything in it that goes to the GPU ends the walk as ever) */
     if (mode == 0 && ot_job_on && !ot_on_job && psx_gpu_early_ok())
         while (ot_job_on && !ot_job_finished && psx_frame_early()) psx_gpu_early_frames++;
+    /* (a walk the worker may go on with through the coming VBlanks, paused for each one's own drawing: the game's wait
+     * ends here, and whatever needs the scene drawn (the display's move to it, a read of it) waits for it then) */
+    if (mode == 0 && ot_job_on && !ot_on_job && !ot_job_paused && !drawsync_cb && psx_gpu_pause_ok()) {
+        psx_span_mark(3);
+        return 0;
+    }
     SYNC();
     if (mode == 0) {
         psx_drawsync_pending();
@@ -1090,7 +1167,9 @@ int psx_scene_only;
 void ContinueDraw(u32 *insaddr, s32 contaddr) {
     /* Even when BreakDraw returns zero, the inserted list must execute. FF9
      * uses this at VBlank for battle commands, status bars and text. */
-    SYNC();
+    const int paused = !contaddr && psx_gpu_pause(); /* (the battle's VBlank list, the scene's walk still on the worker) */
+    if (!paused) SYNC();
+    if (paused && (psx_scene_only || psx_skip_vblank_list())) { psx_gpu_resume(); return; }
     if (!contaddr && psx_scene_only) return; /* (the host's --scene-only: the battle's UI list is a 3DS's bottom screen's) */
     if (!contaddr && psx_skip_vblank_list()) return;
     if (insaddr && !(!contaddr && psx_vblank_list_native(insaddr))) {
@@ -1100,6 +1179,7 @@ void ContinueDraw(u32 *insaddr, s32 contaddr) {
         psx_ui_list_end();
         psx_ui_list_battle = 0;
     }
+    if (paused) psx_gpu_resume();
     if (contaddr && ((u32)contaddr & 0xFFFFFF) != OT_END)
         DrawOTag(link_ptr((u32)contaddr & 0xFFFFFF));
 }

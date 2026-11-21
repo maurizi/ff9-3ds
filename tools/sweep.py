@@ -277,6 +277,12 @@ def emu(a):
                     sheet.save(OUT / "emu" / (a.set + tag) / f"{c.stem}.png")
             else:
                 row["compared"] = 0
+            if a.dumps:  # (the run's dumps kept, for comparing two builds' pictures with each other)
+                keep = OUT / "emu" / (a.set + tag) / f"{c.stem}_dumps"
+                subprocess.run(["rm", "-rf", str(keep)])
+                keep.mkdir(parents=True)
+                for f in dump.glob("f*.ppm"):
+                    (keep / f.name).write_bytes(f.read_bytes())
             log = work / "game.log"
             if log.exists() and re.search(r"FATAL|port_fatal|exception", log.read_text(errors="replace")):
                 row["flags"] = ["FATAL"]
@@ -329,6 +335,7 @@ def main():
     p.add_argument("--redo", action="append", default=[])
     p.add_argument("--rebuild", action="store_true", help="build the test 3dsx again (after a change to the port)")
     p.add_argument("--tag", help="results in emu_<set>_<tag>.jsonl, from a build of their own (the tree's, built at first use)")
+    p.add_argument("--dumps", action="store_true", help="keep each run's dumps in emu/<set>/<name>_dumps")
     p.add_argument("--keep", type=float, default=3.0, help="percent of a frame differing that keeps its picture")
     p.set_defaults(fn=emu)
     p = sub.add_parser("report")

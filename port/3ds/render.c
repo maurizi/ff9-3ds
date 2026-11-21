@@ -4750,6 +4750,16 @@ int psx_gpu_defer_ok(void) {
 int ctr_sw_early = 1;
 int ctr_sw_stagewalk = 1; /* (gpu.c draw_ot: a list sent while a walk is on the other core waits for the sync) */
 int psx_gpu_stage_walk_ok(void) { return ctr_sw_stagewalk; }
+/* (gpu.c psx_gpu_pause: a battle's walk goes on on the other core through the VBlanks after the game's DrawSync, paused
+ * for each one's UI list and present, as the PS1's GPU goes on drawing the list while the game waits for its VBlanks.
+ * 0: the game's thread ends the walk at DrawSync, the worker idle from there) */
+int ctr_sw_walkon;
+int psx_gpu_pause_ok(void) { return ctr_sw_walkon && port_game_mode() == 2 && !menu_state && !ctr_keep_layers; }
+void psx_gpu_paused(int on) { if (on) run_flush(); }
+/* (the walk is paused through a VBlank's own waits for the GPU too: with it left going meanwhile, or under the sound
+ * thread, which shares its core, the sound fell behind (the game's thread then waits at the sound's ring, 20 to 35 ms a
+ * VBlank, and the output runs dry) or the walk took 3 to 8 ms to stop: Holy's and Madeen's worst beats 2295 and 2321,
+ * then 2592 and 2833, against 2104 and 2222 so) */
 int psx_gpu_early_ok(void) { return ctr_sw_early == 2 || (ctr_sw_early && port_game_mode() == 3); }
 /* gpu.c: the drawing goes to the other thread. What this one wrote for the GPU since the last flush (vertices, staging,
  * texture blocks) is written out of this core's data cache here, by this core: a flush asked later by the other
@@ -5467,10 +5477,12 @@ void ctr_present(long frame) {
     frames_drawn++;
     co_last = -1;
     world_ground = port_game_mode() == 3;
-    slot_regroup();
+    int psx_gpu_is_paused(void);
+    const int walk_paused = psx_gpu_is_paused(); /* (a walk goes on after this present: its frame is not over) */
+    if (!walk_paused) slot_regroup();
     extern unsigned int psx_depth_frame;
     psx_depth_frame++;
-    ranges_age();
+    if (!walk_paused) ranges_age();
     fit_frame();
     port_profile_end(PORT_PROFILE_GPU, profile_start);
 }

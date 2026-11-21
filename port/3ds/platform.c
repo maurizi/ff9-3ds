@@ -308,6 +308,17 @@ void plat_wait_frame(void) {
                   for (int i = 0; i < 4; i++) o += snprintf(b + o, sizeof b - o, " %u at %ld", ctr_long[k][i].us / 1000, ctr_long[k][i].frame);
               }
               port_log("the beat's longest, ms at frame:%s\n", b);
+              { extern unsigned int psx_gpu_pauses, psx_gpu_pause_syncs, psx_gpu_sync_ret[4]; static unsigned p0, q0;
+                if (psx_gpu_pauses != p0 || psx_gpu_pause_syncs != q0)
+                    port_log("walks paused and resumed: %u; syncs asked while one was paused: %u; the last walks ended from elsewhere by %08x %08x %08x %08x\n",
+                             psx_gpu_pauses - p0, psx_gpu_pause_syncs - q0, psx_gpu_sync_ret[0], psx_gpu_sync_ret[1], psx_gpu_sync_ret[2], psx_gpu_sync_ret[3]);
+                p0 = psx_gpu_pauses, q0 = psx_gpu_pause_syncs; }
+              { extern unsigned long long psx_gpu_pause_us[4]; static unsigned long long u0[4];
+                if (psx_gpu_pause_us[2] != u0[2])
+                    port_log("pauses, ms of the beat: %u waiting for the GPU before, %u for the worker to stop, %u paused, %u resuming\n",
+                             (unsigned)((psx_gpu_pause_us[0] - u0[0]) / 1000), (unsigned)((psx_gpu_pause_us[1] - u0[1]) / 1000),
+                             (unsigned)((psx_gpu_pause_us[2] - u0[2]) / 1000), (unsigned)((psx_gpu_pause_us[3] - u0[3]) / 1000));
+                for (int i = 0; i < 4; i++) u0[i] = psx_gpu_pause_us[i]; }
               { extern unsigned long long psx_span_us[5]; static unsigned long long s0[5];
                 port_log("this thread's ms of the beat: %u before the scene's walk begins, %u from there to DrawSync, %u in DrawSync, %u after it, %u at the VBlanks' ends\n",
                          (unsigned)((psx_span_us[0] - s0[0]) / 1000), (unsigned)((psx_span_us[1] - s0[1]) / 1000), (unsigned)((psx_span_us[2] - s0[2]) / 1000),
@@ -353,6 +364,9 @@ void plat_wait_frame(void) {
     }
     void port_voice_poll(void);
     port_voice_poll();
+    /* (a battle's walk still on the other core: paused for this VBlank's own drawing and its present, then on) */
+    int psx_gpu_pause(void); void psx_gpu_resume(void);
+    const int walk_paused = psx_gpu_pause();
     {
         const unsigned long long t0 = plat_time_us();
         void port_bottom_hud(void);
@@ -368,6 +382,7 @@ void plat_wait_frame(void) {
         ctr_present_us += plat_time_us() - t0;
         long_note(1, plat_time_us() - t0, frames);
     }
+    if (walk_paused) psx_gpu_resume();
 #ifdef PORT_DUMP_EVERY
     if (frames % PORT_DUMP_EVERY == 0) {
         void ctr_render_dump_display(long);
