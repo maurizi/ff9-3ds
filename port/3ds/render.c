@@ -2236,6 +2236,7 @@ static __attribute__((noinline)) int convert_block_do(TexSlot *s, const Gp0Mode 
  * counted, and every REGROUP_FRAMES frames, if a grouping (greedy, by those counts, 16 a group at most) would cut
  * the atlas changes by a quarter, the slots are moved into it (their texels copied cell to cell: a few ms, once). */
 #define REGROUP_FRAMES 64
+#define REGROUP_MOVES 6
 static u16 co[MAX_SLOTS][MAX_SLOTS];
 static int co_last = -1;
 static inline int cell_of(const TexSlot *t) {
@@ -2243,12 +2244,30 @@ static inline int cell_of(const TexSlot *t) {
 }
 /* a 256x256 cell copied on the GPU's transfer engine (no CPU time): its 32 rows of 8x8 tiles, each 256 texels across
  * and contiguous, with the gap to the next row in each texture */
+/* (queued, not waited for one by one: C3D_SyncTextureCopy outside a frame waits for the queue to empty before each, and
+ * a regrouping's 45 to 70 copies took 150 to 216 ms on an Old 3DS, one frame of the airship's flight in every 128 that
+ * long. The GPU runs the queue in order, which is all the moves need; copy_cells_done waits once, at the end.) */
+static void copy_cells_done(void) {
+    if (!c3d_queue) return;
+    gxCmdQueueRun(c3d_queue);
+    gxCmdQueueWait(c3d_queue, -1);
+    ctr_gx_commands += c3d_queue->numEntries;
+    for (int i = 0; i < c3d_queue->numEntries; i++) ctr_gx_cmd_kind[c3d_queue->entries[i].data[0] & 7]++;
+    gxCmdQueueClear(c3d_queue);
+}
 static void copy_cell(u16 *dst, unsigned dw, unsigned dx, unsigned dy, const u16 *src, unsigned sw, unsigned sx,
                       unsigned sy) {
     const unsigned line = 256 * 8 * 2 / 16; /* (in 16-byte units) */
-    C3D_SyncTextureCopy((u32 *)(src + tiled(sx, sy, sw)), GX_BUFFER_DIM(line, (sw - 256) * 8 * 2 / 16),
-                        (u32 *)(dst + tiled(dx, dy, dw)), GX_BUFFER_DIM(line, (dw - 256) * 8 * 2 / 16), 256 * 256 * 2,
-                        GX_TRANSFER_RAW_COPY(1));
+    if (!c3d_queue) {
+        C3D_SyncTextureCopy((u32 *)(src + tiled(sx, sy, sw)), GX_BUFFER_DIM(line, (sw - 256) * 8 * 2 / 16),
+                            (u32 *)(dst + tiled(dx, dy, dw)), GX_BUFFER_DIM(line, (dw - 256) * 8 * 2 / 16), 256 * 256 * 2,
+                            GX_TRANSFER_RAW_COPY(1));
+        return;
+    }
+    if (c3d_queue->numEntries + 2 >= c3d_queue->maxEntries) copy_cells_done();
+    GX_TextureCopy((u32 *)(src + tiled(sx, sy, sw)), GX_BUFFER_DIM(line, (sw - 256) * 8 * 2 / 16),
+                   (u32 *)(dst + tiled(dx, dy, dw)), GX_BUFFER_DIM(line, (dw - 256) * 8 * 2 / 16), 256 * 256 * 2,
+                   GX_TRANSFER_RAW_COPY(1));
 }
 static void slot_regroup(void) {
     static u32 frame, wait = REGROUP_FRAMES, made_at;
@@ -2333,9 +2352,11 @@ static void slot_regroup(void) {
     for (int k = 0; k < np; k++) if (na[pairs[k].a] != na[pairs[k].b]) after += pairs[k].w;
     if (after * 2 > now) return; /* (worth a move only for half the changes or fewer) */
     if (wait < REGROUP_FRAMES * 32) wait *= 2; /* (then looked at again later and later) */
+    const u64 regroup_t0 = svcGetSystemTick();
     /* move: nothing in flight may draw from the atlases meanwhile, and the GPU's copies run outside a frame */
     gpu_sync();
     if (in_frame) frame_end(), in_frame = 0;
+    if (c3d_queue) gxCmdQueueWait(c3d_queue, -1), copy_cells_done(); /* (the queue empty: the copies go in from its start) */
     static u16 *tmp; /* (in linear memory: the GPU copies through it) */
     if (!tmp) tmp = linearAlloc(256 * 256 * 2);
     if (!tmp) return;
@@ -2354,34 +2375,67 @@ static void slot_regroup(void) {
 #define CELL_OF(k) (u16 *)atlases[(k) / 16].tex.data, atlases[(k) / 16].tex.width, \
                    (unsigned)((k) % 16 % (atlases[(k) / 16].tex.width / 256) * 256), \
                    (unsigned)((k) % 16 / (atlases[(k) / 16].tex.width / 256) * 256)
-    int parked = -1;
+    int capped = 0;
     unsigned moves = 0;
-    for (;;) {
-        int progress = 0;
+    /* (a slot whose new cell is free moves there, REGROUP_MOVES of them at most; then the short cycles left (slots each
+     * wanting the next one's cell), one at a time while they fit: its first slot's texels parked in tmp, the others each
+     * into the cell just freed, the first into the last) */
+    for (int again = 1; again && !capped;) {
+        again = 0;
         for (int i = 0; i < n; i++) {
             if (ocell[i] < 0 || ocell[i] == ncell[i] || owner[ncell[i]] >= 0) continue;
-            if (i == parked) copy_cell(CELL_OF(ncell[i]), tmp, 256, 0, 0), parked = -1;
-            else copy_cell(CELL_OF(ncell[i]), CELL_OF(ocell[i])), owner[ocell[i]] = -1;
-            owner[ncell[i]] = i, ocell[i] = ncell[i], moves++, progress = 1;
+            if (moves >= REGROUP_MOVES) { capped = 1; break; }
+            copy_cell(CELL_OF(ncell[i]), CELL_OF(ocell[i]));
+            owner[ocell[i]] = -1, owner[ncell[i]] = i, ocell[i] = ncell[i], moves++, again = 1;
         }
-        if (progress) continue;
-        if (parked >= 0) break; /* (can't happen: a parked slot's cycle always frees its cell) */
-        int i;
-        for (i = 0; i < n; i++) if (ocell[i] >= 0 && ocell[i] != ncell[i]) break;
-        if (i == n) break;
-        copy_cell(tmp, 256, 0, 0, CELL_OF(ocell[i]));
-        owner[ocell[i]] = -1, parked = i;
     }
+    for (int i = 0; i < n && !capped; i++) {
+        if (ocell[i] < 0 || ocell[i] == ncell[i]) continue;
+        unsigned len = 1;
+        int j = owner[ncell[i]];
+        while (j >= 0 && j != i && len <= REGROUP_MOVES) len++, j = owner[ncell[j]];
+        if (j != i) continue; /* (not a cycle, or a long one: another time) */
+        if (moves + len > REGROUP_MOVES + 2) { capped = 1; break; }
+        copy_cell(tmp, 256, 0, 0, CELL_OF(ocell[i]));
+        int freed = ocell[i];
+        owner[freed] = -1;
+        for (;;) {
+            int k;
+            for (k = 0; k < n; k++) if (ocell[k] >= 0 && ocell[k] != ncell[k] && ncell[k] == freed) break;
+            if (k == n) break; /* (can't happen: the cycle was followed above) */
+            if (k == i) {
+                copy_cell(CELL_OF(freed), tmp, 256, 0, 0);
+                owner[freed] = i, ocell[i] = freed, moves++;
+                break;
+            }
+            copy_cell(CELL_OF(freed), CELL_OF(ocell[k]));
+            const int was = ocell[k];
+            owner[freed] = k, ocell[k] = freed, owner[was] = -1, freed = was, moves++;
+        }
+    }
+    for (int i = 0; i < n && !capped; i++) capped |= ocell[i] >= 0 && ocell[i] != ncell[i]; /* (some left: looked at soon) */
 #undef CELL_OF
+    /* (a slot not moved stays where it is: at most REGROUP_MOVES a time, a GPU copy of a slot being 2 ms on an Old 3DS
+     * and 45 to 70 of them at once a frame of 130 to 200 ms; the next look comes soon then, and finds what is left) */
+    memset(occ, 0, sizeof occ);
+    for (int i = 0; i < n; i++) {
+        if (slots[i].atlas == 0xFF) continue;
+        na[i] = (u8)(ocell[i] / 16), nc[i] = (u8)(ocell[i] % 16);
+        occ[na[i]] |= (u16)(1u << nc[i]);
+    }
+    if (capped) wait = REGROUP_FRAMES;
     for (int a = 0; a < natlases; a++) atlases[a].occ = occ[a], atlases[a].used = (u8)__builtin_popcount(occ[a]);
     for (int i = 0; i < n; i++)
         if (slots[i].atlas != 0xFF) cell_xy(na[i], nc[i], &slots[i]);
     /* (written by the GPU: what the CPU's cache holds of them is stale, and a later write into a line of it would
      * flush the stale rest back) */
-    for (int a = 0; a < natlases; a++) GSPGPU_InvalidateDataCache(atlases[a].tex.data, atlases[a].tex.size);
+    copy_cells_done();
+    const u64 regroup_t1 = svcGetSystemTick();
+    for (int a = 0; a < natlases; a++) svcInvalidateProcessDataCache(CUR_PROCESS_HANDLE, (u32)atlases[a].tex.data, atlases[a].tex.size);
     frame_begin();
     half_restart();
-    port_log("renderer: textures regrouped (%u slots moved, atlas changes %u -> %u)\n", moves, now, after);
+    port_log("renderer: textures regrouped (%u slots moved, atlas changes %u -> %u; %u ms, %u of them the cache's)\n", moves, now, after,
+             (unsigned)((svcGetSystemTick() - regroup_t0) * 1000 / SYSCLOCK_ARM11), (unsigned)((svcGetSystemTick() - regroup_t1) * 1000 / SYSCLOCK_ARM11));
 }
 
 /* The texture for a textured primitive whose texels span [u0,u1]x[v0,v1] (inclusive, 0..255; u1 < u0 when it
