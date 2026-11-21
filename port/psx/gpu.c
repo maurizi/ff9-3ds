@@ -44,8 +44,10 @@ int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int h);
 
 /* the scene's walk on another core (below, at draw_ot) */
 void psx_gpu_sync(void);
+static unsigned int sync_line;
+#define SYNC() (sync_line = __LINE__, psx_gpu_sync())
 int psx_gpu_stage(int kind, const int *args, int nargs, const void *data, unsigned int bytes);
-enum { STAGE_LOAD = 0x100, STAGE_MOVE };
+enum { STAGE_LOAD = 0x100, STAGE_MOVE, STAGE_WALK };
 static volatile int ot_job_on;
 static __thread int ot_on_job; /* this thread is the worker, in the walk */
 
@@ -253,7 +255,7 @@ int LoadImage(RECT *r, u32 *p) {
         const unsigned int bytes = r->w > 0 && r->h > 0 ? (unsigned int)r->w * (unsigned int)r->h * 2 : 0;
         if (!psx_load_record && bytes && bytes <= 0x8000 &&
             psx_gpu_stage(STAGE_LOAD, a, 4, (const void *)((uintptr_t)p & ~(uintptr_t)3), bytes)) return 0;
-        psx_gpu_sync();
+        SYNC();
     }
     if (psx_load_record) load_record(r, p);
     const int check_mask=gp0_state.check_mask;
@@ -286,7 +288,7 @@ int StoreImage(RECT *r, u32 *p) {
     if (!psx_vram) {
         return 0;
     }
-    psx_gpu_sync();
+    SYNC();
     int peek = psx_vram_peek_begin(r->x, r->y, r->w, r->h);
     if (!peek) psx_vram_read(r->x, r->y, r->w, r->h);
     /* by DMA, word-aligned: FF9 stores a single pixel to an odd address (Fossil Roo, field 1403): unaligned, the
@@ -323,7 +325,7 @@ void ClearImage(RECT *r, s32 cr, s32 cg, s32 cb) {
     if (psx_trace_gpu) {
         port_log("gpu: ClearImage %d,%d %dx%d rgb %ld,%ld,%ld\n", r->x, r->y, r->w, r->h, (long)cr, (long)cg, (long)cb);
     }
-    psx_gpu_sync();
+    SYNC();
     vram_fill(r->x, r->y, r->w, r->h, rgb15(cr, cg, cb));
 }
 
@@ -440,7 +442,7 @@ static void draw_packet(u32 *p);
 unsigned int psx_gpu_env_version;
 
 DRAWENV *PutDrawEnv(DRAWENV *env) {
-    psx_gpu_sync();
+    SYNC();
     psx_gpu_env_version++;
     make_draw_env(&env->dr_env, env, 1);
     ((P_TAG *)&env->dr_env)->addr = OT_END;
@@ -455,7 +457,7 @@ extern unsigned int psx_gpu_scene_prims;
 unsigned int psx_gpu_scene_prims_max;
 
 DISPENV *PutDispEnv(DISPENV *env) {
-    psx_gpu_sync();
+    SYNC();
     if (env->disp.x != disp_env.disp.x || env->disp.y != disp_env.disp.y) {
         if (psx_gpu_scene_prims > psx_gpu_scene_prims_max) psx_gpu_scene_prims_max = psx_gpu_scene_prims;
         psx_gpu_scene_prims = 0;
@@ -716,7 +718,7 @@ static void draw_packet(u32 *p) {
 }
 
 void DrawPrim(void *p) {
-    psx_gpu_sync();
+    SYNC();
     draw_packet(p);
 }
 
@@ -870,8 +872,12 @@ __attribute__((weak)) void psx_gpu_staged(int kind, const int *args) { (void)kin
 static void stage_replay(void);
 
 /* The scene's walk, if one is on the worker, finished: what follows may use the GPU's state and the renderer's. */
+/* (which call of this file ended a walk the worker had not finished: the heartbeat's, by line; 0 = from elsewhere) */
+unsigned int psx_sync_line[8], psx_sync_n[8];
 void psx_gpu_sync(void) {
     if (!ot_job_on || ot_on_job) return;
+    const unsigned int from = sync_line;
+    sync_line = 0;
     unsigned int profile_start = port_profile_begin();
     const unsigned long long t0 = plat_time_us();
     ot_job_stop = 1;
@@ -882,6 +888,9 @@ void psx_gpu_sync(void) {
     psx_gpu_defer_us[1] += t1 - t0;
     if (!ot_job_finished) {
         psx_gpu_defer_helped++;
+        int i;
+        for (i = 0; i < 7 && psx_sync_n[i] && psx_sync_line[i] != from; i++) ;
+        psx_sync_line[i] = from, psx_sync_n[i]++;
         if (!ot_job.guard) ot_walk_begin(&ot_job), ot_job.guard = 1;
         ot_walk(&ot_job, NULL);
         ot_walk_end();
@@ -900,7 +909,7 @@ int psx_gpu_stage(int kind, const int *args, int nargs, const void *data, unsign
     if (!ot_job_on || ot_on_job) return 0;
     const unsigned int need = (2 + STAGE_ARGS) * 4 + ((bytes + 3) & ~3u);
     if (!stage_buf) stage_buf = malloc(STAGE_BYTES);
-    if (!stage_buf || stage_used + need > STAGE_BYTES) { psx_gpu_sync(); return 0; }
+    if (!stage_buf || stage_used + need > STAGE_BYTES) { SYNC(); return 0; }
     u32 *r = (u32 *)((u8 *)stage_buf + stage_used);
     r[0] = (u32)kind, r[1] = bytes;
     for (int i = 0; i < STAGE_ARGS; i++) r[2 + i] = i < nargs ? (u32)args[i] : 0;
@@ -908,6 +917,15 @@ int psx_gpu_stage(int kind, const int *args, int nargs, const void *data, unsign
     stage_used += need;
     return 1;
 }
+/* A DrawOTag while a walk is on the worker (a battle's frame is two lists, one right after the other): kept as a call
+ * for the sync, where it is walked after the first, as the PS1's GPU draws the lists it is sent in order while the
+ * game goes on (which leaves a list alone until it has waited for the GPU). The second list ended the first's walk on
+ * the worker at once: every frame of a battle was walked by the game's thread (psx_gpu_stage_walk_ok: the renderer's
+ * switch). */
+typedef struct { u32 *p; const void *native_buffer; unsigned int native_size; } StagedWalk;
+static int stage_walking;
+__attribute__((weak)) int psx_gpu_stage_walk_ok(void) { return 1; }
+static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size);
 static void stage_replay(void) {
     for (unsigned int at = 0; at < stage_used;) { /* (nothing is staged meanwhile: no walk is on the worker) */
         const u32 *r = (const u32 *)((const u8 *)stage_buf + at);
@@ -919,13 +937,26 @@ static void stage_replay(void) {
         } else if (r[0] == STAGE_MOVE) {
             RECT rc = {(s16)a[0], (s16)a[1], (s16)a[2], (s16)a[3]};
             MoveImage(&rc, a[4], a[5]);
+        } else if (r[0] == STAGE_WALK) {
+            StagedWalk w;
+            __builtin_memcpy(&w, r + 2 + STAGE_ARGS, sizeof w);
+            stage_walking = 1; /* (walked here, now: the calls kept after it follow it) */
+            draw_ot(w.p, w.native_buffer, w.native_size);
+            stage_walking = 0;
         } else psx_gpu_staged((int)r[0], a);
     }
     stage_used = 0;
 }
 
 static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size) {
-    psx_gpu_sync();
+    if (ot_job_on && !ot_on_job && psx_gpu_stage_walk_ok()) {
+        const StagedWalk sw = {p, native_buffer, native_size};
+        if (psx_gpu_stage(STAGE_WALK, NULL, 0, &sw, sizeof sw)) {
+            if (drawsync_cb) drawsync_owed = 1;
+            return;
+        }
+    }
+    SYNC();
     unsigned int profile_start = port_profile_begin();
     OtWalk w = {0};
     w.p = p, w.head = p;
@@ -940,7 +971,7 @@ static void draw_ot(u32 *p, const void *native_buffer, unsigned int native_size)
     if (drawsync_cb) {
         drawsync_owed = 1;
     }
-    if (w.from_main && !ot_on_job && psx_ot_entry < 0 && !native_size && psx_gpu_defer_ok() && !plat_async_busy()) {
+    if (w.from_main && !ot_on_job && !stage_walking && psx_ot_entry < 0 && !native_size && psx_gpu_defer_ok() && !plat_async_busy()) {
         psx_gpu_handoff();
         ot_job = w;
         ot_job_finished = 0;
@@ -977,7 +1008,7 @@ int DrawSyncCallback(void (*func)(void)) {
 /* Deliver an owed DrawSync callback (the GPU "finished"): at DrawSync and once per frame. */
 void psx_drawsync_pending(void) {
     if (drawsync_owed && drawsync_cb) {
-        psx_gpu_sync(); /* (the GPU has finished: what the callback is told) */
+        SYNC(); /* (the GPU has finished: what the callback is told) */
         drawsync_owed = 0;
         drawsync_cb();
     }
@@ -994,7 +1025,7 @@ int DrawSync(int mode) {
      * as a PS1's interrupts come during the wait; anything in it that goes to the GPU ends the walk as ever) */
     if (mode == 0 && ot_job_on && !ot_on_job && psx_gpu_early_ok())
         while (ot_job_on && !ot_job_finished && psx_frame_early()) psx_gpu_early_frames++;
-    psx_gpu_sync();
+    SYNC();
     if (mode == 0) {
         psx_drawsync_pending();
     }
@@ -1031,7 +1062,7 @@ int psx_scene_only;
 void ContinueDraw(u32 *insaddr, s32 contaddr) {
     /* Even when BreakDraw returns zero, the inserted list must execute. FF9
      * uses this at VBlank for battle commands, status bars and text. */
-    psx_gpu_sync();
+    SYNC();
     if (!contaddr && psx_scene_only) return; /* (the host's --scene-only: the battle's UI list is a 3DS's bottom screen's) */
     if (!contaddr && psx_skip_vblank_list()) return;
     if (insaddr && !(!contaddr && psx_vblank_list_native(insaddr))) {

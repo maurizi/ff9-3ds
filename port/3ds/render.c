@@ -4748,6 +4748,8 @@ int psx_gpu_defer_ok(void) {
 }
 /* (gpu.c DrawSync: 1 on the world map, 2 wherever a walk is on the other core, 0 nowhere) */
 int ctr_sw_early = 1;
+int ctr_sw_stagewalk = 1; /* (gpu.c draw_ot: a list sent while a walk is on the other core waits for the sync) */
+int psx_gpu_stage_walk_ok(void) { return ctr_sw_stagewalk; }
 int psx_gpu_early_ok(void) { return ctr_sw_early == 2 || (ctr_sw_early && port_game_mode() == 3); }
 /* gpu.c: the drawing goes to the other thread. What this one wrote for the GPU since the last flush (vertices, staging,
  * texture blocks) is written out of this core's data cache here, by this core: a flush asked later by the other
