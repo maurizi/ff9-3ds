@@ -1039,7 +1039,7 @@ static inline Vtx *run_take(int i, unsigned n, float *d) {
     return o;
 }
 
-static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
+__attribute__((noinline)) static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
     if (i == 0) { /* (the run's room: the buffer's rest, its last RUN_V for group 1; nothing else allocates meanwhile) */
         /* (both eyes' values of this submit must fit before the next clear (frame_begin clears): the run ends at as many
          * primitives as there are values left) */
@@ -1814,13 +1814,18 @@ static void hash_remove(int i) {
     }
 }
 static unsigned slots_made; /* (slot_for: slots given a new key, a scene's change) */
+static int slot_last = -1; /* (slot_for's last answer) */
+static TexSlot *slot_new(u32 key, u32 twin);
 HOT_DRAW static TexSlot *slot_for(u32 key, u32 twin) {
-    static int last = -1;
-    if (last >= 0 && slots[last].key == key && slots[last].twin == twin) return &slots[last];
+    if (slot_last >= 0 && slots[slot_last].key == key && slots[slot_last].twin == twin) return &slots[slot_last];
     for (unsigned h = hash_of(key, twin); slot_hash[h]; h = (h + 1) & (SLOT_HASH - 1)) {
         int i = slot_hash[h] - 1;
-        if (slots[i].key == key && slots[i].twin == twin) return &slots[last = i];
+        if (slots[i].key == key && slots[i].twin == twin) return &slots[slot_last = i];
     }
+    return slot_new(key, twin);
+}
+/* (a page not in the cache: out of line, and out of the per-primitive code) */
+__attribute__((noinline, cold)) static TexSlot *slot_new(u32 key, u32 twin) {
     int victim = -1;
     for (int i = 0; i < nslots; i++) {
         if (slots[i].serial != frame_serial && (victim < 0 || slots[i].serial < slots[victim].serial)) victim = i;
@@ -1843,7 +1848,7 @@ HOT_DRAW static TexSlot *slot_for(u32 key, u32 twin) {
         victim = 0;
     }
     if (slots[victim].key) hash_remove(victim);
-    TexSlot *s = &slots[last = victim];
+    TexSlot *s = &slots[slot_last = victim];
     slots_made++;
     s->key = key;
     s->twin = twin;
@@ -2603,11 +2608,11 @@ static BgSlot bg_rec_slots[BG_MEMO_SLOTS];
 #define BG_MEMO_CO 2048
 static u16 bg_rec_co[BG_MEMO_CO]; /* (the slot, + 0x8000 where the pair with the one before is counted) */
 static int bg_rec_nco;
-static void bg_rec_co_add(int id, int counted) {
+__attribute__((noinline, cold)) static void bg_rec_co_add(int id, int counted) {
     if (bg_rec_nco == BG_MEMO_CO) { bg_rec_on = 2; return; }
     bg_rec_co[bg_rec_nco++] = (u16)(id | (counted ? 0x8000 : 0));
 }
-static void bg_rec_blocks(const Gp0Mode *m, TexSlot *s, int cx0, int cx1, int cy0, int cy1) {
+__attribute__((noinline, cold)) static void bg_rec_blocks(const Gp0Mode *m, TexSlot *s, int cx0, int cx1, int cy0, int cy1) {
     static int last;
     int i = last < bg_rec_nslots && bg_rec_slots[last].s == s ? last : -1;
     for (int k = bg_rec_nslots - 1; i < 0 && k >= 0; k--)
@@ -2622,7 +2627,45 @@ static void bg_rec_blocks(const Gp0Mode *m, TexSlot *s, int cx0, int cx1, int cy
                                 0x01010101010101ull, 0x0101010101010101ull};
     bg_rec_slots[i].mask |= (u64)(((2u << cx1) - 1) & ~((1u << cx0) - 1)) * (rows[cy1 - cy0] << (cy0 * 8));
 }
-HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
+/* texture_for's blocks not all known current: each made so (out of line: the per-primitive code's rare, long part) */
+__attribute__((noinline)) static TexSlot *texture_blocks(TexSlot *s, const Gp0Mode *m, const int b8[8], const int uv[4], unsigned *fp, int *keptp) {
+    const int bx0 = b8[0], bx1 = b8[1], by0 = b8[2], by1 = b8[3], cx0 = b8[4], cx1 = b8[5], cy0 = b8[6], cy1 = b8[7];
+    const int u0 = uv[0], v0 = uv[1], u1 = uv[2], v1 = uv[3];
+    unsigned f = 0;
+    int kept = 0;
+    for (int by = cy0; by <= cy1; by++)
+        for (int bx = cx0; bx <= cx1; bx++) {
+            /* (a block only a texel beyond the primitive's own, converted before, whose texels the GPU has drawn
+             * since: left as it is. It is there so that a sample past the primitive's edge finds texels and not
+             * what the slot held before; to make it current its cells would be read back from the GPU, a command
+             * list sent and waited for. Kuja's Flare Star draws into the rows under a page it draws with, layer
+             * after layer: 20 to 25 readbacks a frame for texels no pixel of it shows, its frames at half speed
+             * on an Old 3DS) */
+            if ((bx < bx0 || bx > bx1 || by < by0 || by > by1) && s->stamp[by * 8 + bx] && s->epoch[by * 8 + bx] != tex_epoch &&
+                block_texels_gpu(s, m, bx, by))
+                continue;
+            if (s->stamp[by * 8 + bx] && s->epoch[by * 8 + bx] != tex_epoch && bx >= bx0 && bx <= bx1 && by >= by0 && by <= by1 &&
+                block_kept(s, m, bx, by, u0, v0, u1, v1)) {
+                f |= s->flags[by * 8 + bx], kept = 1;
+                continue;
+            }
+            PART_BEGIN();
+            const int again = convert_block(s, m, bx, by);
+            PART_END(0);
+            if (again) { s = slot_renew(s), f = 0, kept = 0, by = cy0, bx = cx0 - 1; continue; }
+            if (bx >= bx0 && bx <= bx1 && by >= by0 && by <= by1) f |= s->flags[by * 8 + bx];
+        }
+    if (s->cur_epoch != tex_epoch) s->cur = 0, s->cur_epoch = tex_epoch;
+    for (int by = cy0; by <= cy1; by++) /* (each checked: a conversion may have moved the epoch on) */
+        for (int bx = cx0; bx <= cx1; bx++) {
+            const int b = by * 8 + bx;
+            if (s->stamp[b] && s->epoch[b] == tex_epoch) s->cur |= (u64)1 << b;
+        }
+    *fp = f, *keptp = kept;
+    return s;
+}
+/* texture_for's 15-bit pages the GPU has drawn (out of line: rare, and long in the per-primitive code) */
+__attribute__((noinline, cold)) static C3D_Tex *texture_for_drawn(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
     /* A semi-transparent 15-bit texture read from VRAM the GPU has drawn, outside the area being drawn into (the
      * field-to-battle swirl: the frame on screen warped into the next): the mirror sampled where it is, its alpha the
      * texels' bit 15 (the mask bit), which the two page passes split as the PS1 does (opaque without it, blended with
@@ -2655,6 +2698,13 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
         gpu_owned(m->tx + u0, m->ty + v0, m->tx + u1 + 1, m->ty + v1 + 1)) {
         C3D_Tex *t = mirror_page(m->tx, m->ty, 0);
         if (t) { *flags = 0; tex_ou = tex_ov = 0; return t; }
+    }
+    return NULL;
+}
+HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
+    if (__builtin_expect(m->depth == 2, 0)) {
+        C3D_Tex *t = texture_for_drawn(m, u0, v0, u1, v1, flags);
+        if (t) return t;
     }
     u32 key = (u32)m->depth << 30 | (u32)(m->tx >> 6) << 26 | (u32)(m->ty >> 8) << 25 |
               (m->depth < 2 ? (u32)(m->clut_x >> 4) << 9 | (u32)m->clut_y : 0) | 1u << 24;
@@ -2699,36 +2749,8 @@ HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, i
     if (s->cur_epoch == tex_epoch && !(want & ~s->cur)) {
         const u64 own = (u64)(((2u << bx1) - 1) & ~((1u << bx0) - 1)) * (rows[by1 - by0] << (by0 * 8));
         f = (own & s->fl1 ? 1 : 0) | (own & s->fl2 ? 2 : 0);
-    } else {
-        for (int by = cy0; by <= cy1; by++)
-            for (int bx = cx0; bx <= cx1; bx++) {
-                /* (a block only a texel beyond the primitive's own, converted before, whose texels the GPU has drawn
-                 * since: left as it is. It is there so that a sample past the primitive's edge finds texels and not
-                 * what the slot held before; to make it current its cells would be read back from the GPU, a command
-                 * list sent and waited for. Kuja's Flare Star draws into the rows under a page it draws with, layer
-                 * after layer: 20 to 25 readbacks a frame for texels no pixel of it shows, its frames at half speed
-                 * on an Old 3DS) */
-                if ((bx < bx0 || bx > bx1 || by < by0 || by > by1) && s->stamp[by * 8 + bx] && s->epoch[by * 8 + bx] != tex_epoch &&
-                    block_texels_gpu(s, m, bx, by))
-                    continue;
-                if (s->stamp[by * 8 + bx] && s->epoch[by * 8 + bx] != tex_epoch && bx >= bx0 && bx <= bx1 && by >= by0 && by <= by1 &&
-                    block_kept(s, m, bx, by, u0, v0, u1, v1)) {
-                    f |= s->flags[by * 8 + bx], kept = 1;
-                    continue;
-                }
-                PART_BEGIN();
-                const int again = convert_block(s, m, bx, by);
-                PART_END(0);
-                if (again) { s = slot_renew(s), f = 0, kept = 0, by = cy0, bx = cx0 - 1; continue; }
-                if (bx >= bx0 && bx <= bx1 && by >= by0 && by <= by1) f |= s->flags[by * 8 + bx];
-            }
-        if (s->cur_epoch != tex_epoch) s->cur = 0, s->cur_epoch = tex_epoch;
-        for (int by = cy0; by <= cy1; by++) /* (each checked: a conversion may have moved the epoch on) */
-            for (int bx = cx0; bx <= cx1; bx++) {
-                const int b = by * 8 + bx;
-                if (s->stamp[b] && s->epoch[b] == tex_epoch) s->cur |= (u64)1 << b;
-            }
-    }
+    } else
+        s = texture_blocks(s, m, (const int[8]){bx0, bx1, by0, by1, cx0, cx1, cy0, cy1}, (const int[4]){u0, v0, u1, v1}, &f, &kept);
     slot_used(s, want);
     if (bg_rec_on) bg_rec_blocks(m, s, cx0, cx1, cy0, cy1);
     *flags = f;
@@ -3347,16 +3369,7 @@ HOT_DRAW static int r_poly1(const unsigned *w) {
     if (!ctr_sw_poly1 || !poly_plain()) return 0;
     TriCtx c;
     tri_ctx(&c);
-    switch ((w[0] >> 26) & 7) { /* (textured, quad, gouraud bits: the vertices' words at constant places) */
-    case 0: poly_k(w, 0, &c); break;
-    case 1: poly_k(w, 1, &c); break;
-    case 2: poly_k(w, 2, &c); break;
-    case 3: poly_k(w, 3, &c); break;
-    case 4: poly_k(w, 4, &c); break;
-    case 5: poly_k(w, 5, &c); break;
-    case 6: poly_k(w, 6, &c); break;
-    default: poly_k(w, 7, &c); break;
-    }
+    poly_k(w, (w[0] >> 26) & 7, &c);
     return 1;
 #endif
 }

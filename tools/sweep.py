@@ -220,10 +220,10 @@ def emu(a):
     frames = a.frames or {"fields": 1560, "battles": 2640, "spells": 3360, "enemies": 2640}[a.set]
     every = 60 if a.set != "fields" else 120
     pressed = a.set not in ("fields", "enemies")
-    exe = OUT / f"dual_{'press' if pressed else 'plain'}_{frames}{tag}.3dsx"
+    exe = OUT / f"{'single' if a.single else 'dual'}_{'press' if pressed else 'plain'}_{frames}{tag}.3dsx"
     if not exe.exists() or a.rebuild:
         args = ["tools/docker.sh", "make", "-j16", "3ds", "SCENARIO=sdmc:/3ds/ff9/scenarios/sweep.cfg", f"DUMP_EVERY={every}",
-                "SPUSYNC=1", "DUAL=1"] + ([f"AUTOPRESS={presses(frames)}"] if pressed else [])
+                "SPUSYNC=1"] + ([] if a.single else ["DUAL=1"]) + ([f"AUTOPRESS={presses(frames)}"] if pressed else [])
         (ROOT / "build/ff9-test.3dsx").unlink(missing_ok=True)
         r = sh(*args)
         if not (ROOT / "build/ff9-test.3dsx").exists():
@@ -248,7 +248,7 @@ def emu(a):
             for f in dump.glob("f*.ppm"):
                 f.unlink()
             # (until the last frame's dump is there; the time is only the limit for a run that never gets to it)
-            sh("tools/azahar.sh", "-t", int(frames / 60 * 2.7) + 25, "-u", dump / f"f{frames:06d}_ref.ppm", "-o", work, exe)
+            sh("tools/azahar.sh", "-t", int(frames / 60 * 2.7) + 25, "-u", dump / (f"f{frames:06d}.ppm" if a.single else f"f{frames:06d}_ref.ppm"), "-o", work, exe)
             row = {"name": c.stem, "frames": frames}
             rows = []
             for f in range(every, frames + 1, every):
@@ -336,6 +336,8 @@ def main():
     p.add_argument("--rebuild", action="store_true", help="build the test 3dsx again (after a change to the port)")
     p.add_argument("--tag", help="results in emu_<set>_<tag>.jsonl, from a build of their own (the tree's, built at first use)")
     p.add_argument("--dumps", action="store_true", help="keep each run's dumps in emu/<set>/<name>_dumps")
+    p.add_argument("--single", action="store_true", help="the 3DS renderer alone, as the player's build draws (its own takes "
+                   "on packets on, no reference): with --tag and --dumps, two builds' pictures to compare with each other")
     p.add_argument("--keep", type=float, default=3.0, help="percent of a frame differing that keeps its picture")
     p.set_defaults(fn=emu)
     p = sub.add_parser("report")
