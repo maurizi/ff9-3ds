@@ -223,7 +223,7 @@ def emu(a):
     exe = OUT / f"{'single' if a.single else 'dual'}_{'press' if pressed else 'plain'}_{frames}{tag}.3dsx"
     if not exe.exists() or a.rebuild:
         args = ["tools/docker.sh", "make", "-j16", "3ds", "SCENARIO=sdmc:/3ds/ff9/scenarios/sweep.cfg", f"DUMP_EVERY={every}",
-                "SPUSYNC=1"] + ([] if a.single else ["DUAL=1"]) + ([f"AUTOPRESS={presses(frames)}"] if pressed else [])
+                "SPUSYNC=1", "AZAHAR=1"] + ([] if a.single else ["DUAL=1"]) + ([f"AUTOPRESS={presses(frames)}"] if pressed else [])
         (ROOT / "build/ff9-test.3dsx").unlink(missing_ok=True)
         r = sh(*args)
         if not (ROOT / "build/ff9-test.3dsx").exists():

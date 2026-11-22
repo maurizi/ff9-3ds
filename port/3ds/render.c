@@ -906,11 +906,19 @@ enum { K_UNTEX, K_TEX, K_TEX_P1, K_TEX_P2, K_BLIT, K_COMPOSITE, K_SCENE, K_PAGE_
 #define MASK_CHECK 2 /* pixels with the mask bit keep their colour (opaque draws) */
 #define MASK_COPY 4  /* an upload: the source's mask bits as they are */
 #define MASK_DITHER 8 /* (not a mask: the PS1's dithering on, GP0 E1 bit 9, for a draw into the mirror: set_tev_for) */
+#include "pagefix.h"
+int ctr_sw_pagefix = 1;  /* (0: such polygons as the PICA multiplies them, for comparing) */
+static u32 cur_pcol;     /* add_batch's: 1 << 24 | the one colour of a polygon drawn with the mirror's pixels, else 0
+                          * (| 1 << 25: mode 3's blended pass, pagefix4; | 1 << 26: with the PS1's dithering, pagefixd) */
+static u32 tev_pcol, tev_last_pcol; /* set_tev_for: the batch's, and what the stages were last set for */
+int ctr_sw_quant = 1;    /* (0: blended primitives' colours at 8 bits into the blend, for comparing) */
+static int tev_quant, tev_last_quant; /* set_tev_for: a blended primitive's colour to 5 bits first (2: mode 3, a quarter) */
 static int cur_mask;  /* add_batch's: gp0_state's at the primitive (blits: MASK_SET, alpha from the source) */
 #define NO_BLEND 4
 
 typedef struct {
     u8 kind, abr, eyes, target; /* target: 0 the VRAM mirror, 1 + n UI layer n */
+    u32 pcol;                   /* (cur_pcol) */
     u8 mask, ordered, pad2[2];  /* MASK_SET | MASK_CHECK: the PS1's mask bit as the mirror's alpha (GP0 E6);
                                  * ordered: a run's (drawn in order by depth, run_flush) */
     u16 sc[4]; /* scissor: x0, y0, x1, y1 (exclusive) */
@@ -1039,7 +1047,12 @@ static inline Vtx *run_take(int i, unsigned n, float *d) {
     return o;
 }
 
-__attribute__((noinline)) static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
+/* (PORT_HOT_ANCHOR: called some seventy times a frame, between primitives whose code fills the instruction cache: where
+ * it lies in its 4 KiB decides whether it is still there the next time. Not in the per-primitive section, it moved with
+ * any code before it: at 0xD40, among gpu_draws, draw_packet, the tiles' decoder and their drawing, a day's changes
+ * elsewhere cost Lindblum's castle station's walk 1.3 ms and field 1310's 2 on an Old 3DS. Kept at 0x268, where it was
+ * when it was measured; button_icon (every tile and rectangle) and trim_max likewise at theirs) */
+PORT_HOT_ANCHOR(154) __attribute__((noinline)) static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
     if (i == 0) { /* (the run's room: the buffer's rest, its last RUN_V for group 1; nothing else allocates meanwhile) */
         /* (both eyes' values of this submit must fit before the next clear (frame_begin clears): the run ends at as many
          * primitives as there are values left) */
@@ -1083,6 +1096,8 @@ HOT_DRAW static Vtx *run_slot(int kind, int abr, const u16 sc[4], C3D_Tex *tex, 
 }
 
 /* a primitive into the mirror (triangles) */
+static int emit_dithers; /* (emit's caller's: r_poly's polygon is one the PS1 dithers, DITHERED below) */
+#define DITHERED 0.5f
 static void run_add(int kind, int abr, const u16 sc[4], C3D_Tex *tex, const Vtx *v, unsigned n) {
     if (cur_target != 0 || n > RUN_V || !mirror_depth) {
         run_flush();
@@ -1093,6 +1108,7 @@ static void run_add(int kind, int abr, const u16 sc[4], C3D_Tex *tex, const Vtx 
     }
     float d;
     Vtx *o = run_slot(kind, abr, sc, tex, n, &d);
+    d += emit_dithers ? DITHERED : 0;
     for (unsigned k = 0; k < n; k++) o[k] = v[k], o[k].d = d;
 }
 
@@ -1101,7 +1117,7 @@ HOT_DRAW static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D
     if (nbatches) {
         Batch *b = &batches[nbatches - 1];
         if (b->kind == kind && b->abr == abr && b->eyes == eyes && b->tex == tex && b->first + b->count == first &&
-            b->target == cur_target && b->mask == cur_mask && b->ordered == cur_ordered &&
+            b->target == cur_target && b->mask == cur_mask && b->ordered == cur_ordered && b->pcol == cur_pcol &&
             !memcmp(b->sc, sc, sizeof b->sc)) {
             b->count += n;
             return;
@@ -1127,6 +1143,7 @@ HOT_DRAW static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D
     Batch *b = &batches[nbatches++];
     b->kind = kind; b->abr = abr; b->eyes = eyes; b->tex = tex; b->target = (u8)cur_target; b->mask = (u8)cur_mask;
     b->ordered = (u8)cur_ordered;
+    b->pcol = cur_pcol;
     memcpy(b->sc, sc, sizeof b->sc);
     b->first = first; b->count = n;
 }
@@ -1335,6 +1352,71 @@ static void set_tev_for(int kind, int layer) {
             C3D_TexEnvScale(e5, C3D_Alpha, GPU_TEVSCALE_4);
         }
     }
+    /* A polygon drawn with the mirror's own pixels (a frame made from the one before: the field-to-battle swirl) and
+     * one colour: its texels times that colour brought to the PS1's 5 bits before the blend (pagefix.h: the vertices
+     * carry c', here - k, x m / 255, then q + q, x 4 = 8 q). The PICA's own product is up to a step of 5 bits above
+     * the PS1's, in half the cases; over the swirl's 30 frames, each drawn from the last, the picture went to white
+     * and yellow where the PS1's stays pale (an Old 3DS and Azahar alike; the sweep's fields 1014, 1214-1221). */
+    if (!layer && tev_pcol && (kind == K_PAGE_SEMI || kind == K_PAGE_OP)) {
+        const int quarter = tev_pcol >> 25 & 1;
+        const unsigned char (*const fix)[4] = quarter ? pagefix4 : pagefix;
+        const unsigned char *r = fix[tev_pcol & 0xFF], *g = fix[tev_pcol >> 8 & 0xFF], *b = fix[tev_pcol >> 16 & 0xFF];
+        const u32 kc = (u32)r[1] | (u32)g[1] << 8 | (u32)b[1] << 16, mc = (u32)r[2] | (u32)g[2] << 8 | (u32)b[2] << 16;
+        C3D_TexEnv *e3 = C3D_GetTexEnv(3), *e4 = C3D_GetTexEnv(4);
+        if (tev_pcol >> 26 & 1) {
+            /* With the PS1's dithering on, its product is kept to 8 bits ((t x c) >> 4), the dither added, and then the 5
+             * bits kept. The 8-bit product is made of two (pagefixd: the texel times the vertices' a, here plus the
+             * texel times b), stage 2 adds the dither as ever, and three stages after it keep the 5 bits:
+             * round((x - 4) x 32 / 255) is x >> 3 (a quarter of it: (x - 16) x 8 / 255, x >> 5), then q + q, x 4. The 4
+             * (16) is taken off with pagefixd's k */
+            const unsigned char *dr = pagefixd[tev_pcol & 0xFF], *dg = pagefixd[tev_pcol >> 8 & 0xFF], *db = pagefixd[tev_pcol >> 16 & 0xFF];
+            const u32 off = quarter ? 16 : 4;
+            C3D_TexEnv *e5 = C3D_GetTexEnv(5);
+            C3D_TexEnvScale(e0, C3D_RGB, dr[0] ? GPU_TEVSCALE_2 : GPU_TEVSCALE_1); /* (the form: one channel's is all three's, a grey) */
+            C3D_TexEnvSrc(e1, C3D_RGB, GPU_TEXTURE0, GPU_CONSTANT, GPU_PREVIOUS);
+            C3D_TexEnvFunc(e1, C3D_RGB, GPU_MULTIPLY_ADD);
+            C3D_TexEnvColor(e1, (u32)dr[2] | (u32)dg[2] << 8 | (u32)db[2] << 16);
+            C3D_TexEnvSrc(e3, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, 0);
+            C3D_TexEnvFunc(e3, C3D_RGB, GPU_SUBTRACT);
+            C3D_TexEnvColor(e3, (dr[3] + off) | (dg[3] + off) << 8 | (db[3] + off) << 16);
+            C3D_TexEnvSrc(e4, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, 0);
+            C3D_TexEnvFunc(e4, C3D_RGB, GPU_MODULATE);
+            C3D_TexEnvColor(e4, quarter ? 0x080808 : 0x202020);
+            C3D_TexEnvSrc(e5, C3D_RGB, GPU_PREVIOUS, GPU_PREVIOUS, 0);
+            C3D_TexEnvFunc(e5, C3D_RGB, GPU_ADD);
+            C3D_TexEnvScale(e5, C3D_RGB, GPU_TEVSCALE_4);
+        } else {
+            C3D_TexEnvSrc(e1, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, 0);
+            C3D_TexEnvFunc(e1, C3D_RGB, GPU_SUBTRACT);
+            C3D_TexEnvColor(e1, kc);
+            C3D_TexEnvSrc(e3, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, 0);
+            C3D_TexEnvFunc(e3, C3D_RGB, GPU_MODULATE);
+            C3D_TexEnvColor(e3, mc);
+            C3D_TexEnvSrc(e4, C3D_RGB, GPU_PREVIOUS, GPU_PREVIOUS, 0);
+            C3D_TexEnvFunc(e4, C3D_RGB, GPU_ADD);
+            C3D_TexEnvScale(e4, C3D_RGB, GPU_TEVSCALE_4);
+        }
+    }
+    /* Any other primitive blended into the mirror: its colour brought to 5 bits before the blend, as the PS1 blends
+     * (after the dither, as there: x >> 3 as round((x - 4) x 32 / 255), then q + q, x 4; mode 3's quarter of the 5
+     * bits, x >> 5, added whole). Blended at 8 bits and cut to 5 after, a colour too small for a step of 5 bits still
+     * took one off (or added a part that later draws completed): the dithered shade the game subtracts over the
+     * field-to-battle swirl, 6 of 255 at most, nothing at most pixels on the PS1, took a step off a fifth of the
+     * picture every frame of it, and layers added over each other came out brighter than the PS1's. */
+    if (!layer && tev_quant && !tev_pcol) {
+        C3D_TexEnv *e3 = C3D_GetTexEnv(3), *e4 = C3D_GetTexEnv(4);
+        C3D_TexEnvSrc(e3, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, 0);
+        C3D_TexEnvFunc(e3, C3D_RGB, GPU_SUBTRACT);
+        C3D_TexEnvColor(e3, tev_quant == 2 ? 0x101010 : 0x040404);
+        C3D_TexEnvSrc(e4, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, 0);
+        C3D_TexEnvFunc(e4, C3D_RGB, GPU_MODULATE);
+        C3D_TexEnvColor(e4, tev_quant == 2 ? 0x080808 : 0x202020);
+        C3D_TexEnvSrc(e5, C3D_RGB, GPU_PREVIOUS, GPU_PREVIOUS, 0);
+        C3D_TexEnvFunc(e5, C3D_RGB, GPU_ADD);
+        C3D_TexEnvScale(e5, C3D_RGB, GPU_TEVSCALE_4);
+    }
+    tev_last_pcol = tev_pcol;
+    tev_last_quant = tev_quant;
     if (kind == K_TEX || kind == K_T5) C3D_AlphaTest(true, GPU_GREATER, 0);
     else if (kind == K_PAGE_OP) C3D_AlphaTest(true, GPU_GREATER, 0x3F);
     else if (kind == K_TEX_P1 || kind == K_TEX_P2 || kind == K_PAGE_SEMI || kind == K_T5_P1 || kind == K_T5_P2) C3D_AlphaTest(true, GPU_GREATER, 0x7F);
@@ -1494,15 +1576,21 @@ static void submit_do(void) {
             /* (a slot's texture is RGBA5551: its own combiners for the same three kinds) */
             const int bk = b->kind >= K_TEX && b->kind <= K_TEX_P2 && is_slot_tex(b->tex)
                                ? b->kind - K_TEX + K_T5 : b->kind;
+            /* (a primitive blended into the mirror: set_tev_for's stages that keep its 5 bits) */
+            const int quant = !target && ctr_sw_quant && b->abr != NO_BLEND && !b->pcol &&
+                              (b->kind == K_UNTEX || b->kind == K_TEX_P2 || b->kind == K_PAGE_SEMI) ? (b->abr == 3 ? 2 : 1) : 0;
+            if (b->pcol != tev_last_pcol || quant != tev_last_quant) kind = -1; /* (its stages are the colour's, the mode's) */
             if (b->abr != abr || b->mask != bmask || bk != kind) {
                 if (bk != kind || ((b->mask ^ bmask) & (MASK_DITHER | MASK_SET))) {
                     tev_dither = !target && (b->mask & MASK_DITHER);
                     tev_setmask = !target && (b->mask & MASK_SET) && !(b->mask & MASK_COPY);
+                    tev_pcol = b->pcol;
+                    tev_quant = quant;
                     set_tev_for(kind = bk, target != 0 && target != 4);
-                    tev_dither = tev_setmask = 0;
+                    tev_dither = tev_setmask = 0, tev_pcol = 0, tev_quant = 0;
                 }
                 if (target == 4) abr = b->abr, bmask = b->mask, set_blend(NO_BLEND, 0);
-                else set_blend_mask(abr = b->abr, target != 0, bmask = b->mask, b->kind);
+                else abr = b->abr, set_blend_mask((b->pcol >> 25 & 1) || quant == 2 ? 1 : abr, target != 0, bmask = b->mask, b->kind); /* (a quarter: added whole) */
             }
             if (b->tex != tex) {
                 tex = b->tex;
@@ -1684,6 +1772,12 @@ static void readback_cells(int cx0, int cy0, int cx1, int cy1) {
     ctr_rb_n[rb_cause]++;
     rb_cause = 0;
     const u16 *m = mirror_tex[0].data;
+    /* (the mirror is the GPU's to write: what this core's data cache still holds of it from an earlier read is not what
+     * is there now. Read without this, a line of the cache (32 bytes: a block of 4 x 4 pixels) came back as it was
+     * read before: on an Old 3DS, the scenario key blendtest='s tables read one after another had a 4 x 4 block of the
+     * table before in one or two of eight. The rows' bands of 8 (the texture's tiles lie by band)) */
+    { const unsigned band = (VW >> 3) * 64 * sizeof(u16), b0 = (unsigned)(cy0 * CELL) >> 3, b1 = ((unsigned)(cy1 * CELL) + 7) >> 3;
+      GSPGPU_InvalidateDataCache((const u8 *)m + b0 * band, (b1 - b0) * band); }
     for (int cy = cy0; cy < cy1; cy++)
         for (int cx = cx0; cx < cx1; cx++) {
             if (cell[cy][cx].shadow_ok) continue;
@@ -3040,6 +3134,14 @@ static int battle_list_replaced(void) {
     if (port_battle_hud_targets && (slot == 4 || slot == 5 || slot == 9 || slot == 10)) return 1;
     return port_battle_help_on && slot == 2;
 }
+/* What the PS1 dithers (GP0 E1 bit 9 on): polygons that are shaded (gouraud) or drawn with a texture times a colour.
+ * Not a flat polygon without a texture, not a texture drawn as it is, no rectangle or sprite, no line (the software
+ * rasteriser's rule). All of them were dithered here by the bit alone: a field's background tiles and the flat fades
+ * over a scene each got the pattern (a step of 5 bits up or down at part of the pixels). Which primitive is one of
+ * those goes with its vertices, not with the batch (whose stage adds the pattern whenever the bit is on: a state of
+ * its own for the dithered ones split the runs, tiles from the models among them: twice the batches at Lindblum's
+ * castle station): half a step on their place in drawing order (Vtx.d: whole for all else), by which prim.v.pica
+ * takes the pattern at the pixel, or its one texel that adds nothing. */
 static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, int bx1, int by1, C3D_Tex *tex,
                  unsigned tflags) {
     u16 sc[4];
@@ -3180,7 +3282,8 @@ static inline int imax(int a, int b) { return a > b ? a : b; }
  * asked for the lower half's blocks, which the strip before had just drawn into: read back from the GPU, 12 to 16
  * waits a frame (an Old 3DS: 2.1 to 2.9 s per 120 VBlanks). */
 int ctr_sw_trim = 1;
-static __attribute__((noinline)) void trim_max(const int *x, const int *y, const int *u, const int *v, int nv, int *u0, int *v0, int *u1, int *v1) {
+/* (PORT_HOT_ANCHOR: kept at 0xDDC, see run_open) */
+PORT_HOT_ANCHOR(887) static __attribute__((noinline)) void trim_max(const int *x, const int *y, const int *u, const int *v, int nv, int *u0, int *v0, int *u1, int *v1) {
     if (!ctr_sw_trim) return;
     int done = 0;
     /* (and a quad that is a rectangle of texels one to a pixel along an axis: only its texels within the drawing area
@@ -3207,6 +3310,69 @@ static __attribute__((noinline)) void trim_max(const int *x, const int *y, const
         for (int i = 0; i < nv; i++)
             if (t[i] == *hi) bottom &= y[i] == ym, right &= x[i] == xm;
         if (bottom || right) --*hi;
+    }
+}
+/* A triangle's texture coordinates as the PS1 samples them. The PS1 takes a pixel's texel at its corner (x, y), half a
+ * texel on: u + 0.5 there (the software rasteriser's AT: the anchor's u << 16, + 0x8000, + the slopes). The PICA samples
+ * at the pixel's centre, and the vertices are drawn (5/16, 7/16) on for the PS1's coverage: its sample is the PS1's
+ * point (3/16, 1/16) on. For a sprite drawn texel for pixel that is the same texel; for anything stretched or shrunk it
+ * is the texel beside it at part of the pixels (at twice the size, every second pixel: the picture half a texel off),
+ * the "texel edges" of magnified textures in the comparisons with the reference, and what a frame drawn from the one
+ * before (the field-to-battle swirl, each frame dithered and drawn again larger) turned into a darker picture step by
+ * step. So each triangle's coordinates are moved by 0.5 - 3/16 du/dx - 1/16 du/dy (and v's): at the pixel centres they
+ * are then the PS1's at its corners.
+ * Where that lands on a whole texel (every 20th pixel of a texture stretched 34 texels over 40 pixels, as the swirl's
+ * are; every second of one drawn at twice its size) the PS1's value is that texel exactly, or a hair to one side: it
+ * steps by slopes cut to 12 bits of fraction (towards zero), from its leftmost vertex. A slope that fits those bits
+ * lands on the texel; one that doesn't falls short of it, going right. The PICA's coordinates don't resolve a hair
+ * (1/128 of a texel at best), so the coordinate is moved 1/64 to the PS1's side: here by the slope along x alone (to
+ * the texel if both slopes fit; short of it, by the slope's sign, if not; unmoved when u doesn't change along x), in
+ * tri_uv_ps1, for the polygons drawn with the mirror's own pixels, by what the PS1's steps come to at the triangle's
+ * middle. */
+int ctr_sw_uvexact = 1; /* (0: the coordinates as they were, for comparing) */
+/* Which polygons: those drawn larger than their texels (the first triangle's area on screen against its texels').
+ * There a texel covers more than a pixel and the one beside it is a visible step aside: a stretched sprite's or an
+ * effect's picture half a texel off. A polygon drawn smaller (a model's faces, most of a scene's) takes one texel
+ * among several at each pixel either way, and the setup (a division and some twenty products a triangle) for all of
+ * them was 3.7 ms of field 1310's 24 ms walk on an Old 3DS: those keep the per-primitive path as it was. */
+static inline int tri_uv_wanted(const int *x, const int *y, const int *u, const int *v) {
+    const int axy = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
+    const int auv = (u[1] - u[0]) * (v[2] - v[0]) - (u[2] - u[0]) * (v[1] - v[0]);
+    return ctr_sw_uvexact && (axy < 0 ? -axy : axy) > (auv < 0 ? -auv : auv);
+}
+#define UV_EPS (1.0f / 64)
+static inline float uv_off1(int nx, int ny, float inv) {
+    const float gx = (float)nx * inv, gy = (float)ny * inv, fx = gx * 4096, fy = gy * 4096;
+    const float side = fx == (float)(int)fx && fy == (float)(int)fy ? UV_EPS : !nx ? 0 : gx > 0 ? -UV_EPS : UV_EPS;
+    return 0.5f + side - 0.1875f * gx - 0.0625f * gy;
+}
+/* (out of line: for the polygons drawn larger than their texels alone, tri_uv_wanted) */
+static __attribute__((noinline)) void tri_uv_off(int x0, int y0, int x1, int y1, int x2, int y2, int u0, int u1, int u2, int v0, int v1, int v2,
+                              float *du, float *dv) {
+    const int ax = x1 - x0, ay = y1 - y0, bx = x2 - x0, by = y2 - y0, det = ax * by - bx * ay;
+    if (!det) { *du = *dv = 0; return; } /* (no pixels) */
+    const float inv = 1.0f / (float)det;
+    const int ua = u1 - u0, ub = u2 - u0, va = v1 - v0, vb = v2 - v0;
+    *du = uv_off1(ua * by - ub * ay, ub * ax - ua * bx, inv);
+    *dv = uv_off1(va * by - vb * ay, vb * ax - va * bx, inv);
+}
+/* ... for a polygon drawn with the mirror's own pixels (a frame made from the one before: every pixel counts, frame
+ * after frame): the side by the PS1's own steps. Its slopes as it cuts them, what each falls short by, and that from
+ * its anchor (the leftmost vertex, the first of those) to the triangle's middle: short of the texel, or past it. */
+static __attribute__((noinline)) void tri_uv_ps1(const Gp0Vtx *a, const Gp0Vtx *b, const Gp0Vtx *c, float *du, float *dv) {
+    const Gp0Vtx *anchor = b->x <= a->x ? b : a;
+    if (c->x < anchor->x || (anchor == b && c->x == anchor->x)) anchor = c;
+    const int ax = b->x - a->x, ay = b->y - a->y, bx = c->x - a->x, by = c->y - a->y, det = ax * by - bx * ay;
+    if (!det) { *du = *dv = 0; return; }
+    const float inv = 1.0f / (float)det;
+    const float mx = (float)(a->x + b->x + c->x) / 3 - (float)anchor->x, my = (float)(a->y + b->y + c->y) / 3 - (float)anchor->y;
+    for (int k = 0; k < 2; k++) {
+        const int fa = k ? b->v - a->v : b->u - a->u, fb = k ? c->v - a->v : c->u - a->u;
+        const long long nx = (long long)(fa * by - fb * ay) * 4096, ny = (long long)(fb * ax - fa * bx) * 4096;
+        const long long rx = nx - nx / det * det, ry = ny - ny / det * det; /* (what each slope is cut by, x det x 4096) */
+        const float e = -((float)rx * mx + (float)ry * my) * inv; /* (the PS1's value less the true one there, x 4096) */
+        const float off = 0.5f + (e < 0 ? -UV_EPS : UV_EPS) - (0.1875f * (float)nx + 0.0625f * (float)ny) * inv * (1.0f / 4096);
+        if (k) *dv = off; else *du = off;
     }
 }
 static C3D_Tex *prim_texture(const Gp0Mode *m, const Gp0Vtx *v, int n, unsigned *tflags) {
@@ -3298,14 +3464,20 @@ static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         t[i].x = (float)v[i].x + 5.0f / 16;
         t[i].y = (float)v[i].y + 7.0f / 16;
         t[i].z = 0;
-        t[i].u = (float)v[i].u + uvh;
-        t[i].v = (float)v[i].v + uvh;
+        t[i].u = (float)v[i].u;
+        t[i].v = (float)v[i].v;
         if (tex) t[i].u += ou, t[i].v += ov;
         t[i].rgba = vcolor(m, &v[i]);
     }
+    float tdu[2] = {uvh, uvh}, tdv[2] = {uvh, uvh}; /* (each triangle's half texel: tri_uv_off) */
+    const int wx[3] = {v[0].x, v[1].x, v[2].x}, wy[3] = {v[0].y, v[1].y, v[2].y}, wu[3] = {v[0].u, v[1].u, v[2].u}, wv[3] = {v[0].v, v[1].v, v[2].v};
+    if (m->textured && tri_uv_wanted(wx, wy, wu, wv)) {
+        tri_uv_off(v[0].x, v[0].y, v[1].x, v[1].y, v[2].x, v[2].y, v[0].u, v[1].u, v[2].u, v[0].v, v[1].v, v[2].v, &tdu[0], &tdv[0]);
+        if (n == 4) tri_uv_off(v[1].x, v[1].y, v[3].x, v[3].y, v[2].x, v[2].y, v[1].u, v[3].u, v[2].u, v[1].v, v[3].v, v[2].v, &tdu[1], &tdv[1]);
+    }
     /* (the PS1's triangles (0,1,2) and (1,3,2), each skipped 1024 or more wide or 512 or more high: r_poly) */
     static const u8 tri[2][3] = {{0, 1, 2}, {1, 3, 2}};
-    u8 idx[6];
+    u8 idx[6], which[6]; /* (which: the vertex's triangle) */
     unsigned nout = 0;
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
     for (int k = 0; k < (n == 4 ? 2 : 1); k++) {
@@ -3313,7 +3485,9 @@ static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         const int tx0 = imin(imin(a->x, b->x), c->x), tx1 = imax(imax(a->x, b->x), c->x);
         const int ty0 = imin(imin(a->y, b->y), c->y), ty1 = imax(imax(a->y, b->y), c->y);
         if (tx1 - tx0 > 1023 || ty1 - ty0 > 511) continue;
-        idx[nout++] = tri[k][0], idx[nout++] = tri[k][1], idx[nout++] = tri[k][2];
+        idx[nout] = tri[k][0], idx[nout + 1] = tri[k][1], idx[nout + 2] = tri[k][2];
+        which[nout] = which[nout + 1] = which[nout + 2] = (u8)k;
+        nout += 3;
         x0 = imin(x0, tx0); x1 = imax(x1, tx1);
         y0 = imin(y0, ty0); y1 = imax(y1, ty1);
     }
@@ -3336,11 +3510,40 @@ static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         if (tflags & 1) passes[np++] = K_TEX_P1;
         if (tflags & 2) passes[np++] = K_TEX_P2;
     }
+    if ((tflags & 8) && ctr_sw_pagefix) { /* (the mirror's pixels times one colour: set_tev_for) */
+        const u32 c = t[0].rgba & 0xFFFFFF;
+        int one = 1;
+        for (int i = 1; i < n; i++) one &= (t[i].rgba & 0xFFFFFF) == c;
+        /* (with dithering, the three channels' forms the same: one stage's scale is all three's) */
+        if (one && (cur_mask & MASK_DITHER) && !m->raw && (pagefixd[c & 0xFF][0] != pagefixd[c >> 8 & 0xFF][0] || pagefixd[c & 0xFF][0] != pagefixd[c >> 16 & 0xFF][0])) one = 0;
+        if (one) {
+            if (ctr_sw_uvexact) {
+                tri_uv_ps1(&v[0], &v[1], &v[2], &tdu[0], &tdv[0]);
+                if (n == 4) tri_uv_ps1(&v[1], &v[3], &v[2], &tdu[1], &tdv[1]);
+            }
+            for (int p = 0; p < np; p++) { /* (in batches of their own, in their place: add_batch ends the run) */
+                /* (mode 3's blended pass: a quarter of the product, added whole) */
+                const int quarter = passes[p] == K_PAGE_SEMI && abr == 3;
+                const int dith = (cur_mask & MASK_DITHER) && !m->raw; /* (the PS1's dithering on, and this one of its: pagefixd's colours) */
+                const unsigned char (*const fix)[4] = quarter ? pagefix4 : pagefix;
+                const u32 cp = 0xFF000000u | (dith ? pagefixd[c & 0xFF][1] : fix[c & 0xFF][0]) |
+                               (u32)(dith ? pagefixd[c >> 8 & 0xFF][1] : fix[c >> 8 & 0xFF][0]) << 8 |
+                               (u32)(dith ? pagefixd[c >> 16 & 0xFF][1] : fix[c >> 16 & 0xFF][0]) << 16;
+                cur_pcol = 1u << 24 | (u32)quarter << 25 | (u32)dith << 26 | c;
+                Vtx *o = alloc_vtx(nout);
+                for (unsigned k = 0; k < nout; k++) { Vtx q = t[idx[k]]; q.rgba = cp, q.d = dith ? DITHERED : 0, q.u += tdu[which[k]], q.v += tdv[which[k]]; o[k] = q; }
+                add_batch(passes[p], passes[p] == K_PAGE_OP ? NO_BLEND : abr, 3, sc, tex, o - vb, nout);
+            }
+            cur_pcol = 0;
+            return;
+        }
+    }
     for (int p = 0; p < np; p++) {
         const int pabr = passes[p] == K_TEX_P1 || passes[p] == K_PAGE_OP ? NO_BLEND : abr;
         float d;
         Vtx *o = run_slot(passes[p], pabr, sc, tex, nout, &d);
-        for (unsigned k = 0; k < nout; k++) o[k] = t[idx[k]], o[k].d = d;
+        d += (m->textured ? !m->raw : m->gouraud) ? DITHERED : 0;
+        for (unsigned k = 0; k < nout; k++) { Vtx q = t[idx[k]]; q.d = d, q.u += tdu[which[k]], q.v += tdv[which[k]]; o[k] = q; }
     }
 }
 
@@ -3355,7 +3558,7 @@ static inline void tri_ctx(TriCtx *c) {
     c->mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0);
     c->uvh = world_ground ? 0.5f : 0;
 }
-static inline __attribute__((always_inline)) void poly_k(const unsigned *w, const unsigned kind, const TriCtx *c);
+static inline __attribute__((always_inline)) int poly_k(const unsigned *w, const unsigned kind, const TriCtx *c, int other);
 static inline int poly_plain(void) {
     return !(ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2 ||
              (menu_state != 3 && in_window_packets(psx_gpu_packet)));
@@ -3369,14 +3572,14 @@ HOT_DRAW static int r_poly1(const unsigned *w) {
     if (!ctr_sw_poly1 || !poly_plain()) return 0;
     TriCtx c;
     tri_ctx(&c);
-    poly_k(w, (w[0] >> 26) & 7, &c);
-    return 1;
+    return poly_k(w, (w[0] >> 26) & 7, &c, 1);
 #endif
 }
-HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned *w, const unsigned kind, const TriCtx *c) {
+/* (other: 0 where there is no other path for it, the world map's chains: drawn here whatever it is) */
+HOT_DRAW static inline __attribute__((always_inline)) int poly_k(const unsigned *w, const unsigned kind, const TriCtx *c, const int other) {
     const int textured = kind & 1, nv = (kind & 2) ? 4 : 3, gouraud = (kind >> 2) & 1;
     const unsigned cmd = w[0] >> 24;
-    if (ctr_ko == 4) return;
+    if (ctr_ko == 4) return 1;
     /* (the words of vertex i: colour, position, texture coordinates) */
 #define PK_XY(i) (1 + (i) * (1 + textured) + (gouraud ? (i) : 0))
 #define PK_COL(i) ((i) == 0 || !gouraud ? 0 : PK_XY(i) - 1)
@@ -3407,8 +3610,9 @@ HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned
         /* (or drawn into an area that isn't a picture's: the effects' own, among the texture pages) */
         if (__builtin_expect(!(u1 & 31) || !(v1 & 31) || gp0_state.area_y0 >= 256, 0)) trim_max(x, y, u, v, nv, &u0, &v0, &u1, &v1);
         tex = texture_for(&m, u0, v0, u1, v1, &tflags);
+        if (other && __builtin_expect(tflags & 8, 0)) return 0; /* (the mirror's own pixels: r_poly's, for set_tev_for's stages) */
     }
-    if (ctr_ko == 5) return;
+    if (ctr_ko == 5) return 1;
     ctr_depth_stats[1] += nv;
     /* (the PS1's triangles (0,1,2) and (1,3,2), each skipped 1024 or more wide or 512 or more high: r_poly) */
     int x0 = imin(imin(x[0], x[1]), x[2]), x1 = imax(imax(x[0], x[1]), x[2]);
@@ -3421,13 +3625,13 @@ HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned
         if (!ta) x0 = qx0, x1 = qx1, y0 = qy0, y1 = qy1;
         else if (tb) x0 = imin(x0, qx0), x1 = imax(x1, qx1), y0 = imin(y0, qy0), y1 = imax(y1, qy1);
     }
-    if (!ta && !tb) return;
+    if (!ta && !tb) return 1;
     const u16 *sc = c->sc;
-    if (!c->sc_ok) return;
+    if (!c->sc_ok) return 1;
     int bx0 = imax(x0, sc[0]), by0 = imax(y0, sc[1]), bx1 = imin(x1 + 1, sc[2]), by1 = imin(y1 + 1, sc[3]);
-    if (bx0 >= bx1 || by0 >= by1) return;
+    if (bx0 >= bx1 || by0 >= by1) return 1;
     gpu_draws(bx0, by0, bx1, by1);
-    if (ctr_ko == 6) return;
+    if (ctr_ko == 6) return 1;
     cur_target = 0;
     cur_mask = c->mask | ((gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
     ctr_render_stats[1]++;
@@ -3444,13 +3648,15 @@ HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned
     const u32 rawc = textured && m.raw ? 0xFF808080 : 0;
     const float ou = tex ? (float)tex_ou : 0, ov = tex ? (float)tex_ov : 0;
     const float uvh = c->uvh;
-    if (ctr_ko == 7) return;
+    if (ctr_ko == 7) return 1;
     if (ctr_ko == 8 && np > 1) np = 1;
+    const float dh = (textured ? !m.raw : gouraud) ? DITHERED : 0; /* (one the PS1 dithers: emit_dithers) */
     if (nv == 3) { /* (a triangle's vertices straight into the run, once a pass) */
         for (int p = 0; p < np; p++) {
             const int pabr = passes[p] == K_TEX_P1 || passes[p] == K_PAGE_OP ? NO_BLEND : abr;
             float d;
             Vtx *o = run_slot(passes[p], pabr, sc, tex, 3, &d);
+            d += dh;
 #pragma GCC unroll 3
             for (int i = 0; i < 3; i++) {
                 o[i].x = (float)x[i] + 5.0f / 16;
@@ -3463,7 +3669,7 @@ HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned
                 o[i].d = d;
             }
         }
-        return;
+        return 1;
     }
     Vtx t[4];
 #pragma GCC unroll 4
@@ -3481,6 +3687,7 @@ HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned
         const int pabr = passes[p] == K_TEX_P1 || passes[p] == K_PAGE_OP ? NO_BLEND : abr;
         float d;
         Vtx *o = run_slot(passes[p], pabr, sc, tex, nout, &d);
+        d += dh;
         if (ta) {
             o[0] = t[0], o[0].d = d;
             o[1] = t[1], o[1].d = d;
@@ -3496,6 +3703,7 @@ HOT_DRAW static inline __attribute__((always_inline)) void poly_k(const unsigned
 #undef PK_XY
 #undef PK_COL
 #undef PK_UV
+    return 1;
 }
 
 /* A chain of the world map's ground packets (world_faces.c: G3s and GT3s, the walk's order from head, count of them):
@@ -3530,8 +3738,8 @@ HOT_DRAW static int terrain_chain_do(u32 *head, u32 count) {
             (menu_state != 3 && in_window_packets(p)))
             DrawPrim(p), tri_ctx(&c); /* (as the walk would: the state as it leaves it) */
         else {
-            if (cmd & 4) poly_k((const unsigned *)p + 1, 5, &c);
-            else poly_k((const unsigned *)p + 1, 4, &c);
+            if (cmd & 4) poly_k((const unsigned *)p + 1, 5, &c, 0);
+            else poly_k((const unsigned *)p + 1, 4, &c, 0);
             n++;
         }
         p = (u32 *)(((uintptr_t)psx_ram & 0xFF000000) | (p[0] & 0xFFFFFF));
@@ -3634,7 +3842,9 @@ static void r_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
                      n > 3 ? v[3].y : 0, v[0].r, v[0].g, v[0].b, v[1].r, v[1].g, v[1].b, v[2].r, v[2].g, v[2].b, nout);
     }
 #endif
+    emit_dithers = m->textured ? !m->raw : m->gouraud;
     emit(m, out, nout, x0 - grown, y0 - grown, x1 + 1 + grown, y1 + 1 + grown, tex, tflags);
+    emit_dithers = 0;
 }
 
 static int ui_reads_cache(const Gp0Mode *m, int u0, int v0, int u1, int v1);
@@ -3783,7 +3993,8 @@ static void button_icons_frame(void) {
 }
 
 /* the 3DS icon a sprite stands for, -1 if it isn't a button icon */
-static int button_icon(const Gp0Mode *m, int u, int v, int w, int h) {
+/* (PORT_HOT_ANCHOR: kept at 0x140, see run_open) */
+PORT_HOT_ANCHOR(80) static int button_icon(const Gp0Mode *m, int u, int v, int w, int h) {
     for (int k = 0; k < n_btn; k++) {
         const int *d = btn_def[k];
         /* (the message system draws them under another texture page: matched by CLUT, uv and size) */
@@ -5537,6 +5748,7 @@ static u32 px_shadow(int x, int y, const void *ctx) {
     unsigned r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
     return (r << 3) << 16 | (g << 3) << 8 | b << 3;
 }
+static u32 px_shadow_mask(int x, int y, const void *ctx) { return ((const u16 *)ctx)[y * VW + x] >> 15 ? 0xFFFFFF : 0; }
 #define TOP_FB_SIZE (240 * 400 * 3) /* (one eye, RGB8) */
 static u8 *top_fb[3]; /* (each: the left eye, then the right, TOP_FB_SIZE on: ctr_video_init) */
 static volatile int top_presented, top_queued;
@@ -5632,6 +5844,7 @@ void ctr_render_dump(void) {
     write_ppm("mirror0_mask", VW, VH, px_mask, mirror_tex[0].data);
     if (stereo_on) write_ppm("mirror1", VW, VH, px_mirror, mirror_tex[1].data);
     write_ppm("shadow", VW, VH, px_shadow, psx_vram);
+    write_ppm("shadow_mask", VW, VH, px_shadow_mask, psx_vram); /* (the mask bits, as mirror0_mask: DUAL's reference's) */
     for (int i = 0; i < nslots && i < 24; i++) {
         char name[48];
         snprintf(name, sizeof name, "slot%02d_%08lx", i, (unsigned long)slots[i].key);
@@ -5784,7 +5997,16 @@ void ctr_video_init(void) {
         u32 *d = dither_tex.data;
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++) {
-                u32 c = (u32)(128 + dither[y & 3][x & 3]);
+                /* (a pixel's row is sampled from the texture's far end, t running bottom-up: row y of memory is pixel
+                 * row 7 - y, the pattern's row 3 - (y & 3): measured with the scenario key blendtest= (+256), the results
+                 * fitted the PS1's pattern upside down. The stage that adds it (GPU_ADD_SIGNED) takes 128 of 255 off on
+                 * a 3DS; Azahar takes 127, and every dithered value came out one higher there: a build for it (AZAHAR=1)
+                 * has the pattern one lower. The console's tables: exact with 128; Azahar's with 127) */
+#ifdef PORT_AZAHAR
+                u32 c = (u32)(127 + dither[3 - (y & 3)][x & 3]);
+#else
+                u32 c = (u32)(128 + dither[3 - (y & 3)][x & 3]);
+#endif
                 d[tiled(x, y, 8)] = c << 24 | c << 16 | c << 8 | 0xFF;
             }
         GSPGPU_FlushDataCache(d, 8 * 8 * 4);

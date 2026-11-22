@@ -288,6 +288,7 @@ void psx_frame(void) {
         }
         port_canary("VSync callback");
     }
+    { void port_scenario_vblank(unsigned); port_scenario_vblank(vblanks); } /* (a test scenario's own drawing: scenario.c) */
     shown++;
     if (gp0_backend && gp0_backend->frame) {
         gp0_backend->frame();

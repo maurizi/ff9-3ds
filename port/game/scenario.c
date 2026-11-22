@@ -15,6 +15,8 @@ s32 chr_resetToLevel(s32,s32,u8);
 int port_scenario_cast_on; /* (btl_setCmd's patch reads the command only with a cast= key) */
 int port_scenario_enemy_cast_on; /* (btl_setEnemyCmd's patch: only with an enemy_cast= key) */
 static int scenario_enemy_cast=-1;
+static unsigned scenario_blendtest_at=420; /* blendtest_at=N: at VBlank N */
+static int scenario_blendtest; /* blendtest=C: port_scenario_vblank's tables, the polygon's colour C (+ 256: the PS1's dithering on; + 512: its mask bit set by the polygon, GP0 E6) */
 static struct {
     int blackjack; /* blackjack=1 with field_exit=4: the ending's movie skipped and The End's code taken (blackjack_ui.c) */
     int wm_set,wm_x,wm_y,wm_z,wm_rot,wm_yaw; /* wmpos=X,Y,Z,ROT,YAW: the world map's player there and its camera turned so (a 3DS capture's log line) */
@@ -120,6 +122,8 @@ void port_scenario_load(const char *path) {
             port_scenario_cast_on=1;
         }
         else if(!__builtin_strcmp(s,"enemy_cast")) {scenario_enemy_cast=number(eq,0,17);port_scenario_enemy_cast_on=1;}
+        else if(!__builtin_strcmp(s,"blendtest")) scenario_blendtest=number(eq,1,32767);
+        else if(!__builtin_strcmp(s,"blendtest_at")) scenario_blendtest_at=(unsigned)number(eq,1,100000);
         else if(!__builtin_strncmp(s,"trance.",7)) scenario.trance[number(s+7,0,3)]=number(eq,0,255);
         else if(!__builtin_strncmp(s,"preset.",7)) scenario.preset[number(s+7,0,3)]=number(eq,0,19);
         else if(!__builtin_strncmp(s,"hp.",3)) scenario.hp[number(s+3,0,3)]=number(eq,0,9999);
@@ -463,4 +467,94 @@ int port_scenario_cast(int actor, int *abil, int *targets) {
     *abil=scenario.cast_abil;
     if(scenario.cast_targets) *targets=scenario.cast_targets;
     return scenario.cast_cmd;
+}
+
+/* blendtest=C: what a semi-transparent 15-bit textured polygon of colour C (each channel) leaves in the frame, for
+ * every 5-bit value of the pixel under it (the row) and of its texel (the column), in each blending mode, the texels
+ * with the mask bit (blended) and without (drawn as they are; C + 256: with the PS1's dithering on, as a field has
+ * it; C + 4096: stretched as the swirl's; C + 512: the polygon setting the mask bit, as the swirl's do): 8 tables of 32 x 32 in the log, once, at VBlank 420 of
+ * a field. The polygon is the field-to-battle swirl's (the frame on screen drawn into the next, GP0 2E, mode 0, colour
+ * 0x98), which goes on for a second, each frame made from the one before: any difference in the arithmetic grows with
+ * every frame of it. The same packets through whatever draws (the software rasteriser on the host, the PICA renderer on
+ * a 3DS or in an emulator), so each one's arithmetic can be read and compared. The two framebuffers' top left corners
+ * are drawn over for a frame. */
+#include "gp0.h"
+void psx_gpu_sync(void);
+void port_scenario_vblank(unsigned vblank) {
+    if(!scenario.enabled || !scenario_blendtest || vblank!=scenario_blendtest_at || !g_gameState) return;
+    static u32 pk[16]; static u16 px[32*32];
+    const u32 c=(u32)scenario_blendtest&255, col=c|c<<8|c<<16, dith=((u32)scenario_blendtest>>8&1)<<9;
+    psx_gpu_sync();
+    Gp0State saved=gp0_state;
+#define BT_SEND(n) (pk[0]=(u32)(n)<<24|0xFFFFFF, DrawPrim(pk))
+    if(scenario_blendtest&1024) { /* (+ 1024: the swirl's polygon once over the frames themselves, 255 x 223 from the buffer
+                                   * at x 320 onto the one at x 0, mode 0: the texels, the pixels under and the result
+                                   * written as files (bt_src, bt_dst, bt_out: 256 x 224 words each), for the PS1's
+                                   * arithmetic to be worked from the first two and compared with the third) */
+        u16 *buf=malloc(256*224*2);
+        if(buf) {
+#ifdef PORT_3DS
+#define BT_DIR "sdmc:/3ds/ff9/dump/"
+#else
+#define BT_DIR "build/"
+#endif
+            static const char *const names[3]={BT_DIR "bt_src.bin",BT_DIR "bt_dst.bin",BT_DIR "bt_out.bin"};
+            /* (+ 2048: the result alone. Reading the texels back first makes them the CPU's, and the polygon is then drawn
+             * from a texture converted from them, not from the mirror: the two runs' files together, the frames the same) */
+            for(int i=scenario_blendtest&2048?2:0;i<3;++i) {
+                if(i==2) {
+#ifndef PORT_3DS
+                    if(scenario_blendtest&8192) { /* (+ 8192, the host: the texels and the pixels under from files, a 3DS run's
+                                                   * bt_src and bt_dst as build/bt_in_src.bin and bt_in_dst.bin: the same input) */
+                        static const char *const in[2]={"build/bt_in_src.bin","build/bt_in_dst.bin"};
+                        for(int j=0;j<2;++j) { FILE *fi=fopen(in[j],"rb"); if(fi) { if(fread(buf,2,256*224,fi)==256*224) { RECT q={j?0:320,0,256,224}; LoadImage(&q,(u32 *)buf); DrawSync(0); } fclose(fi); } }
+                    }
+#endif
+                    pk[1]=0xE3000000u; pk[2]=0xE4000000u|319|223u<<10; pk[3]=0xE5000000u; pk[4]=0xE6000000u|((u32)scenario_blendtest>>9&1); pk[5]=0xE1000000u|dith; BT_SEND(5);
+                    if(scenario_blendtest&16384) { /* (+ 16384: stretched and turned, as the swirl's later frames') */
+                        pk[1]=0x2E000000u|col; pk[2]=3|5u<<16; pk[3]=0; pk[4]=203|25u<<16; pk[5]=(5u|2u<<7)<<16|170; pk[6]=13|165u<<16; pk[7]=136u<<8; pk[8]=213|185u<<16; pk[9]=170|136u<<8; BT_SEND(9);
+                    } else {
+                    pk[1]=0x2E000000u|col; pk[2]=0; pk[3]=0; pk[4]=255; pk[5]=(5u|2u<<7)<<16|255; pk[6]=223u<<16; pk[7]=223u<<8; pk[8]=255|223u<<16; pk[9]=255|223u<<8; BT_SEND(9);
+                    }
+                    psx_gpu_sync();
+                }
+                RECT r={i==0?320:0,0,256,224};
+                StoreImage(&r,(u32 *)buf);
+                DrawSync(0);
+                FILE *fp=fopen(names[i],"wb");
+                if(fp) { fwrite(buf,2,256*224,fp); fclose(fp); }
+            }
+            free(buf);
+            port_log("BT frame test written\n");
+        }
+        gp0_state=saved;
+        return;
+    }
+    for(int masked=1;masked>=0;--masked) for(u32 abr=0;abr<4;++abr) {
+        /* the texels: columns of 0..31 at (320,0), with or without the mask bit */
+        pk[1]=0xE3000000u|320; pk[2]=0xE4000000u|639|223u<<10; pk[3]=0xE5000000u; pk[4]=0xE6000000u|(u32)masked; pk[5]=0xE1000000u; BT_SEND(5); /* (the strips undithered) */
+        for(u32 x=0;x<32;++x) { pk[1]=0x60000000u|x<<3|x<<11|x<<19; pk[2]=(320+x); pk[3]=1|32u<<16; BT_SEND(3); }
+        /* the pixels under: rows of 0..31 at (0,0), no mask bit */
+        pk[1]=0xE3000000u; pk[2]=0xE4000000u|319|223u<<10; pk[3]=0xE5000000u; pk[4]=0xE6000000u; BT_SEND(4);
+        for(u32 y=0;y<32;++y) { pk[1]=0x60000000u|y<<3|y<<11|y<<19; pk[2]=y<<16; pk[3]=32|1u<<16; BT_SEND(3); }
+        const u32 tp=5|abr<<5|2u<<7;
+        pk[1]=0xE1000000u|dith; pk[2]=0xE6000000u|((u32)scenario_blendtest>>9&1); BT_SEND(2);
+        if(scenario_blendtest&4096) { /* (+ 4096: the polygon as the swirl's are, 34 x 24 texels over 40 x 28 pixels, at (3, 5): which texel each pixel takes) */
+            pk[1]=0x2E000000u|col; pk[2]=3|5u<<16; pk[3]=0; pk[4]=43|5u<<16; pk[5]=tp<<16|34; pk[6]=3|33u<<16; pk[7]=24u<<8; pk[8]=43|33u<<16; pk[9]=34|24u<<8; BT_SEND(9);
+        } else {
+        pk[1]=0x2E000000u|col; pk[2]=0; pk[3]=0; pk[4]=32; pk[5]=tp<<16|32; pk[6]=32u<<16; pk[7]=32u<<8; pk[8]=32|32u<<16; pk[9]=32|32u<<8; BT_SEND(9);
+        }
+        psx_gpu_sync();
+        RECT r={scenario_blendtest&4096?8:0,scenario_blendtest&4096?4:0,32,32};
+        StoreImage(&r,(u32 *)px);
+        DrawSync(0);
+        for(int y=0;y<32;++y) {
+            char line[80];
+            for(int x=0;x<32;++x) { const unsigned v=px[y*32+x]&31; line[x*2]="0123456789abcdef"[v>>4]; line[x*2+1]="0123456789abcdef"[v&15]; }
+            line[64]=0;
+            port_log("BT c %u abr %u masked %d row %2d: %s\n",(unsigned)scenario_blendtest,(unsigned)abr,masked,y,line);
+        }
+    }
+#undef BT_SEND
+    gp0_state=saved;
 }
