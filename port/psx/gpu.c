@@ -39,6 +39,10 @@ unsigned int psx_gpu_packets, psx_gpu_words;
 /* Drawing: every packet goes through the GP0 decoder (gp0.c), which keeps the drawing state and hands primitives to
  * the active backend (software reference, or the DS 3D hardware). */
 #include "gp0.h"
+/* (the code a primitive runs through, as one block: see render.c) */
+#ifndef PORT_HOT_PRIM
+#define PORT_HOT_PRIM
+#endif
 
 int psx_ui_copy(int sx, int sy, int dx, int dy, int w, int h);
 
@@ -675,7 +679,7 @@ unsigned int psx_gp0_len(const u32 *w, unsigned int avail) {
 /* the packet being drawn (a renderer may route packets by where they are: port/3ds/render.c) */
 const u32 *psx_gpu_packet;
 
-static void draw_packet(u32 *p) {
+PORT_HOT_PRIM static void draw_packet(u32 *p) {
     unsigned int len = ((P_TAG *)p)->len;
     psx_gpu_packet = p;
     u32 *w = p + 1;
@@ -790,7 +794,7 @@ volatile unsigned long long psx_gpu_defer_us[4];
 #ifndef PORT_HOT_ANCHOR
 #define PORT_HOT_ANCHOR(n)
 #endif
-/* (PORT_HOT_ANCHOR: at a 4 KiB boundary, see render.c's) */
+/* (PORT_HOT_PRIM: in the per-primitive block, see render.c's) */
 /* (psx_packet_timing 1: the walk's packets timed by their first primitive's command, by thread (0 the game's, 1 the
  * worker) and by where they draw (1: a drawing area at y 256 or under, an effect's own): the heartbeat's) */
 int psx_packet_timing;
@@ -804,7 +808,7 @@ static __attribute__((noinline)) void draw_packet_timed(u32 *p) {
     draw_packet(p);
     psx_packet_us[th][off][cmd] += (unsigned int)(plat_time_us() - t0), psx_packet_n[th][off][cmd]++;
 }
-PORT_HOT_ANCHOR(384) static int ot_walk(OtWalk *s, const volatile int *stop) {
+PORT_HOT_PRIM static int ot_walk(OtWalk *s, const volatile int *stop) {
     u32 *p = s->p;
     const u32 *const head = s->head;
     unsigned int *const main_ot = s->main_ot;

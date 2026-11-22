@@ -50,8 +50,18 @@ extern unsigned short *psx_vram;
 /* An Old 3DS's instruction cache is 16 KB in four ways of 4 KB: what every primitive runs (the walk in gpu.c, the
  * decoder in gp0.c, the functions here) fits or not by where each piece lies within its 4 KB, and that moved with every
  * change to any file linked before them: Lindblum's castle station 2010 -> 2085 ms per 120 VBlanks from a change to the
- * CD's code alone. One function of each of the three is put at a 4 KiB boundary (the Makefile's PORT_HOT_ANCHOR for an
- * Old 3DS's build: aligned(4096)), the rest of each keeping its place by it: their layout is then theirs alone. */
+ * CD's code alone. One function of each of the three was put at a fixed place in its 4 KiB (PORT_HOT_ANCHOR:
+ * aligned(4096), the rest of each keeping its place by it); what was called between primitives from outside those
+ * (run_open, button_icon, trim_max) still moved with the code before it, into the cache's fullest lines with a day's
+ * changes: the same field's walk 18.6 -> 19.9 ms.
+ * PORT_HOT_PRIM: all of it as one block (the Makefile's, an Old 3DS's build: the section named .text alone, which the
+ * link puts before every function's own .text.name, this port's objects first): 15.7 KB side by side, each line of the
+ * cache's four ways taken once at most wherever the block lies. On an Old 3DS, the walk on the game's thread: field 610
+ * 17.9 ms (18.6 with the pieces at their fixed places), field 1310 23.4 (23.8). Keep it under 16 KB (nm -S -n: from
+ * gp0_tpage_sprite16 to r_sprite16's end); gp0.c's command, 7 KB that few packets run, stays outside at its own. */
+#ifndef PORT_HOT_PRIM
+#define PORT_HOT_PRIM
+#endif
 #ifndef PORT_HOT_ANCHOR
 #define PORT_HOT_ANCHOR(n)
 #endif
@@ -694,7 +704,7 @@ HOT_DRAW static inline int cell_range(int x0, int y0, int x1, int y1, int *cx0, 
  * stamped against its sources' cells, none of these): it is skipped. The world map's ground draws small triangles one
  * after another in the same cells) */
 static unsigned cells_ver;
-PORT_HOT_ANCHOR(704) HOT_DRAW static void gpu_draws(int x0, int y0, int x1, int y1) {
+PORT_HOT_PRIM static void gpu_draws(int x0, int y0, int x1, int y1) {
     static int last_cells = -1;
     static unsigned last_ver;
     int cx0, cy0, cx1, cy1;
@@ -991,7 +1001,7 @@ static Vtx *alloc_vtx(unsigned n);
 static void gpu_sync_do(void);
 
 /* the open batches into the batch list, in order, their depth values from here */
-HOT_DRAW static void run_flush(void) {
+PORT_HOT_PRIM static void run_flush(void) {
     int n = run_n;
     if (!n) return;
     run_n = 0;
@@ -1047,12 +1057,7 @@ static inline Vtx *run_take(int i, unsigned n, float *d) {
     return o;
 }
 
-/* (PORT_HOT_ANCHOR: called some seventy times a frame, between primitives whose code fills the instruction cache: where
- * it lies in its 4 KiB decides whether it is still there the next time. Not in the per-primitive section, it moved with
- * any code before it: at 0xD40, among gpu_draws, draw_packet, the tiles' decoder and their drawing, a day's changes
- * elsewhere cost Lindblum's castle station's walk 1.3 ms and field 1310's 2 on an Old 3DS. Kept at 0x268, where it was
- * when it was measured; button_icon (every tile and rectangle) and trim_max likewise at theirs) */
-PORT_HOT_ANCHOR(154) __attribute__((noinline)) static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
+PORT_HOT_PRIM __attribute__((noinline)) static void run_open(int i, int kind, int abr, const u16 sc[4], C3D_Tex *tex) {
     if (i == 0) { /* (the run's room: the buffer's rest, its last RUN_V for group 1; nothing else allocates meanwhile) */
         /* (both eyes' values of this submit must fit before the next clear (frame_begin clears): the run ends at as many
          * primitives as there are values left) */
@@ -1075,7 +1080,7 @@ PORT_HOT_ANCHOR(154) __attribute__((noinline)) static void run_open(int i, int k
 
 /* where a primitive's n vertices go in the run (cur_target 0, n <= RUN_V, mirror_depth: run_add's case), *d their
  * depth value */
-HOT_DRAW static Vtx *run_slot(int kind, int abr, const u16 sc[4], C3D_Tex *tex, unsigned n, float *d) {
+PORT_HOT_PRIM static Vtx *run_slot(int kind, int abr, const u16 sc[4], C3D_Tex *tex, unsigned n, float *d) {
     if (run_n && run_prims >= run_max) run_flush();
     if (run_n) {
         int last = run_n - 1;
@@ -1112,7 +1117,7 @@ static void run_add(int kind, int abr, const u16 sc[4], C3D_Tex *tex, const Vtx 
     for (unsigned k = 0; k < n; k++) o[k] = v[k], o[k].d = d;
 }
 
-HOT_DRAW static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n) {
+PORT_HOT_PRIM static void add_batch(int kind, int abr, int eyes, const u16 sc[4], C3D_Tex *tex, unsigned first, unsigned n) {
     if (run_n) run_flush(); /* (anything else drawn ends the run: it keeps its place after it) */
     if (nbatches) {
         Batch *b = &batches[nbatches - 1];
@@ -2795,7 +2800,7 @@ __attribute__((noinline, cold)) static C3D_Tex *texture_for_drawn(const Gp0Mode 
     }
     return NULL;
 }
-HOT_DRAW static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
+PORT_HOT_PRIM static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int u1, int v1, unsigned *flags) {
     if (__builtin_expect(m->depth == 2, 0)) {
         C3D_Tex *t = texture_for_drawn(m, u0, v0, u1, v1, flags);
         if (t) return t;
@@ -3282,8 +3287,7 @@ static inline int imax(int a, int b) { return a > b ? a : b; }
  * asked for the lower half's blocks, which the strip before had just drawn into: read back from the GPU, 12 to 16
  * waits a frame (an Old 3DS: 2.1 to 2.9 s per 120 VBlanks). */
 int ctr_sw_trim = 1;
-/* (PORT_HOT_ANCHOR: kept at 0xDDC, see run_open) */
-PORT_HOT_ANCHOR(887) static __attribute__((noinline)) void trim_max(const int *x, const int *y, const int *u, const int *v, int nv, int *u0, int *v0, int *u1, int *v1) {
+PORT_HOT_PRIM static __attribute__((noinline)) void trim_max(const int *x, const int *y, const int *u, const int *v, int nv, int *u0, int *v0, int *u1, int *v1) {
     if (!ctr_sw_trim) return;
     int done = 0;
     /* (and a quad that is a rectangle of texels one to a pixel along an axis: only its texels within the drawing area
@@ -3563,7 +3567,7 @@ static inline int poly_plain(void) {
     return !(ui_mode || stereo_on || ctr_outline || !mirror_depth || menu_state == 2 ||
              (menu_state != 3 && in_window_packets(psx_gpu_packet)));
 }
-HOT_DRAW static int r_poly1(const unsigned *w) {
+PORT_HOT_PRIM static int r_poly1(const unsigned *w) {
 #ifdef PORT_PROBE_AT
     (void)w;
     return 0;
@@ -3993,8 +3997,7 @@ static void button_icons_frame(void) {
 }
 
 /* the 3DS icon a sprite stands for, -1 if it isn't a button icon */
-/* (PORT_HOT_ANCHOR: kept at 0x140, see run_open) */
-PORT_HOT_ANCHOR(80) static int button_icon(const Gp0Mode *m, int u, int v, int w, int h) {
+PORT_HOT_PRIM static int button_icon(const Gp0Mode *m, int u, int v, int w, int h) {
     for (int k = 0; k < n_btn; k++) {
         const int *d = btn_def[k];
         /* (the message system draws them under another texture page: matched by CLUT, uv and size) */
@@ -4123,7 +4126,7 @@ static int in_window_packets(const void *p);
 static inline int bg_plain(void) { return !ui_mode && !stereo_on && !ctr_outline && menu_state != 2; }
 /* one tile (t: its page word, then the sprite's three) inside the scissor sc, as r_rect and emit would draw it; 0: not
  * this way (its texels wrap past its page's edge) */
-HOT_DRAW static int bg_tile(const unsigned t[4], const u16 sc[4]) {
+PORT_HOT_PRIM static int bg_tile(const unsigned t[4], const u16 sc[4]) {
     if ((t[3] & 0xFF) > 240 || ((t[3] >> 8) & 0xFF) > 240) return 0;
     Gp0Mode m;
     Gp0Vtx v;
@@ -4173,7 +4176,7 @@ HOT_DRAW static int bg_tile(const unsigned t[4], const u16 sc[4]) {
     return 1;
 }
 /* gp0_tpage_sprite16's (every texture page + SPRT_16 packet: a field background's tiles), its bookkeeping done */
-HOT_DRAW static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc) {
+PORT_HOT_PRIM static int r_sprite16(unsigned int tp, unsigned int cmd, unsigned int xy, unsigned int uvc) {
     u16 sc[4];
     if (!bg_plain() || in_window_packets(psx_gpu_packet) || !area_scissor(sc)) return 0;
     const unsigned t[4] = {tp, cmd, xy, uvc};
@@ -4814,7 +4817,7 @@ static int ui_packet(void) {
 /* (ui_packet's test, without marking the range drawn from. The last packet outside them leaves the addresses between the
  * ranges around it, which the next packets, from the same buffer, mostly fall in: each primitive tested every range,
  * some 0.8 us of the world map's ~3300 a frame on an Old 3DS) */
-HOT_DRAW static int in_window_packets(const void *pv) {
+PORT_HOT_PRIM static int in_window_packets(const void *pv) {
     static const u8 *clo, *chi;
     static unsigned cver = ~0u;
     const u8 *p = (const u8 *)pv;

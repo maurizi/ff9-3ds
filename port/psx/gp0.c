@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include "blackbox.h"
 #include "gp0.h"
+#ifndef PORT_HOT_PRIM
+#define PORT_HOT_PRIM
+#endif
 #ifndef PORT_HOT_ANCHOR
 #define PORT_HOT_ANCHOR(n)
 #endif
@@ -370,7 +373,7 @@ PORT_HOT_ANCHOR(0) GP0_HOT_THUMB static unsigned int command(const unsigned int 
 /* A packet of exactly a texture page (E1) and a 16x16 sprite (SPRT_16, 7C-7F): a field background tile (BgSprt,
  * MargePrim'd). Both commands as command() runs them, without its dispatch; the font pages' sprites (their glyph
  * coverage, below) are left to it. 0: not run. */
-GP0_HOT_THUMB int gp0_tpage_sprite16(const unsigned int *w) {
+PORT_HOT_PRIM GP0_HOT_THUMB int gp0_tpage_sprite16(const unsigned int *w) {
     unsigned int tp = w[0] & 0xFFFFFF, cmd = w[1] >> 24;
     if ((tp & 0x10) && (tp & 15) >= 14) return 0; /* (page 896 or 960, 256) */
     if (!gp0_backend || !gp0_backend->rect) return 0;
@@ -403,7 +406,7 @@ GP0_HOT_THUMB int gp0_tpage_sprite16(const unsigned int *w) {
 
 /* gp0_tpage_sprite16's mode and vertex for its sprite (t: the page word, then the sprite's three), as it gives them to
  * the backend's rect, gp0_state.texpage set to its page: for a run of them drawn at once (render.c gxh_bg_run) */
-void gp0_sprite16_setup(const unsigned int *t, Gp0Mode *m, Gp0Vtx *v) {
+PORT_HOT_PRIM void gp0_sprite16_setup(const unsigned int *t, Gp0Mode *m, Gp0Vtx *v) {
     const unsigned int tp = t[0] & 0xFFFFFF, cmd = t[1] >> 24;
     gp0_state.texpage = tp;
     m->textured = 1;
@@ -438,7 +441,7 @@ void gp0_note_sprites(unsigned int texpage, unsigned int n) {
 
 /* A packet of exactly one polygon (GP0 20-3F: the world map's ground and its fog, models' faces), given to the
  * backend's poly1 with command()'s bookkeeping for it, without its dispatch. 0: not run (command() runs it). */
-int gp0_poly_packet(const unsigned int *w, unsigned int len) {
+PORT_HOT_PRIM int gp0_poly_packet(const unsigned int *w, unsigned int len) {
 #if defined(PORT_GP0_PROBE) || defined(PORT_PROBE_AT)
     (void)w; (void)len;
     return 0;
