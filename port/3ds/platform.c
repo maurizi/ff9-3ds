@@ -379,6 +379,9 @@ void plat_wait_frame(void) {
         const unsigned long long t0 = plat_time_us();
         { extern int ctr_present_late; ctr_present_late = (s32)(C3D_FrameCounter(0) - next_vblank) >= 1; }
         ctr_present(frames);
+#ifdef PORT_PXWATCH
+        { extern long ctr_pxwatch_frame; ctr_pxwatch_frame = frames + 1; }
+#endif
         ctr_present_us += plat_time_us() - t0;
         long_note(1, plat_time_us() - t0, frames);
     }

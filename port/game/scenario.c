@@ -122,7 +122,7 @@ void port_scenario_load(const char *path) {
             port_scenario_cast_on=1;
         }
         else if(!__builtin_strcmp(s,"enemy_cast")) {scenario_enemy_cast=number(eq,0,17);port_scenario_enemy_cast_on=1;}
-        else if(!__builtin_strcmp(s,"blendtest")) scenario_blendtest=number(eq,1,32767);
+        else if(!__builtin_strcmp(s,"blendtest")) scenario_blendtest=number(eq,1,65535);
         else if(!__builtin_strcmp(s,"blendtest_at")) scenario_blendtest_at=(unsigned)number(eq,1,100000);
         else if(!__builtin_strncmp(s,"trance.",7)) scenario.trance[number(s+7,0,3)]=number(eq,0,255);
         else if(!__builtin_strncmp(s,"preset.",7)) scenario.preset[number(s+7,0,3)]=number(eq,0,19);
@@ -472,7 +472,7 @@ int port_scenario_cast(int actor, int *abil, int *targets) {
 /* blendtest=C: what a semi-transparent 15-bit textured polygon of colour C (each channel) leaves in the frame, for
  * every 5-bit value of the pixel under it (the row) and of its texel (the column), in each blending mode, the texels
  * with the mask bit (blended) and without (drawn as they are; C + 256: with the PS1's dithering on, as a field has
- * it; C + 4096: stretched as the swirl's; C + 512: the polygon setting the mask bit, as the swirl's do): 8 tables of 32 x 32 in the log, once, at VBlank 420 of
+ * it; C + 4096: stretched as the swirl's; C + 32768: the texels uploaded, an ordinary texture; C + 512: the polygon setting the mask bit, as the swirl's do): 8 tables of 32 x 32 in the log, once, at VBlank 420 of
  * a field. The polygon is the field-to-battle swirl's (the frame on screen drawn into the next, GP0 2E, mode 0, colour
  * 0x98), which goes on for a second, each frame made from the one before: any difference in the arithmetic grows with
  * every frame of it. The same packets through whatever draws (the software rasteriser on the host, the PICA renderer on
@@ -534,6 +534,15 @@ void port_scenario_vblank(unsigned vblank) {
         /* the texels: columns of 0..31 at (320,0), with or without the mask bit */
         pk[1]=0xE3000000u|320; pk[2]=0xE4000000u|639|223u<<10; pk[3]=0xE5000000u; pk[4]=0xE6000000u|(u32)masked; pk[5]=0xE1000000u; BT_SEND(5); /* (the strips undithered) */
         for(u32 x=0;x<32;++x) { pk[1]=0x60000000u|x<<3|x<<11|x<<19; pk[2]=(320+x); pk[3]=1|32u<<16; BT_SEND(3); }
+        if(scenario_blendtest&32768) { /* (+ 32768: the texels uploaded, not drawn: a texture as any model's or effect's, converted
+                                        * from VRAM, where the strips drawn above are a part of the frame sampled where it is) */
+            static u16 tx[32*32];
+            for(int i=0;i<32*32;++i) { const u32 x=(u32)i&31; tx[i]=(u16)(x|x<<5|x<<10|(masked?0x8000u:0)); }
+            psx_gpu_sync();
+            RECT q={320,0,32,32};
+            LoadImage(&q,(u32 *)tx);
+            DrawSync(0);
+        }
         /* the pixels under: rows of 0..31 at (0,0), no mask bit */
         pk[1]=0xE3000000u; pk[2]=0xE4000000u|319|223u<<10; pk[3]=0xE5000000u; pk[4]=0xE6000000u; BT_SEND(4);
         for(u32 y=0;y<32;++y) { pk[1]=0x60000000u|y<<3|y<<11|y<<19; pk[2]=y<<16; pk[3]=32|1u<<16; BT_SEND(3); }

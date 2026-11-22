@@ -1514,6 +1514,7 @@ static inline int outline_buf(int x, int y) { return x >= 256 || y >= 256; }
 static void page_copy(const Batch *b);
 static unsigned nsubmits, page_pending = ~0u; /* (submits so far; the one a page copy is recorded in: mirror_page) */
 static int is_slot_tex(const C3D_Tex *t);
+static C3D_Tex page_tex; /* (mirror_page's) */
 static void submit_do(void);
 static void submit(void) {
     PART_BEGIN();
@@ -1579,7 +1580,11 @@ static void submit_do(void) {
                               ordered ? -depth_off * (1.0f / 16384) : -0.5f);
             }
             /* (a slot's texture is RGBA5551: its own combiners for the same three kinds) */
-            const int bk = b->kind >= K_TEX && b->kind <= K_TEX_P2 && is_slot_tex(b->tex)
+            /* (... and the mirror's page copied with its mask bits (mirror_page), a mirror's pixel being a slot's texel:
+             * 0x0000 not drawn. An opaque polygon's copy had alpha 1 throughout and drew its 0x0000 texels black: the
+             * polygons of a spell's layer drawn from a part of VRAM not yet drawn into, black slabs over the ground
+             * (the sweep's battles 964, 935, 168: 10 to 15% of a frame's pixels) */
+            const int bk = (b->kind >= K_TEX && b->kind <= K_TEX_P2 && is_slot_tex(b->tex)) || (b->kind == K_TEX && b->tex == &page_tex)
                                ? b->kind - K_TEX + K_T5 : b->kind;
             /* (a primitive blended into the mirror: set_tev_for's stages that keep its 5 bits) */
             const int quant = !target && ctr_sw_quant && b->abr != NO_BLEND && !b->pcol &&
@@ -2586,9 +2591,9 @@ static void slot_regroup(void) {
  * wraps), with its blocks current; *flags = the union of their texel kinds. */
 /* A 15-bit texture read from VRAM the GPU has drawn (the field-to-battle swirl samples the frame it draws into): the
  * page copied on the GPU from the mirror into page_tex, once per frame and page, instead of the mirror read back to
- * the CPU and converted (that readback every frame held the transition at ~6 s per 120 frames on a 3DS). Alpha is
- * kept 1: the mirror's alpha is the PS1's mask bit, not transparency (a texel 0 is drawn black, not skipped); a
- * semi-transparent primitive's copy keeps it (alpha), for its two passes. */
+ * the CPU and converted (that readback every frame held the transition at ~6 s per 120 frames on a 3DS). The copy
+ * keeps the mirror's alpha, the PS1's mask bit (bit 15): a semi-transparent primitive's two passes split by it, an
+ * opaque one draws every texel but 0x0000 (submit_do: as a slot's texel). */
 static C3D_Tex page_tex;
 static C3D_RenderTarget *page_rt;
 static int page_x = -1, page_y = -1, page_alpha;
@@ -2795,7 +2800,7 @@ __attribute__((noinline, cold)) static C3D_Tex *texture_for_drawn(const Gp0Mode 
      * page has the mirror's one alpha bit, and with no flags it drew nothing, Demi's sphere and its glow on the ground) */
     if (m->depth == 2 && !m->semi && !gp0_state.twin_mask_x && !gp0_state.twin_mask_y &&
         gpu_owned(m->tx + u0, m->ty + v0, m->tx + u1 + 1, m->ty + v1 + 1)) {
-        C3D_Tex *t = mirror_page(m->tx, m->ty, 0);
+        C3D_Tex *t = mirror_page(m->tx, m->ty, 1);
         if (t) { *flags = 0; tex_ou = tex_ov = 0; return t; }
     }
     return NULL;
@@ -2874,9 +2879,25 @@ HOT_DRAW static int area_scissor(u16 sc[4]) {
     return sc[2] > sc[0] && sc[3] > sc[1];
 }
 
+/* A textured primitive's colour, drawn into the mirror: each channel x 31/32, rounded down. The PS1 multiplies the
+ * texel's 5 bits by the colour ((t x c) >> 7, or >> 4 before its dithering); the GPU here has the texel as 8 bits, its
+ * 5 with their top 3 again below (t x 255/31), and the product came out 1/32 over: one step of the 32 too bright in a
+ * third of all (texel, colour) pairs (blendtest= with + 32768: 36% of them undithered, 30% dithered; with this 5%,
+ * as many under as over), every textured polygon a little, and a spell's layers added over each other six steps of
+ * the 32 in all (the sweep's battles 2, 935 and 211: 9 to 18% of a frame's pixels). (x km >> 5 on two channels at
+ * once and the third: no carry from one into the next, a channel x 31 being under 16 bits.) */
+#define TEX_RGB(c, km) (((((c) & 0xFF00FFu) * (km)) >> 5 & 0xFF00FFu) | ((((c) & 0x00FF00u) * (km)) >> 5 & 0x00FF00u))
+int ctr_sw_texscale = 1;
 static inline u32 vcolor(const Gp0Mode *m, const Gp0Vtx *v) {
     if (m->textured && m->raw) return 0xFF808080;
     return 0xFF000000u | (u32)v->b << 16 | (u32)v->g << 8 | (u32)v->r;
+}
+/* (into the mirror: where the primitive is known to go there. emit scales its own, a UI layer's stay as they are: its
+ * pixels are 8 bits, drawn over the scene's shown at 8) */
+static inline u32 vcolor_scene(const Gp0Mode *m, const Gp0Vtx *v) {
+    if (m->textured && m->raw) return 0xFF808080;
+    const u32 c = (u32)v->b << 16 | (u32)v->g << 8 | (u32)v->r;
+    return 0xFF000000u | (m->textured && ctr_sw_texscale ? TEX_RGB(c, 31u) : c);
 }
 
 static int world_ground; /* (ctr_present: the world map is up) */
@@ -3245,6 +3266,11 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         int mi = stereo_on ? model_index() : 0;
         if (mi) v = model_weld(v, n, moved, mi); /* (a model's meshes meeting: one depth where their corners do) */
     }
+    Vtx scaled[6];
+    if (layer < 0 && m->textured && !m->raw && ctr_sw_texscale && n <= 6 && !is_fixed_tex(tex)) { /* (vcolor_scene's 31/32) */
+        for (unsigned i = 0; i < n; i++) scaled[i] = v[i], scaled[i].rgba = (v[i].rgba & 0xFF000000u) | TEX_RGB(v[i].rgba, 31u);
+        v = scaled;
+    }
     cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0) |
                (layer < 0 && (gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
     ctr_render_stats[1]++;
@@ -3471,7 +3497,7 @@ static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         t[i].u = (float)v[i].u;
         t[i].v = (float)v[i].v;
         if (tex) t[i].u += ou, t[i].v += ov;
-        t[i].rgba = vcolor(m, &v[i]);
+        t[i].rgba = vcolor_scene(m, &v[i]);
     }
     float tdu[2] = {uvh, uvh}, tdv[2] = {uvh, uvh}; /* (each triangle's half texel: tri_uv_off) */
     const int wx[3] = {v[0].x, v[1].x, v[2].x}, wy[3] = {v[0].y, v[1].y, v[2].y}, wu[3] = {v[0].u, v[1].u, v[2].u}, wv[3] = {v[0].v, v[1].v, v[2].v};
@@ -3515,9 +3541,9 @@ static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
         if (tflags & 2) passes[np++] = K_TEX_P2;
     }
     if ((tflags & 8) && ctr_sw_pagefix) { /* (the mirror's pixels times one colour: set_tev_for) */
-        const u32 c = t[0].rgba & 0xFFFFFF;
+        const u32 c = vcolor(m, &v[0]) & 0xFFFFFF; /* (the PS1's colour, the tables' index: not vcolor_scene's) */
         int one = 1;
-        for (int i = 1; i < n; i++) one &= (t[i].rgba & 0xFFFFFF) == c;
+        for (int i = 1; i < n; i++) one &= (vcolor(m, &v[i]) & 0xFFFFFF) == c;
         /* (with dithering, the three channels' forms the same: one stage's scale is all three's) */
         if (one && (cur_mask & MASK_DITHER) && !m->raw && (pagefixd[c & 0xFF][0] != pagefixd[c >> 8 & 0xFF][0] || pagefixd[c & 0xFF][0] != pagefixd[c >> 16 & 0xFF][0])) one = 0;
         if (one) {
@@ -3650,6 +3676,12 @@ HOT_DRAW static inline __attribute__((always_inline)) int poly_k(const unsigned 
     /* (each vertex made once and written where the run keeps it: r_poly_plain's values, the same sums in the same
      * order) */
     const u32 rawc = textured && m.raw ? 0xFF808080 : 0;
+    u32 col[4]; /* (each vertex's colour, vcolor_scene's: made in one place, the per-primitive block being 16 KB at most) */
+    {
+        const u32 km = textured && ctr_sw_texscale ? 31 : 32;
+#pragma GCC unroll 0
+        for (int i = 0; i < nv; i++) col[i] = rawc ? rawc : 0xFF000000u | TEX_RGB(w[PK_COL(i)], km);
+    }
     const float ou = tex ? (float)tex_ou : 0, ov = tex ? (float)tex_ov : 0;
     const float uvh = c->uvh;
     if (ctr_ko == 7) return 1;
@@ -3669,7 +3701,7 @@ HOT_DRAW static inline __attribute__((always_inline)) int poly_k(const unsigned 
                 float tu = (float)u[i] + uvh, tv = (float)v[i] + uvh;
                 if (tex) tu += ou, tv += ov;
                 o[i].u = tu, o[i].v = tv;
-                o[i].rgba = rawc ? rawc : 0xFF000000u | (w[PK_COL(i)] & 0xFFFFFF);
+                o[i].rgba = col[i];
                 o[i].d = d;
             }
         }
@@ -3684,7 +3716,7 @@ HOT_DRAW static inline __attribute__((always_inline)) int poly_k(const unsigned 
         float tu = (float)u[i] + uvh, tv = (float)v[i] + uvh;
         if (tex) tu += ou, tv += ov;
         t[i].u = tu, t[i].v = tv;
-        t[i].rgba = rawc ? rawc : 0xFF000000u | (w[PK_COL(i)] & 0xFFFFFF);
+        t[i].rgba = col[i];
     }
     const unsigned nout = (ta ? 3 : 0) + (tb ? 3 : 0);
     for (int p = 0; p < np; p++) {
@@ -4146,7 +4178,7 @@ PORT_HOT_PRIM static int bg_tile(const unsigned t[4], const u16 sc[4]) {
     const float qx0 = v.x, qy0 = v.y, qx1 = v.x + 16, qy1 = v.y + 16;
     const float qu0 = icon >= 0 ? 0 : ou + v.u, qv0 = icon >= 0 ? 0 : ov + v.v;
     const float qu1 = icon >= 0 ? 16 : ou + v.u + 16, qv1 = icon >= 0 ? 16 : ov + v.v + 16;
-    const u32 rgba = vcolor(&m, &v);
+    const u32 rgba = icon >= 0 ? vcolor(&m, &v) : vcolor_scene(&m, &v); /* (an icon's texels are 8 bits) */
     gpu_draws(bx0, by0, bx1, by1);
     cur_target = 0;
     cur_mask = (gp0_state.set_mask ? MASK_SET : 0) | (gp0_state.check_mask ? MASK_CHECK : 0) |
@@ -4488,10 +4520,89 @@ static int dual_scene(const Gp0Mode *m) {
     return !(ui_mode || battle_list_replaced() || menu_state == 2 ||
              (menu_state != 3 && ui_packet() && !(m && m->textured && m->depth == 2)));
 }
+#ifdef PORT_PXWATCH
+/* PXWATCH=x,y,f0,f1 (with DUAL=1): every primitive that changes the reference's pixel (x, y) of the frame being drawn
+ * in VBlanks f0..f1, logged with its mode, vertices and the pixel before and after: which primitive a difference
+ * between the two pictures comes from */
+long ctr_pxwatch_frame;
+static u16 pxw_before;
+static u16 *pxw_at(void) {
+    static const int w[4] = {PORT_PXWATCH};
+    if (ctr_pxwatch_frame < w[2] || ctr_pxwatch_frame > w[3]) return 0;
+    return &psx_vram[((gp0_state.ofs_y + w[1]) & 511) * VW + ((gp0_state.ofs_x + w[0]) & 1023)];
+}
+static void pxw_log(const char *what, const Gp0Mode *m, const Gp0Vtx *v, int n, int scene) {
+    const u16 *p = pxw_at();
+    if (!p) return;
+    if (*p == pxw_before) { /* (left as it was: logged all the same if the primitive's box holds the pixel) */
+        static const int w[4] = {PORT_PXWATCH};
+        int x0 = 9999, y0 = 9999, x1 = -9999, y1 = -9999;
+        for (int i = 0; i < n; i++) {
+            const int x = v[i].x - gp0_state.ofs_x, y = v[i].y - gp0_state.ofs_y;
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+        }
+        if (n == 1) x1 = x0 + 16, y1 = y0 + 16; /* (a rectangle: its corner alone is known here) */
+        if (w[0] < x0 || w[0] > x1 || w[1] < y0 || w[1] > y1) return;
+    }
+    port_log("PX f%ld %s%d scene %d tex %d raw %d semi %d abr %d gour %d depth %d page %d,%d clut %d,%d e1 %x mask %d/%d: %04x -> %04x\n",
+             ctr_pxwatch_frame, what, n, scene, m->textured, m->raw, m->semi, m->abr, m->gouraud, m->depth, m->tx, m->ty, m->clut_x, m->clut_y,
+             gp0_state.texpage, gp0_state.set_mask, gp0_state.check_mask, pxw_before, *p);
+    for (int i = 0; i < n; i++)
+        port_log("PX   v%d %d,%d rgb %d,%d,%d uv %d,%d\n", i, v[i].x - gp0_state.ofs_x, v[i].y - gp0_state.ofs_y, v[i].r, v[i].g, v[i].b, v[i].u, v[i].v);
+    if (m->textured && m->depth < 2 && n >= 3) { /* (the texture cache's blocks of its texels: what they hold and what VRAM has) */
+        int u0 = 255, v0 = 255, u1 = 0, v1 = 0;
+        for (int i = 0; i < n; i++) {
+            if (v[i].u < u0) u0 = v[i].u;
+            if (v[i].u > u1) u1 = v[i].u;
+            if (v[i].v < v0) v0 = v[i].v;
+            if (v[i].v > v1) v1 = v[i].v;
+        }
+        const u32 key = (u32)m->depth << 30 | (u32)(m->tx >> 6) << 26 | (u32)(m->ty >> 8) << 25 | (u32)(m->clut_x >> 4) << 9 | (u32)m->clut_y | 1u << 24;
+        const TexSlot *sl = 0;
+        int same = 0;
+        for (int i = 0; i < nslots; i++)
+            if (slots[i].key == key) sl = sl ? sl : &slots[i], same++;
+        if (!sl) { port_log("PX   no slot for key %08lx\n", (unsigned long)key); return; }
+        const u16 *dst = slot_tex(sl)->data;
+        const unsigned aw = slot_tex(sl)->width;
+        const u16 *cl = psx_vram + (m->clut_y & 511) * VW;
+        for (int by = v0 >> 5; by <= v1 >> 5; by++)
+            for (int bx = u0 >> 5; bx <= u1 >> 5; bx++) {
+                const int bb = by * 8 + bx;
+                int have = 0, want = 0, off = 0;
+                for (int y = 0; y < 32; y++)
+                    for (int x = 0; x < 32; x++) {
+                        const int u = bx * 32 + x, vv = by * 32 + y;
+                        const u16 w = psx_vram[((m->ty + vv) & 511) * VW + ((m->tx + (m->depth ? u >> 1 : u >> 2)) & 1023)];
+                        const unsigned c = cl[(m->clut_x + (m->depth ? w >> ((u & 1) * 8) & 255 : w >> ((u & 3) * 4) & 15)) & 1023];
+                        const u16 want5 = (u16)(c ? ((c & 31) << 11 | (c & 0x3E0) << 1 | (c >> 9 & 0x3E) | c >> 15) : 0);
+                        const u16 t = dst[tiled(sl->ox + u, sl->oy + vv, aw)];
+                        have += t != 0, want += c != 0, off += t != want5;
+                    }
+                int cx0, cy0, cx1, cy1, cells = 0;
+                const int sh = m->depth ? 1 : 2;
+                if (cell_range(m->tx + ((bx * 32) >> sh), m->ty + by * 32, m->tx + ((bx * 32) >> sh) + (32 >> sh), m->ty + by * 32 + 32, &cx0, &cy0, &cx1, &cy1))
+                    cells = cell[cy0][cx0].shadow_ok | cell[cy0][cx0].mirror_ok << 1;
+                port_log("PX   slot %d (of %d) twin %lx block %d,%d stamp %lu epoch %lu/%lu cur %d flags %d: texels drawn %d wanted %d differ %d; cell %d\n",
+                         (int)(sl - slots), same, (unsigned long)sl->twin, bx, by, (unsigned long)sl->stamp[bb], (unsigned long)sl->epoch[bb],
+                         (unsigned long)tex_epoch, (int)(sl->cur >> bb & 1), sl->flags[bb], have, want, off, cells);
+            }
+    }
+}
+#define PXW_BEFORE() do { const u16 *p_ = pxw_at(); if (p_) pxw_before = *p_; } while (0)
+#else
+#define PXW_BEFORE() (void)0
+#define pxw_log(what, m, v, n, scene) (void)0
+#endif
 static void dual_poly(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     const int scene = dual_scene(m);
     r_poly(m, v, n);
+    PXW_BEFORE();
     if (scene) psx_softgpu.poly(m, v, n);
+    pxw_log("poly", m, v, n, scene);
 }
 static void dual_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
     const int scene = dual_scene(m);
@@ -4501,7 +4612,9 @@ static void dual_line(const Gp0Mode *m, const Gp0Vtx *a, const Gp0Vtx *b) {
 static void dual_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
     const int scene = dual_scene(m);
     r_rect(m, v, w, h);
+    PXW_BEFORE();
     if (scene) psx_softgpu.rect(m, v, w, h);
+    pxw_log(w == 16 ? "rect16_" : "rect", m, v, 1, scene);
 }
 static int dual_copy(int sx, int sy, int dx, int dy, int w, int h) {
     if (!r_copy(sx, sy, dx, dy, w, h)) return 0;
@@ -5302,7 +5415,18 @@ static void movie_tex_free(void) {
     C3D_TexDelete(&movie_tex[1]);
     movie_ok = 0, movie_cur = -1;
 }
+#ifdef PORT_DUAL /* (the last frames converted, as VRAM had them: what a dump compares the top screen with) */
+static u8 mov_keep[3][320 * 240 * 3];
+static unsigned mov_keep_n;
+#endif
 static void convert_rgb24(u8 *px, unsigned tw, const PsxDisplayInfo *d, int w, int h) {
+#ifdef PORT_DUAL
+    {
+        u8 *k = mov_keep[mov_keep_n++ % 3];
+        for (int y = 0; y < h && y < 240; y++)
+            __builtin_memcpy(k + y * 320 * 3, (const u8 *)(psx_vram + ((d->y + y) & 511) * VW + d->x), (w < 320 ? w : 320) * 3);
+    }
+#endif
     /* (the tiled address as a row's part and a column's, the column's looked up) */
     static unsigned col[400], col_tw;
     if (col_tw != tw) {
@@ -5760,12 +5884,26 @@ static u32 px_top(int x, int y, const void *ctx) { /* (a top framebuffer: BGR8, 
     return (u32)p[2] << 16 | (u32)p[1] << 8 | p[0];
 }
 #ifdef PORT_DUAL /* (a movie's frame, on the top screen and in VRAM: ctr_render_dump_display) */
-static struct { const u8 *fb; int ox, oy, x, y; } mov_dump;
+static struct { const u8 *fb, *keep; int ox, oy, x_best, w, h; float s; } mov_dump;
 static u32 px_mov_top(int x, int y, const void *ctx) { (void)ctx; return px_top(x + mov_dump.ox, y + mov_dump.oy, mov_dump.fb); }
 static u32 px_mov_vram(int x, int y, const void *ctx) {
     (void)ctx;
-    const u8 *p = (const u8 *)(psx_vram + ((mov_dump.y + y) & 511) * VW + mov_dump.x) + x * 3;
-    return (u32)p[0] << 16 | (u32)p[1] << 8 | p[2];
+    /* (the frame as draw_to_top shows it: scaled to the screen's height, its texels blended) */
+    float u = ((float)x + 0.5f) / mov_dump.s - 0.5f, v = ((float)y + 0.5f) / mov_dump.s - 0.5f;
+    if (u < 0) u = 0;
+    if (v < 0) v = 0;
+    if (u > (float)(mov_dump.w - 1)) u = (float)(mov_dump.w - 1);
+    if (v > (float)(mov_dump.h - 1)) v = (float)(mov_dump.h - 1);
+    const int u0 = (int)u, v0 = (int)v, u1 = u0 + 1 < mov_dump.w ? u0 + 1 : u0, v1 = v0 + 1 < mov_dump.h ? v0 + 1 : v0;
+    const float fu = u - (float)u0, fv = v - (float)v0;
+    const u8 *p00 = mov_dump.keep + (v0 * 320 + u0) * 3, *p01 = mov_dump.keep + (v0 * 320 + u1) * 3;
+    const u8 *p10 = mov_dump.keep + (v1 * 320 + u0) * 3, *p11 = mov_dump.keep + (v1 * 320 + u1) * 3;
+    u32 c = 0;
+    for (int k = 0; k < 3; k++) {
+        const float top = (float)p00[k] + ((float)p01[k] - (float)p00[k]) * fu, bot = (float)p10[k] + ((float)p11[k] - (float)p10[k]) * fu;
+        c = c << 8 | (u32)(top + (bot - top) * fv + 0.5f);
+    }
+    return c;
 }
 #endif
 /* DUMP_EVERY=N: the displayed buffer every N frames, as dump/f<frame>.ppm (a timeline of one run) */
@@ -5851,19 +5989,35 @@ void ctr_render_dump_display(long frame) {
      * screen. The two pictures dump_display_eye wrote of it (the mirror's and the CPU's copy, each read as 15-bit
      * pixels) meant nothing, and every movie field showed as 97-100% off the reference. In their place: the frame as
      * VRAM has it (f<frame>_ref) and the part of the top screen it is shown in (f<frame>_s): its place, size and colour
-     * order checked, not its decoding (both from the one decoded frame). A dump taken as the movie's frame changes may
-     * be a frame apart. */
+     * order checked, not its decoding (both from the one decoded frame), the reference scaled as draw_to_top scales the
+     * frame to the screen (unscaled, the two were 7% apart in size: 8-35% of the pixels). The screen shows a frame converted a present or
+     * two before the dump (and VRAM may hold the next by then: the pictures were a movie frame apart, 8-35% of the
+     * pixels in a pan), so the reference is the one of the last three converted that the screen is nearest. */
     {
         PsxDisplayInfo d;
         psx_gpu_display_info(&d);
         const int w = d.w > 320 ? 320 : d.w, h = d.h > 240 ? 240 : d.h;
         if (d.rgb24 && w >= 64) {
-            mov_dump.fb = fb, mov_dump.ox = (400 - w) / 2, mov_dump.oy = (240 - h) / 2, mov_dump.x = d.x, mov_dump.y = d.y;
+            mov_dump.s = top_scale(w, h), mov_dump.w = w, mov_dump.h = h;
+            const int dw = (int)((float)w * mov_dump.s + 0.5f), dh = (int)((float)h * mov_dump.s + 0.5f);
+            mov_dump.fb = fb, mov_dump.ox = (400 - dw) / 2, mov_dump.oy = (240 - dh) / 2;
+            unsigned best = ~0u;
+            for (int k = 0; k < 3; k++) { /* (every fourth pixel of every fourth row is enough to tell frames apart) */
+                unsigned off = 0;
+                mov_dump.keep = mov_keep[k];
+                for (int y = 0; y < dh; y += 4)
+                    for (int x = 0; x < dw; x += 4) {
+                        const u32 a = px_mov_top(x, y, 0), b = px_mov_vram(x, y, 0);
+                        off += (unsigned)(abs((int)(a >> 16) - (int)(b >> 16)) + abs((int)(a >> 8 & 255) - (int)(b >> 8 & 255)) + abs((int)(a & 255) - (int)(b & 255)));
+                    }
+                if (off < best) best = off, mov_dump.x_best = k;
+            }
+            mov_dump.keep = mov_keep[mov_dump.x_best];
             char name[32];
             snprintf(name, sizeof name, "f%06ld_s", frame);
-            write_ppm(name, w, h, px_mov_top, &mov_dump);
+            write_ppm(name, dw, dh, px_mov_top, &mov_dump);
             snprintf(name, sizeof name, "f%06ld_ref", frame);
-            write_ppm(name, w, h, px_mov_vram, &mov_dump);
+            write_ppm(name, dw, dh, px_mov_vram, &mov_dump);
         }
     }
 #endif

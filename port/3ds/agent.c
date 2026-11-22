@@ -50,7 +50,7 @@
  * Weak: a build without one still links, and says so when a job names it. */
 extern int ctr_defer __attribute__((weak)), ctr_slot_keep __attribute__((weak)), ctr_defer_world __attribute__((weak)),
     ctr_sw_chain __attribute__((weak)), ctr_sw_poly1 __attribute__((weak)), ctr_sw_drawmemo __attribute__((weak)),
-    ctr_sw_reorder __attribute__((weak)), ctr_sw_overlap __attribute__((weak)), ctr_sw_defer_thread __attribute__((weak)), ctr_sw_kflush __attribute__((weak)), ctr_sw_flush __attribute__((weak)), ctr_sw_timing __attribute__((weak)), ctr_ko __attribute__((weak)), ctr_sw_bgmemo __attribute__((weak)), ctr_sw_quant __attribute__((weak)), ctr_sw_uvexact __attribute__((weak)), ctr_sw_pagefix __attribute__((weak)), ctr_sw_tiles __attribute__((weak)), ctr_sw_blockuse __attribute__((weak)), ctr_sw_early __attribute__((weak)), ctr_sw_cluthash __attribute__((weak)), ctr_sw_rawdraw __attribute__((weak)), ctr_sw_lateskip __attribute__((weak)), ctr_sw_uisame __attribute__((weak)), ctr_sw_trim __attribute__((weak)), ctr_sw_keepgpu __attribute__((weak)), ctr_sw_stagewalk __attribute__((weak));
+    ctr_sw_reorder __attribute__((weak)), ctr_sw_overlap __attribute__((weak)), ctr_sw_defer_thread __attribute__((weak)), ctr_sw_kflush __attribute__((weak)), ctr_sw_flush __attribute__((weak)), ctr_sw_timing __attribute__((weak)), ctr_ko __attribute__((weak)), ctr_sw_bgmemo __attribute__((weak)), ctr_sw_quant __attribute__((weak)), ctr_sw_texscale __attribute__((weak)), ctr_sw_uvexact __attribute__((weak)), ctr_sw_pagefix __attribute__((weak)), ctr_sw_tiles __attribute__((weak)), ctr_sw_blockuse __attribute__((weak)), ctr_sw_early __attribute__((weak)), ctr_sw_cluthash __attribute__((weak)), ctr_sw_rawdraw __attribute__((weak)), ctr_sw_lateskip __attribute__((weak)), ctr_sw_uisame __attribute__((weak)), ctr_sw_trim __attribute__((weak)), ctr_sw_keepgpu __attribute__((weak)), ctr_sw_stagewalk __attribute__((weak));
 extern int psx_packet_timing, ctr_sw_walkon;
 static const struct { const char *name; int *p; } switches[] = {
     {"ctr_defer", &ctr_defer},
@@ -66,6 +66,7 @@ static const struct { const char *name; int *p; } switches[] = {
     {"ctr_sw_flush", &ctr_sw_flush},
     {"ctr_sw_timing", &ctr_sw_timing},
     {"ctr_ko", &ctr_ko},
+    {"ctr_sw_texscale", &ctr_sw_texscale},
     {"ctr_sw_bgmemo", &ctr_sw_bgmemo},
     {"ctr_sw_quant", &ctr_sw_quant},
     {"ctr_sw_uvexact", &ctr_sw_uvexact},
