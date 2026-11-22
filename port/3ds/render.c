@@ -5759,6 +5759,15 @@ static u32 px_top(int x, int y, const void *ctx) { /* (a top framebuffer: BGR8, 
     const u8 *p = (const u8 *)ctx + (x * 240 + (239 - y)) * 3;
     return (u32)p[2] << 16 | (u32)p[1] << 8 | p[0];
 }
+#ifdef PORT_DUAL /* (a movie's frame, on the top screen and in VRAM: ctr_render_dump_display) */
+static struct { const u8 *fb; int ox, oy, x, y; } mov_dump;
+static u32 px_mov_top(int x, int y, const void *ctx) { (void)ctx; return px_top(x + mov_dump.ox, y + mov_dump.oy, mov_dump.fb); }
+static u32 px_mov_vram(int x, int y, const void *ctx) {
+    (void)ctx;
+    const u8 *p = (const u8 *)(psx_vram + ((mov_dump.y + y) & 511) * VW + mov_dump.x) + x * 3;
+    return (u32)p[0] << 16 | (u32)p[1] << 8 | p[2];
+}
+#endif
 /* DUMP_EVERY=N: the displayed buffer every N frames, as dump/f<frame>.ppm (a timeline of one run) */
 static void dump_display_eye(long frame, int eye) {
     PsxDisplayInfo d;
@@ -5837,6 +5846,27 @@ void ctr_render_dump_display(long frame) {
         snprintf(name, sizeof name, eye ? "f%06ld_top_r" : "f%06ld_top", frame);
         write_ppm(name, 400, 240, px_top, fb + eye * TOP_FB_SIZE);
     }
+#ifdef PORT_DUAL
+    /* A movie's frame (24 bits a pixel in VRAM) is not drawn through the mirror: present_rgb24 copies it to the top
+     * screen. The two pictures dump_display_eye wrote of it (the mirror's and the CPU's copy, each read as 15-bit
+     * pixels) meant nothing, and every movie field showed as 97-100% off the reference. In their place: the frame as
+     * VRAM has it (f<frame>_ref) and the part of the top screen it is shown in (f<frame>_s): its place, size and colour
+     * order checked, not its decoding (both from the one decoded frame). A dump taken as the movie's frame changes may
+     * be a frame apart. */
+    {
+        PsxDisplayInfo d;
+        psx_gpu_display_info(&d);
+        const int w = d.w > 320 ? 320 : d.w, h = d.h > 240 ? 240 : d.h;
+        if (d.rgb24 && w >= 64) {
+            mov_dump.fb = fb, mov_dump.ox = (400 - w) / 2, mov_dump.oy = (240 - h) / 2, mov_dump.x = d.x, mov_dump.y = d.y;
+            char name[32];
+            snprintf(name, sizeof name, "f%06ld_s", frame);
+            write_ppm(name, w, h, px_mov_top, &mov_dump);
+            snprintf(name, sizeof name, "f%06ld_ref", frame);
+            write_ppm(name, w, h, px_mov_vram, &mov_dump);
+        }
+    }
+#endif
 }
 
 void ctr_render_dump(void) {
