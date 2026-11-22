@@ -445,7 +445,7 @@ int port_scenario_wmpos(int *x, int *y, int *z, int *rot, int *yaw) {
 /* enemy_cast=K: (btl_setEnemyCmd's counted patch) an enemy's turn plays attack K of the encounter's table instead of the
  * one its script chose, when K is one of that enemy's own: a sequence's animations are counted from its base in the
  * encounter's list (Battle.seq.seqFlags, a byte a sequence), which an enemy type's sequences share, so K is taken only
- * where its base is the chosen attack's. The targets stay the script's. For running each enemy attack's effect
+ * where its base is the chosen attack's. The targets stay the script's (the patch keeps one of them for a one-target attack). For running each enemy attack's effect
  * (tools/sweep.py's enemies set); the log says each time one was played. */
 int port_scenario_enemy_cast(int abil, const unsigned char *bases, const int *seqs) {
     const int k=scenario_enemy_cast;
