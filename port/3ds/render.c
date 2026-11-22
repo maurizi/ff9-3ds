@@ -3559,6 +3559,10 @@ static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
                 const u32 cp = 0xFF000000u | (dith ? pagefixd[c & 0xFF][1] : fix[c & 0xFF][0]) |
                                (u32)(dith ? pagefixd[c >> 8 & 0xFF][1] : fix[c >> 8 & 0xFF][0]) << 8 |
                                (u32)(dith ? pagefixd[c >> 16 & 0xFF][1] : fix[c >> 16 & 0xFF][0]) << 16;
+                /* (the run before it ended first, as itself: add_batch ends it, and made its batch with this polygon's
+                 * colour. Meteor's trails, gouraud ones fading to black and flat ones by turns, drew the gouraud ones
+                 * with the flat ones' colour all along: red wedges across the frame, the sweep's s046) */
+                if (run_n) run_flush();
                 cur_pcol = 1u << 24 | (u32)quarter << 25 | (u32)dith << 26 | c;
                 Vtx *o = alloc_vtx(nout);
                 for (unsigned k = 0; k < nout; k++) { Vtx q = t[idx[k]]; q.rgba = cp, q.d = dith ? DITHERED : 0, q.u += tdu[which[k]], q.v += tdv[which[k]]; o[k] = q; }
@@ -4534,6 +4538,13 @@ static u16 *pxw_at(void) {
 static void pxw_log(const char *what, const Gp0Mode *m, const Gp0Vtx *v, int n, int scene) {
     const u16 *p = pxw_at();
     if (!p) return;
+    static unsigned seq;
+    seq++;
+    /* (and, a line each: what is drawn off the frame (a page being made) and what samples a 15-bit page: their order) */
+    if (gp0_state.area_x0 >= 320 || gp0_state.area_y0 >= 480 || (m->textured && m->depth == 2))
+        port_log("PXA f%ld #%u %s%d area %d,%d-%d,%d tex %d depth %d page %d,%d semi %d abr %d at %d,%d uv %d,%d rgb %d,%d,%d\n", ctr_pxwatch_frame, seq, what, n,
+                 gp0_state.area_x0, gp0_state.area_y0, gp0_state.area_x1, gp0_state.area_y1, m->textured, m->depth, m->tx, m->ty, m->semi, m->abr,
+                 v[0].x, v[0].y, v[0].u, v[0].v, v[0].r, v[0].g, v[0].b);
     if (*p == pxw_before) { /* (left as it was: logged all the same if the primitive's box holds the pixel) */
         static const int w[4] = {PORT_PXWATCH};
         int x0 = 9999, y0 = 9999, x1 = -9999, y1 = -9999;
