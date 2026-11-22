@@ -27,6 +27,7 @@
 #include <3ds.h>
 #include <citro3d.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4529,6 +4530,30 @@ static int dual_scene(const Gp0Mode *m) {
  * in VBlanks f0..f1, logged with its mode, vertices and the pixel before and after: which primitive a difference
  * between the two pictures comes from */
 long ctr_pxwatch_frame;
+/* (its lines kept in memory and written to dump/pxwatch.txt after f1: the debug log's reader dropped most of a frame's
+ * lines, and writing them moved the game's frames) */
+static char *pxw_buf;
+static unsigned pxw_len;
+#define PXW_BUF (4u << 20)
+static void pxw_printf(const char *fmt, ...) {
+    if (!pxw_buf && !(pxw_buf = malloc(PXW_BUF))) return;
+    if (pxw_len + 512 > PXW_BUF) return;
+    va_list ap;
+    va_start(ap, fmt);
+    const int k = vsnprintf(pxw_buf + pxw_len, 512, fmt, ap);
+    va_end(ap);
+    if (k > 0) pxw_len += k < 512 ? (unsigned)k : 511u;
+}
+void ctr_pxwatch_end(void) {
+    static const int w[4] = {PORT_PXWATCH};
+    static int done;
+    if (done || ctr_pxwatch_frame <= w[3]) return;
+    done = 1;
+    mkdir("sdmc:/3ds/ff9/dump", 0777);
+    FILE *f = fopen("sdmc:/3ds/ff9/dump/pxwatch.txt", "wb");
+    if (f) { if (pxw_buf) fwrite(pxw_buf, 1, pxw_len, f); fclose(f); }
+    port_log("pxwatch: %u bytes written\n", pxw_len);
+}
 static u16 pxw_before;
 static u16 *pxw_at(void) {
     static const int w[4] = {PORT_PXWATCH};
@@ -4541,8 +4566,8 @@ static void pxw_log(const char *what, const Gp0Mode *m, const Gp0Vtx *v, int n, 
     static unsigned seq;
     seq++;
     /* (and, a line each: what is drawn off the frame (a page being made) and what samples a 15-bit page: their order) */
-    if (gp0_state.area_x0 >= 320 || gp0_state.area_y0 >= 480 || (m->textured && m->depth == 2))
-        port_log("PXA f%ld #%u %s%d area %d,%d-%d,%d tex %d depth %d page %d,%d semi %d abr %d at %d,%d uv %d,%d rgb %d,%d,%d\n", ctr_pxwatch_frame, seq, what, n,
+    if (gp0_state.area_y0 >= 256 || (m->textured && m->depth == 2))
+        pxw_printf("PXA f%ld #%u %s%d area %d,%d-%d,%d tex %d depth %d page %d,%d semi %d abr %d at %d,%d uv %d,%d rgb %d,%d,%d\n", ctr_pxwatch_frame, seq, what, n,
                  gp0_state.area_x0, gp0_state.area_y0, gp0_state.area_x1, gp0_state.area_y1, m->textured, m->depth, m->tx, m->ty, m->semi, m->abr,
                  v[0].x, v[0].y, v[0].u, v[0].v, v[0].r, v[0].g, v[0].b);
     if (*p == pxw_before) { /* (left as it was: logged all the same if the primitive's box holds the pixel) */
@@ -4558,11 +4583,11 @@ static void pxw_log(const char *what, const Gp0Mode *m, const Gp0Vtx *v, int n, 
         if (n == 1) x1 = x0 + 16, y1 = y0 + 16; /* (a rectangle: its corner alone is known here) */
         if (w[0] < x0 || w[0] > x1 || w[1] < y0 || w[1] > y1) return;
     }
-    port_log("PX f%ld %s%d scene %d tex %d raw %d semi %d abr %d gour %d depth %d page %d,%d clut %d,%d e1 %x mask %d/%d: %04x -> %04x\n",
+    pxw_printf("PX f%ld %s%d scene %d tex %d raw %d semi %d abr %d gour %d depth %d page %d,%d clut %d,%d e1 %x mask %d/%d: %04x -> %04x\n",
              ctr_pxwatch_frame, what, n, scene, m->textured, m->raw, m->semi, m->abr, m->gouraud, m->depth, m->tx, m->ty, m->clut_x, m->clut_y,
              gp0_state.texpage, gp0_state.set_mask, gp0_state.check_mask, pxw_before, *p);
     for (int i = 0; i < n; i++)
-        port_log("PX   v%d %d,%d rgb %d,%d,%d uv %d,%d\n", i, v[i].x - gp0_state.ofs_x, v[i].y - gp0_state.ofs_y, v[i].r, v[i].g, v[i].b, v[i].u, v[i].v);
+        pxw_printf("PX   v%d %d,%d rgb %d,%d,%d uv %d,%d\n", i, v[i].x - gp0_state.ofs_x, v[i].y - gp0_state.ofs_y, v[i].r, v[i].g, v[i].b, v[i].u, v[i].v);
     if (m->textured && m->depth < 2 && n >= 3) { /* (the texture cache's blocks of its texels: what they hold and what VRAM has) */
         int u0 = 255, v0 = 255, u1 = 0, v1 = 0;
         for (int i = 0; i < n; i++) {
@@ -4576,7 +4601,7 @@ static void pxw_log(const char *what, const Gp0Mode *m, const Gp0Vtx *v, int n, 
         int same = 0;
         for (int i = 0; i < nslots; i++)
             if (slots[i].key == key) sl = sl ? sl : &slots[i], same++;
-        if (!sl) { port_log("PX   no slot for key %08lx\n", (unsigned long)key); return; }
+        if (!sl) { pxw_printf("PX   no slot for key %08lx\n", (unsigned long)key); return; }
         const u16 *dst = slot_tex(sl)->data;
         const unsigned aw = slot_tex(sl)->width;
         const u16 *cl = psx_vram + (m->clut_y & 511) * VW;
@@ -4597,7 +4622,7 @@ static void pxw_log(const char *what, const Gp0Mode *m, const Gp0Vtx *v, int n, 
                 const int sh = m->depth ? 1 : 2;
                 if (cell_range(m->tx + ((bx * 32) >> sh), m->ty + by * 32, m->tx + ((bx * 32) >> sh) + (32 >> sh), m->ty + by * 32 + 32, &cx0, &cy0, &cx1, &cy1))
                     cells = cell[cy0][cx0].shadow_ok | cell[cy0][cx0].mirror_ok << 1;
-                port_log("PX   slot %d (of %d) twin %lx block %d,%d stamp %lu epoch %lu/%lu cur %d flags %d: texels drawn %d wanted %d differ %d; cell %d\n",
+                pxw_printf("PX   slot %d (of %d) twin %lx block %d,%d stamp %lu epoch %lu/%lu cur %d flags %d: texels drawn %d wanted %d differ %d; cell %d\n",
                          (int)(sl - slots), same, (unsigned long)sl->twin, bx, by, (unsigned long)sl->stamp[bb], (unsigned long)sl->epoch[bb],
                          (unsigned long)tex_epoch, (int)(sl->cur >> bb & 1), sl->flags[bb], have, want, off, cells);
             }
