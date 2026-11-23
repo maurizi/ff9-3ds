@@ -44,12 +44,13 @@ static const u32 slot_vram[2] = {SLOT, SLOT2};
 static const u32 *current_funcs[2];
 static u32 current_nfuncs[2];
 static u32 seen[2][4];
+static const PsxFxmod *current_mod[2]; /* (the slot's identified module: slot_words) */
 
 static u32 at(u32 vram) { return *(const u32 *)PSX_ADDR(vram); }
 
 /* port/ds/fx_pack.c: the loaded module's code was overwritten; identify the slot's module again on the next call */
 void port_fxmod_forget(void) {
-    for (int k = 0; k < 2; ++k) { current_funcs[k] = NULL; seen[k][0] = ~at(slot_vram[k]); }
+    for (int k = 0; k < 2; ++k) { current_funcs[k] = NULL; current_mod[k] = NULL; seen[k][0] = ~at(slot_vram[k]); }
 }
 
 #ifndef PORT_NDS
@@ -78,12 +79,28 @@ static void relocate(const u32 *relocs) {
 }
 #endif
 
+/* The words that tell a slot's module changed: its header pointer and three words of its code (the identified
+ * module's: its first, its middle, its last). They were three words at fixed places (4, 0x100, 0x400 into the slot):
+ * in a small module 0x400 is its own data. Vanish's module counts there, a new value several times a frame for a
+ * second, and each time the slot was identified again: every module that loads there hashed until one matched, and
+ * the relocations applied again. 45 ms of every frame on an Old 3DS (a beat of 2540 ms, 2005 full speed); 40% of the
+ * PC build's samples in that stretch in matches(). (Not yet identified: the fixed places, as before.) */
+static void slot_words(int k, u32 w[4]) {
+    const u32 v = slot_vram[k];
+    const PsxFxmod *m = current_mod[k];
+    w[0] = at(v);
+    if (m && m->text_hi >= m->text_lo + 8)
+        w[1] = at(m->text_lo), w[2] = at(m->text_lo + (((m->text_hi - m->text_lo) / 2) & ~3u)), w[3] = at(m->text_hi - 4);
+    else w[1] = at(v + 4), w[2] = at(v + 0x100), w[3] = at(v + 0x400);
+}
 /* slot k's module identified (relocated, its native code loaded) if it changed since */
 static void identify(int k) {
     const u32 v = slot_vram[k];
-    u32 now[4] = {at(v), at(v + 4), at(v + 0x100), at(v + 0x400)};
+    u32 now[4];
+    slot_words(k, now);
     if (now[0] == seen[k][0] && now[1] == seen[k][1] && now[2] == seen[k][2] && now[3] == seen[k][3]) return;
     current_funcs[k] = NULL;
+    current_mod[k] = NULL;
     for (const PsxFxmod *m = psx_fxmods; m->vram; ++m)
         if (m->vram == v && matches(m)) {
 #ifdef PORT_NDS
@@ -92,10 +109,11 @@ static void identify(int k) {
 #else
             psx_relocate(fxrel(m) + 1, 0, 0x200000); current_funcs[k] = m->funcs; current_nfuncs[k] = m->nfuncs;
 #endif
+            if (current_funcs[k]) current_mod[k] = m;
             break;
         }
     /* (unidentified: asked again at the next call, as a module still loading leaves these words as they will stay) */
-    if (current_funcs[k]) for (int i = 0; i < 4; ++i) seen[k][i] = now[i];
+    if (current_funcs[k]) slot_words(k, seen[k]); /* (the module's words, its header as relocated) */
 }
 
 /* The native function for a call into a module slot at PS1 address `target`, or 0 (none: effect_bridge.c stops). */

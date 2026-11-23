@@ -289,6 +289,53 @@ const char *plat_psxrel_fallback(void) {
     return "build/psxrel.bin";
 }
 
+/* --prof LO-HI:NEW.txt: where the program is, sampled 20000 times a second while the frame is in [LO, HI): each
+ * sample's address and its caller's (the frame pointer's chain is not kept: the return address is looked for on the
+ * stack's top words), one a line, for tools/prof_report.py (addr2line by function). Which of the game's or the
+ * port's functions a slow stretch on the console is in, when no timer there says. */
+#include <signal.h>
+#include <time.h>
+#include <ucontext.h>
+static long prof_lo, prof_hi;
+static const char *prof_path;
+static unsigned *prof_buf, prof_n;
+#define PROF_MAX (4u << 20)
+static void prof_tick(int sig, siginfo_t *si, void *ctx) {
+    (void)sig; (void)si;
+    if (frames < prof_lo || frames >= prof_hi || prof_n + 9 > PROF_MAX) return;
+    const ucontext_t *u = ctx;
+    prof_buf[prof_n++] = (unsigned)u->uc_mcontext.gregs[14] /* (REG_EIP) */;
+    const unsigned *sp = (const unsigned *)u->uc_mcontext.gregs[7] /* (REG_ESP) */;
+    for (int i = 0; i < 8; i++) prof_buf[prof_n++] = sp[i]; /* (the stack's top: the caller's address among them) */
+}
+static void prof_write(void) {
+    FILE *f = fopen(prof_path, "w");
+    if (!f) return;
+    for (unsigned i = 0; i + 9 <= prof_n; i += 9) {
+        for (int k = 0; k < 9; k++) fprintf(f, "%08x%c", prof_buf[i + k], k == 8 ? '\n' : ' ');
+    }
+    fclose(f);
+}
+static void prof_start(const char *arg) {
+    char *end;
+    prof_lo = strtol(arg, &end, 10);
+    if (*end != '-') return;
+    prof_hi = strtol(end + 1, &end, 10);
+    if (*end != ':') return;
+    prof_path = end + 1;
+    prof_buf = malloc(PROF_MAX * sizeof *prof_buf);
+    struct sigaction sa = {0};
+    sa.sa_sigaction = prof_tick, sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigaction(SIGPROF, &sa, NULL);
+    timer_t t;
+    struct sigevent ev = {0};
+    ev.sigev_notify = SIGEV_SIGNAL, ev.sigev_signo = SIGPROF;
+    if (timer_create(CLOCK_PROCESS_CPUTIME_ID, &ev, &t)) return;
+    struct itimerspec its = {{0, 50000}, {0, 50000}};
+    timer_settime(t, 0, &its, NULL);
+    atexit(prof_write);
+}
+
 int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--data") && i + 1 < argc) {
@@ -356,6 +403,8 @@ int main(int argc, char **argv) {
                 return 1;
             }
             ram_dump_path = path;
+        } else if (!strcmp(argv[i], "--prof") && i + 1 < argc) {
+            prof_start(argv[++i]);
         } else if (!strcmp(argv[i], "--frames") && i + 1 < argc) {
             frame_limit = atol(argv[++i]);
         } else {
