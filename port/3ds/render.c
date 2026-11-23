@@ -2848,6 +2848,10 @@ PORT_HOT_PRIM static C3D_Tex *texture_for(const Gp0Mode *m, int u0, int v0, int 
      * the camera turned, on an Old 3DS. The flags (which passes it needs) are its own blocks' alone */
     int cx0 = bx0, cx1 = bx1, cy0 = by0, cy1 = by1;
     if (u1 >= u0) cx0 = (u0 > 0 ? u0 - 1 : 0) >> 5, cx1 = (u1 < 255 ? u1 + 1 : 255) >> 5;
+    /* (not a block past VRAM's right edge that the primitive itself has no texel in: its texels would be VRAM's
+     * leftmost columns, the picture's, and every tile drawn there made every texture's blocks be looked at again:
+     * field 1310, an 8-bit page at x 960 whose faces end at u 127, 300 lookups a frame the long way on an Old 3DS) */
+    if (__builtin_expect(cx1 > bx1 && m->tx + (cx1 << (3 + m->depth)) >= VW, 0)) cx1 = bx1;
     if (v1 >= v0) cy0 = (v0 > 0 ? v0 - 1 : 0) >> 5, cy1 = (v1 < 255 ? v1 + 1 : 255) >> 5;
     /* (the same page, CLUT, window and blocks as the last lookup, nothing written to any source since and the same
      * frame: its answer again, every block then current (convert_block's first test). Runs of glyphs from one font
