@@ -742,14 +742,6 @@ static void set_add(int rx0, int ry0, int rx1, int ry1) {
     set_rect[n_set].x0 = (s16)rx0, set_rect[n_set].y0 = (s16)ry0, set_rect[n_set].x1 = (s16)rx1, set_rect[n_set].y1 = (s16)ry1;
     n_set++;
 }
-/* an untextured opaque quad drawn with the forced bit (poly_k's): if it is a rectangle, what of it the drawing area
- * takes in (the PS1 draws neither its right column nor its bottom row) */
-static __attribute__((noinline, cold)) void set_quad(const int *x, const int *y, const u16 *sc) {
-    const int x0 = imin(x[0], x[3]), x1 = imax(x[0], x[3]), y0 = imin(y[0], y[3]), y1 = imax(y[0], y[3]);
-    if (!((x[1] == x0 || x[1] == x1) && (x[2] == x0 || x[2] == x1) && x[1] != x[2] && (y[1] == y0 || y[1] == y1) &&
-          (y[2] == y0 || y[2] == y1) && y[1] != y[2] && x[0] != x[3] && y[0] != y[3])) return;
-    set_add(imax(x0, sc[0]), imax(y0, sc[1]), imin(x1, sc[2]), imin(y1, sc[3]));
-}
 PORT_HOT_PRIM static void gpu_draws(int x0, int y0, int x1, int y1) {
     static int last_cells = -1;
     static unsigned last_ver;
@@ -3757,7 +3749,6 @@ HOT_DRAW static inline __attribute__((always_inline)) int poly_k(const unsigned 
     if (ctr_ko == 5) return 1;
     ctr_depth_stats[1] += nv;
     gpu_draws(bx0, by0, bx1, by1);
-    if (__builtin_expect(!textured && nv == 4 && !m.semi && (c->mask & MASK_SET) && ta && tb, 0)) set_quad(x, y, sc);
     if (ctr_ko == 6) return 1;
     cur_target = 0;
     cur_mask = c->mask | ((gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);

@@ -687,6 +687,10 @@ PORT_HOT_PRIM static void draw_packet(u32 *p) {
     psx_gpu_words += len;
     if (len - 4 <= 8 && gp0_poly_packet(w, len)) return;
     if (len == 4 && w[0] >> 24 == 0xE1 && w[1] >> 26 == 0x7C >> 2 && gp0_tpage_sprite16(w)) return;
+    if (len == 3 && w[0] >> 26 == 0x7C >> 2) { /* (a 16x16 sprite alone, the page as it is: a spell's particles, thousands a frame in Holy) */
+        const unsigned int t[4] = {gp0_state.texpage & 0xFFFFFF, w[0], w[1], w[2]};
+        if (gp0_tpage_sprite16(t)) return;
+    }
     if (len == 5 && w[0] >> 24 == 0xE1 && !w[1] && w[2] >> 26 == 0x7C >> 2) { /* (MargePrim's: the sprite's tag is a NOP between) */
         const unsigned int t[4] = {w[0], w[2], w[3], w[4]};
         if (gp0_tpage_sprite16(t)) return;
