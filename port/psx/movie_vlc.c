@@ -5,7 +5,7 @@
 
 /* (at, w: the three halfwords from byte `at` on, kept: peek's window moves to the next only every 16 bits, about every
  * third code, and building it took three bounded reads for every code) */
-typedef struct { const uint8_t *data; unsigned bytes, bit, at; uint64_t w; } Bits;
+typedef struct { const uint8_t *data; unsigned bytes, bit, at; uint64_t w; uint32_t hi; } Bits; /* (hi: w's first 32 bits) */
 static unsigned le16(const uint8_t *p) {return p[0]|((unsigned)p[1]<<8);}
 static uint32_t halfword(const Bits *b, unsigned offset) {
     return offset+1<b->bytes ? le16(b->data+offset) : 0;
@@ -15,8 +15,15 @@ static uint32_t peek(Bits *b) {
     if (offset!=b->at) {
         b->at=offset;
         b->w=(uint64_t)halfword(b,offset)<<32|(uint64_t)halfword(b,offset+2)<<16|halfword(b,offset+4);
+        b->hi=(uint32_t)(b->w>>16);
     }
     return (uint32_t)((b->w<<shift)>>16);
+}
+/* the next 12 bits (peek's top 12: the window's first 32 bits hold them at any of its 16 places) */
+static inline unsigned peek12(Bits *b) {
+    const unsigned offset=(b->bit/16)*2;
+    if (offset!=b->at) (void)peek(b);
+    return (b->hi<<(b->bit&15))>>20;
 }
 static int consume(Bits *b, unsigned n) {
     if (n>b->bytes*8-b->bit) return 0;
@@ -70,6 +77,10 @@ static int ac(Bits *b, const uint8_t *pairs, uint16_t *value, int *eob) {
  * level pairs change. (ac's tests, every code, were most of the movies' VLC) */
 #define SHORT_BITS 12
 static struct { uint16_t value; uint8_t bits, eob; } short_codes[1u<<SHORT_BITS];
+/* (and the codes of up to 8 bits by their first 8: 1 KB, where the 12-bit table is 16 KB, an Old 3DS's whole data
+ * cache: a code's entry there is picked by the bits that follow it. A busy movie frame's expansion 7.8 -> 7.1 ms
+ * there (field 2752's movie); the output the same on 200,000 random streams) */
+static struct { uint16_t value; uint8_t bits, eob; } short8[256];
 static uint8_t short_pairs[216];
 static int short_made;
 static void short_make(const uint8_t pairs[216]) {
@@ -88,6 +99,12 @@ static void short_make(const uint8_t pairs[216]) {
         short_codes[p].bits=0;
         if (rz==FF9_VLC_OK && ro==FF9_VLC_OK && bz.bit==bo.bit && bz.bit<=SHORT_BITS && vz==vo && ez==eo)
             short_codes[p].value=vz,short_codes[p].bits=(uint8_t)bz.bit,short_codes[p].eob=(uint8_t)ez;
+    }
+    for (unsigned p=0;p<256;p++) {
+        short8[p].bits=0;
+        if (short_codes[p<<4].bits && short_codes[p<<4].bits<=8) {
+            short8[p].value=short_codes[p<<4].value,short8[p].bits=short_codes[p<<4].bits,short8[p].eob=short_codes[p<<4].eob;
+        }
     }
     __builtin_memcpy(short_pairs,pairs,216);
     short_made=1;
@@ -113,8 +130,9 @@ int ff9_movie_vlc_v2(const uint8_t *bs, size_t bytes, const uint8_t pairs[216],
         for (;;) {
             uint16_t coefficient;
             int end;
-            const unsigned k=peek(&b)>>(32-SHORT_BITS),n=short_codes[k].bits;
-            if (n && n<=b.bytes*8-b.bit) b.bit+=n,coefficient=short_codes[k].value,end=short_codes[k].eob;
+            const unsigned k=peek12(&b),n8=short8[k>>4].bits,n=n8 ? n8 : short_codes[k].bits;
+            if (n8 && n8<=b.bytes*8-b.bit) b.bit+=n8,coefficient=short8[k>>4].value,end=short8[k>>4].eob;
+            else if (n && n<=b.bytes*8-b.bit) b.bit+=n,coefficient=short_codes[k].value,end=short_codes[k].eob;
             else {
                 int result=ac(&b,pairs,&coefficient,&end);
                 if (result) return result;

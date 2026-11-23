@@ -152,7 +152,12 @@ void o64_mbg_vlcDecode(u8 *bs, u32 *out, void *table) {
     if (bytes > 18336) {
         bytes = 18336;
     }
-    if (ahead_vlc_start(bs, bytes, out)) return; /* (the VLC too on the other core: ahead_vlc_start) */
+    /* (the VLC too on the other core, ahead_vlc_start, for a movie behind a field: the game's core has the field to
+     * run. A full-screen movie's is expanded here: this core has nothing else to do then, and the worker shares its core
+     * with the sound, which with a movie's many voices leaves it little: field 2752's movie on an Old 3DS, a frame's
+     * expansion 7 ms here and 16 or more there, this core waiting for it at the frame's DecDCTin: a beat of 2440 ms
+     * there, 2130 here, 88 audio underruns a beat against 18) */
+    if (g_mbgRgb24 != 1 && ahead_vlc_start(bs, bytes, out)) return;
     Ff9MovieVlcInfo info;
     unsigned int t = port_profile_begin();
     int r = ff9_movie_vlc_v2(bs, bytes & ~1u, (const u8 *)g_mbgVlcPairs, (u16 *)out, 0x10000 / 2, &info);
