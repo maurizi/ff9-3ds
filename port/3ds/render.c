@@ -5224,7 +5224,7 @@ int psx_gpu_stage_walk_ok(void) { return ctr_sw_stagewalk; }
 /* (gpu.c psx_gpu_pause: a battle's walk goes on on the other core through the VBlanks after the game's DrawSync, paused
  * for each one's UI list and present, as the PS1's GPU goes on drawing the list while the game waits for its VBlanks.
  * 0: the game's thread ends the walk at DrawSync, the worker idle from there) */
-int ctr_sw_walkon;
+int ctr_sw_walkon = 1;
 int psx_gpu_pause_ok(void) { return ctr_sw_walkon && port_game_mode() == 2 && !menu_state && !ctr_keep_layers; }
 void psx_gpu_paused(int on) { if (on) run_flush(); }
 /* (the walk is paused through a VBlank's own waits for the GPU too: with it left going meanwhile, or under the sound

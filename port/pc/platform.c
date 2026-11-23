@@ -330,7 +330,7 @@ static void prof_start(const char *arg) {
     timer_t t;
     struct sigevent ev = {0};
     ev.sigev_notify = SIGEV_SIGNAL, ev.sigev_signo = SIGPROF;
-    if (timer_create(CLOCK_PROCESS_CPUTIME_ID, &ev, &t)) return;
+    if (timer_create(CLOCK_MONOTONIC, &ev, &t)) return; /* (the process's own clock ticks only 250 times a second) */
     struct itimerspec its = {{0, 50000}, {0, 50000}};
     timer_settime(t, 0, &its, NULL);
     atexit(prof_write);
