@@ -1171,6 +1171,7 @@ __attribute__((weak)) int ctr_keep_layers;
  * (port/3ds/render.c). Between the two calls every primitive belongs to it. */
 __attribute__((weak)) void psx_ui_list_begin(void) {}
 __attribute__((weak)) void psx_ui_list_begin_keep(void) {}
+__attribute__((weak)) int psx_ui_list_begin_part(int x0, int y0, int x1, int y1) { (void)x0; (void)y0; (void)x1; (void)y1; return 0; }
 __attribute__((weak)) void psx_ui_list_begin_at(int x, int y) { (void)x; (void)y; }
 __attribute__((weak)) int port_battle_help_on;
 __attribute__((weak)) int port_battle_hud_on, port_battle_hud_targets;

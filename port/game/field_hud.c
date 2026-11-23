@@ -930,6 +930,45 @@ static int same_words(const u32 *a, const u32 *b, unsigned n) {
     return 1;
 }
 
+/* A sprite's or a tile's packet (one GP0 60-7F command): its rectangle. 0: something else. */
+static int sprite_box(const u32 *pk, int box[4]) {
+    const u32 len = pk[0] >> 24, cmd = pk[1] >> 24;
+    if (cmd < 0x60 || cmd > 0x7F) return 0;
+    const int textured = (cmd >> 2) & 1, size = (cmd >> 3) & 3;
+    if (len != (u32)(2 + textured + (size == 0))) return 0;
+    const int x = (int)(pk[2] << 21) >> 21, y = (int)(pk[2] << 5) >> 21;
+    int w = size == 1 ? 1 : size == 2 ? 8 : 16, h = w;
+    if (size == 0) w = (int)(pk[3 + textured] & 0x3FF), h = (int)(pk[3 + textured] >> 16 & 0x1FF);
+    box[0] = x, box[1] = y, box[2] = x + w, box[3] = y + h;
+    return 1;
+}
+/* What differs between this VBlank's packets (hud_mem) and the ones last drawn into the layer (old, as many words):
+ * if only sprites and tiles, in the same places of the list, the rectangle that takes them in, as they were and as
+ * they are (within w x h; 1). 0: anything else differs, or nothing, or most of the screen. */
+static int hud_changed_rect(const u32 *old, unsigned words, int w, int h, int rect[4]) {
+    for (unsigned i = 0; i < OTN + 4; i++)
+        if (hud_mem[i] != old[i]) return 0;
+    int x0 = 1 << 20, y0 = 1 << 20, x1 = -(1 << 20), y1 = -(1 << 20), n = 0;
+    for (unsigned i = OTN + 4; i < words;) {
+        const u32 len = hud_mem[i] >> 24;
+        if (!len || i + 1 + len > words || hud_mem[i] != old[i]) return 0;
+        int differs = 0;
+        for (u32 k = 1; k <= len; k++) differs |= hud_mem[i + k] != old[i + k];
+        if (differs) {
+            int a[4], b[4];
+            if (!sprite_box(hud_mem + i, a) || !sprite_box(old + i, b) || ++n > 16) return 0;
+            x0 = a[0] < x0 ? a[0] : x0, y0 = a[1] < y0 ? a[1] : y0, x1 = a[2] > x1 ? a[2] : x1, y1 = a[3] > y1 ? a[3] : y1;
+            x0 = b[0] < x0 ? b[0] : x0, y0 = b[1] < y0 ? b[1] : y0, x1 = b[2] > x1 ? b[2] : x1, y1 = b[3] > y1 ? b[3] : y1;
+        }
+        i += 1 + len;
+    }
+    if (!n) return 0;
+    x0 = x0 < 0 ? 0 : x0, y0 = y0 < 0 ? 0 : y0, x1 = x1 > w ? w : x1, y1 = y1 > h ? h : y1;
+    if (x0 >= x1 || y0 >= y1 || (x1 - x0) * (y1 - y0) * 5 > w * h * 2) return 0;
+    rect[0] = x0, rect[1] = y0, rect[2] = x1, rect[3] = y1;
+    return 1;
+}
+int psx_ui_list_begin_part(int x0, int y0, int x1, int y1);
 void port_bottom_hud(void) {
     { void port_rewards_live_draw(void); port_rewards_live_draw(); } /* (the rewards under a battle: rewards_top.c) */
     shown = shown_battle = 0;
@@ -1039,6 +1078,46 @@ void port_bottom_hud(void) {
         }
     }
 
+    /* The same list but for a few sprites or tiles (a status icon's frame, a digit, the clock): the rectangle that
+     * takes them in is cleared and drawn again alone, the list's other sprites and tiles left out of the walk and
+     * everything else cut to it by the drawing area. The whole screen, 400-odd primitives through the layer's path, was
+     * drawn again for each such change: 2.5 ms of every VBlank on an Old 3DS while an animated status icon is on a
+     * party member's card (the sweep's e0167_a01: the bottom screen's and battle's UI 295 ms of a beat). */
+    {
+        const unsigned serial = ctr_ui_layer_serial();
+        int rect[4];
+        if (serial != ~0u && serial == last_serial[serial & 1] && used == last_used[serial & 1] &&
+            hud_changed_rect(last_mem[serial & 1], used / 4, d.w ? d.w : 320, d.h ? d.h : 240, rect) &&
+            psx_ui_list_begin_part(rect[0], rect[1], rect[2], rect[3])) {
+            __builtin_memcpy(last_mem[serial & 1], hud_mem, used); /* (as built: before what follows) */
+            static u16 hid_at[1024];
+            static u8 hid_len[1024];
+            unsigned nhid = 0;
+            for (unsigned i = OTN + 4; i < used / 4;) {
+                const u32 len = hud_mem[i] >> 24;
+                int b[4];
+                /* (not the pointing hands, 23 x 13: the renderer notes where each is as it meets it) */
+                if (nhid < 1024 && sprite_box(hud_mem + i, b) && !(b[2] - b[0] == 23 && b[3] - b[1] == 13) &&
+                    (b[0] >= rect[2] || b[2] <= rect[0] || b[1] >= rect[3] || b[3] <= rect[1]))
+                    hid_at[nhid] = (u16)i, hid_len[nhid++] = (u8)len, hud_mem[i] &= 0x00FFFFFFu;
+                i += 1 + len;
+            }
+            const u32 area0 = p[1], area1 = p[2];
+            p[1] = 0xE3000000u | (u32)(d.x + rect[0]) | (u32)(d.y + rect[1]) << 10;
+            p[2] = 0xE4000000u | (u32)(d.x + rect[2] - 1) | (u32)(d.y + rect[3] - 1) << 10;
+            Gp0State saved_part = gp0_state;
+            port_draw_ot_buffer(&hud_ot[OTN - 1], hud_mem, sizeof hud_mem);
+            psx_ui_list_end();
+            gp0_state = saved_part;
+            p[1] = area0, p[2] = area1;
+            for (unsigned k = 0; k < nhid; k++) hud_mem[hid_at[k]] |= (u32)hid_len[k] << 24;
+            const unsigned after = ctr_ui_layer_serial();
+            if (after != ~0u) last_used[after & 1] = used, last_serial[after & 1] = after;
+            shown = !world;
+            shown_battle = battle;
+            return;
+        }
+    }
     psx_gpu_sync();
     Gp0State saved_gp0 = gp0_state; /* (the field's drawing environment is the field's again after) */
     if (battle || world) psx_ui_list_begin_keep();

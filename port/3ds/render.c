@@ -179,7 +179,8 @@ volatile unsigned ctr_gx_commands, ctr_gx_interrupts;
 volatile unsigned ctr_gx_cmd_kind[8], ctr_gx_irq_kind[4]; /* commands by GX id; interrupts: PSC0, PPF, P3D, DMA */
 static gxCmdQueue_s *c3d_queue;
 #ifndef PORT_PROFILE
-static void gx_irq(void *which) { ctr_gx_interrupts++; ctr_gx_irq_kind[(uintptr_t)which & 3]++; }
+void port_tl(const char *what, int v);
+static void gx_irq(void *which) { ctr_gx_interrupts++; ctr_gx_irq_kind[(uintptr_t)which & 3]++; port_tl("gx done (0 fill, 1 transfer, 2 list)", (int)((uintptr_t)which & 3)); }
 #endif
 /* HAZARD=1 (test builds): what the GPU reads in a frame it may still be drawing (the frame sent at a present, drawn
  * while the next is recorded) against what the CPU writes meanwhile. On hardware such a write changes what that frame
@@ -5171,6 +5172,35 @@ void psx_ui_list_begin_keep(void) {
     ui_ox = d.x;
     ui_oy = d.y;
     ui_list_layer = ui_layer_for(d.x, d.y, 0);
+}
+
+/* the same, for a rectangle of the layer alone (its pixels, the displayed buffer's origin at 0, 0): cleared, and what
+ * the caller's list then draws there (its drawing area the rectangle's) drawn over the rest as the layer has it.
+ * The cursors' places are noted again as the list is walked (the caller leaves the pointing hands in it). 0: not begun.
+ * (field_hud.c: the battle screen's drawing changed in a few small sprites, an animated status icon, a digit) */
+int psx_ui_list_begin_part(int x0, int y0, int x1, int y1) {
+    psx_gpu_sync();
+    PsxDisplayInfo d;
+    psx_gpu_display_info(&d);
+    const int k = displayed_layer();
+    if (k < 0 || x0 < 0 || y0 < 0 || x1 > UI_W || y1 > UI_H || x0 >= x1 || y0 >= y1) return 0;
+    UiLayer *L = &layers[k];
+    ui_mode = 1;
+    ui_ox = d.x;
+    ui_oy = d.y;
+    ui_list_layer = k;
+    L->shown = 0, L->clear_pending = 0; /* (ui_layer_for's, without its clear: asked or not, nothing was drawn since) */
+    L->nhands = 0;
+    const u16 sc[4] = {(u16)x0, (u16)y0, (u16)x1, (u16)y1};
+    const int saved = cur_target;
+    cur_target = k + 1;
+    Vtx *v = alloc_vtx(6);
+    quad(v, x0, y0, x1, y1, 0, 0, 0, 0, 0x00000000);
+    add_batch(K_UNTEX, NO_BLEND, 1, sc, NULL, v - vb, 6);
+    cur_target = saved;
+    L->clears++;
+    L->drawn = frames_drawn;
+    return 1;
 }
 
 void psx_ui_list_end(void) {
