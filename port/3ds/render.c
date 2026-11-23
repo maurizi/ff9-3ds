@@ -727,10 +727,21 @@ static unsigned cells_ver;
 #define SET_RECTS 8
 static struct { s16 x0, y0, x1, y1; } set_rect[SET_RECTS];
 static int n_set;
+/* (the box that takes them all in: gpu_draws asks set_hit only for a draw that reaches into it. Asked for every draw
+ * while any rectangle stood, a field with one somewhere off its picture paid a call for each of its primitives: field
+ * 574's walk 21.5 -> 24.9 ms a frame on an Old 3DS) */
+static int set_box[4] = {1 << 20, 1 << 20, -(1 << 20), -(1 << 20)};
+static void set_box_make(void) {
+    set_box[0] = set_box[1] = 1 << 20, set_box[2] = set_box[3] = -(1 << 20);
+    for (int i = 0; i < n_set; i++)
+        set_box[0] = imin(set_box[0], set_rect[i].x0), set_box[1] = imin(set_box[1], set_rect[i].y0),
+        set_box[2] = imax(set_box[2], set_rect[i].x1), set_box[3] = imax(set_box[3], set_rect[i].y1);
+}
 static __attribute__((noinline, cold)) void set_hit(int x0, int y0, int x1, int y1) {
     for (int i = 0; i < n_set;)
         if (x0 < set_rect[i].x1 && x1 > set_rect[i].x0 && y0 < set_rect[i].y1 && y1 > set_rect[i].y0) set_rect[i] = set_rect[--n_set];
         else i++;
+    set_box_make();
 }
 static int set_has(int x0, int y0, int x1, int y1) {
     for (int i = 0; i < n_set; i++)
@@ -742,12 +753,13 @@ static void set_add(int rx0, int ry0, int rx1, int ry1) {
     if (n_set == SET_RECTS) set_rect[0] = set_rect[--n_set];
     set_rect[n_set].x0 = (s16)rx0, set_rect[n_set].y0 = (s16)ry0, set_rect[n_set].x1 = (s16)rx1, set_rect[n_set].y1 = (s16)ry1;
     n_set++;
+    set_box_make();
 }
 PORT_HOT_PRIM static void gpu_draws(int x0, int y0, int x1, int y1) {
     static int last_cells = -1;
     static unsigned last_ver;
     int cx0, cy0, cx1, cy1;
-    if (__builtin_expect(n_set, 0) && !gp0_state.set_mask) set_hit(x0, y0, x1, y1);
+    if (__builtin_expect(n_set, 0) && x0 < set_box[2] && x1 > set_box[0] && y0 < set_box[3] && y1 > set_box[1] && !gp0_state.set_mask) set_hit(x0, y0, x1, y1);
     if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
     const int cells = cx0 | cy0 << 6 | cx1 << 12 | cy1 << 18;
     if (ctr_sw_drawmemo && cells == last_cells && last_ver == cells_ver) return;
@@ -828,7 +840,7 @@ void psx_vram_touch(int x, int y, int w, int h) {
     gen_counter++;
     cells_ver++;
     if (n_set) set_hit(x, y, x + w, y + h); /* (the CPU's pixels, or a fill's: no longer all with the mask bit) */
-    if (n_set && (x < 0 || y < 0 || x + w > VW || y + h > VH)) n_set = 0;
+    if (n_set && (x < 0 || y < 0 || x + w > VW || y + h > VH)) n_set = 0, set_box_make();
     /* (a rectangle past VRAM's edge wraps: every source cell it takes in counts) */
     const int wraps = x < 0 || y < 0 || x + w > VW || y + h > VH;
     const u32 epoch_was = tex_epoch;

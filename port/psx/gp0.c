@@ -373,6 +373,7 @@ PORT_HOT_ANCHOR(0) GP0_HOT_THUMB static unsigned int command(const unsigned int 
 /* A packet of exactly a texture page (E1) and a 16x16 sprite (SPRT_16, 7C-7F): a field background tile (BgSprt,
  * MargePrim'd). Both commands as command() runs them, without its dispatch; the font pages' sprites (their glyph
  * coverage, below) are left to it. 0: not run. */
+static void sprite16_rect(const unsigned int *w, unsigned int tp, unsigned int cmd);
 PORT_HOT_PRIM GP0_HOT_THUMB int gp0_tpage_sprite16(const unsigned int *w) {
     unsigned int tp = w[0] & 0xFFFFFF, cmd = w[1] >> 24;
     if ((tp & 0x10) && (tp & 15) >= 14) return 0; /* (page 896 or 960, 256) */
@@ -389,6 +390,11 @@ PORT_HOT_PRIM GP0_HOT_THUMB int gp0_tpage_sprite16(const unsigned int *w) {
     if (area_hits) psx_display_generation++;
     ++psx_gpu_scene_prims;
     if (gp0_backend->sprite16 && gp0_backend->sprite16(tp, w[1], w[2], w[3])) return 1;
+    sprite16_rect(w, tp, cmd);
+    return 1;
+}
+/* (the backend's rectangle for one its sprite16 left: out of the per-primitive block, see gpu.c draw_packet_rest) */
+static __attribute__((noinline)) void sprite16_rect(const unsigned int *w, unsigned int tp, unsigned int cmd) {
     Gp0Mode m;
     m.textured = 1;
     m.raw = cmd & 1;
@@ -401,7 +407,6 @@ PORT_HOT_PRIM GP0_HOT_THUMB int gp0_tpage_sprite16(const unsigned int *w) {
     v.u = w[3] & 0xFF;
     v.v = (w[3] >> 8) & 0xFF;
     gp0_backend->rect(&m, &v, 16, 16);
-    return 1;
 }
 
 /* gp0_tpage_sprite16's mode and vertex for its sprite (t: the page word, then the sprite's three), as it gives them to

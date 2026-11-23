@@ -679,6 +679,7 @@ unsigned int psx_gp0_len(const u32 *w, unsigned int avail) {
 /* the packet being drawn (a renderer may route packets by where they are: port/3ds/render.c) */
 const u32 *psx_gpu_packet;
 
+static void draw_packet_rest(u32 *w, unsigned int len);
 PORT_HOT_PRIM static void draw_packet(u32 *p) {
     unsigned int len = ((P_TAG *)p)->len;
     psx_gpu_packet = p;
@@ -695,6 +696,11 @@ PORT_HOT_PRIM static void draw_packet(u32 *p) {
         const unsigned int t[4] = {w[0], w[2], w[3], w[4]};
         if (gp0_tpage_sprite16(t)) return;
     }
+    draw_packet_rest(w, len);
+}
+/* (every other packet: out of the per-primitive block, which is as large as an Old 3DS's instruction cache: what few
+ * packets run must not take its room) */
+static __attribute__((noinline)) void draw_packet_rest(u32 *w, unsigned int len) {
     for (unsigned int i = 0; i < len;) {
         i += gp0_run_plain(w + i, len - i); /* (primitives and drawing state: nearly all of them) */
         if (i >= len) break;
