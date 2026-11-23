@@ -190,6 +190,7 @@ static u32 *live_ot[2];
 static u8 *live_buf[2];
 static u32 *live_env[2]; /* each table's packet setting the drawing area to its framebuffer, first in it */
 static int live_cur = -1;
+static int live_new; /* (a table built since the last one drawn: port_rewards_live_draw) */
 int port_rewards_live_step(void) {
     void *psx_spare_alloc(unsigned int size);
     if (!live_buf[0])
@@ -231,6 +232,7 @@ int port_rewards_live_step(void) {
     g_primPtr = saved_prim;
     live_env[cur] = env;
     live_cur = cur;
+    live_new = 1;
     if (!more) {
         o65_rewards_exit_game(); /* (as battleEnd_update: the VRAM row back) */
         live_vram(0);
@@ -271,8 +273,15 @@ static void live_draw_into(int j) {
 }
 void port_rewards_live_draw(void) {
     extern int ctr_keep_layers;
+    const int was = ctr_keep_layers;
     ctr_keep_layers = port_rewards_live_state() == 2 && live_cur >= 0;
     if (!ctr_keep_layers) return;
+    /* (once for each table: the battle steps every fourth VBlank or so, and the layers keep what was drawn into them
+     * (ctr_keep_layers). Drawn at every VBlank, the same table four times over, each time with the rewards' images
+     * uploaded and the battle's after them (every texture drawn with checked again): 17 ms of every VBlank on an Old
+     * 3DS, the rewards under a battle's victory pose at 63% of full speed, the sweep's e0165_a02) */
+    if (was && !live_new) return;
+    live_new = 0;
     live_vram(1);
     live_draw_into(0);
     live_draw_into(1);
