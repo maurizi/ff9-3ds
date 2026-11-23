@@ -19,12 +19,6 @@ static uint32_t peek(Bits *b) {
     }
     return (uint32_t)((b->w<<shift)>>16);
 }
-/* the next 12 bits (peek's top 12: the window's first 32 bits hold them at any of its 16 places) */
-static inline unsigned peek12(Bits *b) {
-    const unsigned offset=(b->bit/16)*2;
-    if (offset!=b->at) (void)peek(b);
-    return (b->hi<<(b->bit&15))>>20;
-}
 static int consume(Bits *b, unsigned n) {
     if (n>b->bytes*8-b->bit) return 0;
     b->bit+=n;return 1;
@@ -119,23 +113,40 @@ int ff9_movie_vlc_v2(const uint8_t *bs, size_t bytes, const uint8_t pairs[216],
     unsigned total=le16(bs)*2+2, used=2, blocks=0;
     if (capacity<total) return FF9_VLC_CAPACITY;
     out[0]=le16(bs);out[1]=le16(bs+2);
-    Bits b={bs+8,(unsigned)bytes-8,0,~0u,0};
+    /* The codes read through a 32-bit window (its top `have` bits the stream's next ones, filled a halfword at a time)
+     * where they are short: the DC's 10 bits and the two tables' codes of up to 12. peek() made its three-halfword
+     * window again every 16 bits and shifted 64 bits for every code: a third of the expansion's time. Anything else
+     * (longer codes, escapes, errors, the stream's end) goes to ac() at the same bit as before, and the window is made
+     * again after it. */
+    const uint8_t *const d=bs+8;
+    const unsigned nbytes=(unsigned)bytes-8,limit=nbytes*8;
+    unsigned bit=0,off=0;
+    uint32_t win=0;
+    int have=0;
+#define FILL() while (have<=16) { win|=(off+1<nbytes ? le16(d+off) : 0u)<<(16-have); off+=2; have+=16; }
     if (!short_made || __builtin_memcmp(short_pairs,pairs,216)) short_make(pairs);
     for (;;) {
-        unsigned dc=peek(&b)>>22;
-        if (!consume(&b,10)) return FF9_VLC_TRUNCATED;
+        FILL();
+        unsigned dc=win>>22;
+        if (10>limit-bit) return FF9_VLC_TRUNCATED;
+        win<<=10,have-=10,bit+=10;
         if (dc==0x1ff) break;
         if (used>=total) return FF9_VLC_CAPACITY;
         out[used++]=(le16(bs+4)<<10)|dc;
         for (;;) {
             uint16_t coefficient;
             int end;
-            const unsigned k=peek12(&b),n8=short8[k>>4].bits,n=n8 ? n8 : short_codes[k].bits;
-            if (n8 && n8<=b.bytes*8-b.bit) b.bit+=n8,coefficient=short8[k>>4].value,end=short8[k>>4].eob;
-            else if (n && n<=b.bytes*8-b.bit) b.bit+=n,coefficient=short_codes[k].value,end=short_codes[k].eob;
+            FILL();
+            const unsigned k=win>>(32-SHORT_BITS),n8=short8[k>>4].bits,n=n8 ? n8 : short_codes[k].bits;
+            if (n8 && n8<=limit-bit) win<<=n8,have-=(int)n8,bit+=n8,coefficient=short8[k>>4].value,end=short8[k>>4].eob;
+            else if (n && n<=limit-bit) win<<=n,have-=(int)n,bit+=n,coefficient=short_codes[k].value,end=short_codes[k].eob;
             else {
+                Bits b={d,nbytes,bit,~0u,0,0};
                 int result=ac(&b,pairs,&coefficient,&end);
                 if (result) return result;
+                bit=b.bit,off=(bit/16)*2,win=0,have=0;
+                FILL();
+                win<<=bit&15,have-=(int)(bit&15);
             }
             if (used>=total) return FF9_VLC_CAPACITY;
             out[used++]=coefficient;
@@ -143,7 +154,8 @@ int ff9_movie_vlc_v2(const uint8_t *bs, size_t bytes, const uint8_t pairs[216],
         }
         blocks++;
     }
+#undef FILL
     while (used<total) out[used++]=0xfe00;
-    *info=(Ff9MovieVlcInfo){total,blocks,b.bit};
+    *info=(Ff9MovieVlcInfo){total,blocks,bit};
     return FF9_VLC_OK;
 }
