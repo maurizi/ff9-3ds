@@ -984,6 +984,7 @@ static int cur_target; /* where add_batch records: 0 the mirror, 1 + n UI layer 
 #define RUN_V 1536 /* vertices per open batch (the first; the others RUN_V2) */
 #define RUN_V2 1024
 #define RUN_GROUPS 6
+#define RUN_MOVE 256 /* (a group of so many vertices at most is moved at its run's end: run_flush) */
 typedef struct {
     u8 kind, abr, mask;
     u16 sc[4];
@@ -1030,8 +1031,24 @@ PORT_HOT_PRIM static void run_flush(void) {
             end += run_g[i].nv;
         }
         vb_top = run_top0;
-    } else
-        for (int i = 1; i < n; i++) at[i] = run_at[i];
+    } else {
+        /* (a small group is still moved down after the first, where there is room below the pieces: its piece, and any
+         * below it, is free again. Every group left in its piece, a frame of many runs took more pieces than the buffer
+         * has: 80 a frame in field 1225 and a battle's heaviest effects, the buffer full once a frame and the GPU waited
+         * for each time (render.c's sync in run_open, 150 to 200 a run of the sweep's where there were none)) */
+        unsigned top = run_top0;
+        for (int i = 1; i < n; i++) {
+            if (run_g[i].nv <= RUN_MOVE && end + run_g[i].nv <= vb_top) {
+                memmove(vb + end, vb + run_at[i], run_g[i].nv * sizeof(Vtx));
+                at[i] = end;
+                end += run_g[i].nv;
+            } else {
+                at[i] = run_at[i];
+                if (run_at[i] < top) top = run_at[i];
+            }
+        }
+        vb_top = top;
+    }
     vb_top_closed = vb_top;
     vb_used = end;
     vb_run_open = 0;
