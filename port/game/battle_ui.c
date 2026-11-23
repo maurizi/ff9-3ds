@@ -39,6 +39,7 @@ int port_battle_hud_targets; /* ... its targets too (render.c leaves the target 
 
 void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h);
 void ctr_hud_draw(int slot, int x, int y, int w, int h);
+void ctr_hud_bar(int x, int y, int w, int h, u32 bgr); /* (a solid bar over the bottom screen's layer, this present) */
 const u8 *port_portrait(int index); /* field_hud.c: the menu's portrait entry (0x6C0 bytes), NULL if unread */
 const u8 *port_portrait_face(int index); /* field_hud.c: its face, 32x32 8-bit pixels */
 
@@ -196,10 +197,12 @@ static void draw_cards(void) {
         /* the ATB bar: white when the member is ready, the trance bar under it */
         int ready = u->inMenuQueue && !u->cmdIssued;
         int max = u->max->maxAtb > 0 ? u->max->maxAtb : 1, atb = u->atb > max ? max : u->atb < 0 ? 0 : u->atb;
-        bar(&g_ot[2], x + 40, y + 25, 102 * atb / max, 4, ready ? 0xF0F0F0 : 0xC09040);
+        /* (the bars' filled parts over the screen's layer at each present, ctr_hud_bar: drawn in the layer, a bar a
+         * pixel longer was the whole screen drawn again, at nearly every VBlank while the party's bars fill) */
+        ctr_hud_bar(x + 40, y + 25, 102 * atb / max, 4, ready ? 0xF0F0F0 : 0xC09040);
         bar(&g_ot[3], x + 40, y + 25, 102, 4, 0x302018);
         if (u->flags & 0x40000000u) {
-            bar(&g_ot[2], x + 40, y + 31, 102 * u->trance / 255, 3, 0x9060F0);
+            ctr_hud_bar(x + 40, y + 31, 102 * u->trance / 255, 3, 0x9060F0);
             bar(&g_ot[3], x + 40, y + 31, 102, 3, 0x301830);
         }
         if (g_btlUi->cmdUnit == u) bar(&g_ot[2], r_cards.x + 2, y + 1, 2, 32, 0x40E0F8); /* (the member choosing) */

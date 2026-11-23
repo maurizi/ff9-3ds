@@ -5231,6 +5231,20 @@ static void draw_to_top(C3D_RenderTarget *rt, C3D_Tex *src, int sx, int sy, int 
     if (s > 1.0f) C3D_TexSetFilter(src, GPU_NEAREST, GPU_NEAREST);
 }
 
+/* a solid rectangle on a screen's render target (already drawn on) */
+static void screen_rect(C3D_RenderTarget *rt, int x, int y, int w, int h, u32 bgr) {
+    C3D_Mtx p;
+    Mtx_OrthoTilt(&p, 0.0f, rt == bottom_rt ? 320.0f : 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &p);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, u_stereo, 0, 0, 1, 0.5f);
+    set_tev(K_UNTEX);
+    set_blend(NO_BLEND, 0);
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    Vtx *v = alloc_vtx(6);
+    quad(v, x, y, x + w, y + h, 0, 0, 0, 0, 0xFF000000u | bgr);
+    draw_tris(v - vb, 6);
+}
+
 /* what is on a screen's render target (already drawn on), darkened to frac (0-255 of 256): destination x constant */
 static void screen_dim(C3D_RenderTarget *rt, unsigned frac) {
     C3D_Mtx p;
@@ -5293,6 +5307,11 @@ void ctr_top_ui(unsigned *head, const void *buf, unsigned size) {
 static struct { C3D_Tex tex; u32 key; int ok; } hud_img[HUD_IMAGES];
 static struct { int slot, x, y, w, h, dw, dh; } hud_draw[16];
 static int n_hud_draw;
+/* Solid bars over the bottom screen's layer, drawn at each present (ctr_hud_bar: a battle's ATB and Trance bars). In
+ * the layer, a bar a pixel longer was the whole battle screen drawn again, its 400-odd primitives, at nearly every
+ * VBlank while the party's bars fill: 2 to 4 ms of each on an Old 3DS (the sweep's e0057_a02: 489 ms of a beat). */
+static struct { s16 x, y, w, h; u32 bgr; } hud_bar[16];
+static int n_hud_bar;
 
 /* image slot: w x h (<= 64x64) 8-bit pixels through a CLUT of PS1 colours, kept while key is the same */
 void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h) {
@@ -5427,6 +5446,13 @@ void ctr_hud_draw(int slot, int x, int y, int w, int h) {
     n_hud_draw++;
 }
 
+void ctr_hud_bar(int x, int y, int w, int h, u32 bgr) {
+    psx_gpu_sync();
+    if (w <= 0 || h <= 0 || n_hud_bar == 16) return;
+    hud_bar[n_hud_bar].x = (s16)x, hud_bar[n_hud_bar].y = (s16)y, hud_bar[n_hud_bar].w = (s16)w, hud_bar[n_hud_bar].h = (s16)h;
+    hud_bar[n_hud_bar++].bgr = bgr & 0xFFFFFF;
+}
+
 /* the same on the top screen (its 400x240), scaled to dw x dh */
 void ctr_hud_draw_top(int slot, int x, int y, int w, int h, int dw, int dh) {
     psx_gpu_sync();
@@ -5455,6 +5481,8 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
     for (int i = 0; i < n_hud_draw; i++) /* (texels x 2 x grey: as drawn; transparent ones not) */
         if (hud_draw[i].x < 1000) screen_quad(bottom_rt, &hud_img[hud_draw[i].slot].tex, K_TEX, NO_BLEND, 0xFF808080, 0, 0, hud_draw[i].w,
                     hud_draw[i].h, hud_draw[i].x, hud_draw[i].y + ctr_ui_oy);
+    for (int i = 0; i < n_hud_bar; i++)
+        screen_rect(bottom_rt, hud_bar[i].x, hud_bar[i].y + ctr_ui_oy, hud_bar[i].w, hud_bar[i].h, hud_bar[i].bgr);
     layers[k].shown = 1;
     ctr_ui_nhands = layers[k].nhands;
     memcpy(ctr_ui_hands, layers[k].hands, sizeof ctr_ui_hands);
@@ -5605,6 +5633,7 @@ void ctr_present(long frame) {
             !cells_newer(di.x, di.y, di.x + dw, di.y + dh, present_gen)) {
             skipped++, ctr_late_skips++;
             n_hud_draw = 0;
+            n_hud_bar = 0;
             return;
         }
         skipped = 0;
@@ -5656,8 +5685,15 @@ void ctr_present(long frame) {
                 if (hud_draw[i].x >= 1000) hsh = 0; /* (one for the top screen: drawn) */
                 else if (!hsh) hsh = 1;
             }
+            for (int i = 0; i < n_hud_bar && hsh; i++) { /* (and its bars) */
+                const u32 w[3] = {(u32)(u16)hud_bar[i].x | (u32)(u16)hud_bar[i].y << 16, (u32)(u16)hud_bar[i].w | (u32)(u16)hud_bar[i].h << 16,
+                                  hud_bar[i].bgr};
+                for (int k = 0; k < 3; k++) hsh = (hsh ^ w[k]) * 0x01000193u;
+                if (!hsh) hsh = 1;
+            }
             if (hsh && hsh == last_hash && tex_writes == last_writes) {
                 n_hud_draw = 0;
+                n_hud_bar = 0;
                 nbatches = 0;
                 if (vfirst < vb_used) vb_used = vfirst;
                 if (vb_flushed > vb_used) vb_flushed = vb_used;
@@ -5866,6 +5902,7 @@ void ctr_present(long frame) {
     present_bottom(&d, w, h);
     GSEG(GS_BOTTOM);
     n_hud_draw = 0;
+    n_hud_bar = 0;
     if (!light) top_queue(stereo_on);
     frame_end();
     in_frame = 0;
