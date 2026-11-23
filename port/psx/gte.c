@@ -483,15 +483,39 @@ GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *
     void port_fatal(const char *, ...), port_log(const char *, ...);
     u32 check_sxy[64], check_sz[64], check_info[64];
 #endif
+    /* (the three sums in 32 bits where that is the same: a row's coefficients together under 65536 keep the row's
+     * products' sum inside 32 bits for any vertex, and (TR x 4096 + sum) >> 12 is TR + (sum >> 12) exactly, which with
+     * TR under 2^31 - 2^20 in size stays inside them too. Any rotation with a scale does; in 64 bits, each sum three
+     * long multiply-accumulates and a long shift, they were most of a vertex's time: a festival crowd's 6300 vertices a
+     * frame, field 574, on an Old 3DS) */
+#define ROW_SUM(a, b, c) ((u32)((a) < 0 ? -(a) : (a)) + (u32)((b) < 0 ? -(b) : (b)) + (u32)((c) < 0 ? -(c) : (c)))
+#define TR_OK(t) ((i32)(t) > -0x7FE00000 && (i32)(t) < 0x7FE00000)
+    const int narrow = ROW_SUM(r11, r12, r13) < 65536 && ROW_SUM(r21, r22, r23) < 65536 && ROW_SUM(r31, r32, r33) < 65536 &&
+                       TR_OK(TRX) && TR_OK(TRY) && TR_OK(TRZ);
+#undef ROW_SUM
+#undef TR_OK
+    const i32 trx = (i32)TRX, try_ = (i32)TRY, trz = (i32)TRZ;
+#ifdef PORT_GTE_DEPTH
+    extern int psx_depth_on;
+    const int rec = psx_depth_on; /* (a 3DS in 2D records none: not asked for each vertex) */
+#endif
     for (int i = 0; i < count; ++i, v += 2) {
         const i32 x = (i16)v[0], y = (i32)v[0] >> 16, z = (i16)v[1];
-        const i64 m1 = tx + (i64)(r11 * x) + (i64)(r12 * y) + (i64)(r13 * z);
-        const i64 m2 = ty + (i64)(r21 * x) + (i64)(r22 * y) + (i64)(r23 * z);
-        const i64 m3 = tz + (i64)(r31 * x) + (i64)(r32 * y) + (i64)(r33 * z);
-        i32 ir1 = (i32)(m1 >> 12), ir2 = (i32)(m2 >> 12);
+        i32 ir1, ir2;
+        i64 z12;
+        if (__builtin_expect(narrow, 1)) {
+            ir1 = trx + ((r11 * x + r12 * y + r13 * z) >> 12);
+            ir2 = try_ + ((r21 * x + r22 * y + r23 * z) >> 12);
+            z12 = trz + ((r31 * x + r32 * y + r33 * z) >> 12);
+        } else {
+            const i64 m1 = tx + (i64)(r11 * x) + (i64)(r12 * y) + (i64)(r13 * z);
+            const i64 m2 = ty + (i64)(r21 * x) + (i64)(r22 * y) + (i64)(r23 * z);
+            const i64 m3 = tz + (i64)(r31 * x) + (i64)(r32 * y) + (i64)(r33 * z);
+            ir1 = (i32)(m1 >> 12), ir2 = (i32)(m2 >> 12);
+            z12 = m3 >> 12;
+        }
         if (ir1 > 0x7FFF) ir1 = 0x7FFF; else if (ir1 < -0x8000) ir1 = -0x8000;
         if (ir2 > 0x7FFF) ir2 = 0x7FFF; else if (ir2 < -0x8000) ir2 = -0x8000;
-        const i64 z12 = m3 >> 12;
         const u32 sz3 = z12 > 0xFFFF ? 0xFFFF : z12 < 0 ? 0 : (u32)z12;
         u32 div;
         if (h >= sz3 * 2) div = 0x1FFFF;
@@ -515,7 +539,7 @@ GTE_HOT void gte_rtpt_batch(const gte_u32 *v, int count, gte_u32 *sxy, gte_u32 *
         sxy[i] = w;
         sz[i] = sz3;
 #ifdef PORT_GTE_DEPTH
-        psx_depth_record(&sxy[i], w, depth_info(sz3, mx, my, (i32)sx, (i32)sy));
+        if (rec) psx_depth_record(&sxy[i], w, depth_info(sz3, mx, my, (i32)sx, (i32)sy));
 #endif
     }
 #ifdef GTE_BATCH_CHECK
