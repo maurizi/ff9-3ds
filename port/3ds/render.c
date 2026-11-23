@@ -3634,21 +3634,7 @@ HOT_DRAW static inline __attribute__((always_inline)) int poly_k(const unsigned 
         x[i] = (int)(xy & 0x7FF) - (int)((xy & 0x400) << 1) + ox;
         y[i] = (int)((xy >> 16) & 0x7FF) - (int)((xy >> 15) & 0x800) + oy;
     }
-    unsigned tflags = 0;
-    C3D_Tex *tex = NULL;
-    if (textured) {
-#pragma GCC unroll 4
-        for (int i = 0; i < nv; i++) u[i] = w[PK_UV(i)] & 0xFF, v[i] = (w[PK_UV(i)] >> 8) & 0xFF;
-        int u0 = imin(imin(u[0], u[1]), u[2]), u1 = imax(imax(u[0], u[1]), u[2]);
-        int v0 = imin(imin(v[0], v[1]), v[2]), v1 = imax(imax(v[0], v[1]), v[2]);
-        if (nv == 4) u0 = imin(u0, u[3]), u1 = imax(u1, u[3]), v0 = imin(v0, v[3]), v1 = imax(v1, v[3]);
-        /* (or drawn into an area that isn't a picture's: the effects' own, among the texture pages) */
-        if (__builtin_expect(!(u1 & 31) || !(v1 & 31) || gp0_state.area_y0 >= 256, 0)) trim_max(x, y, u, v, nv, &u0, &v0, &u1, &v1);
-        tex = texture_for(&m, u0, v0, u1, v1, &tflags);
-        if (other && __builtin_expect(tflags & 8, 0)) return 0; /* (the mirror's own pixels: r_poly's, for set_tev_for's stages) */
-    }
-    if (ctr_ko == 5) return 1;
-    ctr_depth_stats[1] += nv;
+    /* (what is off the drawing area left before its texture is looked up: a crowd's models, mostly) */
     /* (the PS1's triangles (0,1,2) and (1,3,2), each skipped 1024 or more wide or 512 or more high: r_poly) */
     int x0 = imin(imin(x[0], x[1]), x[2]), x1 = imax(imax(x[0], x[1]), x[2]);
     int y0 = imin(imin(y[0], y[1]), y[2]), y1 = imax(imax(y[0], y[1]), y[2]);
@@ -3665,6 +3651,21 @@ HOT_DRAW static inline __attribute__((always_inline)) int poly_k(const unsigned 
     if (!c->sc_ok) return 1;
     int bx0 = imax(x0, sc[0]), by0 = imax(y0, sc[1]), bx1 = imin(x1 + 1, sc[2]), by1 = imin(y1 + 1, sc[3]);
     if (bx0 >= bx1 || by0 >= by1) return 1;
+    unsigned tflags = 0;
+    C3D_Tex *tex = NULL;
+    if (textured) {
+#pragma GCC unroll 4
+        for (int i = 0; i < nv; i++) u[i] = w[PK_UV(i)] & 0xFF, v[i] = (w[PK_UV(i)] >> 8) & 0xFF;
+        int u0 = imin(imin(u[0], u[1]), u[2]), u1 = imax(imax(u[0], u[1]), u[2]);
+        int v0 = imin(imin(v[0], v[1]), v[2]), v1 = imax(imax(v[0], v[1]), v[2]);
+        if (nv == 4) u0 = imin(u0, u[3]), u1 = imax(u1, u[3]), v0 = imin(v0, v[3]), v1 = imax(v1, v[3]);
+        /* (or drawn into an area that isn't a picture's: the effects' own, among the texture pages) */
+        if (__builtin_expect(!(u1 & 31) || !(v1 & 31) || gp0_state.area_y0 >= 256, 0)) trim_max(x, y, u, v, nv, &u0, &v0, &u1, &v1);
+        tex = texture_for(&m, u0, v0, u1, v1, &tflags);
+        if (other && __builtin_expect(tflags & 8, 0)) return 0; /* (the mirror's own pixels: r_poly's, for set_tev_for's stages) */
+    }
+    if (ctr_ko == 5) return 1;
+    ctr_depth_stats[1] += nv;
     gpu_draws(bx0, by0, bx1, by1);
     if (ctr_ko == 6) return 1;
     cur_target = 0;
