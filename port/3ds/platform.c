@@ -186,6 +186,23 @@ void ctr_watchdog_start(void) {
     if (watchdog_on) aptHook(&watchdog_hook, watchdog_event, NULL);
 }
 
+int ctr_tl_from = -1, ctr_tl_to = -1;
+static struct { unsigned us; const char *what; int v; long frame; } tl_ring[4096];
+static volatile unsigned tl_n;
+void port_tl(const char *what, int v) {
+    if (frames < ctr_tl_from || frames > ctr_tl_to || tl_n >= 4096) return;
+    const unsigned i = __atomic_fetch_add(&tl_n, 1, __ATOMIC_RELAXED);
+    if (i >= 4096) return;
+    tl_ring[i].us = (unsigned)plat_time_us(), tl_ring[i].what = what, tl_ring[i].v = v, tl_ring[i].frame = frames;
+}
+static void tl_dump(void) {
+    static int done;
+    if (done || ctr_tl_to < 0 || frames <= ctr_tl_to) return;
+    done = 1;
+    const unsigned n = tl_n < 4096 ? tl_n : 4096;
+    for (unsigned i = 0; i < n; i++)
+        port_log("tl %ld %u +%u %s %d\n", tl_ring[i].frame, tl_ring[i].us - tl_ring[0].us, i ? tl_ring[i].us - tl_ring[i - 1].us : 0, tl_ring[i].what, tl_ring[i].v);
+}
 void plat_wait_frame(void) {
     const unsigned long long pf0 = plat_time_us();
     { void psx_span_mark(int); psx_span_mark(4); }
@@ -378,7 +395,9 @@ void plat_wait_frame(void) {
     { /* (the present's time on this thread, for the heartbeat) */
         const unsigned long long t0 = plat_time_us();
         { extern int ctr_present_late; ctr_present_late = (s32)(C3D_FrameCounter(0) - next_vblank) >= 1; }
+        port_tl("present", (int)(C3D_FrameCounter(0) - next_vblank));
         ctr_present(frames);
+        port_tl("present done", 0);
 #ifdef PORT_PXWATCH
         { extern long ctr_pxwatch_frame; void ctr_pxwatch_end(void); ctr_pxwatch_frame = frames + 1; ctr_pxwatch_end(); }
 #endif
@@ -426,6 +445,8 @@ void plat_wait_frame(void) {
         if (now - next_vblank > 4) next_vblank = now;
     }
     next_vblank++;
+    port_tl("VBlank's end", (int)(C3D_FrameCounter(0) - next_vblank));
+    tl_dump();
 #else
     unsigned int w = port_profile_wait_begin();
     gspWaitForVBlank();

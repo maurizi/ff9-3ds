@@ -620,6 +620,7 @@ static inline void draw_tris(unsigned first, unsigned n) {
 volatile unsigned long long ctr_gpu_us; /* (the heartbeat's: from a frame's end to the GPU's queue done) */
 static volatile unsigned long long gpu_sent_at;
 static void frame_end(void) {
+    { void port_tl(const char *, int); port_tl("frame_end (list sent)", 0); }
     trace("frame_end", vb_used, (int)staging_used);
     flush_pending();
 #ifdef PORT_PROFILE
@@ -714,10 +715,46 @@ HOT_DRAW static inline int cell_range(int x0, int y0, int x1, int y1, int *cx0, 
  * stamped against its sources' cells, none of these): it is skipped. The world map's ground draws small triangles one
  * after another in the same cells) */
 static unsigned cells_ver;
+/* Rectangles of VRAM whose every pixel has the mask bit: filled by an opaque untextured rectangle drawn with the mask
+ * bit forced (GP0 E6 bit 0) and drawn into since only so. A translucent polygon textured from there has no texel
+ * without the bit, so its pass for those (K_PAGE_OP: opaque where the bit is clear) draws nothing and is left out
+ * (texture_for_drawn's flag 16). Holy draws its glows into such an area, off the picture, and then some 400 polygons a
+ * frame textured from it: each two batches, the opaque pass and the blended by turns, 700 to 1000 batches a frame;
+ * on an Old 3DS the walk's rest 26 to 47 ms of each frame and its three presents 22 to 25 ms (11 to 13 of them waiting
+ * for the GPU, 7 to 9 submitting), a frame 68 to 85 ms where the PS1's is 50. Anything else that writes there (a draw
+ * without the forced bit, a fill, the CPU) ends the rectangle. */
+#define SET_RECTS 8
+static struct { s16 x0, y0, x1, y1; } set_rect[SET_RECTS];
+static int n_set;
+static __attribute__((noinline, cold)) void set_hit(int x0, int y0, int x1, int y1) {
+    for (int i = 0; i < n_set;)
+        if (x0 < set_rect[i].x1 && x1 > set_rect[i].x0 && y0 < set_rect[i].y1 && y1 > set_rect[i].y0) set_rect[i] = set_rect[--n_set];
+        else i++;
+}
+static int set_has(int x0, int y0, int x1, int y1) {
+    for (int i = 0; i < n_set; i++)
+        if (x0 >= set_rect[i].x0 && x1 <= set_rect[i].x1 && y0 >= set_rect[i].y0 && y1 <= set_rect[i].y1) return 1;
+    return 0;
+}
+static void set_add(int rx0, int ry0, int rx1, int ry1) {
+    if (rx1 - rx0 < 8 || ry1 - ry0 < 8 || set_has(rx0, ry0, rx1, ry1)) return;
+    if (n_set == SET_RECTS) set_rect[0] = set_rect[--n_set];
+    set_rect[n_set].x0 = (s16)rx0, set_rect[n_set].y0 = (s16)ry0, set_rect[n_set].x1 = (s16)rx1, set_rect[n_set].y1 = (s16)ry1;
+    n_set++;
+}
+/* an untextured opaque quad drawn with the forced bit (poly_k's): if it is a rectangle, what of it the drawing area
+ * takes in (the PS1 draws neither its right column nor its bottom row) */
+static __attribute__((noinline, cold)) void set_quad(const int *x, const int *y, const u16 *sc) {
+    const int x0 = imin(x[0], x[3]), x1 = imax(x[0], x[3]), y0 = imin(y[0], y[3]), y1 = imax(y[0], y[3]);
+    if (!((x[1] == x0 || x[1] == x1) && (x[2] == x0 || x[2] == x1) && x[1] != x[2] && (y[1] == y0 || y[1] == y1) &&
+          (y[2] == y0 || y[2] == y1) && y[1] != y[2] && x[0] != x[3] && y[0] != y[3])) return;
+    set_add(imax(x0, sc[0]), imax(y0, sc[1]), imin(x1, sc[2]), imin(y1, sc[3]));
+}
 PORT_HOT_PRIM static void gpu_draws(int x0, int y0, int x1, int y1) {
     static int last_cells = -1;
     static unsigned last_ver;
     int cx0, cy0, cx1, cy1;
+    if (__builtin_expect(n_set, 0) && !gp0_state.set_mask) set_hit(x0, y0, x1, y1);
     if (!cell_range(x0, y0, x1, y1, &cx0, &cy0, &cx1, &cy1)) return;
     const int cells = cx0 | cy0 << 6 | cx1 << 12 | cy1 << 18;
     if (ctr_sw_drawmemo && cells == last_cells && last_ver == cells_ver) return;
@@ -797,6 +834,8 @@ void psx_vram_touch(int x, int y, int w, int h) {
     }
     gen_counter++;
     cells_ver++;
+    if (n_set) set_hit(x, y, x + w, y + h); /* (the CPU's pixels, or a fill's: no longer all with the mask bit) */
+    if (n_set && (x < 0 || y < 0 || x + w > VW || y + h > VH)) n_set = 0;
     /* (a rectangle past VRAM's edge wraps: every source cell it takes in counts) */
     const int wraps = x < 0 || y < 0 || x + w > VW || y + h > VH;
     const u32 epoch_was = tex_epoch;
@@ -865,7 +904,9 @@ static void frame_begin(void) {
         ctr_gx_commands += c3d_queue->numEntries;
         for (int i = 0; i < c3d_queue->numEntries; i++) ctr_gx_cmd_kind[c3d_queue->entries[i].data[0] & 7]++;
     }
+    { void port_tl(const char *, int); port_tl("frame_begin (GPU wait)", gpu_busy); }
     C3D_FrameBegin(0); /* waits for the GPU to finish what was sent: the other half is free */
+    { void port_tl(const char *, int); port_tl("frame_begin done", 0); }
     PART_END(2);
     ctr_where = was;
     if (depth_clear) { /* (runs' depth values used up: submit) */
@@ -1558,9 +1599,12 @@ static unsigned nsubmits, page_pending = ~0u; /* (submits so far; the one a page
 static int is_slot_tex(const C3D_Tex *t);
 static C3D_Tex page_tex; /* (mirror_page's) */
 static void submit_do(void);
+void port_tl(const char *what, int v); /* (platform.c: the agent's timeline of a few frames) */
 static void submit(void) {
     PART_BEGIN();
+    if (nbatches) port_tl("submit", (int)nbatches);
     submit_do();
+    port_tl("submit done", 0);
     PART_END(1);
 }
 static void submit_do(void) {
@@ -1851,6 +1895,7 @@ void psx_vram_filled(int x, int y, int w, int h, unsigned int rgb15) {
     if (w <= 0 || h <= 0) return;
     int x1 = x + w > VW ? VW : x + w, y1 = y + h > VH ? VH : y + h;
     gpu_draws(x, y, x1, y1); /* (its partly covered cells must be current in the mirror first) */
+    if (n_set) set_hit(x, y, x1, y1); /* (a fill's pixels are without the mask bit) */
     unsigned r = (rgb15 & 31) << 3, g = ((rgb15 >> 5) & 31) << 3, b = ((rgb15 >> 10) & 31) << 3;
     Vtx *v = alloc_vtx(6);
     quad(v, x, y, x1, y1, 0, 0, 0, 0, 0xFF000000 | b << 16 | g << 8 | r);
@@ -2826,7 +2871,7 @@ __attribute__((noinline, cold)) static C3D_Tex *texture_for_drawn(const Gp0Mode 
                 for (int cy = cy0; cy < cy1; cy++)
                     for (int cx = cx0; cx < cx1; cx++)
                         if (!cell[cy][cx].mirror_ok) { blit_cells(cx0, cy0, cx1, cy1); cy = cy1; break; }
-            *flags = 8;
+            *flags = 8 | (n_set && set_has(x0, y0, imax(x1 - 1, x0 + 1), imax(y1 - 1, y0 + 1)) ? 16 : 0);
             tex_ou = (float)m->tx, tex_ov = (float)m->ty;
             return &mirror_tex[0];
         }
@@ -2835,7 +2880,7 @@ __attribute__((noinline, cold)) static C3D_Tex *texture_for_drawn(const Gp0Mode 
          * of readbacks in the spell) */
         if (!apart && x1 <= VW && y1 <= VH && gpu_owned(x0, y0, x1, y1)) {
             C3D_Tex *t = mirror_page(m->tx, m->ty, 1);
-            if (t) { *flags = 8; tex_ou = tex_ov = 0; return t; }
+            if (t) { *flags = 8 | (n_set && set_has(x0, y0, imax(x1 - 1, x0 + 1), imax(y1 - 1, y0 + 1)) ? 16 : 0); tex_ou = tex_ov = 0; return t; }
         }
     }
     /* (a translucent primitive's texels by their bit 15, as the slots hold it (alpha 0xFF / 0x80, flags): the copied
@@ -3237,7 +3282,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         int passes2[2], np2 = 0, abr2 = m->semi ? m->abr : NO_BLEND;
         if (!m->textured) passes2[np2++] = K_UNTEX;
         else if (!m->semi) passes2[np2++] = K_TEX;
-        else if (tflags & 8) passes2[np2++] = K_PAGE_OP, passes2[np2++] = K_PAGE_SEMI;
+        else if (tflags & 8) { if (!(tflags & 16)) passes2[np2++] = K_PAGE_OP; passes2[np2++] = K_PAGE_SEMI; }
         else {
             if (tflags & 1) passes2[np2++] = K_TEX_P1;
             if (tflags & 2) passes2[np2++] = K_TEX_P2;
@@ -3323,7 +3368,7 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
     int passes[2], np = 0, abr = m->semi ? m->abr : NO_BLEND;
     if (!m->textured) passes[np++] = K_UNTEX;
     else if (!m->semi) passes[np++] = K_TEX;
-    else if (tflags & 8) passes[np++] = K_PAGE_OP, passes[np++] = K_PAGE_SEMI;
+    else if (tflags & 8) { if (!(tflags & 16)) passes[np++] = K_PAGE_OP; passes[np++] = K_PAGE_SEMI; }
     else {
         if (tflags & 1) passes[np++] = K_TEX_P1;
         if (tflags & 2) passes[np++] = K_TEX_P2;
@@ -3581,7 +3626,7 @@ static void r_poly_plain(const Gp0Mode *m, const Gp0Vtx *v, int n) {
     int passes[2], np = 0, abr = m->semi ? m->abr : NO_BLEND;
     if (!m->textured) passes[np++] = K_UNTEX;
     else if (!m->semi) passes[np++] = K_TEX;
-    else if (tflags & 8) passes[np++] = K_PAGE_OP, passes[np++] = K_PAGE_SEMI;
+    else if (tflags & 8) { if (!(tflags & 16)) passes[np++] = K_PAGE_OP; passes[np++] = K_PAGE_SEMI; }
     else {
         if (tflags & 1) passes[np++] = K_TEX_P1;
         if (tflags & 2) passes[np++] = K_TEX_P2;
@@ -3712,6 +3757,7 @@ HOT_DRAW static inline __attribute__((always_inline)) int poly_k(const unsigned 
     if (ctr_ko == 5) return 1;
     ctr_depth_stats[1] += nv;
     gpu_draws(bx0, by0, bx1, by1);
+    if (__builtin_expect(!textured && nv == 4 && !m.semi && (c->mask & MASK_SET) && ta && tb, 0)) set_quad(x, y, sc);
     if (ctr_ko == 6) return 1;
     cur_target = 0;
     cur_mask = c->mask | ((gp0_state.texpage >> 9 & 1) ? MASK_DITHER : 0);
@@ -3719,7 +3765,7 @@ HOT_DRAW static inline __attribute__((always_inline)) int poly_k(const unsigned 
     int passes[2], np = 0, abr = m.semi ? m.abr : NO_BLEND;
     if (!textured) passes[np++] = K_UNTEX;
     else if (!m.semi) passes[np++] = K_TEX;
-    else if (tflags & 8) passes[np++] = K_PAGE_OP, passes[np++] = K_PAGE_SEMI;
+    else if (tflags & 8) { if (!(tflags & 16)) passes[np++] = K_PAGE_OP; passes[np++] = K_PAGE_SEMI; }
     else {
         if (tflags & 1) passes[np++] = K_TEX_P1;
         if (tflags & 2) passes[np++] = K_TEX_P2;
@@ -4182,6 +4228,9 @@ static void r_rect(const Gp0Mode *m, const Gp0Vtx *v, int w, int h) {
         }
         py += ph;
     }
+    /* (an opaque rectangle into the mirror with the mask bit forced: every pixel of it has the bit, set_rect) */
+    if (!m->textured && !m->semi && gp0_state.set_mask && !ui_mode && !menu_state && !in_window_packets(psx_gpu_packet))
+        set_add(imax(v->x, cx0), imax(v->y, cy0), imin(v->x + w, cx1), imin(v->y + h, cy1));
     if (clear) clear_cpu(cx0, cy0, cx1, cy1, was_ok);
 }
 
@@ -4238,7 +4287,7 @@ PORT_HOT_PRIM static int bg_tile(const unsigned t[4], const u16 sc[4]) {
     const int abr = m.semi ? m.abr : NO_BLEND;
     int passes[2], pabr[2], np = 0;
     if (!m.semi) passes[np] = K_TEX, pabr[np++] = abr;
-    else if (tflags & 8) passes[np] = K_PAGE_OP, pabr[np++] = NO_BLEND, passes[np] = K_PAGE_SEMI, pabr[np++] = abr;
+    else if (tflags & 8) { if (!(tflags & 16)) passes[np] = K_PAGE_OP, pabr[np++] = NO_BLEND; passes[np] = K_PAGE_SEMI, pabr[np++] = abr; }
     else {
         if (tflags & 1) passes[np] = K_TEX_P1, pabr[np++] = NO_BLEND;
         if (tflags & 2) passes[np] = K_TEX_P2, pabr[np++] = abr;
@@ -6213,6 +6262,7 @@ const unsigned char *ctr_capture_top(unsigned *serial) {
 }
 #endif
 static void queue_done(gxCmdQueue_s *queue) {
+    port_tl("GPU queue done", 0);
     if (gpu_sent_at) ctr_gpu_us += (svcGetSystemTick() - gpu_sent_at) / (SYSCLOCK_ARM11 / 1000000), gpu_sent_at = 0; /* (the GSP's event thread) */
     if (c3d_queue_done) c3d_queue_done(queue);
     int b = top_queued;

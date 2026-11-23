@@ -51,7 +51,7 @@
 extern int ctr_defer __attribute__((weak)), ctr_slot_keep __attribute__((weak)), ctr_defer_world __attribute__((weak)),
     ctr_sw_chain __attribute__((weak)), ctr_sw_poly1 __attribute__((weak)), ctr_sw_drawmemo __attribute__((weak)),
     ctr_sw_reorder __attribute__((weak)), ctr_sw_overlap __attribute__((weak)), ctr_sw_defer_thread __attribute__((weak)), ctr_sw_kflush __attribute__((weak)), ctr_sw_flush __attribute__((weak)), ctr_sw_timing __attribute__((weak)), ctr_ko __attribute__((weak)), ctr_sw_bgmemo __attribute__((weak)), ctr_sw_quant __attribute__((weak)), ctr_sw_texscale __attribute__((weak)), ctr_sw_uvexact __attribute__((weak)), ctr_sw_pagefix __attribute__((weak)), ctr_sw_tiles __attribute__((weak)), ctr_sw_blockuse __attribute__((weak)), ctr_sw_early __attribute__((weak)), ctr_sw_cluthash __attribute__((weak)), ctr_sw_rawdraw __attribute__((weak)), ctr_sw_lateskip __attribute__((weak)), ctr_sw_uisame __attribute__((weak)), ctr_sw_trim __attribute__((weak)), ctr_sw_keepgpu __attribute__((weak)), ctr_sw_stagewalk __attribute__((weak));
-extern int psx_packet_timing, ctr_sw_walkon;
+extern int psx_packet_timing, ctr_sw_walkon, ctr_tl_from, ctr_tl_to;
 static const struct { const char *name; int *p; } switches[] = {
     {"ctr_defer", &ctr_defer},
     {"ctr_slot_keep", &ctr_slot_keep},
@@ -82,6 +82,8 @@ static const struct { const char *name; int *p; } switches[] = {
     {"ctr_sw_keepgpu", &ctr_sw_keepgpu},
     {"ctr_sw_stagewalk", &ctr_sw_stagewalk},
     {"psx_packet_timing", &psx_packet_timing},
+    {"ctr_tl_from", &ctr_tl_from},
+    {"ctr_tl_to", &ctr_tl_to},
     {"ctr_sw_walkon", &ctr_sw_walkon},
 };
 

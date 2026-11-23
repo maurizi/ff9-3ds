@@ -978,6 +978,7 @@ void psx_gpu_sync(void) {
     psx_gpu_defer_us[1] += t1 - t0;
     if (!ot_job_finished) {
         psx_gpu_defer_helped++;
+        { void port_tl(const char *, int); port_tl("walk's rest here", (int)from); }
         int i;
         for (i = 0; i < 7 && psx_sync_n[i] && psx_sync_line[i] != from; i++) ;
         psx_sync_line[i] = from, psx_sync_n[i]++;
@@ -986,6 +987,7 @@ void psx_gpu_sync(void) {
         ot_walk(&ot_job, NULL);
         ot_walk_end();
         psx_gpu_defer_us[2] += plat_time_us() - t1;
+        { void port_tl(const char *, int); port_tl("walk's rest done", 0); }
     }
     port_profile_detail_end(PORT_PROFILE_OT_WALK, profile_start);
     const unsigned long long t2 = plat_time_us();
@@ -1121,8 +1123,10 @@ __attribute__((weak)) int psx_gpu_early_ok(void) { return 0; }
 int psx_frame_early(void);
 unsigned int psx_gpu_early_frames; /* (the heartbeat's) */
 
+__attribute__((weak)) void port_tl(const char *what, int v) { (void)what; (void)v; }
 int DrawSync(int mode) {
     psx_span_mark(2);
+    port_tl("DrawSync in", mode);
     /* (the game's own wait for the GPU: with the walk still on the worker, the coming VBlanks' interrupt work first,
      * as a PS1's interrupts come during the wait; anything in it that goes to the GPU ends the walk as ever) */
     if (mode == 0 && ot_job_on && !ot_on_job && psx_gpu_early_ok())
@@ -1131,12 +1135,14 @@ int DrawSync(int mode) {
      * ends here, and whatever needs the scene drawn (the display's move to it, a read of it) waits for it then) */
     if (mode == 0 && ot_job_on && !ot_on_job && !ot_job_paused && !drawsync_cb && psx_gpu_pause_ok()) {
         psx_span_mark(3);
+        port_tl("DrawSync out (walk goes on)", 0);
         return 0;
     }
     SYNC();
     if (mode == 0) {
         psx_drawsync_pending();
     }
+    port_tl("DrawSync out", 0);
     psx_span_mark(3);
     return 0;
 }
