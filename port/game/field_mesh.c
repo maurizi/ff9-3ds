@@ -312,6 +312,80 @@ static void depth_to_packets(const u8 *grp, const u8 *pkt) {
 static void depth_to_packets(const u8 *grp, const u8 *pkt) { (void)grp; (void)pkt; }
 #endif
 
+/* fldmdl_drawMesh's linking (the decomp's model_link.c, with config/patches.txt's F35) with each polygon's two GTE
+ * commands worked out here: NCLIP's MAC0 (the three corners' cross product, 64 bits cut to 32) and AVSZ3's OTZ
+ * (ZSF3 x the three depths >> 12, within 0..0xFFFF), as gte.c's. A crowd's 2600 polygons a frame (field 574) went
+ * through the GTE's registers for both: three registers loaded, the command's dispatch, its flags, one read back,
+ * twice a polygon. What the routine leaves in the GTE is put back at its end: the last polygon's corners through
+ * NCLIP and the last triangle's depths through AVSZ3, in the order they came, as the game's own commands leave SXY0-2,
+ * SZ1-3, MAC0, OTZ and FLAG. (GTE_BATCH_CHECK builds: every polygon's two values against the GTE's own.) */
+#if !defined(PORT_NDS) && !defined(FM_LINK_GAME) /* (FM_LINK_GAME: the game's own, to compare a build with) */
+#include "gte.h"
+PORT_OVERLAY_CODE(0a) static void fm_link(ModelObj *model, u8 group) {
+    u8 *m = (u8 *)model;
+    u8 *grp = *(u8 **)(*(u8 **)(m + 8) + 0x10) + group * 0x28;
+    u8 *pkt = *(u8 **)(*(u8 **)(m + 0x44) + group * 12 + 4);
+    u8 *poly = *(u8 **)(grp + 0x1C);
+    GameData *gd = g_gameState->gameData;
+    u32 *ot = gd->ot[gd->drawBuf];
+    if (gd->drawBuf != 0) pkt += *(u16 *)grp;
+    ot -= (s8)grp[0x13];
+    const s32 zsf3 = (s16)gte_cfc2(29);
+    u32 last_xy[3] = {0, 0, 0}, last_z[3] = {0, 0, 0};
+    unsigned seq = 0, xy_seq = 0, z_seq = 0;
+    for (int k = 0; k < 8; k++) {
+        const int quad = !(k & 1);
+        for (s32 n = *(u16 *)(grp + 2 + 2 * k); n > 0; n--, poly += kind_src[k], pkt += kind_size[k]) {
+            const u32 i0 = *(u16 *)(poly + 0), i1 = *(u16 *)(poly + 2), i2 = *(u16 *)(poly + 4);
+            const u32 i3 = quad ? *(u16 *)(poly + 6) : 0;
+            const u32 xy0 = (u32)g_vtxScreenXY[i0], xy1 = (u32)g_vtxScreenXY[i1], xy2 = (u32)g_vtxScreenXY[i2];
+            u32 z;
+            if (!(poly[kind_flags[k]] & 2)) {
+                *(u32 *)pkt = (u32)kind_len[k] << 24;
+                const s32 x0 = (s16)xy0, y0 = (s32)xy0 >> 16, x1 = (s16)xy1, y1 = (s32)xy1 >> 16, x2 = (s16)xy2, y2 = (s32)xy2 >> 16;
+                const s32 nclip = (s32)((int64_t)x0 * y1 + (int64_t)x1 * y2 + (int64_t)x2 * y0 - (int64_t)x0 * y2 - (int64_t)x1 * y0 - (int64_t)x2 * y1);
+                last_xy[0] = xy0, last_xy[1] = xy1, last_xy[2] = xy2, xy_seq = ++seq;
+#ifdef GTE_BATCH_CHECK
+                { s32 real; gte_ldsxy3(xy0, xy1, xy2); gte_nclip(); gte_stopz(&real);
+                  if (real != nclip) port_fatal("fm_link check: NCLIP %08x here, %08x the GTE's", (unsigned)nclip, (unsigned)real); }
+#endif
+                if (nclip <= 0) continue;
+            }
+            *(u32 *)(pkt + kind_xy[k][0]) = xy0;
+            *(u32 *)(pkt + kind_xy[k][1]) = xy1;
+            *(u32 *)(pkt + kind_xy[k][2]) = xy2;
+            if (quad) {
+                *(u32 *)(pkt + kind_xy[k][3]) = (u32)g_vtxScreenXY[i3];
+                z = ((u32)g_vtxScreenZ[i0] + g_vtxScreenZ[i1] + g_vtxScreenZ[i2] + g_vtxScreenZ[i3]) >> 4;
+            } else {
+                const u32 z0 = (u32)g_vtxScreenZ[i0], z1 = (u32)g_vtxScreenZ[i1], z2 = (u32)g_vtxScreenZ[i2];
+                const int64_t m0 = (int64_t)zsf3 * (s32)((z0 & 0xFFFF) + (z1 & 0xFFFF) + (z2 & 0xFFFF));
+                const int64_t q = m0 >> 12;
+                z = q > 0xFFFF ? 0xFFFF : q < 0 ? 0 : (u32)q;
+                last_z[0] = z0, last_z[1] = z1, last_z[2] = z2, z_seq = ++seq;
+#ifdef GTE_BATCH_CHECK
+                { u32 real; gte_ldsz3(z0, z1, z2); gte_avsz3(); gte_stotz(&real);
+                  if (real != z) port_fatal("fm_link check: AVSZ3 %x here, %x the GTE's", (unsigned)z, (unsigned)real); }
+#endif
+            }
+            u32 *slot = &ot[z];
+            if (PSX_OT_OUTSIDE(slot)) continue; /* (past the table: the PS1 never draws it, psx_mem.h) */
+            *(u32 *)pkt = *slot | ((u32)kind_len[k] << 24);
+            *slot = (u32)pkt & 0xFFFFFF;
+        }
+    }
+    /* (the GTE as the game's commands leave it) */
+    for (int pass = 0; pass < 2; pass++) {
+        const int nclip_now = xy_seq && (pass == 0) == (xy_seq < z_seq || !z_seq);
+        const int avsz_now = z_seq && (pass == 0) == (z_seq < xy_seq || !xy_seq);
+        if (nclip_now) { gte_ldsxy3(last_xy[0], last_xy[1], last_xy[2]); gte_nclip(); }
+        if (avsz_now) { gte_ldsz3(last_z[0], last_z[1], last_z[2]); gte_avsz3(); }
+    }
+}
+#else
+#define fm_link o0a_fldmdl_drawMesh_link
+#endif
+
 PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     GameData *gd = g_gameState->gameData;
     u8 *grp = (u8 *)&model->model->groups[group];
@@ -335,7 +409,7 @@ PORT_OVERLAY_CODE(0a) void o0a_fldmdl_drawMesh(ModelObj *model, u8 group) {
     int taken = port_native_field_mesh(&n);
     if (taken >= 2) link_translucent(grp, pkt, (u32 *)n.ot, 0, 0);
     if (taken) return;
-    o0a_fldmdl_drawMesh_link(model, group);
+    fm_link(model, group);
     depth_to_packets(grp, pkt);
 }
 
