@@ -5641,7 +5641,22 @@ static void convert_rgb24(u8 *px, unsigned tw, const PsxDisplayInfo *d, int w, i
     for (int y = 0; y < h; y++) {
         const u8 *src = (const u8 *)(psx_vram + ((d->y + y) & 511) * VW + d->x);
         u8 *row = px + ((unsigned)(y >> 3) * (tw >> 3) * 64 + morton_y[y & 7]) * 3;
-        for (int x = 0; x < w; x++, src += 3) {
+        /* (two pixels a step: an even column's texel and the next one's lie one after the other in a tile, six bytes
+         * read as a word and a halfword and written so, their red and blue changed over. A byte at a time, the loop's
+         * loads and stores were its time: 7 ms of every movie frame on an Old 3DS) */
+        int x = 0;
+        for (; x + 1 < w; x += 2, src += 6) {
+            u8 *o = row + col[x];
+            u32 a;
+            u16 b;
+            __builtin_memcpy(&a, src, 4);
+            __builtin_memcpy(&b, src + 4, 2);
+            const u32 lo = (a >> 16 & 0xFF) | (a & 0xFF00) | (a & 0xFF) << 16 | (u32)(b >> 8) << 24;
+            const u16 hi = (u16)((b & 0xFF) | (a >> 24) << 8);
+            __builtin_memcpy(o, &lo, 4);
+            __builtin_memcpy(o + 4, &hi, 2);
+        }
+        for (; x < w; x++, src += 3) {
             u8 *o = row + col[x];
             o[0] = src[2]; o[1] = src[1]; o[2] = src[0];
         }
