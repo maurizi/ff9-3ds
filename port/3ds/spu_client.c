@@ -269,11 +269,35 @@ void psx_spu_advance(unsigned ticks) {
 }
 
 /* SPU RAM transfers (spu.c): done by the audio core in its order; the game's side waits, as its source may change */
+/* (Not waited for where nothing needs it: a clear, and a transfer in of up to XFER_BYTES, whose bytes are copied
+ * here and taken from the copy by the audio core when it comes to it. The wait was for the audio core to work through
+ * everything queued before the transfer, mixing included: a movie streams its music into SPU RAM once a frame, and
+ * with the mixer busy on its core the game's thread stood 18 to 21 ms of every 67 ms movie frame there (an Old 3DS,
+ * field 2752's movie: its frames 62 to 71 ms of the game's own time, the movie 2% slow and more). A read back still
+ * waits, and after it everything before it is done.) */
+#define XFER_BYTES (64 * 1024)
+static u8 xfer[XFER_BYTES] __attribute__((aligned(4)));
+static u32 xfer_used, xfer_issued; /* (the game's thread's: bytes of xfer in use; transfers queued so far) */
+static int xfer_begun;
 int psx_spu7_ram(unsigned at, unsigned n, const unsigned char *src, unsigned char *dst) {
-    u32 want = shared.transfers + 1;
+    if (!xfer_begun) xfer_issued = shared.transfers, xfer_begun = 1;
+    if ((s32)(shared.transfers - xfer_issued) >= 0) xfer_used = 0; /* (every one queued is done: the copies are free) */
+    const int copied = src && n <= XFER_BYTES;
+    if (copied && xfer_used + n > XFER_BYTES) { /* (no room: once those before are done there is) */
+        while ((s32)(shared.transfers - xfer_issued) < 0) svcSleepThread(50000);
+        xfer_used = 0;
+    }
+    const void *from = src;
+    if (copied) {
+        memcpy(xfer + xfer_used, src, n);
+        from = xfer + xfer_used;
+        xfer_used += (n + 3) & ~3u;
+    }
+    const u32 want = ++xfer_issued;
     put(SPU7_ADDR, at, 0);
-    put(src ? SPU7_RAM_IN : dst ? SPU7_RAM_OUT : SPU7_RAM_CLEAR, n, (u32)(src ? (const void *)src : (void *)dst));
+    put(src ? SPU7_RAM_IN : dst ? SPU7_RAM_OUT : SPU7_RAM_CLEAR, n, (u32)(src ? from : (void *)dst));
     kick();
+    if (copied || (!src && !dst)) return 1;
     while ((s32)(shared.transfers - want) < 0) svcSleepThread(50000);
     __sync_synchronize();
     return 1;
