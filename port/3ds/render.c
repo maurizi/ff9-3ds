@@ -2477,7 +2477,7 @@ static __attribute__((noinline)) int convert_block_do(TexSlot *s, const Gp0Mode 
  * counted, and every REGROUP_FRAMES frames, if a grouping (greedy, by those counts, 16 a group at most) would cut
  * the atlas changes by a quarter, the slots are moved into it (their texels copied cell to cell: a few ms, once). */
 #define REGROUP_FRAMES 64
-#define REGROUP_MOVES 6
+#define REGROUP_MOVES 3 /* (6 until 2026-11-23: with the look itself, 21 to 32 ms at once, two VBlanks of a battle gone) */
 static u16 co[MAX_SLOTS][MAX_SLOTS];
 static int co_last = -1;
 static inline int cell_of(const TexSlot *t) {
@@ -2510,6 +2510,14 @@ static void copy_cell(u16 *dst, unsigned dw, unsigned dx, unsigned dy, const u16
                    (u32 *)(dst + tiled(dx, dy, dw)), GX_BUFFER_DIM(line, (dw - 256) * 8 * 2 / 16), 256 * 256 * 2,
                    GX_TRANSFER_RAW_COPY(1));
 }
+static u16 pair_ix[MAX_SLOTS * MAX_SLOTS / 2];
+static const u16 *pair_w;
+static unsigned pair_stride;
+static int pair_cmp(const void *a, const void *b) {
+    const unsigned ia = *(const u16 *)a, ib = *(const u16 *)b;
+    const unsigned wa = *(const u16 *)((const u8 *)pair_w + ia * pair_stride), wb = *(const u16 *)((const u8 *)pair_w + ib * pair_stride);
+    return wa != wb ? (wa < wb ? 1 : -1) : (ia < ib ? -1 : ia > ib);
+}
 static void slot_regroup(void) {
     static u32 frame, wait = REGROUP_FRAMES, made_at;
     if (++frame < wait || natlases < 2) return;
@@ -2532,13 +2540,13 @@ static void slot_regroup(void) {
         }
     memset(co, 0, sizeof co);
     if (now < wait * 16) return; /* (fewer than 16 changes a frame: nothing worth a move) */
-    for (int i = 1; i < np; i++) { /* (insertion sort by weight, descending: a few hundred pairs) */
-        typeof(pairs[0]) t = pairs[i];
-        int j = i - 1;
-        while (j >= 0 && pairs[j].w < t.w) pairs[j + 1] = pairs[j], j--;
-        pairs[j + 1] = t;
-    }
-    for (int k = 0; k < np; k++) {
+    /* (by weight, descending; equal weights in their first order, as the insertion sort this was left them: with 144
+     * slots the pairs are thousands, and that sort was milliseconds) */
+    for (int i = 0; i < np; i++) pair_ix[i] = (u16)i;
+    pair_w = &pairs[0].w, pair_stride = sizeof pairs[0];
+    qsort(pair_ix, (size_t)np, sizeof pair_ix[0], pair_cmp);
+    for (int q = 0; q < np; q++) {
+        const int k = pair_ix[q];
         int ga = grp[pairs[k].a], gb = grp[pairs[k].b];
         if (ga == gb || gsize[ga] + gsize[gb] > 16) continue;
         for (int i = 0; i < n; i++) if (grp[i] == gb) grp[i] = (u8)ga;
@@ -3299,13 +3307,18 @@ static void emit(const Gp0Mode *m, const Vtx *v, unsigned n, int bx0, int by0, i
         }
         return;
     }
-    if (ui_mode && !(psx_ui_list_battle && 0x17 - psx_ot_entry == 17)) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
+    /* (those hands in the scene whatever else: their packets, the game's buffers reused, are now and then inside a
+     * range the window system gave for an earlier frame's (ui_packet), and the hand then went to the bottom screen's
+     * layer for that frame: a pointing hand blinking over the battle screen with nothing to point at, the user's film
+     * of 2026-11-22) */
+    const int scene_hand = ui_mode && psx_ui_list_battle && 0x17 - psx_ot_entry == 17;
+    if (ui_mode && !scene_hand) layer = ui_list_layer, ox = ui_ox, oy = ui_oy;
     /* (a 15-bit texture is a frame copied from VRAM, as the field-to-battle swirl draws: the scene, never a window,
      * whose art is CLUT-based, even when the game builds it in its window packets) */
     /* (the card game's bottom screen is its frame itself (present_bottom): its windows, the "Start the game?" Yes/No
      * over the stock, are drawn into it in their place. In a UI layer, which that screen doesn't show, the question
      * was missing behind the card selection board) */
-    else if (menu_state != 3 && (menu_state == 2 || ui_packet()) && !(m && m->textured && m->depth == 2)) { /* (a menu: the whole frame) */
+    else if (!scene_hand && menu_state != 3 && (menu_state == 2 || ui_packet()) && !(m && m->textured && m->depth == 2)) { /* (a menu: the whole frame) */
         int x, y, w, h;
         psx_gpu_draw_area(&x, &y, &w, &h);
         layer = ui_layer_for(x, y, 0);
