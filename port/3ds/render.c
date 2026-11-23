@@ -104,7 +104,7 @@ typedef struct {
  * palace: at most 9150 vertices and 896 KB of staging a frame); past them a frame waits for the GPU and goes on. Larger,
  * they took 8 MB of linear memory the texture cache needs: it stopped at 67 pages, and the palace's and South Gate's
  * scenes, using more, converted pages again every frame (24-27 ms a frame on a 3DS) */
-#define VB_MAX (24 * 1024)
+#define VB_MAX (64 * 1024)
 static Vtx *vb;
 static unsigned vb_used, vb_flushed;
 
@@ -149,6 +149,11 @@ int ctr_sw_kflush = 1;                      /* (0: the GSP service's flush, as l
 static const char *flush_what = "?";
 static int vb_run_open;     /* a run holds the vertex buffer's room (run_open ... run_flush) */
 static unsigned vb_run_at;  /* ... from this vertex on */
+/* (a run's other groups: each in a piece of its own taken from the buffer's end downwards (run_open) and drawn from
+ * there. vb_top: the lowest taken; vb_top_closed: of closed runs; vb_top_flushed: what flush_pending has written out) */
+static unsigned vb_top = VB_MAX, vb_top_closed = VB_MAX, vb_top_flushed = VB_MAX, run_top0;
+static int run_rec; /* (the open run is one recorded: its groups' pieces taken at once, in order, and moved at its end) */
+static int bg_rec_on;
 static unsigned vb_used, vb_flushed, staging_used, staging_flushed;
 static void flush_range(void *p, unsigned n) {
     if (!n) return;
@@ -379,6 +384,10 @@ static void flush_pending(void) {
     const unsigned upto = vb_run_open ? vb_run_at : vb_used;
     if (upto > vb_flushed) flush_range(vb + vb_flushed, (upto - vb_flushed) * sizeof(Vtx));
     if (upto > vb_flushed || !vb_run_open) vb_flushed = upto;
+    if (vb_top_closed < vb_top_flushed) {
+        flush_range(vb + vb_top_closed, (vb_top_flushed - vb_top_closed) * sizeof(Vtx));
+        vb_top_flushed = vb_top_closed;
+    }
     flush_what = "staging";
     flush_range(staging + staging_flushed, staging_used - staging_flushed);
     staging_flushed = staging_used;
@@ -886,6 +895,7 @@ static void half_restart(void) {
     vb = vb_half[half];
     staging = staging_half[half];
     vb_used = vb_flushed = 0;
+    vb_top = vb_top_closed = vb_top_flushed = VB_MAX;
     staging_used = staging_flushed = 0;
     frame_serial++;
 }
@@ -943,7 +953,7 @@ static Batch batches[MAX_BATCHES];
 static void run_flush(void);
 HOT_DRAW static Vtx *alloc_vtx(unsigned n) {
     run_flush(); /* (an open run holds the rest of the buffer: run_open) */
-    if (vb_used + n > VB_MAX) gpu_sync();
+    if (vb_used + n > vb_top) gpu_sync();
     Vtx *v = vb + vb_used;
     vb_used += n;
     hz_check(v, n * sizeof(Vtx), "vertices");
@@ -1008,14 +1018,21 @@ PORT_HOT_PRIM static void run_flush(void) {
     run_n = 0;
     depth_next += run_prims;
     run_prims = 0;
-    /* (the other groups moved down after the first, in order: each to below where it was) */
+    /* (the other groups drawn from their pieces at the buffer's end. They were moved down after the first: 1.8 ms of
+     * a frame of 2600 polygons on an Old 3DS, field 574. A background run being recorded (bg_memo_keep copies the
+     * run's vertices as one stretch) is still moved, and its pieces given back) */
     unsigned at[RUN_GROUPS], end = run_at[0] + run_g[0].nv;
     at[0] = run_at[0];
-    for (int i = 1; i < n; i++) {
-        memmove(vb + end, vb + run_at[i], run_g[i].nv * sizeof(Vtx));
-        at[i] = end;
-        end += run_g[i].nv;
-    }
+    if (run_rec) {
+        for (int i = 1; i < n; i++) {
+            memmove(vb + end, vb + run_at[i], run_g[i].nv * sizeof(Vtx));
+            at[i] = end;
+            end += run_g[i].nv;
+        }
+        vb_top = run_top0;
+    } else
+        for (int i = 1; i < n; i++) at[i] = run_at[i];
+    vb_top_closed = vb_top;
     vb_used = end;
     vb_run_open = 0;
     int saved_target = cur_target, saved_mask = cur_mask;
@@ -1062,17 +1079,24 @@ PORT_HOT_PRIM __attribute__((noinline)) static void run_open(int i, int kind, in
     if (i == 0) { /* (the run's room: the buffer's rest, its last RUN_V for group 1; nothing else allocates meanwhile) */
         /* (both eyes' values of this submit must fit before the next clear (frame_begin clears): the run ends at as many
          * primitives as there are values left) */
-        const unsigned others = (RUN_GROUPS - 1) * RUN_V2; /* (the other groups' room: the buffer's end, in order) */
-        if (run_room() < 16 || vb_used + others + 64 > VB_MAX) gpu_sync();
+        /* (room for the first group and one piece more at least; a recorded run's for every group, as it is moved) */
+        run_rec = bg_rec_on != 0;
+        const unsigned others = (run_rec ? RUN_GROUPS - 1 : 1) * RUN_V2;
+        if (run_room() < 16 || vb_used + others + 64 > vb_top) gpu_sync();
         run_max = run_room();
-        run_at[0] = vb_used, run_cap[0] = VB_MAX - others - vb_used;
+        run_at[0] = vb_used, run_cap[0] = vb_top - others - vb_used;
         if (run_cap[0] > RUN_V) run_cap[0] = RUN_V;
-        for (int k = 1; k < RUN_GROUPS; k++) run_at[k] = VB_MAX - others + (k - 1) * RUN_V2, run_cap[k] = RUN_V2;
-        hz_check(vb + vb_used, (VB_MAX - vb_used) * sizeof(Vtx), "vertices");
+        run_top0 = vb_top;
+        if (run_rec) {
+            vb_top -= others;
+            for (int k = 1; k < RUN_GROUPS; k++) run_at[k] = vb_top + (k - 1) * RUN_V2, run_cap[k] = RUN_V2;
+        }
+        hz_check(vb + vb_used, (vb_top - vb_used) * sizeof(Vtx), "vertices");
         vb_run_open = 1, vb_run_at = vb_used;
         vb_used = VB_MAX;
         run_d0 = (float)depth_next;
     }
+    else if (!run_rec) vb_top -= RUN_V2, run_at[i] = vb_top, run_cap[i] = RUN_V2; /* (run_slot: there is room) */
     RunGroup *g = &run_g[i];
     g->kind = (u8)kind; g->abr = (u8)abr; g->mask = (u8)cur_mask; g->tex = tex; g->nv = 0;
     memcpy(g->sc, sc, sizeof g->sc);
@@ -1091,7 +1115,7 @@ PORT_HOT_PRIM static Vtx *run_slot(int kind, int abr, const u16 sc[4], C3D_Tex *
                 ctr_run_reorders++;
                 return run_take(i, n, d);
             }
-        if (run_n < RUN_GROUPS) {
+        if (run_n < RUN_GROUPS && (run_rec || vb_top >= run_at[0] + run_cap[0] + RUN_V2)) {
             run_open(run_n, kind, abr, sc, tex);
             return run_take(run_n - 1, n, d);
         }
@@ -4295,7 +4319,7 @@ HOT_DRAW static int bg_memo_same(const BgMemo *m, const u32 *head, int count, co
 /* the copy drawn: 0 if there was no room this frame (the caller draws the tiles) */
 HOT_DRAW static int bg_memo_draw(BgMemo *m, const u32 *head) {
     run_flush();
-    if (run_room() < m->prims + 16 || vb_used + m->nv + 64 > VB_MAX || nbatches + (unsigned)m->nb + 2 > MAX_BATCHES) {
+    if (run_room() < m->prims + 16 || vb_used + m->nv + 64 > vb_top || nbatches + (unsigned)m->nb + 2 > MAX_BATCHES) {
         gpu_sync();
         if (run_room() < m->prims + 16 || !bg_memo_textures(m)) return 0;
     }
