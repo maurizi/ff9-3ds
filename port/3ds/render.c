@@ -104,7 +104,7 @@ typedef struct {
  * palace: at most 9150 vertices and 896 KB of staging a frame); past them a frame waits for the GPU and goes on. Larger,
  * they took 8 MB of linear memory the texture cache needs: it stopped at 67 pages, and the palace's and South Gate's
  * scenes, using more, converted pages again every frame (24-27 ms a frame on a 3DS) */
-#define VB_MAX (64 * 1024)
+#define VB_MAX (40 * 1024)
 static Vtx *vb;
 static unsigned vb_used, vb_flushed;
 
@@ -1891,8 +1891,8 @@ typedef struct {
     u32 chash[64]; /* ... and its CLUT's */
 } __attribute__((aligned(32))) TexSlot; /* (its front on two cache lines of its own) */
 
-#define MAX_SLOTS 96
-#define SLOT_RESERVE (512u << 10)
+#define MAX_SLOTS 144
+#define SLOT_RESERVE (1536u << 10)
 static TexSlot slots[MAX_SLOTS];
 static int nslots;
 int ctr_texture_pages(void) { psx_gpu_sync(); return nslots; } /* (the heartbeat's: platform.c) */
