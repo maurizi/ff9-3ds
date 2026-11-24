@@ -205,3 +205,5 @@ src/ovl_0b/btl_cmd.c |     cmd->ability = &g_gameState->gameData->ctx.battle->en
 # The field screen asks whether the script taking control gives it back (port/game/field_map.c port_control_taken):
 # noted as the instruction runs, the object and its place known then.
 src/main/event.c | case EVT_OP_DISABLE_CONTROL: | case EVT_OP_DISABLE_CONTROL: port_control_taken(); | 1
+# The credit card after the Masked Man drawn alone, the bottom screen dark meanwhile (port/game/field_hud.c port_splash_running).
+src/ovl_0a/fld_main.c | fld_showSplashImage(); | port_splash_running(1); fld_showSplashImage(); port_splash_running(0); | 1

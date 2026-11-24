@@ -56,6 +56,7 @@ void port_scenario_field_ready(int field);
 void port_field_entering(int field); /* (around fld_load: port/game/field_hud.c) */
 void port_field_ready(int field);
 void port_control_taken(void); /* (event.c's EVT_OP_DISABLE_CONTROL: port/game/field_map.c) */
+void port_splash_running(int on); /* (around fld_showSplashImage: port/game/field_hud.c) */
 int port_scenario_seed(int ordinary_seed);
 
 /* Print to the debug console. */

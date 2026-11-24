@@ -871,7 +871,9 @@ static void draw(void) {
         return;
     }
 
-    /* the header: where, and since when and with what */
+    /* the header: where, and since when and with what (while playing: not through a cutscene, as the map and party,
+     * the user's choice: the LOG button alone then) */
+    if (party_live()) {
     if ((field_ready || g_gameState->mode != 1) && ram_ok(g->locationName, 1) && *g->locationName != 0xFF)
         text_drawBlock(r_head.x + 8, r_head.y + 6, 2, g->locationName, 0);
     /* (placed from the right by their widths: the gil against the box's edge, its icon, the time before it. At fixed
@@ -887,6 +889,7 @@ static void draw(void) {
     ui_drawSmallDigits(tx, r_head.y + 9, 2, buf, tcol);
     ui_drawSprite(tx - 13, r_head.y + 8, 2, 0xB1, 0);
     win_drawBox(&r_head, 3, 2);
+    }
 
     if (!draw_choices() && log_on) opts_on ? draw_options() : draw_log();
     else if (!n_choices) {
@@ -912,8 +915,9 @@ static void draw(void) {
         button(cards_rect = &r_cards, cards, buf);
     }
     {
-        static const u8 logl[] = "LOG", mapl[] = "MAP";
-        button(&r_log, log_on ? mapl : logl, NULL);
+        static const u8 logl[] = "LOG", mapl[] = "MAP", hidel[] = "HIDE";
+        button(&r_log, log_on ? (party_live() ? mapl : hidel) : logl, NULL); /* (closing the log: back to the map, or with
+                                                                                * no map up (a cutscene) to nothing) */
     }
     ate_shown = ate_available();
     if (ate_shown) { /* (pulsing, as the PS1's prompt) */
@@ -1024,9 +1028,15 @@ static int hud_changed_rect(const u32 *old, unsigned words, int w, int h, int re
     return 1;
 }
 int psx_ui_list_begin_part(int x0, int y0, int x1, int y1);
+/* the credit card after the Masked Man ("Conceived & Produced by Hironobu Sakaguchi", fld_showSplashImage as the cargo
+ * room, field 52, hands over to Vivi in Alexandria, 100) on the top screen: nothing on the bottom meanwhile, not even the header and LOG (the user's
+ * report). Set around the call (config/patches.txt) */
+static int splash_on;
+void port_splash_running(int on) { splash_on = on; }
 void port_bottom_hud(void) {
     { void port_rewards_live_draw(void); port_rewards_live_draw(); } /* (the rewards under a battle: rewards_top.c) */
     shown = shown_battle = 0;
+    if (splash_on) return;
     ctr_flat_background(g_gameState && g_gameState->mode == 1);
     if (g_gameState && g_gameState->gameData) cards_step();
     if (g_gameState && g_gameState->gameData && g_gameState->gameData->font) top_hud();
