@@ -696,11 +696,55 @@ static int had_control(void) {
     return port_ending_field() ? here : had;
 }
 
+/* Whether the player is playing, not watching a cutscene: the map, the party and the menu's buttons are shown then (the
+ * header and LOG always). Playing once control has held STEADY VBlanks. Control taken away just after a confirm press
+ * made while in control is the player's own doing (a talk, a chest, a save point) and keeps it while its message
+ * windows follow one another (TALK_GAP VBlanks without one: the talk has led into a scene, as Baku's in the opening's
+ * meeting room into the whole Masked Man act); taken away otherwise
+ * it is the field's script: a cutscene, and after CUTSCENE_VBLANKS (a script's pause of a moment is not one) all of it
+ * goes until control is back. A field entered, or the field again after a battle, without control yet: a cutscene at
+ * once. (Latched from the first control on (had_control), the map and party showed through every cutscene: after the
+ * Masked Man, Vivi's arrival in Alexandria with the scene before's party (the game sets his only as it gives control),
+ * the play on the Prima Vista (the user's reports)) */
+#define TALK_VBLANKS 12
+#define CUTSCENE_VBLANKS 15
+#define TALK_GAP 30
+static int party_live(void) {
+    static int live, on, off, talk, gap, confirm_at = -1000, field = -1, mode = -1, last_frame = -1;
+    unsigned int plat_pad_buttons(int port);
+    if (!had_control()) return live = 0;
+    const int f = (int)VSync(-1);
+    if (f == last_frame) return live; /* (once a VBlank) */
+    last_frame = f;
+    const int ctl = ram_ok(g_evtState, sizeof *g_evtState) && g_evtState->controlEnabled;
+    if (g_gameState->mode != 1) { mode = g_gameState->mode; return live; }
+    if (mode != 1 || g_gameState->gameData->fieldId != field) { /* (a field entered, or the field again after a battle) */
+        mode = 1, field = g_gameState->gameData->fieldId;
+        if (!ctl) live = 0, on = 0, talk = 0;
+    }
+    if (ctl) {
+        off = 0, talk = 0;
+        if (plat_pad_buttons(0) & 0x6000u) confirm_at = f; /* (Cross or Circle) */
+        if (++on >= STEADY) live = 1;
+        return live;
+    }
+    if (on) talk = f - confirm_at <= TALK_VBLANKS, gap = 0; /* (control just taken away: by the player's press or the script) */
+    on = 0;
+    if (talk) { /* (a talk goes on while its windows come one after another: a stretch without one, it has become a scene) */
+        int open = 0;
+        for (int k = 0; k < 10; k++) open |= g_msgWindows[k].open != 0;
+        if (open) gap = 0;
+        else if (++gap >= TALK_GAP) talk = 0;
+    }
+    if (!talk && ++off >= CUTSCENE_VBLANKS) live = 0;
+    return live;
+}
+
 /* (changed only once the new state has held STEADY frames: at an encounter the menu flags change for a frame or two
  * before the swirl, and the party list went and came back) */
 static int menu_allowed(void) {
     static int shown, run, last_frame = -1;
-    int now = had_control() && !(g_gameState->gameData->flags & GD_MENU_DISABLED);
+    int now = party_live() && !(g_gameState->gameData->flags & GD_MENU_DISABLED);
     int f = (int)VSync(-1);
     if (f != last_frame) { /* (once a frame: draw asks more than once) */
         last_frame = f;
@@ -835,15 +879,15 @@ static void draw(void) {
 
     if (!draw_choices() && log_on) opts_on ? draw_options() : draw_log();
     else if (!n_choices) {
-        ui_drawLabel(r_map.x + 8, r_map.y - 3, 2, (s32)map, 0);
-        if (field_ready || g_gameState->mode != 1)
-            g_primPtr = port_field_map_draw(&g_ot[2], g_primPtr, (u8 *)(hud_mem + OTN + BUF_WORDS) - 64, r_map.x + 3,
-                                            r_map.y + 3, r_map.w - 6, r_map.h - 6);
-        win_drawBox(&r_map, 3, 2);
-        /* (the party once the player has had control here: it is the real party then. Not by the menu's being allowed,
-         * which a cutscene takes away: the party went and came back around Memoria's movie of Alexandria (the user's
-         * report)) */
-        if (had_control()) {
+        if (party_live()) { /* (the map and party while playing, not through a cutscene) */
+            ui_drawLabel(r_map.x + 8, r_map.y - 3, 2, (s32)map, 0);
+            if (field_ready || g_gameState->mode != 1)
+                g_primPtr = port_field_map_draw(&g_ot[2], g_primPtr, (u8 *)(hud_mem + OTN + BUF_WORDS) - 64, r_map.x + 3,
+                                                r_map.y + 3, r_map.w - 6, r_map.h - 6);
+            win_drawBox(&r_map, 3, 2);
+        }
+        /* (the party while playing: the real party then, not the opening's placeholder or a scene's before control) */
+        if (party_live()) {
             ui_drawLabel(r_party.x + 8, r_party.y - 3, 2, (s32)party, 0);
             draw_party();
         }
@@ -1016,6 +1060,7 @@ void port_bottom_hud(void) {
     int auction = g_gameState->mode == 1 && port_auction_live();
     auction_live = auction;
     { int port_minigame_panel_up(void); if (g_gameState->mode == 1 && !auction && port_minigame_panel_up()) return; } /* (a minigame's panel: ui_split.c) */
+    { int port_sword_fight(void); if (port_sword_fight()) return; } /* (the play's sword fight: dark, ui_split.c) */
     choices_only = !ctl;
 
     ClearOTagR(hud_ot, OTN);

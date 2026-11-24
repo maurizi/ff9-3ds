@@ -19,8 +19,6 @@ static const struct { u16 field, lo, hi; } panels[] = {
     {103, 0xEA, 0xEB},   /* jump rope: "N times" (the girls' comments are speech: on the top) */
     {1850, 0x94, 0x94},  /* Hippaul racing: "Press Square and Circle alternately!" (Hippolady's lines and GO! are speech) */
     {657, 0x183, 0x183}, /* frog catching: "Frogs Captured: N" */
-    {64, 0x6F, 0x6F},    /* the Prima Vista play's sword fight: its instructions */
-    {64, 0x78, 0x80},    /* ... the nobles' verdict, the gil */
 };
 int port_menu_state(void);
 /* The ending's field cutscenes: after Necron (the party waking on the hill (field 2928) to the Iifa tree's roots (2934))
@@ -149,6 +147,23 @@ int port_top_fade(u8 rgb[3]) {
 }
 long VSync(long);
 int port_minigame_panel_up(void) { return VSync(-1) - panel_frame <= 2; }
+/* The Prima Vista play's sword fight (field 64; decomp R38 4): the bottom screen dark from Zidane's "Expect no quarter"
+ * (msg 0x6A) through the instructions (0x6F), Blank's prompts (0x70-0x77) and the results (0x78-0x80), its text all on
+ * the top as the PS1 has it. Its instructions and results as a panel on the bottom screen were a poor fit, and between
+ * them, whenever none was up, the field's screen came back for a moment (the user's report: "just go fully black").
+ * FIGHT_GAP VBlanks between two of its messages (a prompt answered, the next some 30 to 50 later) keep it dark. */
+#define FIGHT_GAP 120
+int port_sword_fight(void) {
+    static long seen = -1000, tick = -1;
+    static int live;
+    const long now = VSync(-1);
+    if (now == tick) return live;
+    tick = now;
+    if (!g_gameState || g_gameState->mode != 1 || g_gameState->gameData->fieldId != 64) return live = 0;
+    for (int k = 0; k < 10; k++)
+        if (g_msgWindows[k].open && g_msgWindows[k].msgId >= 0x6A && g_msgWindows[k].msgId <= 0x80) seen = now;
+    return live = now - seen < FIGHT_GAP;
+}
 
 void win_drawAll(void) {
     u8 *lo = g_primPtr;

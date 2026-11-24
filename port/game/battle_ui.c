@@ -413,6 +413,14 @@ int port_battle_hud_draw(void) {
         return 0;
     }
     if (!ram_ok(g_gameState->gameData->ctx.battle, 16) || !ram_ok(g_btlUi, sizeof *g_btlUi) || !g_btlUi->partyCount) return 0;
+    /* (the game's battle panel off: the battle won or lost, its closing scene or the game over coming. Nothing of the
+     * battle's then, the bottom screen dark: drawn, the screen had no cards (party_unit) and left the last picture in its
+     * layer, which an empty list doesn't clear, the cards' portraits and bars gone from over it (the user's report: the
+     * Masked Man's end, and a game over)) */
+    if (!g_btluiState.enabled) {
+        cmd_shown = list_shown = tgt_shown = sys_shown = 0;
+        return 0;
+    }
     int st = g_btlUi->menuState;
     cmd_shown = list_shown = tgt_shown = 0;
     port_battle_hud_targets = 0;
