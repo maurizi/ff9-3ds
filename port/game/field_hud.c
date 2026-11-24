@@ -700,7 +700,9 @@ static int had_control(void) {
  * header and LOG always). Playing once control has held STEADY VBlanks. Control taken away just after a confirm press
  * made while in control is the player's own doing (a talk, a chest, a save point) and keeps it while its message
  * windows follow one another (TALK_GAP VBlanks without one: the talk has led into a scene, as Baku's in the opening's
- * meeting room into the whole Masked Man act); taken away otherwise
+ * meeting room into the whole Masked Man act). Taken away by a script that gives it back on every path without
+ * leaving the field (port_scene_returns, field_map.c: Puck running into Vivi), it is play too, until control is back;
+ * taken away otherwise
  * it is the field's script: a cutscene, and after CUTSCENE_VBLANKS (a script's pause of a moment is not one) all of it
  * goes until control is back. A field entered, or the field again after a battle, without control yet: a cutscene at
  * once. (Latched from the first control on (had_control), the map and party showed through every cutscene: after the
@@ -728,9 +730,12 @@ static int party_live(void) {
         if (++on >= STEADY) live = 1;
         return live;
     }
-    if (on) talk = f - confirm_at <= TALK_VBLANKS, gap = 0; /* (control just taken away: by the player's press or the script) */
+    if (on) { /* (control just taken away: by the player's press, or by a script that gives it back here: field_map.c) */
+        int port_scene_returns(void);
+        talk = f - confirm_at <= TALK_VBLANKS ? 1 : port_scene_returns() ? 2 : 0, gap = 0;
+    }
     on = 0;
-    if (talk) { /* (a talk goes on while its windows come one after another: a stretch without one, it has become a scene) */
+    if (talk == 1) { /* (a talk goes on while its windows come one after another: a stretch without one, it has become a scene) */
         int open = 0;
         for (int k = 0; k < 10; k++) open |= g_msgWindows[k].open != 0;
         if (open) gap = 0;

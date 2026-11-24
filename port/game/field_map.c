@@ -712,3 +712,277 @@ u8 *port_field_map_draw(u32 *ot, u8 *pkt, u8 *pkt_end, int bx, int by, int bw, i
 #undef RV
     return (u8 *)p;
 }
+
+/* ---- a scripted interruption the player stays in: the field screen keeps its map and party through it ----
+ * Control taken away by a field's script is a cutscene to the field screen (field_hud.c party_live), unless the
+ * script that took it gives it back on every path without leaving the field: then it is an interruption of play
+ * (Puck running into Vivi in Alexandria's main street, field 100: Puck's entry 1 function 18 takes control, plays
+ * the fall and two lines, and calls Vivi's function 15, which gives it back; the user's report, the map and party
+ * went and came back). Walked from the control-off on, every path: through jumps (a condition read from the game's
+ * variables as they are, and from what the path itself has set), switches and calls into other objects' functions,
+ * each path to end on ENABLE_CONTROL (in the function or a function it calls), none to reach a field, world, battle,
+ * movie or game over change, or anything the walk can't read (a table switch, a call to the caller, a thread, an
+ * unknown op or expression term): then the answer is no. The meeting room's question in the opening (field 50, entry
+ * 17) gives control back on one answer and sets a flag for the cutscene on the other: no. */
+enum { SC_FAIL = -1, SC_NONE = 0, SC_ENABLE = 1, SC_LOOP = 2 };
+/* what the paths have set, as a stack: a path's own entries above where it began (a branch walks on from its
+ * parent's count, the parent's own left as they are), and the instructions of the path likewise */
+#define SC_OV 256
+static struct { u8 bank, type, uid, known; u16 idx; s32 v; } sc_ov[SC_OV];
+#define SC_PATH 2048
+static u16 sc_path[SC_PATH];
+static int sc_steps;
+
+static EvtObject *obj_of_uid(int uid) {
+    int guard = 0;
+    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next)
+        if (ram_ok(nd->obj, sizeof(EvtObject)) && nd->obj->uid == uid) return nd->obj;
+    return NULL;
+}
+
+/* a variable's bytes: G the global events, F the field's, L the object's own */
+static u8 *sc_bank(EvtObject *o, int bank, unsigned *size) {
+    if (bank == 0) { *size = sizeof g_evtGlobalVars.b; return g_evtGlobalVars.b; }
+    if (bank == 1) { *size = sizeof g_evtState->fieldVars; return g_evtState->fieldVars; }
+    if (!o || o->stackOfs < o->varsOfs) return NULL;
+    *size = (unsigned)(o->stackOfs - o->varsOfs) * 4;
+    u8 *p = (u8 *)o + o->varsOfs * 4;
+    return ram_ok(p, *size) ? p : NULL;
+}
+
+static int sc_read(EvtObject *o, int nv, int bank, int type, int idx, s32 *out) {
+    const int uid = bank >= 2 && o ? o->uid : 0;
+    for (int k = nv - 1; k >= 0; k--)
+        if (sc_ov[k].bank == bank && sc_ov[k].type == type && sc_ov[k].idx == idx && sc_ov[k].uid == uid) {
+            *out = sc_ov[k].v;
+            return sc_ov[k].known;
+        }
+    unsigned size;
+    const u8 *p = sc_bank(o, bank, &size);
+    if (!p) return 0;
+    if (type == 0 || type == 4) { /* (a bit: idx >> 3, low bit first) */
+        if ((unsigned)idx >> 3 >= size) return 0;
+        *out = p[idx >> 3] >> (idx & 7) & 1;
+        return 1;
+    }
+    const int w = type == 8 || type == 0xC ? 3 : type == 0x10 || type == 0x14 ? 1 : 2;
+    if ((unsigned)idx + w > size) return 0;
+    u32 x = 0;
+    for (int k = 0; k < w; k++) x |= (u32)p[idx + k] << 8 * k;
+    if (type == 8) x = (u32)((s32)(x << 8) >> 8);
+    else if (type == 0x10) x = (u32)(s8)x;
+    else if (type == 0x18) x = (u32)(s16)x;
+    *out = (s32)x;
+    return 1;
+}
+
+static int sc_write(EvtObject *o, int *nv, int bank, int type, int idx, s32 val, int known) {
+    const int n = *nv;
+    if (n == SC_OV) return 0;
+    sc_ov[n].bank = (u8)bank, sc_ov[n].type = (u8)type, sc_ov[n].idx = (u16)idx;
+    sc_ov[n].uid = (u8)(bank >= 2 && o ? o->uid : 0), sc_ov[n].v = val, sc_ov[n].known = (u8)known;
+    *nv = n + 1;
+    return 1;
+}
+
+/* an expression from c[*pi] to its 0x7F: its value (*known 0 when it can't be read); assignments into v. 0: a term
+ * the walk doesn't know */
+static int sc_expr(EvtObject *o, int *nv, const u8 *c, int *pi, int end, s32 *val, int *known) {
+    struct { s32 v; u8 known, isvar, bank, type; u16 idx; } st[16];
+    int sp = 0, i = *pi;
+#define PUSH(x, k) do { if (sp == 16) return 0; st[sp].v = (x), st[sp].known = (u8)(k), st[sp].isvar = 0; sp++; } while (0)
+    while (i < end) {
+        const int b = c[i++];
+        if (b == 0x7F) break;
+        if (b >= 0x80) {
+            const int idx = b & 0x20 ? c[i] | c[i + 1] << 8 : c[i];
+            i += b & 0x20 ? 2 : 1;
+            s32 x = 0;
+            const int k = sc_read(o, *nv, b & 3, b & 0x1C, idx, &x);
+            PUSH(x, k);
+            st[sp - 1].isvar = 1, st[sp - 1].bank = (u8)(b & 3), st[sp - 1].type = (u8)(b & 0x1C), st[sp - 1].idx = (u16)idx;
+        } else if (b == 0x7D) { PUSH((s16)(c[i] | c[i + 1] << 8), 1); i += 2; }
+        else if (b == 0x7E) { PUSH((s32)((c[i] | c[i + 1] << 8 | c[i + 2] << 16 | (u32)c[i + 3] << 24) & 0x3FFFFFF), 1); i += 4; }
+        else if (b == 0x78) { PUSH(0, 0); i += 2; }
+        else if (b == 0x7A) { PUSH(0, c[i] == 2); i += 1; } /* (sys.controlEnabled: off, the walk starting there) */
+        else if (b == 0x79 || b == 0x29 || b == 0x5F) { PUSH(0, 0); i += 1; }
+        else if ((b >= 0x11 && b <= 0x1B) || b == 0x20 || b == 0x21 || (b >= 0x24 && b <= 0x28)) {
+            if (sp < 2) return 0;
+            const s32 r = st[sp - 1].v, l = st[sp - 2].v;
+            const int kr = st[sp - 1].known, kl = st[sp - 2].known;
+            s32 x = 0;
+            int k = kl && kr;
+            switch (b) {
+            case 0x11: x = l * r; break;
+            case 0x12: k = k && r; x = k ? l / r : 0; break;
+            case 0x13: k = k && r; x = k ? l % r : 0; break;
+            case 0x14: x = l + r; break;
+            case 0x15: x = l - r; break;
+            case 0x16: x = (s32)((u32)l << (r & 31)); break;
+            case 0x17: x = l >> (r & 31); break;
+            case 0x18: x = l < r; break;
+            case 0x19: x = l > r; break;
+            case 0x1A: x = l <= r; break;
+            case 0x1B: x = l >= r; break;
+            case 0x20: x = l == r; break;
+            case 0x21: x = l != r; break;
+            case 0x24: x = l & r; break;
+            case 0x25: x = l ^ r; break;
+            case 0x26: x = l | r; break;
+            case 0x27: x = l && r; if ((kl && !l) || (kr && !r)) k = 1, x = 0; break;
+            case 0x28: x = l || r; if ((kl && l) || (kr && r)) k = 1, x = 1; break;
+            }
+            sp -= 2;
+            PUSH(x, k);
+        } else if (b == 0x2C || (b >= 0x2F && b <= 0x35) || (b >= 0x3D && b <= 0x3F)) { /* (= and the compound ones) */
+            if (sp < 2 || !st[sp - 2].isvar) return 0;
+            const int simple = b == 0x2C;
+            const s32 x = st[sp - 1].v;
+            const int k = simple && st[sp - 1].known;
+            if (!sc_write(o, nv, st[sp - 2].bank, st[sp - 2].type, st[sp - 2].idx, x, k)) return 0;
+            sp -= 2;
+            PUSH(x, k);
+        } else if (b == 0x0E || b == 0x10 || b == 0x0D) {
+            if (sp < 1) return 0;
+            const s32 x = st[sp - 1].v;
+            st[sp - 1].v = b == 0x0E ? !x : b == 0x10 ? ~x : -x;
+            st[sp - 1].isvar = 0;
+        } else if (b >= 0x04 && b <= 0x07) { /* (++ and --) */
+            if (sp < 1 || !st[sp - 1].isvar) return 0;
+            if (!sc_write(o, nv, st[sp - 1].bank, st[sp - 1].type, st[sp - 1].idx, 0, 0)) return 0;
+            st[sp - 1].known = 0, st[sp - 1].isvar = 0;
+        } else if (b == 0x62 || b == 0x63 || b == 0x50 || b == 0x51 || b == 0x4F || b == 0x58 || b == 0x59 || b == 0x6B ||
+                   b == 0x6D || b == 0x6A || b == 0x64 || b == 0x65 || b == 0x52 || b == 0x53 || b == 0x6E || b == 0x6F ||
+                   b == 0x70 || b == 0x71 || b == 0x61 || b == 0x60 || b == 0x4D || b == 0x2A) { /* (functions of one value) */
+            if (sp < 1) return 0;
+            st[sp - 1].known = 0, st[sp - 1].isvar = 0;
+        } else if (b == 0x66 || b == 0x5E || b == 0x5D) { /* (of two) */
+            if (sp < 2) return 0;
+            sp--;
+            st[sp - 1].known = 0, st[sp - 1].isvar = 0;
+        } else return 0;
+    }
+#undef PUSH
+    *pi = i;
+    *val = sp ? st[sp - 1].v : 0;
+    *known = sp ? st[sp - 1].known : 0;
+    return 1;
+}
+
+static int sc_join(int a, int b) {
+    if (a == SC_FAIL || b == SC_FAIL) return SC_FAIL;
+    if (a == SC_LOOP) return b;
+    if (b == SC_LOOP) return a;
+    return a == b ? a : SC_FAIL;
+}
+
+/* every path from instruction i of object o's function (code c, up to end) */
+static int sc_level; /* (nested walks: each takes some 700 bytes of stack) */
+static int sc_walk2(EvtObject *o, const u8 *c, int i, int end, int nv, int depth, int p0, int npath);
+static int sc_walk(EvtObject *o, const u8 *c, int i, int end, int nv, int depth, int p0, int npath) {
+    if (sc_level >= 24) return SC_FAIL;
+    sc_level++;
+    const int r = sc_walk2(o, c, i, end, nv, depth, p0, npath);
+    sc_level--;
+    return r;
+}
+/* (p0: where this function's walk begins in sc_path; npath: the path's length there) */
+static int sc_walk2(EvtObject *o, const u8 *c, int i, int end, int nv, int depth, int p0, int npath) {
+    s32 cond = 0;
+    int cond_known = 0;
+    while (i >= 0 && i < end) {
+        if (++sc_steps > 20000 || depth > 6) return SC_FAIL;
+        for (int k = p0; k < npath; k++)
+            if (sc_path[k] == i) return SC_LOOP; /* (a loop back on this path: its way out is walked from the branch) */
+        if (npath == SC_PATH) return SC_FAIL;
+        sc_path[npath++] = (u16)i;
+        const int op = c[i];
+        switch (op) {
+        case 0x2E: return SC_ENABLE;
+        case 0x28: case 0x2A: case 0x2B: case 0x8C: case 0xB6: case 0xF5: return SC_FAIL; /* (leaves the field) */
+        case 0x04: return SC_NONE;
+        case 0x0B: case 0x0D: case 0x16: case 0x18: case 0x1A: case 0x43: case 0x97: return SC_FAIL;
+        case 0x1C: if (i + 2 < end && c[i + 1] == 0 && c[i + 2] == 0xFF) return SC_NONE; break; /* (deletes itself) */
+        case 0x01: i = i + 3 + (s16)(c[i + 1] | c[i + 2] << 8); continue;
+        case 0x02: case 0x03: {
+            const int to = i + 3 + (s16)(c[i + 1] | c[i + 2] << 8);
+            if (cond_known) { i = (op == 0x03) == (cond != 0) ? to : i + 3; continue; }
+            const int a = sc_walk(o, c, to, end, nv, depth, p0, npath);
+            if (a == SC_FAIL) return SC_FAIL;
+            return sc_join(a, sc_walk(o, c, i + 3, end, nv, depth, p0, npath));
+        }
+        case 0x06: {
+            const int n = c[i + 1], base = i + 4;
+            const int dflt = base + (c[i + 2] | c[i + 3] << 8);
+            int r = SC_LOOP, hit = -1;
+            for (int k = 0; k < n; k++) {
+                const int val = c[base + 4 * k] | c[base + 4 * k + 1] << 8;
+                const int to = base + (c[base + 4 * k + 2] | c[base + 4 * k + 3] << 8);
+                if (cond_known) { if (val == (cond & 0xFFFF)) hit = to; continue; }
+                r = sc_join(r, sc_walk(o, c, to, end, nv, depth, p0, npath));
+                if (r == SC_FAIL) return r;
+            }
+            if (cond_known) { i = hit >= 0 ? hit : dflt; continue; }
+            return sc_join(r, sc_walk(o, c, dflt, end, nv, depth, p0, npath));
+        }
+        case 0x05: {
+            int j = i + 1;
+            if (!sc_expr(o, &nv, c, &j, end, &cond, &cond_known)) return SC_FAIL;
+            i = j;
+            continue;
+        }
+        case 0x10: case 0x12: case 0x14: { /* (a call: level, uid, tag, all literal) */
+            if (i + 4 >= end || c[i + 1] != 0) return SC_FAIL;
+            const int uid = c[i + 3] == 0xFF ? o->uid : c[i + 3] == 0xFA ? g_evtState->playerUid : c[i + 3];
+            EvtObject *to = obj_of_uid(uid);
+            const u8 *c2;
+            int s2, e2;
+            if (!to) return SC_FAIL;
+            if (function_of(to->scriptIdx, c[i + 4], &c2, &s2, &e2)) {
+                const int r = sc_walk(to, c2, s2, e2, nv, depth + 1, npath, npath);
+                if (r == SC_FAIL || r == SC_ENABLE) return r;
+            }
+            break;
+        }
+        default: break;
+        }
+        cond_known = 0;
+        i = next_ins(c, i, end);
+    }
+    return i < 0 ? SC_FAIL : SC_NONE;
+}
+
+/* the object that took control just now (its instruction a few past a DISABLE_CONTROL in the function it is in),
+ * and whether it gives it back without leaving the field: 1 yes, 0 no or unknown */
+int port_scene_returns(void) {
+    int found = 0, guard = 0;
+    if (!ram_ok(g_evtState, sizeof *g_evtState)) return 0;
+    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next) {
+        EvtObject *o = nd->obj;
+        if (!ram_ok(o, sizeof *o) || !ram_ok(o->ip, 1)) continue;
+        const int entry = o->scriptIdx;
+        if (!ram_ok(g_evtScripts + entry * 8, 8)) continue;
+        u8 *h = g_evtScripts + *(u16 *)(g_evtScripts + entry * 8);
+        const int size = *(u16 *)(g_evtScripts + entry * 8 + 2), n = *(u16 *)h >> 8;
+        if (!ram_ok(h, size) || 2 + n * 4 > size || o->ip < h || o->ip >= h + size) continue;
+        const int at = (int)(o->ip - h);
+        const u16 *p = (const u16 *)(h + 2);
+        int s = -1, e = size;
+        for (int k = 0; k < n; k++) /* (the function the instruction is in) */
+            if (p[k * 2 + 1] + 2 <= at && p[k * 2 + 1] + 2 > s) s = p[k * 2 + 1] + 2;
+        for (int k = 0; k < n; k++)
+            if (p[k * 2 + 1] + 2 > s && p[k * 2 + 1] + 2 < e) e = p[k * 2 + 1] + 2;
+        if (s < 0) continue;
+        int i = s, off = -1, after = 0;
+        for (int g = 0; i >= 0 && i < at && g < 4096; g++) {
+            if (h[i] == 0x2D) off = i, after = 0;
+            else after++;
+            i = next_ins(h, i, e);
+        }
+        if (i != at || off < 0 || after > 8) continue;
+        found = 1;
+        sc_steps = 0, sc_level = 0;
+        if (sc_walk(o, h, off + 1, e, 0, 0, 0, 0) != SC_ENABLE) return 0;
+    }
+    return found;
+}
