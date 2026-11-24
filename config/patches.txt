@@ -202,3 +202,6 @@ src/ovl_0b/btl_cmd.c | void btl_setCmd(BtlCmd *cmd, u32 cmdNo, s32 subNo, s32 ta
 # without the key. An attack for one target given the script's several keeps the first of them (btl_findCover looks the
 # mask up as one unit and reads the NULL it gets: a crash off the PS1).
 src/ovl_0b/btl_cmd.c |     cmd->ability = &g_gameState->gameData->ctx.battle->enemyAbilities[abilityId]; |     { extern int port_scenario_enemy_cast_on; if (port_scenario_enemy_cast_on && cmdNo == BTL_CMD_ENEMY_TURN) { int port_scenario_enemy_cast(int, const unsigned char *, const int *); u32 port_a = (u32)port_scenario_enemy_cast((int)abilityId, g_gameState->gameData->ctx.battle->seq.seqFlags, (const int *)g_gameState->gameData->ctx.battle->seq.seqs); if (port_a != abilityId && (u32)(g_gameState->gameData->ctx.battle->enemyAbilities[port_a].targetType - BTL_TGT_ALL_ANY) >= 7) targets = (s16)(targets & -targets); abilityId = port_a; } } cmd->ability = &g_gameState->gameData->ctx.battle->enemyAbilities[abilityId]; | 1
+# The field screen asks whether the script taking control gives it back (port/game/field_map.c port_control_taken):
+# noted as the instruction runs, the object and its place known then.
+src/main/event.c | case EVT_OP_DISABLE_CONTROL: | case EVT_OP_DISABLE_CONTROL: port_control_taken(); | 1

@@ -726,13 +726,19 @@ static int party_live(void) {
     }
     if (ctl) {
         off = 0, talk = 0;
-        if (plat_pad_buttons(0) & 0x6000u) confirm_at = f; /* (Cross or Circle) */
+        { /* (Cross or Circle pressed now: not held, which a player walking with a button down does all the time) */
+            static unsigned held;
+            const unsigned now = plat_pad_buttons(0) & 0x6000u;
+            if (now & ~held) confirm_at = f;
+            held = now;
+        }
         if (++on >= STEADY) live = 1;
         return live;
     }
     if (on) { /* (control just taken away: by the player's press, or by a script that gives it back here: field_map.c) */
         int port_scene_returns(void);
-        talk = f - confirm_at <= TALK_VBLANKS ? 1 : port_scene_returns() ? 2 : 0, gap = 0;
+        talk = port_scene_returns() ? 2 : f - confirm_at <= TALK_VBLANKS ? 1 : 0, gap = 0; /* (the script's answer first: a
+         * press just before Puck ran into Vivi made it a talk, which went at the half second of his fall without a line) */
     }
     on = 0;
     if (talk == 1) { /* (a talk goes on while its windows come one after another: a stretch without one, it has become a scene) */

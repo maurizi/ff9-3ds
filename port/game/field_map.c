@@ -952,37 +952,47 @@ static int sc_walk2(EvtObject *o, const u8 *c, int i, int end, int nv, int depth
     return i < 0 ? SC_FAIL : SC_NONE;
 }
 
-/* the object that took control just now (its instruction a few past a DISABLE_CONTROL in the function it is in),
- * and whether it gives it back without leaving the field: 1 yes, 0 no or unknown */
-int port_scene_returns(void) {
-    int found = 0, guard = 0;
-    if (!ram_ok(g_evtState, sizeof *g_evtState)) return 0;
-    for (EvtListNode *nd = evt_getObjectList(); ram_ok(nd, sizeof *nd) && guard++ < 64; nd = nd->next) {
-        EvtObject *o = nd->obj;
-        if (!ram_ok(o, sizeof *o) || !ram_ok(o->ip, 1)) continue;
-        const int entry = o->scriptIdx;
-        if (!ram_ok(g_evtScripts + entry * 8, 8)) continue;
-        u8 *h = g_evtScripts + *(u16 *)(g_evtScripts + entry * 8);
-        const int size = *(u16 *)(g_evtScripts + entry * 8 + 2), n = *(u16 *)h >> 8;
-        if (!ram_ok(h, size) || 2 + n * 4 > size || o->ip < h || o->ip >= h + size) continue;
-        const int at = (int)(o->ip - h);
-        const u16 *p = (const u16 *)(h + 2);
-        int s = -1, e = size;
-        for (int k = 0; k < n; k++) /* (the function the instruction is in) */
-            if (p[k * 2 + 1] + 2 <= at && p[k * 2 + 1] + 2 > s) s = p[k * 2 + 1] + 2;
-        for (int k = 0; k < n; k++)
-            if (p[k * 2 + 1] + 2 > s && p[k * 2 + 1] + 2 < e) e = p[k * 2 + 1] + 2;
-        if (s < 0) continue;
-        int i = s, off = -1, after = 0;
-        for (int g = 0; i >= 0 && i < at && g < 4096; g++) {
-            if (h[i] == 0x2D) off = i, after = 0;
-            else after++;
-            i = next_ins(h, i, e);
-        }
-        if (i != at || off < 0 || after > 8) continue;
-        found = 1;
-        sc_steps = 0, sc_level = 0;
-        if (sc_walk(o, h, off + 1, e, 0, 0, 0, 0) != SC_ENABLE) return 0;
+/* As the control-off instruction runs (config/patches.txt, event.c's EVT_OP_DISABLE_CONTROL, control still on then):
+ * the running object (g_evtCurObj, its instruction just past the op) walked from there. Asked at that moment, not a
+ * VBlank later from where the objects then stand: a frame on, Puck's script was already inside the function it
+ * calls, and the object that took control could no longer be told. -1 nothing noted, 0 no, 1 yes. */
+static int scene_verdict = -1;
+void port_control_taken(void) {
+    if (!g_gameState || g_gameState->mode != 1 || !ram_ok(g_evtState, sizeof *g_evtState) || !g_evtState->controlEnabled)
+        return;
+    scene_verdict = 0;
+    EvtObject *o = g_evtCurObj;
+    if (!ram_ok(o, sizeof *o) || !ram_ok(o->ip, 1)) return;
+    const int entry = o->scriptIdx;
+    if (!ram_ok(g_evtScripts + entry * 8, 8)) return;
+    u8 *h = g_evtScripts + *(u16 *)(g_evtScripts + entry * 8);
+    const int size = *(u16 *)(g_evtScripts + entry * 8 + 2), n = *(u16 *)h >> 8;
+    if (!ram_ok(h, size) || 2 + n * 4 > size || o->ip <= h || o->ip >= h + size) return;
+    int at = (int)(o->ip - h);
+    /* (the interpreter has read the next op's first byte too as the op runs: ip two past it, the control-off op being
+     * one byte; one past or on it also taken) */
+    if (at >= 2 && h[at - 2] == 0x2D) at--;
+    else if (h[at - 1] != 0x2D) { if (h[at] != 0x2D) return; at++; }
+    const u16 *p = (const u16 *)(h + 2);
+    int s = -1, e = size;
+    for (int k = 0; k < n; k++) /* (the function the instruction is in) */
+        if (p[k * 2 + 1] + 2 < at && p[k * 2 + 1] + 2 > s) s = p[k * 2 + 1] + 2;
+    for (int k = 0; k < n; k++)
+        if (p[k * 2 + 1] + 2 > s && p[k * 2 + 1] + 2 < e) e = p[k * 2 + 1] + 2;
+    if (s < 0) return;
+    sc_steps = 0, sc_level = 0;
+    const int r = sc_walk(o, h, at, e, 0, 0, 0, 0);
+    scene_verdict = r == SC_ENABLE;
+    { /* (in the log: which script took control, and the answer; a report of the field screen checked from it) */
+        void port_log(const char *, ...);
+        port_log("scene: field %d object %d function at %d took control: %s\n", g_gameState->gameData->fieldId, o->uid, s,
+                 r == SC_ENABLE ? "gives it back here" : "cutscene");
     }
-    return found;
+}
+
+/* the verdict on the control taken just now (asked once, as the field screen sees control go): 1 it comes back */
+int port_scene_returns(void) {
+    const int v = scene_verdict == 1;
+    scene_verdict = -1;
+    return v;
 }
