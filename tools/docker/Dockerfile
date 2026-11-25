@@ -22,4 +22,8 @@ RUN set -e; cd /tmp; \
     install -m 755 Project_CTR/makerom/bin/makerom bannertool/linux-x86_64/bannertool /usr/local/bin/; \
     rm -rf Project_CTR bannertool bannertool.zip
 
+# the banner's title font (tools/banner3d.py --title: Nimbus Roman Bold)
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-urw-base35 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /ff9ds

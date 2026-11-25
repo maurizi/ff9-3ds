@@ -18,12 +18,12 @@ img.save(sys.argv[1])
 
 rate = 32728
 with wave.open(sys.argv[2], "wb") as w:
-    w.setnchannels(1)
+    w.setnchannels(2)  # (the HOME Menu plays a one-channel banner sound as a row of beeps)
     w.setsampwidth(2)
     w.setframerate(rate)
     frames = bytearray()
     for i in range(int(rate * 1.2)):
         t = i / rate
         v = sum(math.sin(2 * math.pi * f * t) for f in (523.25, 659.25, 783.99)) / 3 * math.exp(-3 * t)
-        frames += struct.pack("<h", int(v * 12000))
+        frames += struct.pack("<hh", int(v * 12000), int(v * 12000))
     w.writeframes(bytes(frames))

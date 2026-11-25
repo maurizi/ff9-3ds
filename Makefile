@@ -220,9 +220,9 @@ $(BUILD)/3ds/runtime-config: FORCE_3DS_CONFIG
 	@rm -f $@.tmp
 $(3ds_PORTOBJS): $(BUILD)/3ds/runtime-config $(3ds_EXTRAOBJS)
 
-APP_TITLE  := Final Fantasy IX
-APP_DESC   := Native 3DS port (ff9-decomp)
-APP_AUTHOR := ff9-3ds
+APP_TITLE  := Final Fantasy IX 3DS
+APP_DESC   := Final Fantasy IX 3DS
+APP_AUTHOR :=
 $(BUILD)/3ds/icon.png: tools/make_icon.py
 	@$(PYTHON) tools/make_icon.py $@
 $(BUILD)/ff9.smdh: $(BUILD)/3ds/icon.png
@@ -257,8 +257,12 @@ MAKEROM    ?= makerom
 BANNERTOOL ?= bannertool
 $(BUILD)/banner.png $(BUILD)/banner.wav &: tools/make_banner.py
 	@$(PYTHON) tools/make_banner.py $(BUILD)/banner.png $(BUILD)/banner.wav
-$(BUILD)/ff9.bnr: $(BUILD)/banner.png $(BUILD)/banner.wav
+# The banner: bannertool's flat one is the model and sound that tools/banner3d.py puts the title in; the builder adds
+# the heroes from the user's discs (and replaces the icon).
+$(BUILD)/banner-flat.bnr: $(BUILD)/banner.png $(BUILD)/banner.wav
 	@$(BANNERTOOL) makebanner -i $(BUILD)/banner.png -a $(BUILD)/banner.wav -o $@ >/dev/null
+$(BUILD)/ff9.bnr: $(BUILD)/banner-flat.bnr tools/banner3d.py
+	@$(PYTHON) tools/banner3d.py --title $< $@
 $(BUILD)/ff9.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr config/ff9.rsf
 	@echo "CIA  $@"
 	@mkdir -p $(BUILD)/romfs-none

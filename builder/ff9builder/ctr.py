@@ -165,8 +165,8 @@ def _copy(src, dst, n, step=1 << 22):
         n -= len(b)
 
 
-def write_3dsx(base, files, out, progress=None):
-    """base: a 3DSX with an SMDH and no RomFS; files: [(name, path)] for its RomFS"""
+def write_3dsx(base, files, out, progress=None, smdh=None):
+    """base: a 3DSX with an SMDH and no RomFS; files: [(name, path)] for its RomFS; smdh: another SMDH for it"""
     with open(base, 'rb') as f:
         prog = f.read()
     magic, hsize = struct.unpack_from('<4sH', prog, 0)
@@ -177,6 +177,10 @@ def write_3dsx(base, files, out, progress=None):
         raise ValueError(f'{base} already has a RomFS')
     romfs = RomFS(files, makerom=False)
     prog = bytearray(prog)
+    if smdh is not None:
+        if len(smdh) != smdh_size:
+            raise ValueError('the SMDH is not the same size as the 3DSX\'s')
+        prog[smdh_at:smdh_at + smdh_size] = smdh
     struct.pack_into('<I', prog, 0x28, len(prog))  # (right after the SMDH, as 3dsxtool puts it)
     done = 0
     with open(out, 'wb') as o:
@@ -189,12 +193,95 @@ def write_3dsx(base, files, out, progress=None):
     return len(prog) + romfs.size
 
 
-def write_cia(base, files, out, progress=None):
+EXEFS_HEADER = 0x200
+CIA_META_SMDH = 0x400  # the SMDH's copy in a CIA's meta section
+
+
+def _cia_layout(cia, name='the CIA'):
+    """(offsets of the TMD, content and meta, sizes of the TMD, content and meta, TMD body, chunk record)"""
+    hsize, _, _, cert_size, tik_size, tmd_size, meta_size, content_size = struct.unpack_from('<IHHIIIIQ', cia, 0)
+    o_cert = align(hsize, 64)
+    o_tik = align(o_cert + cert_size, 64)
+    o_tmd = align(o_tik + tik_size, 64)
+    o_content = align(o_tmd + tmd_size, 64)
+    o_meta = align(o_content + content_size, 64)
+    sig = struct.unpack_from('>I', cia, o_tmd)[0]
+    body = {0x10003: 0x240, 0x10004: 0x140, 0x10005: 0x80}.get(sig)
+    if body is None or struct.unpack_from('>H', cia, o_tmd + body + 0x9E)[0] != 1:
+        raise ValueError(f'{name}: not a single-content CIA')
+    rec = body + 0xC4 + 64 * 36
+    if struct.unpack_from('>H', cia, o_tmd + rec + 6)[0] & 1:
+        raise ValueError(f'{name}: its content is encrypted')
+    return o_tmd, o_content, o_meta, tmd_size, content_size, meta_size, body, rec
+
+
+def _ncch_exefs(ncch):
+    """[(name, bytes)] of an unencrypted NCCH's ExeFS, in its order"""
+    if ncch[0x100:0x104] != b'NCCH' or not ncch[0x18F] & 4:
+        raise ValueError('not an unencrypted NCCH')
+    at = struct.unpack_from('<I', ncch, 0x1A0)[0] * MEDIA
+    out = []
+    for i in range(10):
+        name, off, size = struct.unpack_from('<8sII', ncch, at + 16 * i)
+        if name.strip(b'\0'):
+            out.append((name.rstrip(b'\0').decode(), bytes(ncch[at + EXEFS_HEADER + off:at + EXEFS_HEADER + off + size])))
+    return out
+
+
+def cia_exefs(cia):
+    """{name: bytes} of the ExeFS of a CIA's content (e.g. '.code', 'banner', 'icon')"""
+    _, o_content, _, _, content_size, _, _, _ = _cia_layout(cia)
+    return dict(_ncch_exefs(cia[o_content:o_content + content_size]))
+
+
+def cia_replace_exefs(cia, files):
+    """a CIA (one content, an unencrypted NCCH without a RomFS) with some of its ExeFS files replaced ({name:
+    bytes}): the ExeFS, its hashes, the NCCH's sizes and superblock hash, the TMD's hashes, and the SMDH's copy in
+    the meta section when 'icon' is one of them"""
+    o_tmd, o_content, o_meta, tmd_size, content_size, meta_size, body, rec = _cia_layout(cia)
+    ncch = bytearray(cia[o_content:o_content + content_size])
+    if struct.unpack_from('<I', ncch, 0x1B0)[0]:
+        raise ValueError('the CIA\'s NCCH has a RomFS')
+    old = _ncch_exefs(ncch)
+    unknown = set(files) - {n for n, _ in old}
+    if unknown:
+        raise ValueError('no ExeFS file ' + ', '.join(sorted(unknown)))
+    head, data = bytearray(EXEFS_HEADER), bytearray()
+    for i, (name, b) in enumerate(old):
+        b = files.get(name, b)
+        struct.pack_into('<8sII', head, 16 * i, name.encode(), len(data), len(b))
+        head[0xC0 + 32 * (9 - i):0xC0 + 32 * (10 - i)] = hashlib.sha256(b).digest()
+        data += b + bytes(align(len(b), MEDIA) - len(b))
+    exefs = head + data
+    at = struct.unpack_from('<I', ncch, 0x1A0)[0] * MEDIA
+    hash_region = struct.unpack_from('<I', ncch, 0x1A8)[0] * MEDIA
+    ncch = ncch[:at] + exefs
+    struct.pack_into('<I', ncch, 0x1A4, len(exefs) // MEDIA)
+    ncch[0x1C0:0x1E0] = hashlib.sha256(exefs[:hash_region]).digest()
+    struct.pack_into('<I', ncch, 0x104, len(ncch) // MEDIA)
+    tmd = bytearray(cia[o_tmd:o_tmd + tmd_size])
+    struct.pack_into('>Q', tmd, rec + 8, len(ncch))
+    tmd[rec + 16:rec + 48] = hashlib.sha256(ncch).digest()
+    tmd[body + 0xC4 + 4:body + 0xC4 + 36] = hashlib.sha256(tmd[rec:rec + 48]).digest()
+    tmd[body + 0xA4:body + 0xC4] = hashlib.sha256(tmd[body + 0xC4:body + 0xC4 + 64 * 36]).digest()
+    meta = bytearray(cia[o_meta:o_meta + meta_size])
+    if 'icon' in files and meta_size >= CIA_META_SMDH + len(files['icon']):
+        meta[CIA_META_SMDH:CIA_META_SMDH + len(files['icon'])] = files['icon']
+    out = bytearray(cia[:o_tmd]) + tmd
+    out += bytes(o_content - len(out)) + ncch
+    out += bytes(align(len(out), 64) - len(out)) + meta
+    struct.pack_into('<Q', out, 0x18, len(ncch))
+    return bytes(out)
+
+
+def write_cia(base, files, out, progress=None, exefs=None):
     """base: a CIA (one content, an unencrypted NCCH without a RomFS) made by makerom; files: [(name, path)] for the
-    RomFS it gets. progress(done, total, phase) with phase 'hash' (reading the files once for the hash tree), then
-    'write'."""
+    RomFS it gets; exefs: {name: bytes} replacing some of its ExeFS files (cia_replace_exefs). progress(done, total,
+    phase) with phase 'hash' (reading the files once for the hash tree), then 'write'."""
     with open(base, 'rb') as f:
         cia = f.read()
+    if exefs:
+        cia = cia_replace_exefs(cia, exefs)
     hsize, _, _, cert_size, tik_size, tmd_size, meta_size, content_size = struct.unpack_from('<IHHIIIIQ', cia, 0)
     o_cert = align(hsize, 64)
     o_tik = align(o_cert + cert_size, 64)

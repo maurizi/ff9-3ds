@@ -175,6 +175,16 @@ class Disc:
             raise DiscError(f'{name}: disc {self.number}\'s FF9.IMG differs from the NTSC-U release\'s (a damaged dump '
                             f'or a patched/translated disc?)')
 
+    def raw_sectors(self, lba, count):
+        """whole 2352-byte sectors (a movie's: their subheaders and Form 2 data)"""
+        self.f.seek(lba * RAW)
+        return [self.f.read(RAW) for _ in range(count)]
+
+    def movie_lba(self, folder, name):
+        """the first sector of a file in a directory of the root (a movie: OPENING/FMVD001.STR)"""
+        lba, size, _ = self.entries()[folder]
+        return self.entries(lba, size)[name][0]
+
     def file_view(self, name):
         """A read-only file object over one of the disc's files (its user data, sector by sector)"""
         lba, size, _ = self.entries()[name]

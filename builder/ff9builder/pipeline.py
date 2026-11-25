@@ -3,6 +3,7 @@ screen's field maps (maps.bin), and put both in the RomFS of the prebuilt, data-
 import importlib
 import os
 import shutil
+import struct
 import sys
 import tempfile
 
@@ -38,14 +39,14 @@ def vendor_dir():
 
 
 def _modules():
-    """pack_discs, bake_maps and the decomp's field_maps"""
+    """pack_discs, bake_maps, the decomp's field_maps, and banner3d"""
     vendor = vendor_dir()
     paths = [os.path.join(vendor, 'tools'), os.path.join(vendor, 'decomp', 'tools')]
     for p in reversed(paths):
         if p not in sys.path:
             sys.path.insert(0, p)
     return (importlib.import_module('pack_discs'), importlib.import_module('bake_maps'),
-            importlib.import_module('field_maps'))
+            importlib.import_module('field_maps'), importlib.import_module('banner3d'))
 
 
 def identify(paths):
@@ -79,6 +80,37 @@ class Progress:
         self.report((self.at + w * (done / total if total else 1)) / self.total, message)
 
 
+def make_banner(banner3d, discs, imgs, bases, log):
+    """(banner, SMDH) made from the discs (tools/banner3d.py: the heroes' models, the opening movie's logo) for the program's own (bannertool's flat banner, a plain icon); (None, None) keeps those if
+    anything fails: a nicer banner is not worth a failed build"""
+    try:
+        if bases.get('ff9.cia'):
+            with open(bases['ff9.cia'], 'rb') as f:
+                exefs = ctr.cia_exefs(f.read())
+            banner, smdh = exefs['banner'], exefs['icon']
+        else:
+            banner, smdh = None, smdh_of_3dsx(bases['ff9.3dsx'])
+        d1 = discs[1]
+        sectors = banner3d.movie_sectors(d1.raw_sectors, d1.movie_lba(*banner3d.LOGO_MOVIE))
+        notes = []
+        out = banner3d.build(dict(imgs), sectors, banner, smdh, exe=d1.file_view(d1.boot).read(),
+                             notes=notes)
+        log('HOME Menu banner and icon made from the discs.')
+        for note in notes:
+            log(note[0].upper() + note[1:] + '.')
+        return out
+    except Exception as e:  # noqa: BLE001 (any failure keeps the plain banner)
+        log(f'Kept the plain HOME Menu banner ({type(e).__name__}: {e}).')
+        return None, None
+
+
+def smdh_of_3dsx(path):
+    with open(path, 'rb') as f:
+        prog = f.read()
+    at, size = struct.unpack_from('<II', prog, 0x20)
+    return prog[at:at + size]
+
+
 def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambda f, m=None: None, scratch=None):
     """discs: {number: Disc} (all four); writes out_dir/ff9-full.3dsx and/or ff9-full.cia; returns their paths.
     scratch: where the split of disc 1 goes (thousands of small files: the web builder keeps them in memory, its
@@ -92,9 +124,9 @@ def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambd
             bases[name] = payload(name)
             if not bases[name]:
                 raise DiscError(f'the prebuilt program {name} is missing from this builder')
-    pack_discs, bake_maps, fm = _modules()
+    pack_discs, bake_maps, fm, banner3d = _modules()
     os.makedirs(out_dir, exist_ok=True)
-    steps = [('verify', 20), ('relocs', 30), ('pack', 45), ('maps', 10)]
+    steps = [('verify', 20), ('relocs', 30), ('pack', 45), ('maps', 10), ('banner', 3)]
     if make_3dsx:
         steps.append(('3dsx', 10))
     if make_cia:
@@ -137,10 +169,13 @@ def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambd
         log(f'{fields} field maps baked.')
         files = [('discs.bin', pack_path), ('maps.bin', maps_path), ('psxrel.bin', rel_path)]
 
+        pr.step('banner', 'Making the HOME Menu banner')
+        banner, smdh = make_banner(banner3d, discs, imgs, bases, log)
+
         if make_3dsx:
             pr.step('3dsx', 'Writing ff9-full.3dsx')
             out = os.path.join(out_dir, 'ff9-full.3dsx')
-            ctr.write_3dsx(bases['ff9.3dsx'], files, out + '.part', pr.part)
+            ctr.write_3dsx(bases['ff9.3dsx'], files, out + '.part', pr.part, smdh=smdh)
             os.replace(out + '.part', out)
             outputs.append(out)
             log(f'Wrote {out}')
@@ -148,7 +183,8 @@ def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambd
             pr.step('cia', 'Writing ff9-full.cia')
             out = os.path.join(out_dir, 'ff9-full.cia')
             ctr.write_cia(bases['ff9.cia'], files, out + '.part',
-                          lambda d, t, phase: pr.part(d / 2 + (t / 2 if phase == 'write' else 0), t))
+                          lambda d, t, phase: pr.part(d / 2 + (t / 2 if phase == 'write' else 0), t),
+                          exefs={'banner': banner, 'icon': smdh} if banner else None)
             os.replace(out + '.part', out)
             outputs.append(out)
             log(f'Wrote {out}')

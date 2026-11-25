@@ -18,8 +18,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DECOMP = ROOT / "decomp"
-PORT_TOOLS = ["pack_discs.py", "bake_maps.py", "gen_relocs.py", "psxlink.py", "ff9sym.py"]
+PORT_TOOLS = ["pack_discs.py", "bake_maps.py", "gen_relocs.py", "psxlink.py", "ff9sym.py", "banner3d.py",
+              "banner_model.py", "akao_se.py"]
 DECOMP_TOOLS = ["field_maps.py", "encounter_catalog.py", "ff9img.py", "effect_modules.py", "evtscript/evtdis.py",
+                "field_models.py", "battle_models.py", "battle_pose.py",
                 "evtscript/edis.py", "evtscript/optab.json"]
 
 
@@ -39,6 +41,9 @@ def stage(payload, out):
     (vendor / "tools").mkdir(parents=True)
     for t in PORT_TOOLS:
         shutil.copy(ROOT / "tools" / t, vendor / "tools" / t)
+    # the banner's model writer (third_party/pycgfx: MIT; without its swizzler, which needs Pillow)
+    shutil.copytree(ROOT / "third_party/pycgfx", vendor / "third_party/pycgfx",
+                    ignore=shutil.ignore_patterns("__pycache__", "swizzler.py"))
     d = vendor / "decomp"
     for t in DECOMP_TOOLS:
         (d / "tools" / t).parent.mkdir(parents=True, exist_ok=True)

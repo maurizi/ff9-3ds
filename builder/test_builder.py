@@ -100,6 +100,50 @@ class Writers(unittest.TestCase):
             for name, p in self.files:
                 self.assertEqual(romfs_read(f, 0, name), open(p, 'rb').read(), name)
 
+    def test_cia_exefs(self):
+        """the banner and icon replaced (tools/banner3d.py's), then the RomFS added: every ExeFS hash, the NCCH's
+        superblock hash and sizes, the TMD, and the SMDH's copy in the meta section"""
+        base = open(self.need('ff9.cia'), 'rb').read()
+        old = ctr.cia_exefs(base)
+        new = {'banner': os.urandom(len(old['banner']) + 12345), 'icon': b'SMDH' + os.urandom(len(old['icon']) - 4)}
+        out = os.path.join(self.tmp.name, 'e.cia')
+        ctr.write_cia(self.need('ff9.cia'), self.files, out, exefs=new)
+        c = open(out, 'rb').read()
+        got = ctr.cia_exefs(c)
+        self.assertEqual(got['banner'], new['banner'])
+        self.assertEqual(got['icon'], new['icon'])
+        self.assertEqual(got['.code'], old['.code'])
+        hsize, _, _, cc, tik, tmd_size, meta, size = struct.unpack_from('<IHHIIIIQ', c, 0)
+        o_tmd = ctr.align(ctr.align(ctr.align(hsize, 64) + cc, 64) + tik, 64)
+        o_ncch = ctr.align(o_tmd + tmd_size, 64)
+        ncch = c[o_ncch:o_ncch + size]
+        tmd = c[o_tmd:o_tmd + tmd_size]
+        body, rec = 0x140, 0x140 + 0xC4 + 64 * 36
+        self.assertEqual(hashlib.sha256(ncch).digest(), tmd[rec + 16:rec + 48])
+        self.assertEqual(hashlib.sha256(tmd[rec:rec + 48]).digest(), tmd[body + 0xC4 + 4:body + 0xC4 + 36])
+        e_at, e_size, e_hash = (x * 0x200 for x in struct.unpack_from('<III', ncch, 0x1A0))
+        exefs = ncch[e_at:e_at + e_size]
+        self.assertEqual(hashlib.sha256(exefs[:e_hash]).digest(), ncch[0x1C0:0x1E0])
+        for i in range(10):
+            name, off, n = struct.unpack_from('<8sII', exefs, 16 * i)
+            if name.strip(b'\0'):
+                self.assertEqual(off % 0x200, 0)
+                self.assertEqual(hashlib.sha256(exefs[0x200 + off:0x200 + off + n]).digest(),
+                                 exefs[0xC0 + 32 * (9 - i):0xC0 + 32 * (10 - i)], name)
+        r_at = struct.unpack_from('<I', ncch, 0x1B0)[0] * 0x200
+        self.assertGreaterEqual(r_at, e_at + e_size)
+        o_meta = ctr.align(o_ncch + size, 64)
+        self.assertEqual(c[o_meta + 0x400:o_meta + 0x400 + len(new['icon'])], new['icon'])
+
+    def test_3dsx_smdh(self):
+        base = self.need('ff9.3dsx')
+        prog = open(base, 'rb').read()
+        at, n = struct.unpack_from('<II', prog, 0x20)
+        smdh = b'SMDH' + os.urandom(n - 4)
+        out = os.path.join(self.tmp.name, 's.3dsx')
+        ctr.write_3dsx(base, self.files, out, smdh=smdh)
+        self.assertEqual(open(out, 'rb').read()[at:at + n], smdh)
+
 
 if __name__ == '__main__':
     unittest.main()

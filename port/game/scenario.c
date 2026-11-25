@@ -16,6 +16,7 @@ int port_scenario_cast_on; /* (btl_setCmd's patch reads the command only with a 
 int port_scenario_enemy_cast_on; /* (btl_setEnemyCmd's patch: only with an enemy_cast= key) */
 static int scenario_enemy_cast=-1;
 static unsigned scenario_blendtest_at=420; /* blendtest_at=N: at VBlank N */
+static int scenario_se=-1; static unsigned scenario_se_at=600; /* se=ID[,VBLANK]: at that VBlank the music and every sound effect stopped and that sound effect played alone through the mode's sound hook (its data must be loaded there: a recording for tools/banner3d.py's renderer to be checked against) */
 static int scenario_blendtest; /* blendtest=C: port_scenario_vblank's tables, the polygon's colour C (+ 256: the PS1's dithering on; + 512: its mask bit set by the polygon, GP0 E6) */
 static struct {
     int blackjack; /* blackjack=1 with field_exit=4: the ending's movie skipped and The End's code taken (blackjack_ui.c) */
@@ -124,6 +125,7 @@ void port_scenario_load(const char *path) {
         else if(!__builtin_strcmp(s,"enemy_cast")) {scenario_enemy_cast=number(eq,0,17);port_scenario_enemy_cast_on=1;}
         else if(!__builtin_strcmp(s,"blendtest")) scenario_blendtest=number(eq,1,65535);
         else if(!__builtin_strcmp(s,"blendtest_at")) scenario_blendtest_at=(unsigned)number(eq,1,100000);
+        else if(!__builtin_strcmp(s,"se")) { char *c=__builtin_strchr(eq,','); if(c) { *c=0; scenario_se_at=(unsigned)strtoul(c+1,0,0); } scenario_se=(int)strtoul(eq,0,0); }
         else if(!__builtin_strncmp(s,"trance.",7)) scenario.trance[number(s+7,0,3)]=number(eq,0,255);
         else if(!__builtin_strncmp(s,"preset.",7)) scenario.preset[number(s+7,0,3)]=number(eq,0,19);
         else if(!__builtin_strncmp(s,"hp.",3)) scenario.hp[number(s+3,0,3)]=number(eq,0,9999);
@@ -481,6 +483,10 @@ int port_scenario_cast(int actor, int *abil, int *targets) {
 #include "gp0.h"
 void psx_gpu_sync(void);
 void port_scenario_vblank(unsigned vblank) {
+    if(scenario.enabled && scenario_se>=0 && g_gameState) {
+        if(vblank+30==scenario_se_at) { akao_stopMusicNow(); akao_stopAllSe(); }
+        if(vblank==scenario_se_at) g_gameState->gameData->soundHook(SND_SE_PLAY,scenario_se,0,SND_PAN_CENTER,SND_VOL_MAX);
+    }
     if(!scenario.enabled || !scenario_blendtest || vblank!=scenario_blendtest_at || !g_gameState) return;
     static u32 pk[16]; static u16 px[32*32];
     const u32 c=(u32)scenario_blendtest&255, col=c|c<<8|c<<16, dith=((u32)scenario_blendtest>>8&1)<<9;
