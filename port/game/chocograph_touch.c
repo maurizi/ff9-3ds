@@ -70,7 +70,7 @@ int port_chocograph_top(void) {
     o32_menuChocograph_drawPicture(28, 28, 2, id, 0);
     o32_menuChocograph_drawFrame(24, 24, 2, 0);
     text_drawBlock(112, 28, 2, text_get(id + CHOCO_TEXT_NAME), TEXT_PAL_WHITE);
-    if (st->found & (1u << id)) ui_drawLabel(112, 46, 2, (s32) TX("TREASURE FOUND", "TESORO HALLADO", "TESORO TROVATO", "SCHATZ GEFUNDEN"), 0);
+    if (st->found & (1u << id)) ui_drawLabel(112, 46, 2, (s32) TX("TREASURE FOUND", "TESORO HALLADO", "TESORO TROVATO", "SCHATZ GEFUNDEN", "TRESOR TROUVE"), 0);
     text_drawBlock(112, 64, 2, text_get(CHOCO_TEXT_ABILITY), TEXT_PAL_WHITE);
     int need = o32_menuChocograph_getRequiredAbility(id);
     for (int i = 0; i <= need; i++)

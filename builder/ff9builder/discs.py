@@ -43,11 +43,14 @@ RELEASES = [
             '04d3269b203cbaa8dcc0ac8697999c14c92b5bc5', {
                 1: ('e6a19f7d6d72f81973e4b869c8b62e9df736064f',), 2: ('e1698bf54e4e5881cf4b1fe0c860bd899238f706',),
                 3: ('06f431a586d1db796725ff5ccf381433ab91741f',), 4: ('c86687accc1acd4558d92c8a8dac32ae70f06913',)}),
+    Release('fr', 'PAL, French', ('SLES_029.66', 'SLES_129.66', 'SLES_229.66', 'SLES_329.66'),
+            '2082305d33d0aea451efab2eb2b8c870c7b60690', {
+                1: ('3d989e6cab9b86874056a1896c3f1ff8f6a2d520',), 2: ('a72c82efc64407e927dad5313a6676ae73fe144f',),
+                3: ('027e9468050d7bdc6e79ea70006eea560115b561',), 4: ('e42389f639fadbd12f73cfa8ab7522e8149979e4',)}),
 ]
 RELEASE = {r.version: r for r in RELEASES}
 # FF9 releases the port isn't built for yet, by each disc's boot executable
 NOT_YET = {**{f'SLES_{d}29.65': 'the PAL English release' for d in '0123'},
-           **{f'SLES_{d}29.66': 'the PAL French release' for d in '0123'},
            **{f'SLPS_020.0{d}': 'the Japanese release' for d in '0123'}}
 REGION_OF_PREFIX = {'SLES': 'a European (PAL) release', 'SLPS': 'a Japanese release',
                     'SCES': 'a European release', 'SCUS': 'a different NTSC-U title', 'SLPM': 'a Japanese release'}

@@ -1,5 +1,5 @@
-/* The port's own labels in the release's language: TX("NEW GAME", "NUEVA PARTIDA", "NUOVA PARTITA", "NEUES SPIEL")
- * is the string of the release the program is built for (NTSC-U, Spanish, Italian, German). They are drawn by the
+/* The port's own labels in the release's language: TX("NEW GAME", "NUEVA PARTIDA", "NUOVA PARTITA", "NEUES SPIEL", "NOUVELLE PARTIE")
+ * is the string of the release the program is built for (NTSC-U, Spanish, Italian, German, French). They are drawn by the
  * game's label font (ui_drawLabel): capitals, digits, space and & . _, and in the PAL releases' font also ! and the
  * accents, written before their letter as the games' own label strings write them: '#' acute (P#AG: PÁG), '$' grave
  * (ABILIT$A: ABILITÀ), '"' umlaut (AUSR"USTUNG: AUSRÜSTUNG). No apostrophe, hyphen or colon. The games' own words are
@@ -9,13 +9,15 @@
 #define PORT_TEXT_H
 
 #if VERSION_ES
-#define TX(us, es, it, de) es
+#define TX(us, es, it, de, fr) es
 #elif VERSION_IT
-#define TX(us, es, it, de) it
+#define TX(us, es, it, de, fr) it
 #elif VERSION_DE
-#define TX(us, es, it, de) de
+#define TX(us, es, it, de, fr) de
+#elif VERSION_FR
+#define TX(us, es, it, de, fr) fr
 #else
-#define TX(us, es, it, de) us
+#define TX(us, es, it, de, fr) us
 #endif
 
 #endif

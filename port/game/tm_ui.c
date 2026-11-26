@@ -247,10 +247,10 @@ int port_tm_top_draw(void) {
         for (int i = 0; i < 10; i++)
             if (s->cards[i].onBoard) { if (s->cards[i].owner == TM_PLAYER) you++; else foe++; }
         u8 a[4];
-        ui_drawLabel(info.x + 10, info.y + 120, 2, (s32) TX("YOU", "T#U", "TU", "DU"), s->turn == 0 ? 1 : 0);
+        ui_drawLabel(info.x + 10, info.y + 120, 2, (s32) TX("YOU", "T#U", "TU", "DU", "VOUS"), s->turn == 0 ? 1 : 0);
         text_formatNumber(you, a, 2, 1);
         ui_drawDigits(info.x + 50, info.y + 118, 2, a, 0);
-        ui_drawLabel(info.x + 110, info.y + 120, 2, (s32) TX("FOE", "RIVAL", "RIVALE", "GEGNER"), s->turn == 1 ? 1 : 0);
+        ui_drawLabel(info.x + 110, info.y + 120, 2, (s32) TX("FOE", "RIVAL", "RIVALE", "GEGNER", "RIVAL"), s->turn == 1 ? 1 : 0);
         text_formatNumber(foe, a, 2, 1);
         ui_drawDigits(info.x + 150, info.y + 118, 2, a, 0);
     }

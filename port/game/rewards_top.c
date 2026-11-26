@@ -36,7 +36,7 @@ static void member(int i, int x, int y) {
     u8 a[16];
     port_big_portrait(4 + i, c, x + 8, y + 8, 40);
     text_drawBlock(x + 56, y + 6, 2, c->name, 0);
-    ui_drawLabel(x + 146, y + 9, 2, (s32) TX("LV", "NV", "LV", "LV"), 0);
+    ui_drawLabel(x + 146, y + 9, 2, (s32) TX("LV", "NV", "LV", "LV", "NV"), 0);
     text_formatNumber(c->level, a, 2, TEXT_NUM_ASCII);
     ui_drawDigits(x + 162, y + 8, 2, a, 0);
     /* EXP towards the next level */
@@ -47,20 +47,20 @@ static void member(int i, int x, int y) {
     rect(x + 56, y + 26, 126, 6, 0x302020);
     if (fill) rect(x + 57, y + 27, fill, 4, 0x30C8F0); /* (gold) */
     if (s_rewards.getsExp[i]) {
-        ui_drawLabel(x + 56, y + 38, 2, (s32) TX("EXP", "EXP", "EXP", "EP"), 0);
+        ui_drawLabel(x + 56, y + 38, 2, (s32) TX("EXP", "EXP", "EXP", "EP", "EXP"), 0);
         a[0] = '+';
         text_formatNumber((s32)s_rewards.rewards.expEach, a + 1, -1, TEXT_NUM_ASCII);
         ui_drawSmallDigits(x + 76, y + 39, 2, a, 0);
     }
     if (s_rewards.getsAp[i]) {
-        ui_drawLabel(x + 128, y + 38, 2, (s32) TX("AP", "PH", "PA", "AP"), 0);
+        ui_drawLabel(x + 128, y + 38, 2, (s32) TX("AP", "PH", "PA", "AP", "PC"), 0);
         a[0] = '+';
         text_formatNumber((s32)s_rewards.rewards.ap, a + 1, -1, TEXT_NUM_ASCII);
         ui_drawSmallDigits(x + 144, y + 39, 2, a, 0);
     }
     int ups = s_rewards.levelPopups[i].count;
     if (ups > 0) {
-        ui_drawLabel(x + 8, y + 54, 2, (s32) TX("LEVEL UP", "SUBE NV", "NUOVO LV", "LEVEL UP"), 0);
+        ui_drawLabel(x + 8, y + 54, 2, (s32) TX("LEVEL UP", "SUBE NV", "NUOVO LV", "LEVEL UP", "NIVEAU"), 0);
         if (ups > 1) {
             a[0] = 'x';
             text_formatNumber(ups, a + 1, -1, TEXT_NUM_ASCII);
@@ -70,7 +70,7 @@ static void member(int i, int x, int y) {
     LearnList *l = &s_rewards.learned[i];
     int n = l->count > 2 ? 2 : l->count;
     for (int k = 0; k < n; k++) {
-        if (k == 0) ui_drawLabel(x + 8, y + 68, 2, (s32) TX("LEARNED", "APRENDE", "APPRESA", "ERLERNT"), 0);
+        if (k == 0) ui_drawLabel(x + 8, y + 68, 2, (s32) TX("LEARNED", "APRENDE", "APPRESA", "ERLERNT", "APPRISE"), 0);
         text_drawBlock(x + 56, y + 64 + k * 13, 2, (u8 *)ability_name(l->ids[k]), 0);
     }
     if (l->count > 2) {

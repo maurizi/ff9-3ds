@@ -28,10 +28,10 @@
 #                     that PC, sends back the log and frames, starts itself again (docs/hardware-harness.md)
 
 DECOMP   := decomp
-# The game version (decomp docs/versions.md): us (NTSC-U 1.0 and 1.1), or PAL es / it / de. Another version than us
+# The game version (decomp docs/versions.md): us (NTSC-U 1.0 and 1.1), or PAL es / it / de / fr. Another version than us
 # builds into build/<VERSION>/.
 VERSION  ?= us
-PAL_VERSIONS := es it de
+PAL_VERSIONS := es it de fr
 BUILD    := $(if $(filter us,$(VERSION)),build,build/$(VERSION))
 export FF9_VERSION := $(VERSION)
 GEN      := $(BUILD)/gen
@@ -78,6 +78,7 @@ UNIQUE_ID_us  := 0xF9F93
 UNIQUE_ID_es  := 0xF9F94
 UNIQUE_ID_it  := 0xF9F95
 UNIQUE_ID_de  := 0xF9F96
+UNIQUE_ID_fr  := 0xF9F97
 UNIQUE_ID     := $(UNIQUE_ID_$(VERSION))
 # The version, for the decomp C and the port code that reads its headers: PAL content at 60 Hz (PAL_TV 0), and the
 # C of every function (NON_MATCHING: a version's asm-only functions in their C)

@@ -8,8 +8,8 @@
 /* field 657, frog catching: "Frogs Captured: N" */
 #if VERSION_ES
 #define MSG_FROG_COUNT 0x182
-#elif VERSION_DE
-#define MSG_FROG_COUNT 0x184
+#elif VERSION_DE || VERSION_FR
+#define MSG_FROG_COUNT 0x184 /* (German, French) */
 #else
 #define MSG_FROG_COUNT 0x183 /* (NTSC-U, Italian) */
 #endif

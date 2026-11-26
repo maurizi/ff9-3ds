@@ -11,9 +11,9 @@ from pathlib import Path
 
 DECOMP = Path("decomp")
 # The game version the port is built for ($FF9_VERSION, the Makefile's VERSION): us (NTSC-U 1.0/1.1) or a PAL language
-# (es, it, de); the decomp's docs/versions.md. Each has its own configs in decomp/config.
-MAIN_NAMES = {"us": "SLUS_012.51", "es": "SLES_029.69", "it": "SLES_029.68", "de": "SLES_029.67"}
-PAL_VERSIONS = ("es", "it", "de")
+# (es, it, de, fr); the decomp's docs/versions.md. Each has its own configs in decomp/config.
+MAIN_NAMES = {"us": "SLUS_012.51", "es": "SLES_029.69", "it": "SLES_029.68", "de": "SLES_029.67", "fr": "SLES_029.66"}
+PAL_VERSIONS = ("es", "it", "de", "fr")
 
 # the boot exe: 0x800-byte header, then .rodata, .text, .data (decomp CLAUDE.md "Layout facts"; the section starts of
 # another version are its splat config's)

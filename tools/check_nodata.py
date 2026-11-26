@@ -17,7 +17,8 @@ from pathlib import Path
 WINDOW = 64
 # (file, first byte, end): source tables that the executable also holds
 ALLOWED = [("SLUS_012.51", 0x586D0, 0x58930),  # libspu's reverb presets: port/include/psx_spu_presets.h
-           ("SLES_029.69", 0x58D18, 0x58F78), ("SLES_029.68", 0x58D50, 0x58FB0), ("SLES_029.67", 0x58E28, 0x59088)]
+           ("SLES_029.69", 0x58D18, 0x58F78), ("SLES_029.68", 0x58D50, 0x58FB0), ("SLES_029.67", 0x58E28, 0x59088),
+           ("SLES_029.66", 0x58DA8, 0x59008)]
 
 
 def sources():
