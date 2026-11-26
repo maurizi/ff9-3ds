@@ -5,14 +5,18 @@ Everything here is read from the decomp's committed configs, except what needs t
 tools/gen_relocs.py uses. Nothing is hard-coded except the boot exe's section offsets, which are fixed facts of
 SLUS_012.51 (its sha1 is checked by the decomp's `make extract`).
 """
+import os
 import re
 from pathlib import Path
 
 DECOMP = Path("decomp")
-VERSION = "us"
+# The game version the port is built for ($FF9_VERSION, the Makefile's VERSION): us (NTSC-U 1.0/1.1) or a PAL language
+# (es, it, de); the decomp's docs/versions.md. Each has its own configs in decomp/config.
+MAIN_NAMES = {"us": "SLUS_012.51", "es": "SLES_029.69", "it": "SLES_029.68", "de": "SLES_029.67"}
+PAL_VERSIONS = ("es", "it", "de")
 
-# SLUS_012.51: 0x800-byte header, then .rodata, .text, .data (decomp CLAUDE.md "Layout facts").
-MAIN_NAME = "SLUS_012.51"
+# the boot exe: 0x800-byte header, then .rodata, .text, .data (decomp CLAUDE.md "Layout facts"; the section starts of
+# another version are its splat config's)
 MAIN_VRAM = 0x80010000
 MAIN_HEADER = 0x800
 MAIN_TEXT = 0x2FA0
@@ -22,7 +26,40 @@ RAM_LO, RAM_HI = 0x80010000, 0x80200000  # PS1 RAM the game uses (below 0x800100
 SPAD_LO, SPAD_HI = 0x1F800000, 0x1F800400
 
 SYM_LINE = re.compile(r"^\s*(\w+)\s*=\s*(0x[0-9A-Fa-f]+)\s*;(.*)$")
-ADDR_NAME = re.compile(r"^(?:func|D|jtbl)_([0-9A-F]{8})$")
+
+
+def set_version(version):
+    """VERSION and what follows from it (the builder switches versions in one process)"""
+    global VERSION, MAIN_NAME, ADDR_NAME
+    if version not in MAIN_NAMES:
+        raise ValueError(f"unknown version {version}")
+    VERSION = version
+    MAIN_NAME = MAIN_NAMES[version]
+    # A name that is its address. Another version keeps the US names (func_80012345 too) at its own addresses (its
+    # symbol files say where) and gives its own placeholders a suffix: func_800228D0_es.
+    ADDR_NAME = re.compile(r"^(?:func|D|jtbl)_([0-9A-F]{8})" + ("" if version == "us" else f"_{version}") + "$")
+    _ASM_INDEX.clear()
+
+
+_ASM_INDEX = {}
+set_version(os.environ.get("FF9_VERSION", "us"))
+
+
+def config_name(name):
+    """a binary's splat config in decomp/config: the us one, or the version's"""
+    if name == "main":
+        return MAIN_NAME.lower() + ".yaml"
+    return f"{name}.yaml" if VERSION == "us" else f"{name}.{VERSION}.yaml"
+
+
+def main_sections():
+    """(.text, .data) file offsets of the boot exe: its config's first C subsegment and its data segment"""
+    if VERSION == "us":
+        return MAIN_TEXT, MAIN_DATA
+    y = (DECOMP / "config" / config_name("main")).read_text()
+    text = int(re.search(r"- \[(0x[0-9A-Fa-f]+), c,", y).group(1), 16)
+    data = int(re.search(r"- \[(0x[0-9A-Fa-f]+), data\]", y).group(1), 16)
+    return text, data
 
 
 def yaml_size(path):
@@ -74,7 +111,7 @@ def native_fxmods(names=None):
     import os
     wanted = set(os.environ.get("FXNATIVE", "").split()) if names is None else set(names)
     out = {}
-    for line in (DECOMP / f"config/fxmods.{VERSION}.txt").read_text().splitlines():
+    for line in (DECOMP / "config/fxmods.us.txt").read_text().splitlines():  # (the same modules in every version)
         f = line.split("#")[0].split()
         if len(f) < 5 or f[0] not in wanted:
             continue
@@ -90,32 +127,40 @@ def binaries(fxmods=None):
     """{name: Binary}: main, the code overlays and the native effect modules (fxmods: exactly these, else
     native_fxmods()'s choice)"""
     cfg = DECOMP / "config"
-    out = {"main": Binary("main", DECOMP / "disks/us" / MAIN_NAME, MAIN_VRAM, MAIN_HEADER, MAIN_TEXT, MAIN_DATA, header=MAIN_HEADER,
-                          yaml=cfg / "slus_012.51.yaml")}
+    text, data = main_sections()
+    out = {"main": Binary("main", DECOMP / f"disks/{VERSION}" / MAIN_NAME, MAIN_VRAM, MAIN_HEADER, text, data,
+                          header=MAIN_HEADER, yaml=cfg / config_name("main"))}
     for line in (DECOMP / f"config/overlays.{VERSION}.txt").read_text().splitlines():
         f = line.split("#")[0].split()
         if len(f) >= 4:
             name = f"ovl_{f[0]}"
-            out[name] = Binary(name, DECOMP / f"disks/us/ovl/{f[0]}.bin", int(f[1], 16), 0, int(f[2], 16), int(f[3], 16),
-                               yaml=cfg / f"{name}.yaml")
+            out[name] = Binary(name, DECOMP / f"disks/{VERSION}/ovl/{f[0]}.bin", int(f[1], 16), 0, int(f[2], 16),
+                               int(f[3], 16), yaml=cfg / config_name(name))
     for name, (vram, text, data) in native_fxmods(fxmods).items():
         out[name] = Binary(name, DECOMP / f"disks/us/fxmod/{name}.bin", vram, 0, text, data,
                            yaml=cfg / f"fxmod/{name}.yaml")
     return out
 
 
+def asm_dir(binary, root=Path(".")):
+    """the decomp's split of `binary`: the version's, or for an effect module the us one (the same in every version)"""
+    return root / DECOMP / "asm" / ("us" if binary.startswith("fx_") else VERSION) / binary
+
+
 def symbol_files(binary):
-    """The decomp's symbol files that describe `binary`, hand-written first."""
+    """The decomp's symbol files that describe `binary`, hand-written first (another version's last: its aliases,
+    US names for places inside its symbols, data the C reads by them)."""
     cfg = DECOMP / "config"
     if binary.startswith("fx_"):
         names = [f"fxmod/{binary}.syms.txt", f"fxmod/undefined_funcs_auto.{binary}.txt",
                  f"fxmod/undefined_syms_auto.{binary}.txt"]
     elif binary == "main":
         names = [f"symbols.{VERSION}.txt", f"symbols.psyq.{VERSION}.txt",
-                 f"undefined_funcs_auto.{VERSION}.txt", f"undefined_syms_auto.{VERSION}.txt"]
+                 f"undefined_funcs_auto.{VERSION}.txt", f"undefined_syms_auto.{VERSION}.txt", f"aliases.{VERSION}.txt"]
     else:
         names = [f"symbols.{binary}.{VERSION}.txt", f"symbols.psyq.{binary}.{VERSION}.txt",
-                 f"undefined_funcs_auto.{binary}.{VERSION}.txt", f"undefined_syms_auto.{binary}.{VERSION}.txt"]
+                 f"undefined_funcs_auto.{binary}.{VERSION}.txt", f"undefined_syms_auto.{binary}.{VERSION}.txt",
+                 f"aliases.{binary}.{VERSION}.txt"]
     return [cfg / n for n in names if (cfg / n).exists()]
 
 
@@ -139,7 +184,7 @@ def functions():
             for n, (a, _) in read_symbols(f).items():
                 named.setdefault(b, {}).setdefault(n, a)
     out = {}
-    for line in (DECOMP / f"config/functions.{VERSION}.txt").read_text().splitlines():
+    for line in (DECOMP / "config/functions.us.txt").read_text().splitlines():  # (names shared by every version)
         if line.startswith("#") or not line.strip():
             continue
         b, name = line.split()[:2]
@@ -172,7 +217,7 @@ def data_symbols_of(binary, splat=True):
         for n, (a, is_func) in read_symbols(f).items():
             if (not is_func or n.startswith("g_")) and n not in funcs:
                 out[n] = a
-    asm = DECOMP / f"asm/{VERSION}/{binary}"
+    asm = asm_dir(binary)
     for s in asm.rglob("*.s") if splat else ():
         for m in re.finditer(r"^dlabel (\w+)\n\s*/\* [0-9A-F]+ ([0-9A-F]{8}) ", s.read_text(errors="replace"), re.M):
             out.setdefault(m.group(1), int(m.group(2), 16))
@@ -193,7 +238,7 @@ def data_symbols(bins, splat=True):
             for n, (a, is_func) in read_symbols(f).items():
                 if (not is_func or n.startswith("g_")) and n not in funcs:
                     add(n, a)
-        asm = DECOMP / f"asm/{VERSION}/{'main' if b == 'main' else b}"
+        asm = asm_dir(b)
         for s in asm.rglob("*.s") if splat else ():
             text = s.read_text(errors="replace")
             for m in re.finditer(r"^dlabel (\w+)\n\s*/\* [0-9A-F]+ ([0-9A-F]{8}) ", text, re.M):
@@ -207,7 +252,7 @@ WORD_LINE = re.compile(r"/\* ([0-9A-F]+) ([0-9A-F]{8}) ([0-9A-F]{8}) \*/\s+\.wor
 def data_words(binary):
     """(vram, value, operand) for every `.word` splat emitted in `binary`'s data/rodata: these are the only
     places a pointer can be (splat types everything else as .short/.byte/.asciz)."""
-    asm = DECOMP / f"asm/{VERSION}/{binary}"
+    asm = asm_dir(binary)
     seen = {}
     for s in sorted(asm.rglob("*.s")):
         for m in WORD_LINE.finditer(s.read_text(errors="replace")):
@@ -217,9 +262,6 @@ def data_words(binary):
     return [seen[k] for k in sorted(seen)]
 
 
-_ASM_INDEX = {}
-
-
 def asm_path(binary, address, root=Path(".")):
     """The splat .s file of the function at `address` in `binary` (e.g. "ovl_0b"), whatever the decomp names it.
 
@@ -227,7 +269,7 @@ def asm_path(binary, address, root=Path(".")):
     """
     if binary not in _ASM_INDEX:
         index = {}
-        for path in (root / DECOMP / "asm" / VERSION / binary / "nonmatchings").rglob("*.s"):
+        for path in (asm_dir(binary, root) / "nonmatchings").rglob("*.s"):
             first = re.search(r"/\* [0-9A-F]+ ([0-9A-F]{8}) [0-9A-F]{8} \*/", path.read_text())
             if first:
                 index[int(first.group(1), 16)] = path

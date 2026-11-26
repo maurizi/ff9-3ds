@@ -22,12 +22,15 @@ def _resource(*parts):
     return None
 
 
-def payload(name):
-    """the prebuilt program: payload/ff9.3dsx, ff9.cia and linkinfo.json in a bundle, build/ in a checkout"""
-    p = _resource('payload', name)
+def payload(name, version='us'):
+    """the prebuilt program for a release (discs.Release.version): ff9.3dsx, ff9.cia and linkinfo.json, in a bundle's
+    payload/ (us) or payload/<version>/, in a checkout's build/ or build/<version>/ (make VERSION=...)"""
+    sub = () if version == 'us' else (version,)
+    p = _resource('payload', *sub, name)
     if p:
         return p
-    for p in (os.path.join(ROOT, 'build', name), os.path.join(ROOT, 'build', 'gen', name)):
+    build = os.path.join(ROOT, 'build', *sub)
+    for p in (os.path.join(build, name), os.path.join(build, 'gen', name)):
         if os.path.isfile(p):
             return p
     return None
@@ -50,10 +53,16 @@ def _modules():
 
 
 def identify(paths):
-    """{disc number: Disc} from dump files in any order (DiscError on a wrong or doubled disc)"""
+    """{disc number: Disc} from dump files in any order (DiscError on a wrong or doubled disc, or discs of two
+    releases)"""
     out = {}
     for p in paths:
         d = Disc(p)
+        other = next(iter(out.values()), None)
+        if other and other.release is not d.release:
+            raise DiscError(f'{os.path.basename(p)} is the {d.release.name} release\'s disc {d.number}, '
+                            f'{os.path.basename(other.source)} the {other.release.name} release\'s: all four discs '
+                            f'must be of one release')
         if d.number in out:
             raise DiscError(f'{os.path.basename(p)} and {os.path.basename(out[d.number].source)} are both disc {d.number}')
         out[d.number] = d
@@ -94,7 +103,7 @@ def make_banner(banner3d, discs, imgs, bases, log):
         sectors = banner3d.movie_sectors(d1.raw_sectors, d1.movie_lba(*banner3d.LOGO_MOVIE))
         notes = []
         out = banner3d.build(dict(imgs), sectors, banner, smdh, exe=d1.file_view(d1.boot).read(),
-                             notes=notes)
+                             notes=notes, version=d1.release.version)
         log('HOME Menu banner and icon made from the discs.')
         for note in notes:
             log(note[0].upper() + note[1:] + '.')
@@ -111,6 +120,12 @@ def smdh_of_3dsx(path):
     return prog[at:at + size]
 
 
+def full_name(release, ext):
+    """the output's name: ff9-full.cia, another release's ff9-es-full.cia ... (the program looks for its .3dsx by it, and
+    keeps its folder on the SD card by the same name: two releases side by side)"""
+    return f'ff9-full.{ext}' if release.version == 'us' else f'ff9-{release.version}-full.{ext}'
+
+
 def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambda f, m=None: None, scratch=None):
     """discs: {number: Disc} (all four); writes out_dir/ff9-full.3dsx and/or ff9-full.cia; returns their paths.
     scratch: where the split of disc 1 goes (thousands of small files: the web builder keeps them in memory, its
@@ -118,12 +133,14 @@ def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambd
     missing = [n for n in range(1, 5) if n not in discs]
     if missing:
         raise DiscError('missing disc ' + ', '.join(map(str, missing)))
+    release = discs[1].release
     bases = {}
     for want, name in ((make_3dsx, 'ff9.3dsx'), (make_cia, 'ff9.cia'), (True, 'linkinfo.json')):
         if want:
-            bases[name] = payload(name)
+            bases[name] = payload(name, release.version)
             if not bases[name]:
-                raise DiscError(f'the prebuilt program {name} is missing from this builder')
+                raise DiscError(f'the prebuilt program {name} for the {release.name} release is missing from this '
+                                f'builder')
     pack_discs, bake_maps, fm, banner3d = _modules()
     os.makedirs(out_dir, exist_ok=True)
     steps = [('verify', 20), ('relocs', 30), ('pack', 45), ('maps', 10), ('banner', 3)]
@@ -142,13 +159,14 @@ def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambd
             log(f'Checking disc {n} ({os.path.basename(discs[n].path)})')
             discs[n].verify(lambda d, t, base=done: pr.part(base + d, sum(sizes.values())))
             done += sizes[n]
-        log('All four discs are Final Fantasy IX (NTSC-U), unmodified.')
+        log(f'All four discs are Final Fantasy IX ({release.name}), unmodified.')
 
         pr.step('relocs', 'Analysing the executable')
         rel_path = os.path.join(work, 'psxrel.bin')
         tree = tempfile.mkdtemp(prefix='decomp-', dir=scratch) if scratch else os.path.join(work, 'decomp')
         os.makedirs(tree, exist_ok=True)
-        relocs.build(discs[1], vendor_dir(), bases['linkinfo.json'], tree, rel_path, log=log, progress=pr.part)
+        relocs.build(discs[1], vendor_dir(), bases['linkinfo.json'], tree, rel_path, log=log, progress=pr.part,
+                     version=release.version)
         shutil.rmtree(tree, ignore_errors=True)
 
         pr.step('pack', 'Packing the discs')
@@ -173,15 +191,15 @@ def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambd
         banner, smdh = make_banner(banner3d, discs, imgs, bases, log)
 
         if make_3dsx:
-            pr.step('3dsx', 'Writing ff9-full.3dsx')
-            out = os.path.join(out_dir, 'ff9-full.3dsx')
+            out = os.path.join(out_dir, full_name(release, '3dsx'))
+            pr.step('3dsx', f'Writing {os.path.basename(out)}')
             ctr.write_3dsx(bases['ff9.3dsx'], files, out + '.part', pr.part, smdh=smdh)
             os.replace(out + '.part', out)
             outputs.append(out)
             log(f'Wrote {out}')
         if make_cia:
-            pr.step('cia', 'Writing ff9-full.cia')
-            out = os.path.join(out_dir, 'ff9-full.cia')
+            out = os.path.join(out_dir, full_name(release, 'cia'))
+            pr.step('cia', f'Writing {os.path.basename(out)}')
             ctr.write_cia(bases['ff9.cia'], files, out + '.part',
                           lambda d, t, phase: pr.part(d / 2 + (t / 2 if phase == 'write' else 0), t),
                           exefs={'banner': banner, 'icon': smdh} if banner else None)
@@ -192,8 +210,8 @@ def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambd
         return outputs
     finally:
         shutil.rmtree(work, ignore_errors=True)
-        for out in ('ff9-full.3dsx.part', 'ff9-full.cia.part'):
+        for out in (full_name(release, '3dsx'), full_name(release, 'cia')):
             try:
-                os.unlink(os.path.join(out_dir, out))
+                os.unlink(os.path.join(out_dir, out + '.part'))
             except OSError:
                 pass

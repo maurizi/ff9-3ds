@@ -28,8 +28,12 @@
 #                     that PC, sends back the log and frames, starts itself again (docs/hardware-harness.md)
 
 DECOMP   := decomp
-VERSION  := us
-BUILD    := build
+# The game version (decomp docs/versions.md): us (NTSC-U 1.0 and 1.1), or PAL es / it / de. Another version than us
+# builds into build/<VERSION>/.
+VERSION  ?= us
+PAL_VERSIONS := es it de
+BUILD    := $(if $(filter us,$(VERSION)),build,build/$(VERSION))
+export FF9_VERSION := $(VERSION)
 GEN      := $(BUILD)/gen
 PYTHON   := python3
 ,        := ,
@@ -67,13 +71,27 @@ DECOMP_HDRS := $(wildcard $(DECOMP)/include/*.h)
 # window_tween.c reimplemented func_80063118 before the decomp matched it; only its PSX comparison test uses it now.
 PSX_SRCS  := $(filter-out port/game/window_tween.c,$(wildcard port/psx/*.c port/game/*.c))
 
+# The version, for the decomp C and the port code that reads its headers: PAL content at 60 Hz (PAL_TV 0), and the
+# C of every function (NON_MATCHING: a version's asm-only functions in their C)
+VERSION_DEFS  := -DVERSION_$(shell echo $(VERSION) | tr a-z A-Z)=1 $(if $(filter $(PAL_VERSIONS),$(VERSION)),-DVERSION_PAL=1) \
+                 -DPAL_TV=0 -DNON_MATCHING -DFF9_VERSION='"$(VERSION)"' -DFF9_BUILD_DIR='"$(BUILD)"' \
+                 -DFF9_SD_NAME='"$(SD_NAME)"'
+# Each release's own place on the 3DS, so two can be installed side by side (their memory cards differ): the SD
+# folder sdmc:/3ds/<SD_NAME> (its full build <SD_NAME>-full.3dsx) and the CIA's title id
+SD_NAME       := ff9$(if $(filter us,$(VERSION)),,-$(VERSION))
+UNIQUE_ID_us  := 0xF9F93
+UNIQUE_ID_es  := 0xF9F94
+UNIQUE_ID_it  := 0xF9F95
+UNIQUE_ID_de  := 0xF9F96
+UNIQUE_ID     := $(UNIQUE_ID_$(VERSION))
 # PS1 semantics: signed char, no strict aliasing, wrapping overflow; K&R-era C (gcc 2.8) needs gnu89 + permissive.
 DECOMP_CFLAGS := -std=gnu89 -fpermissive -O2 -g -fsigned-char -fno-strict-aliasing -fwrapv \
                  -fno-delete-null-pointer-checks -fno-builtin-memcpy -ffunction-sections -fdata-sections -w \
                  -I$(DECOMP)/include -Iport/include -include port_prelude.h \
+                 $(VERSION_DEFS) \
                  $(addprefix -I,$(wildcard $(DECOMP)/src_equiv/*/)) # their "../src_equiv.h" resolves from here
 PORT_CFLAGS   := -std=gnu17 -O2 -g -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter -Wno-builtin-declaration-mismatch -ffunction-sections -fdata-sections \
-                 -Iport/include -I$(DECOMP)/include
+                 -Iport/include -I$(DECOMP)/include $(VERSION_DEFS)
 
 # port/game/ includes the decomp's headers, whose inline helpers call functions declared only for other binaries
 GAME_CFLAGS   := -Wno-error=implicit-function-declaration -Wno-implicit-function-declaration
@@ -267,20 +285,22 @@ $(BUILD)/ff9.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr conf
 	@echo "CIA  $@"
 	@mkdir -p $(BUILD)/romfs-none
 	@$(MAKEROM) -f cia -o $@ -elf $< -rsf config/ff9.rsf -icon $(BUILD)/ff9.smdh -banner $(BUILD)/ff9.bnr -target t \
-		-DAPP_ROMFS=$(BUILD)/romfs-none
+		-DAPP_ROMFS=$(BUILD)/romfs-none -DAPP_UNIQUE_ID=$(UNIQUE_ID)
 $(BUILD)/ff9-full.cia: $(BUILD)/3ds/ff9ds.elf $(BUILD)/ff9.smdh $(BUILD)/ff9.bnr config/ff9.rsf $(BUILD)/discs.bin $(BUILD)/maps.bin $(BUILD)/psxrel.bin
 	@echo "CIA  $@ (with the disc pack)"
 	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin \
 		&& ln -f $(BUILD)/maps.bin $(BUILD)/romfs/maps.bin && cp $(BUILD)/psxrel.bin $(BUILD)/romfs/psxrel.bin
 	@$(MAKEROM) -f cia -o $@ -elf $< -rsf config/ff9.rsf -icon $(BUILD)/ff9.smdh -banner $(BUILD)/ff9.bnr -target t \
-		-DAPP_ROMFS=$(BUILD)/romfs
+		-DAPP_ROMFS=$(BUILD)/romfs -DAPP_UNIQUE_ID=$(UNIQUE_ID)
 cia: $(BUILD)/ff9.cia
 
 # What the builder (builder/) bundles: the program as a .3dsx and a .cia, and linkinfo.json (what its relocation tables
 # are made from). None of it needs or holds the game's data: CI builds it from a clean checkout (.github/workflows).
+# the builder's program for this release: build/payload/, another release's in build/payload/<VERSION>/
+PAYLOAD  := build/payload$(if $(filter us,$(VERSION)),,/$(VERSION))
 payload: $(BUILD)/ff9.3dsx $(BUILD)/ff9.cia $(GEN)/linkinfo.json
-	@mkdir -p $(BUILD)/payload && cp $^ $(BUILD)/payload/
-	@echo "PAYLOAD $(BUILD)/payload"
+	@mkdir -p $(PAYLOAD) && cp $^ $(PAYLOAD)/
+	@echo "PAYLOAD $(PAYLOAD)"
 .PHONY: payload
 cia-full: $(BUILD)/ff9-full.cia
 # an installable title is always the player build
@@ -293,13 +313,13 @@ $(if $(and $(TEST_OPTS),$(filter cia cia-full payload $(BUILD)/ff9.cia $(BUILD)/
 # as a field loads). Never share the output.
 $(BUILD)/maps.bin: tools/bake_maps.py $(DECOMP)/tools/field_maps.py
 	@echo "MAPS $@"
-	@$(PYTHON) tools/bake_maps.py --decomp $(DECOMP) --img disks/us --out $@
+	@$(PYTHON) tools/bake_maps.py --decomp $(DECOMP) --img disks/$(VERSION) --out $@
 maps: $(BUILD)/maps.bin
 .PHONY: maps
 
 $(BUILD)/discs.bin: tools/pack_discs.py
 	@echo "PACK $@"
-	@$(PYTHON) tools/pack_discs.py --img disks/us --out $@
+	@$(PYTHON) tools/pack_discs.py --img disks/$(VERSION) --out $@
 $(BUILD)/ff9-full.3dsx: $(BUILD)/3ds/ff9ds.elf $(OUT_SMDH) $(BUILD)/discs.bin $(BUILD)/maps.bin $(BUILD)/psxrel.bin
 	@echo "3DSX $@ (with the disc pack)"
 	@rm -rf $(BUILD)/romfs && mkdir -p $(BUILD)/romfs && ln -f $(BUILD)/discs.bin $(BUILD)/romfs/discs.bin \
@@ -320,11 +340,11 @@ $(BUILD)/pc/ff9ds: $(BUILD)/pc/ff9ds.elf
 decomp-objs: $(3ds_DOBJS)
 
 # --- disc data (host) ----------------------------------------------------------------------------------------
-# Needs the four disc images in disks/us/raw/ ("FF9 CD1.img" ... as in the decomp). The decomp's split only needs
+# Needs the four disc images in disks/$(VERSION)/raw/ ("FF9 CD1.img" ... as in the decomp). The decomp's split only needs
 # the exe and the code overlays; they are copied into the submodule, whose container can't follow links.
 extract:
 	$(MAKE) -C $(DECOMP) extract extract-img extract-ovl DISC_DIR=$(CURDIR)/disks/$(VERSION)/raw
-	cd $(DECOMP) && tools/docker.sh make split
+	cd $(DECOMP) && tools/docker.sh make split VERSION=$(VERSION)
 
 clean:
 	rm -rf $(BUILD)

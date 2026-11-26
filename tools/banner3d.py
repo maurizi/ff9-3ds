@@ -305,10 +305,38 @@ class Figure:
         return -min(battle_pose.mvmva_tr(*self.frames[0][bone], v)[1] for g in self.m.meshes for bone, v in g)
 
 
+# ---- the game's addresses, by the decomp's names for them: in the release's symbol files ---------------------------
+
+VERSION = 'us'  # the release the discs are (the decomp's VERSION: build(version=...))
+_SYMBOLS = {}
+
+
+def _address(name, binary='main'):
+    """a symbol's address in the release: config/symbols[.<binary>].<version>.txt of the decomp (beside this file in a
+    checkout, in the builder's vendor folder)"""
+    key = (VERSION, binary)
+    if key not in _SYMBOLS:
+        table = {}
+        for base in (os.path.join(HERE, '..', 'decomp', 'config'), os.path.join(HERE, '..', 'vendor', 'decomp', 'config')):
+            stem = 'symbols' if binary == 'main' else f'symbols.{binary}'
+            path = os.path.join(base, f'{stem}.{VERSION}.txt')
+            if os.path.isfile(path):
+                for line in open(path):
+                    f = line.split('//')[0].split('=')
+                    if len(f) == 2 and f[1].strip().rstrip(';').startswith('0x'):
+                        table[f[0].strip()] = int(f[1].strip().rstrip(';'), 16)
+                break
+        _SYMBOLS[key] = table
+    if name not in _SYMBOLS[key]:
+        raise KeyError(f'{name} is not in the {VERSION} symbols of {binary}')
+    return _SYMBOLS[key][name]
+
+
 # ---- one frame of a movie (the port's decoder, port/psx/movie_stream.c, movie_vlc.c, mdec_decode.c, in Python) ---
 
 OVL_MOVIE, OVL_MOVIE_VRAM = 0x64, 0x80198700
-MOVIE_TABLES = ((0x8019DCFC, 216), (0x8019DEC8, 128), (0x8019DF4C, 128))  # g_mbgVlcPairs, quantization, scale
+# g_mbgVlcPairs, the quantization and scale tables: (name, size) in the movie overlay (its address: _address)
+MOVIE_TABLES = (('g_mbgVlcPairs', 216), ('D_8019DEC8', 128), ('D_8019DF4C', 128))
 CHUNK = 0x8F4  # video bytes a sector (Mode 2 Form 2: 2324 less the 32-byte header)
 ZIGZAG = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14,
           21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53,
@@ -318,7 +346,11 @@ ZIGZAG = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33
 def movie_tables(img):
     """(run/level pairs, quantization, scale) from the movie player overlay"""
     ovl = _file(img, 0, OVL_MOVIE)
-    return [ovl[a - OVL_MOVIE_VRAM:a - OVL_MOVIE_VRAM + n] for a, n in MOVIE_TABLES]
+    out = []
+    for name, n in MOVIE_TABLES:
+        a = _address(name, 'ovl_64') - OVL_MOVIE_VRAM
+        out.append(ovl[a:a + n])
+    return out
 
 
 def movie_bitstream(sectors, frame):
@@ -1094,7 +1126,7 @@ def cbmd(model, cwav):
 # one-channel sound it plays as a row of twelve beeps (heard in the emulated menu and on the console).
 SOUND_FILE = (DIR_COMMON, 0x2712)
 SOUND_SE, SOUND_BANK, SOUND_SONG = 0x8044A, 0x90139, 0x70064
-EXE_VRAM, EXE_HEADER, EXE_SEMITONES, EXE_PAN_CURVE = 0x80010000, 0x800, 0x8006F410, 0x8006F540
+EXE_VRAM, EXE_HEADER = 0x80010000, 0x800
 SOUND_SECONDS = 3.0
 
 
@@ -1105,8 +1137,8 @@ def sound(img, exe):
     data = _file(img, *SOUND_FILE)
     items = dict(db_items(data, 0))
     at = lambda vram: vram - EXE_VRAM + EXE_HEADER
-    semitones = struct.unpack_from('<12I', exe, at(EXE_SEMITONES))
-    centre, = struct.unpack_from('<h', exe, at(EXE_PAN_CURVE) + 2 * 0x80)
+    semitones = struct.unpack_from('<12I', exe, at(_address('g_akaoSemitonePitch')))
+    centre, = struct.unpack_from('<h', exe, at(_address('g_akaoPanCurve')) + 2 * 0x80)
     song = items[SOUND_SONG]
     if data[song:song + 4] != b'AKAO':
         raise ValueError('sound: not a song')
@@ -1190,11 +1222,14 @@ def icon(crystal):
     return 48, 48, out
 
 
-def build(imgs, sectors, banner, smdh, clashes=None, exe=None, notes=None):
+def build(imgs, sectors, banner, smdh, clashes=None, exe=None, notes=None, version='us'):
     """(new banner, new SMDH): imgs {disc: FF9.IMG reader} (every disc a pose comes from), sectors: the icon's
     movie frames' (movie_sectors); banner and SMDH: the program's own (title_banner's, the plain icon); banner
     None: only the SMDH (a 3DSX has no banner). exe: disc 1's boot executable, for the banner's sound (None, or a
-    sound that cannot be made: the program's own chime stays, and why is added to the list `notes`)"""
+    sound that cannot be made: the program's own chime stays, and why is added to the list `notes`); version: the
+    discs' release (the decomp's VERSION: where the tables are)"""
+    global VERSION
+    VERSION = version
     _, crystal = logo(sectors, movie_tables(imgs[min(imgs)]))
     new_smdh = smdh_icons(smdh, icon(crystal))
     if banner is None:

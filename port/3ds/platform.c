@@ -7,7 +7,7 @@
  * the game builds there lies in the same 16 MB window and a 24-bit OT link rebuilds as (psx_ram & 0xFF000000) |
  * addr24 (gpu.c), as on the PC host.
  *
- * Data: sdmc:/3ds/ff9/ holds raw/FF9 CDn.img (or the packed discs.bin), as the PC's --data directory does.
+ * Data: sdmc:/3ds/ff9/ (another release's: ff9-es/, ...: FF9_SD_NAME) holds raw/FF9 CDn.img (or the packed discs.bin), as the PC's --data directory does.
  */
 #include <3ds.h>
 #include <citro3d.h>
@@ -495,7 +495,7 @@ void plat_mkdir(const char *path) {
 }
 
 const char *plat_data_dir(void) {
-    return "sdmc:/3ds/ff9";
+    return "sdmc:/3ds/" FF9_SD_NAME;
 }
 
 /* Where the disc pack is when the build carries it: the single-file build (make 3ds-full) has it in its own romfs;
@@ -510,7 +510,7 @@ static void find_disc_pack(void) {
         disc_pack = "romfs:/discs.bin";
         return;
     }
-    static const char *const full[] = {"/3ds/ff9-full.3dsx", "/3ds/ff9/ff9-full.3dsx"};
+    static const char *const full[] = {"/3ds/" FF9_SD_NAME "-full.3dsx", "/3ds/" FF9_SD_NAME "/" FF9_SD_NAME "-full.3dsx"};
     for (unsigned i = 0; i < sizeof full / sizeof *full; i++) {
         Handle fd;
         u32 got = 0, hdr[11];

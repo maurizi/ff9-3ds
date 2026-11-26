@@ -11,9 +11,11 @@ import sys
 def self_test():
     """everything the builder needs is in it and loads: the payload, the vendored tools, splat and its natives"""
     from . import pipeline
-    for name in ('ff9.3dsx', 'ff9.cia', 'linkinfo.json'):
-        if not pipeline.payload(name):
-            sys.exit(f'self-test: no {name}')
+    from .discs import RELEASES
+    for r in RELEASES:
+        for name in ('ff9.3dsx', 'ff9.cia', 'linkinfo.json'):
+            if not pipeline.payload(name, r.version):
+                sys.exit(f'self-test: no {name} for {r.version}')
     vendor = pipeline.vendor_dir()
     for rel in ('tools/gen_relocs.py', 'decomp/config/slus_012.51.yaml', 'decomp/tools/field_maps.py',
                 'decomp/include/ff9.h'):

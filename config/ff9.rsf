@@ -11,7 +11,7 @@ RomFs:
 
 TitleInfo:
   Category                : Application
-  UniqueId                : 0xF9F93
+  UniqueId                : $(APP_UNIQUE_ID) # (one per release: the Makefile's UNIQUE_ID)
 
 Option:
   UseOnSD                 : true

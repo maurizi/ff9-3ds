@@ -22,7 +22,7 @@
 #include "psx_spu.h"
 #include "psx_spu_trace.h"
 
-static const char *data_dir = "disks/us";
+static const char *data_dir = "disks/" FF9_VERSION; /* (the Makefile's VERSION) */
 static long frame_limit = -1;
 static long spu_snapshot_at = -1;
 static long ram_dump_at = -1; /* --ram-dump FRAME:PATH: PS1 RAM image, for tools/ram_diff.py */
@@ -286,7 +286,7 @@ const char *plat_data_dir(void) {
 
 /* port/psx/psxrel.c: where make writes the relocation tables, when the data folder has none */
 const char *plat_psxrel_fallback(void) {
-    return "build/psxrel.bin";
+    return FF9_BUILD_DIR "/psxrel.bin";
 }
 
 /* --prof LO-HI:NEW.txt: where the program is, sampled 20000 times a second while the frame is in [LO, HI): each

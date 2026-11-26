@@ -192,8 +192,8 @@ def main():
             lines.append(f"PROVIDE({name} = psx_scratchpad + 0x{a & 0x3FF:X});")
     # D_XXXXXXXX names the symbol files don't list yet: the name is the address (the port's own: port_syms below)
     for name in sorted(set().union(*(undefined(objs[b]) for b in bins)) - set(syms)):
-        m = re.match(r"^D_([0-9A-F]{8})$", name)
-        if m and ff9sym.RAM_LO <= int(m.group(1), 16) < ff9sym.RAM_HI:
+        m = ff9sym.ADDR_NAME.match(name)
+        if m and name.startswith("D_") and ff9sym.RAM_LO <= int(m.group(1), 16) < ff9sym.RAM_HI:
             lines.append(f"PROVIDE({name} = psx_ram + 0x{int(m.group(1), 16) & 0x1FFFFF:X}); /* from its name */")
             report.append(f"placed by name: {name} (not in the decomp's symbol files)")
     dups = sorted(defined_in_src & defined_in_equiv)
@@ -215,6 +215,7 @@ def main():
     fx = [b for b in sorted(bins) if b.startswith("fx_")]
     info = json.dumps({
         "version": 1,
+        "game": ff9sym.VERSION,  # the release the program is built for (psxrel.bin is made from its discs)
         "bins": sorted(bins), "fxmods": fx,
         "funcs": {b: dict(sorted(fs.items())) for b, fs in sorted(funcs.items()) if b in bins},
         "defined": {b: sorted(defined[b]) for b in sorted(bins)},

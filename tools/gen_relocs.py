@@ -47,7 +47,7 @@ def raw_ranges(b, names):
     out = []
     for name in names.get(b, ()):
         lo = hi = None
-        for path in sorted((ff9sym.DECOMP / "asm").glob(f"*/{b}/data/*.s")):
+        for path in sorted((ff9sym.asm_dir(b) / "data").glob("*.s")):
             inside = False
             for line in path.read_text().splitlines():
                 if line.startswith(f"dlabel {name}"):
@@ -71,7 +71,7 @@ def raw_ranges(b, names):
 def regions_of(b, bi):
     """file offset ranges of a binary's data: .rodata, .data, and data splat keeps inside .text"""
     regions = [(bi.rodata, bi.text), (bi.data, bi.end)]
-    for s in (ff9sym.DECOMP / f"asm/{ff9sym.VERSION}/{b}/data").glob("*.s"):
+    for s in (ff9sym.asm_dir(b) / "data").glob("*.s"):
         t = s.read_text()
         m = re.search(r"\.section \.text.*?nonmatching (\w+), (0x[0-9A-Fa-f]+)", t, re.S)
         if m and ".incbin" in t:  # data embedded in .text (ovl_0b's textbin table)
@@ -217,6 +217,7 @@ def main_chunks(bi, relocs, regions):
 def build(linkinfo_path, out_path, report_path=None):
     text = Path(linkinfo_path).read_text()
     info = json.loads(text)
+    ff9sym.set_version(info.get("game", "us"))
     bins = ff9sym.binaries(info["fxmods"])
     if sorted(bins) != sorted(info["bins"]):
         sys.exit("gen_relocs.py: the decomp's binaries aren't the program's (another decomp revision?)")

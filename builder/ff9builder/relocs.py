@@ -64,41 +64,48 @@ def _sha1_lines(path):
     return out
 
 
-def build(disc1, vendor, linkinfo, tree, out, log=print, progress=None):
-    """disc1: a discs.Disc; vendor: the bundled tools; tree: an empty work directory; writes psxrel.bin to out"""
+def build(disc1, vendor, linkinfo, tree, out, log=print, progress=None, version='us'):
+    """disc1: a discs.Disc; vendor: the bundled tools; tree: an empty work directory; version: the release's (the
+    decomp's VERSION, the program's linkinfo "game"); writes psxrel.bin to out"""
     import json
     info = json.load(open(linkinfo))
+    if info.get('game', 'us') != version:
+        raise ValueError(f'the program is built for the {info.get("game", "us")} release, the discs are {version}')
     decomp = os.path.join(vendor, 'decomp')
     tools = os.path.join(vendor, 'tools')
     for p in (os.path.join(decomp, 'tools'), tools):
         if p not in sys.path:
             sys.path.insert(0, p)
+    ff9sym = importlib.import_module('ff9sym')
+    ff9sym.set_version(version)
     # the decomp tree: its configs and C stubs (copied: splat writes beside them), and the disc's binaries
     import shutil
     for d in ('config', 'src'):
         shutil.copytree(os.path.join(decomp, d), os.path.join(tree, d))
-    us = os.path.join(tree, 'disks', 'us')
-    os.makedirs(os.path.join(us, 'ovl'))
-    os.makedirs(os.path.join(us, 'fxmod'))
+    # (the effect modules are the same in every release: disks/us/fxmod, split with their us configs)
+    disks = os.path.join(tree, 'disks', version)
+    fxdir = os.path.join(tree, 'disks', 'us', 'fxmod')
+    os.makedirs(os.path.join(disks, 'ovl'))
+    os.makedirs(fxdir)
 
     exe = disc1.boot.upper().split(';')[0]
     lba, size, _ = disc1.entries()[exe]
-    with open(os.path.join(us, 'SLUS_012.51'), 'wb') as f:
+    with open(os.path.join(disks, ff9sym.MAIN_NAME), 'wb') as f:
         f.write(disc1.user(lba, size))
 
     ff9img = importlib.import_module('ff9img')
     effect_modules = importlib.import_module('effect_modules')
     ff9img.open = disc_open({'disc1:FF9.IMG': lambda: disc1.file_view('FF9.IMG')})
     img = ff9img.Img('disc1:FF9.IMG')
-    want = _sha1_lines(os.path.join(decomp, 'config', 'checksums.ovl.us.sha1'))
+    want = _sha1_lines(os.path.join(decomp, 'config', f'checksums.ovl.{version}.sha1'))
     ovls = [b[4:] for b in info['bins'] if b.startswith('ovl_')]
     for fid, sec, n in img.files(img.dirs[0]):
         name = f'{fid:02x}'
         if name in ovls:
             data = img.read(sec * SECTOR, n)
             if want.get(f'ovl_{name}.bin') not in (None, hashlib.sha1(data).hexdigest()):
-                raise ValueError(f'overlay {name} differs from the NTSC-U release\'s')
-            with open(os.path.join(us, 'ovl', name + '.bin'), 'wb') as f:
+                raise ValueError(f'overlay {name} differs from the release\'s ({version})')
+            with open(os.path.join(disks, 'ovl', name + '.bin'), 'wb') as f:
                 f.write(data)
     log('Extracted the executable and code overlays.')
     sha = {}
@@ -113,7 +120,7 @@ def build(disc1, vendor, linkinfo, tree, out, log=print, progress=None):
         if name in info['fxmods']:
             if sha.get(name) != m['sha1']:
                 raise ValueError(f'effect module {name} differs from the NTSC-U release\'s')
-            with open(os.path.join(us, 'fxmod', name + '.bin'), 'wb') as f:
+            with open(os.path.join(fxdir, name + '.bin'), 'wb') as f:
                 f.write(m['image'])
             found += 1
     if found != len(info['fxmods']):
@@ -121,7 +128,7 @@ def build(disc1, vendor, linkinfo, tree, out, log=print, progress=None):
     log(f'Extracted {found} battle effect modules.')
 
     # splat, as the decomp's make split (the executable and overlays in turn, the modules 8 at a time)
-    yamls = ['config/slus_012.51.yaml'] + [f'config/ovl_{o}.yaml' for o in ovls]
+    yamls = [f'config/{ff9sym.config_name(b)}' for b in ['main'] + [f'ovl_{o}' for o in ovls]]
     fx = [f'config/fxmod/{m}.yaml' for m in info['fxmods']]
     total = len(yamls) + len(fx)
     done = [0]
@@ -161,7 +168,6 @@ def build(disc1, vendor, linkinfo, tree, out, log=print, progress=None):
             list(ex.map(split, [fx[i::workers] for i in range(workers)]))
     log('Split the binaries (splat).')
 
-    ff9sym = importlib.import_module('ff9sym')
     gen_relocs = importlib.import_module('gen_relocs')
     from pathlib import Path
     ff9sym.DECOMP = Path(tree)

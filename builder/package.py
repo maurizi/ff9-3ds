@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Make the builder a single executable for this OS (PyInstaller): dist/ff9-3ds-builder-<os>[.exe].
 
-    python builder/package.py --payload DIR      (DIR: ff9.3dsx, ff9.cia, linkinfo.json from `make payload`)
+    python builder/package.py --payload DIR      (DIR: ff9.3dsx, ff9.cia, linkinfo.json from `make payload`, and each
+                                                 other release's in DIR/<version>/: make VERSION=es payload)
 
 Needs builder/requirements.txt installed (PyInstaller, and splat at the decomp's version). Bundles the builder,
 the payload (the program, which carries none of the game's data), and what it runs on the user's discs: the port's
@@ -63,12 +64,14 @@ def stage(payload, out):
     (d / "include").mkdir()
     (d / "include/ff9.h").write_text("".join(l for l in (DECOMP / "include/ff9.h").read_text().splitlines(True)
                                              if l.startswith("#define EVT_OP_")))
-    (pkg / "payload").mkdir()
-    for name in ("ff9.3dsx", "ff9.cia", "linkinfo.json"):
-        src = Path(payload) / name
-        if not src.is_file():
-            sys.exit(f"package.py: no {src}")
-        shutil.copy(src, pkg / "payload" / name)
+    # the program for each release: the us one at the top, another's in its folder (make VERSION=es payload)
+    for sub in [""] + sorted(p.name for p in Path(payload).iterdir() if p.is_dir()):
+        (pkg / "payload" / sub).mkdir(parents=True, exist_ok=True)
+        for name in ("ff9.3dsx", "ff9.cia", "linkinfo.json"):
+            src = Path(payload) / sub / name
+            if not src.is_file():
+                sys.exit(f"package.py: no {src}")
+            shutil.copy(src, pkg / "payload" / sub / name)
     shutil.copy(ROOT / "builder/ff9-3ds-builder.py", out / "ff9-3ds-builder.py")
     return out
 

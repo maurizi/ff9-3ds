@@ -7,22 +7,28 @@ Not counted: text (the decomp's C keeps the game's debug messages as string lite
 the ranges in ALLOWED: data the repository's own source has, which the executable also links (SDK tables).
 
     tools/check_nodata.py build/3ds/ff9ds.elf build/ff9.3dsx build/ff9.cia
+    FF9_VERSION=es tools/check_nodata.py build/es/3ds/ff9ds.elf ...   (another release's build, against its discs)
 
 Exit 1, with the matching offsets, when any is found. Run before publishing a build (make builder runs it)."""
+import os
 import sys
 from pathlib import Path
 
 WINDOW = 64
 # (file, first byte, end): source tables that the executable also holds
-ALLOWED = [("SLUS_012.51", 0x586D0, 0x58930)]  # libspu's reverb presets: port/include/psx_spu_presets.h
+ALLOWED = [("SLUS_012.51", 0x586D0, 0x58930),  # libspu's reverb presets: port/include/psx_spu_presets.h
+           ("SLES_029.69", 0x58D18, 0x58F78), ("SLES_029.68", 0x58D50, 0x58FB0), ("SLES_029.67", 0x58E28, 0x59088)]
 
 
 def sources():
     root = Path(__file__).resolve().parent.parent
+    ver = os.environ.get("FF9_VERSION", "us")
+    disks = root / f"decomp/disks/{ver}" if (root / f"decomp/disks/{ver}").exists() else root / f"disks/{ver}"
     us = root / "decomp/disks/us" if (root / "decomp/disks/us").exists() else root / "disks/us"
-    files = sorted(us.glob("SLUS_*")) + sorted((us / "ovl").glob("*.bin")) + sorted((us / "fxmod").glob("*.bin"))
+    # (the effect modules are the same in every release)
+    files = sorted(disks.glob("SL[UE]S_*")) + sorted((disks / "ovl").glob("*.bin")) + sorted((us / "fxmod").glob("*.bin"))
     if not files:
-        sys.exit(f"check_nodata: no executable or overlays under {us}")
+        sys.exit(f"check_nodata: no executable or overlays under {disks}")
     return files
 
 

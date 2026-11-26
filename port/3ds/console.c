@@ -69,7 +69,7 @@ static void log_append(const char *text, int n, int now) {
 }
 
 void ctr_console_init(void) {
-    logfile = fopen("sdmc:/3ds/ff9/log.txt", "w");
+    logfile = fopen("sdmc:/3ds/" FF9_SD_NAME "/log.txt", "w");
     if (logfile) setvbuf(logfile, NULL, _IOFBF, 16 << 10);
     LightLock_Init(&pend_lock);
     LightLock_Init(&file_lock);
