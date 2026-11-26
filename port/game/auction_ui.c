@@ -3,10 +3,11 @@
  * per digit (100s, 1000s, 10000s), BID and CANCEL. The bid is the entry-10 object's local Ls16[4] (in hundreds),
  * written directly within the script's own rules (above the price, at most the funds and 999); BID and CANCEL give
  * the bid loop the button it polls (Cross 0x20000, Circle 0x10000 in g_msgPadPressed between the message and the
- * object updates). The game's own bid windows (messages 0xC9-0xD0) stay off both screens' way: field_hud.c draws
+ * object updates). The game's own bid windows (NTSC-U's messages 0xC9-0xD0: port_msgs.h) stay off both screens' way: field_hud.c draws
  * this instead of the field's bottom screen. */
 #define M2CTX
 #include "ff9.h"
+#include "port_msgs.h"
 
 #define AUCTION_FIELD 909
 static int pending; /* 0 none, 1 bid, 2 cancel, 3 open the bid entry */
@@ -28,7 +29,7 @@ static int can_open(void) {
 }
 static int entry_open(void) {
     for (int k = 0; k < 10; k++)
-        if (g_msgWindows[k].open && g_msgWindows[k].msgId == 0xCB) return 1;
+        if (g_msgWindows[k].open && g_msgWindows[k].msgId == MSG_AUCTION_BID_ENTRY) return 1;
     return 0;
 }
 int port_auction_live(void) {

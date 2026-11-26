@@ -5,6 +5,7 @@
 #define M2CTX
 #include "ff9.h"
 #include "psx_mem.h"
+#include "port_msgs.h"
 
 void win_drawAll_game(void);
 __attribute__((weak)) void port_ui_packets(const void *lo, const void *hi) { (void)lo; (void)hi; }
@@ -18,7 +19,7 @@ __attribute__((weak)) void port_bottom_shift(const void *lo, const void *hi, int
 static const struct { u16 field, lo, hi; } panels[] = {
     {103, 0xEA, 0xEB},   /* jump rope: "N times" (the girls' comments are speech: on the top) */
     {1850, 0x94, 0x94},  /* Hippaul racing: "Press Square and Circle alternately!" (Hippolady's lines and GO! are speech) */
-    {657, 0x183, 0x183}, /* frog catching: "Frogs Captured: N" */
+    {657, MSG_FROG_COUNT, MSG_FROG_COUNT}, /* frog catching: "Frogs Captured: N" */
 };
 int port_menu_state(void);
 /* The ending's field cutscenes: after Necron (the party waking on the hill (field 2928) to the Iifa tree's roots (2934))
@@ -56,7 +57,8 @@ static int to_bottom(const Window *w) {
     }
     if (field == 909) { /* (the Treno auction: its bid windows replaced by auction_ui.c's panel: off the top screen) */
         for (int k = 0; k < 10; k++)
-            if (g_msgWindows[k].open && g_msgWindows[k].window == w && g_msgWindows[k].msgId >= 0xC9 && g_msgWindows[k].msgId <= 0xCE)
+            if (g_msgWindows[k].open && g_msgWindows[k].window == w && g_msgWindows[k].msgId >= MSG_AUCTION_BID_FIRST &&
+                g_msgWindows[k].msgId <= MSG_AUCTION_BID_LAST)
                 return 2;
         return 0;
     }
