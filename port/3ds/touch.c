@@ -8,6 +8,7 @@
  * (scrolling a list). AUTOTOUCH="X,Y@FRAME ..." scripts taps for tests (X,Y@FRAME+N holds, X,Y>X2,Y2@FRAME+N
  * drags). */
 #include <3ds.h>
+#include "port_buttons.h"
 #include <stdlib.h>
 
 #include "ctr.h"
@@ -94,14 +95,14 @@ static unsigned step(void) {
         if (gx > tx + 9) return PAD_RIGHT;
         if (gx < tx - 9) return PAD_LEFT;
         goal = 0;
-        return PAD_CROSS;
+        return PORT_PAD_CONFIRM;
     }
     if (gy > hy + 7) return PAD_DOWN;
     if (gy < hy - 7) return PAD_UP;
     if (gx < hx - 4) return PAD_LEFT;              /* left of the hand: the column before */
     if (gx > hx + HAND_W + 112) return PAD_RIGHT;  /* well right of its entry: the next column */
     goal = 0;
-    return PAD_CROSS;
+    return PORT_PAD_CONFIRM;
 }
 
 unsigned int ctr_ui_pad_buttons(long frame) {
@@ -132,7 +133,7 @@ unsigned int ctr_ui_pad_buttons(long frame) {
         int mx = t.px - dx0, my = t.py - dy0;
         if (!swiped && mx < -48 && abs(my) < 32) { /* swipe left: back */
             swiped = 1;
-            queued = PAD_CIRCLE, nqueued = 1;
+            queued = PORT_PAD_CANCEL, nqueued = 1; /* (cancel: Circle, Cross in JP) */
         } else if (!swiped || vsteps) {
             int want = my / 24; /* swipe up/down: a step per 24 pixels */
             if (abs(mx) < 32 && want != vsteps) {

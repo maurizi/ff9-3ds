@@ -4,6 +4,7 @@
  * options from x 0x98, 0x5A apart (menuConfig_drawRows, menuConfig_drawChoice). */
 #define M2CTX
 #include "ovl_34.h"
+#include "port_buttons.h"
 
 void o34_menuConfig_setOption(u8 v);
 
@@ -20,7 +21,7 @@ int port_config_tap(int x, int y, unsigned *press) {
         o34_menuConfig_setOption(x >= 8 + 0x90 + 0x5A - 8);
         return -1;
     }
-    if (item == CONFIG_ROW_CONTROLLER || item == CONFIG_ROW_BTL_CONTROL) { *press = 0x4000; return 1; }
+    if (item == CONFIG_ROW_CONTROLLER || item == CONFIG_ROW_BTL_CONTROL) { *press = PORT_PAD_CONFIRM; return 1; }
     snd_playSe(SE_CURSOR);
     return -1;
 }

@@ -43,7 +43,7 @@ void port_auction_step(void) {
     if (pending == 3) {
         EvtObject *o = evt_getObject(16);
         if (o && can_open() && !entry_open()) evt_callObjectFunc(o, 1, 3, 0);
-    } else if (entry_open()) g_msgPadPressed |= pending == 1 ? 0x20000 : 0x10000;
+    } else if (entry_open()) g_msgPadPressed |= pending == 1 ? BTN_CONFIRM : BTN_CANCEL;
     pending = 0;
 }
 

@@ -3,6 +3,7 @@
  * sound), a tap on its lower half (the price) buys or sells (Cross: the game's own confirm). */
 #define M2CTX
 #include "ovl_3c.h"
+#include "port_buttons.h"
 
 /* the quantity window up for the shop mode running: its rect, quantity and limit */
 static int quantity_window(RECT **r, u8 **q, u8 *max) {
@@ -26,7 +27,7 @@ int port_shop_tap(int x, int y, unsigned *press) {
     u8 *q, max;
     if (!g_gameState || !quantity_window(&r, &q, &max) || fade_isBusy()) return 0;
     if (x < r->x || x >= r->x + r->w || y < r->y || y >= r->y + r->h) return -1;
-    if (y >= r->y + r->h / 2) { *press = 0x4000; return 1; } /* (the price: buy / sell) */
+    if (y >= r->y + r->h / 2) { *press = PORT_PAD_CONFIRM; return 1; } /* (the price: buy / sell) */
     int n = *q + (x >= r->x + r->w / 2 ? 1 : -1);
     if (n >= 1 && n <= max) {
         snd_playSe(SE_CURSOR);

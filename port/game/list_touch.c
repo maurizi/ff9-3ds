@@ -6,6 +6,7 @@
  * list: a tap on a member there sets s_menuItem.slot and confirms the same way. */
 #define M2CTX
 #include "ovl_37.h" /* (the Item screen's member window, below; includes ff9.h) */
+#include "port_buttons.h"
 
 extern int ctr_ui_hands[][2], ctr_ui_nhands; /* render.c: the hands drawn last frame, in the frame's coordinates */
 long VSync(long);
@@ -47,7 +48,7 @@ int port_list_tap(int x, int y, unsigned *press) {
         int slot = (y - r->y - 6) / 0x2B;
         if (slot < 0 || slot > 3 || !g_gameState->gameData->party[slot] || s_menuItem.charWin.anim) return -1;
         s_menuItem.slot = (u8)slot;
-        *press = 0x4000;
+        *press = PORT_PAD_CONFIRM;
         return 1;
     }
     for (int i = nlists - 1; i >= 0; i--) {
@@ -64,7 +65,7 @@ int port_list_tap(int x, int y, unsigned *press) {
         if ((m->top + row) * m->cols + col >= m->count) return -1;
         m->cursor = (u8)row;
         m->col = (u8)col;
-        *press = 0x4000; /* (cross: the game's own confirm for its list) */
+        *press = PORT_PAD_CONFIRM; /* (cross: the game's own confirm for its list) */
         return 1;
     }
     return 0;

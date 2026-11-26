@@ -121,7 +121,7 @@ static void apply(TmState *s) {
     default:
         break;
     }
-    if (cross) g_padRepeat |= BTN_CROSS;
+    if (cross) g_padRepeat |= BTN_CONFIRM; /* (Circle in JP) */
 }
 
 /* tm_mainLoop, each frame after its pad read (the patch) */

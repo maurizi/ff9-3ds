@@ -3,6 +3,7 @@
  * candidates are a list box (list_touch.c). Rows 17 px apart from equipRect.y (menuEquip_drawCursor). */
 #define M2CTX
 #include "ovl_33.h"
+#include "port_buttons.h"
 
 /* a tap at (x, y) in the frame's coordinates: 1 with the confirm press in *press, -1 taken, 0 not here */
 int port_equip_tap(int x, int y, unsigned *press) {
@@ -12,7 +13,7 @@ int port_equip_tap(int x, int y, unsigned *press) {
     if (s_menuEquip.state != EQUIP_STATE_SLOT && s_menuEquip.state != EQUIP_STATE_TABS) return 0;
     s_menuEquip.state = EQUIP_STATE_SLOT;
     s_menuEquip.equipSlot = (u8)((y - r->y - 4) / 17);
-    *press = 0x4000;
+    *press = PORT_PAD_CONFIRM;
     return 1;
 }
 
@@ -33,7 +34,7 @@ int port_ability_tap(int x, int y, unsigned *press) {
         s_menuAbility.state = ABILITY_STATE_LIST;
         l->cursor = (u8)row;
         l->col = (u8)col;
-        *press = 0x4000;
+        *press = PORT_PAD_CONFIRM;
         return 1;
     }
     /* the tabs (Use / Equip): that tab */
@@ -51,6 +52,6 @@ int port_ability_tap(int x, int y, unsigned *press) {
         if (slot < 0 || slot > 3 || !g_gameState->gameData->party[slot]) return -1;
         s_menuAbility.target = (u8)slot;
     }
-    *press = 0x4000;
+    *press = PORT_PAD_CONFIRM;
     return 1;
 }

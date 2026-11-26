@@ -51,10 +51,14 @@ RELEASES = [
             'e6fdd67c75fc0fc1c3458ee2062cd30083671589', {
                 1: ('41158e3e46c06571302442510177a7cf85884024',), 2: ('8de08a6b550f274579f367c4c9462371dafbfc41',),
                 3: ('123f8182aad508d04282bb887c2673aec1a779dc',), 4: ('f3feea35ad3130d401f75a9cbdb5d2c688f09984',)}),
+    Release('jp', 'Japanese', ('SLPS_020.00', 'SLPS_020.01', 'SLPS_020.02', 'SLPS_020.03'),
+            '8ba95c45e7c38ae944b74d9a75cb565c36d6a906', {
+                1: ('c3bd2be5f0ff135cffb5bb6ff20a4e83d9f1a4f4',), 2: ('7e71410d8ecafd7b6fd00701ea30b26ed876e9ec',),
+                3: ('09f7c62d7275866ba252131d5fc79414ffb7f321',), 4: ('24d9f770edd7721f06e347ad7022389f5526a8e0',)}),
 ]
 RELEASE = {r.version: r for r in RELEASES}
 # FF9 releases the port isn't built for yet, by each disc's boot executable
-NOT_YET = {f'SLPS_020.0{d}': 'the Japanese release' for d in '0123'}
+NOT_YET = {}
 REGION_OF_PREFIX = {'SLES': 'a European (PAL) release', 'SLPS': 'a Japanese release',
                     'SCES': 'a European release', 'SCUS': 'a different NTSC-U title', 'SLPM': 'a Japanese release'}
 SUPPORTED = ', '.join(r.name for r in RELEASES)

@@ -20,6 +20,7 @@
  * GPU state is put back after. */
 #define M2CTX
 #include "ff9.h"
+#include "port_buttons.h"
 #include "port_text.h"
 #include "gp0.h"
 #include "psx_display.h"
@@ -111,7 +112,7 @@ s32 evt_updateObjects(void) {
     void port_scenario_object_step(void), port_auction_step(void);
     port_scenario_object_step(); /* (scenario.c: a fixture's placing and talking) */
     port_auction_step(); /* (auction_ui.c: a tapped bid) */
-    if (choice_cross) choice_cross = 0, g_msgPadPressed |= 0x20000;
+    if (choice_cross) choice_cross = 0, g_msgPadPressed |= BTN_CONFIRM; /* (Cross; Circle in JP) */
     return evt_updateObjects_game();
 }
 
@@ -157,7 +158,7 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
         seq[0] = 0x0008 | 8u << 24;
         return 1;
     }
-    if (g_gameState && gameover_live && max > 0) { seq[0] = 0x4000; return 1; } /* (Cross; a field's or a battle's) */
+    if (g_gameState && gameover_live && max > 0) { seq[0] = PORT_PAD_CONFIRM; return 1; } /* (Cross; a field's or a battle's) */
     if (g_gameState && g_gameState->mode == 4 && bj_live) { int port_bj_tap(int, int); port_bj_tap(x, y - oy); return -1; }
     if (g_gameState && g_gameState->mode == 1 && auction_live) { int port_auction_tap(int, int); if (port_auction_tap(x, y - oy)) return -1; }
     if (g_gameState && config_open() && config_overlay_tap(x, y)) return -1; /* (the Config screen's 3DS OPTIONS) */
@@ -195,7 +196,7 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
                 if (x < r->x || x >= r->x + r->w || yy < cy - 7 || yy >= cy + 7) continue;
                 g_msgChoice = i;
                 if (w->waitFrames != MSGW_WAIT_INPUT || (w->flags & MSGW_NO_INPUT)) { /* (the world's script polls Cross) */
-                    if (max > 0) { seq[0] = 0x4000; return 1; }
+                    if (max > 0) { seq[0] = PORT_PAD_CONFIRM; return 1; }
                     return -1;
                 }
                 w->waitFrames = 1;
@@ -212,7 +213,7 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (shown_battle) return port_battle_tap(x, y, seq, max);
     if (port_disc_prompt_live()) { /* (the end of a disc's save prompt: its cursor, then its own Cross) */
         for (int i = 0; i < 2; i++)
-            if (inside(&r_disc[i], x, y) && max > 0) { port_disc_prompt_set(i); seq[0] = 0x4000; return 1; }
+            if (inside(&r_disc[i], x, y) && max > 0) { port_disc_prompt_set(i); seq[0] = PORT_PAD_CONFIRM; return 1; }
         return -1;
     }
     if (n_choices) { /* (a choice, directly: the game's choice set and its window answered, as msg_input does on cross) */
@@ -1230,7 +1231,11 @@ void port_bottom_hud(void) {
  * for the renderer to draw the 3DS's buttons in their place (port/3ds/render.c): per 3DS button A, B, X, Y, L, R, ZL,
  * ZR, the sprite's texture page, CLUT, uv and size as {tx, ty, clut_x, clut_y, u, v, w, h}. */
 int port_button_sprites(int out[8][8]) {
+    #if VERSION_JP
+    static const u8 ids[8] = {5, 4, 7, 6, 8, 10, 9, 11}; /* (A = circle, B = cross: the Japanese release confirms with circle) */
+#else
     static const u8 ids[8] = {4, 5, 7, 6, 8, 10, 9, 11}; /* (A = cross, B = circle, X = triangle, Y = square, ...) */
+#endif
     for (int k = 0; k < 8; k++) {
         const SpriteDef *d = &g_uiSprites[ids[k]];
         u32 clut = d->uvclut >> 16;

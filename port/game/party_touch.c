@@ -5,6 +5,7 @@
  * out of it instead, as on the PS1). */
 #define M2CTX
 #include "ovl_3b.h"
+#include "port_buttons.h"
 
 static int in(const RECT *r, int x, int y, int dx, int dy, int w, int h) {
     return x >= r->x + dx && x < r->x + dx + w && y >= r->y + dy && y < r->y + dy + h;
@@ -14,7 +15,7 @@ static int in(const RECT *r, int x, int y, int dx, int dy, int w, int h) {
 int port_party_tap(int x, int y, unsigned *press) {
     if (!g_gameState || g_menu.state != 3 || g_menu.type != MENU_PARTY || fade_isBusy()) return 0;
     if (in(&s_menuPartyTitleRect, x, y, 0, 0, s_menuPartyTitleRect.w, s_menuPartyTitleRect.h)) {
-        *press = 0x2000; /* (Circle) */
+        *press = PORT_PAD_CANCEL; /* (Circle) */
         return 1;
     }
     int row = -1, idx = 0;
@@ -33,6 +34,6 @@ int port_party_tap(int x, int y, unsigned *press) {
     }
     c->row = (u8)row;
     c->idx = (u8)idx;
-    *press = 0x4000; /* (Cross: menuParty_pick) */
+    *press = PORT_PAD_CONFIRM; /* (Cross: menuParty_pick) */
     return 1;
 }

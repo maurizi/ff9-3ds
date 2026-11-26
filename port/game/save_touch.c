@@ -4,6 +4,7 @@
  * places its hand: slots 0x12 apart from y 0x6D, files SAVE_ROW_H apart from y 0x42, Yes/No 15 apart. */
 #define M2CTX
 #include "ovl_39.h"
+#include "port_buttons.h"
 
 /* a tap at (x, y) in the frame's coordinates: 1 with the confirm press in *press, -1 taken, 0 not here */
 int port_save_tap(int x, int y, unsigned *press) {
@@ -31,7 +32,7 @@ int port_save_tap(int x, int y, unsigned *press) {
     default:
         return -1;
     }
-    *press = 0x4000;
+    *press = PORT_PAD_CONFIRM;
     return 1;
 }
 
@@ -70,6 +71,6 @@ void o39_menuSave_inputSlot(void) {
     o39_menuSave_selectSlot();
 }
 void o39_menuSave_inputFileList(void) {
-    if (!s_menuSave.list.scroll && (g_padRepeat & BTN_CIRCLE)) { leave(); return; }
+    if (!s_menuSave.list.scroll && (g_padRepeat & BTN_CANCEL)) { leave(); return; }
     o39_menuSave_inputFileList_game();
 }

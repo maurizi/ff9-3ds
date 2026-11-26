@@ -10,6 +10,7 @@
  * Data: sdmc:/3ds/ff9/ (another release's: ff9-es/, ...: FF9_SD_NAME) holds raw/FF9 CDn.img (or the packed discs.bin), as the PC's --data directory does.
  */
 #include <3ds.h>
+#include "port_buttons.h"
 #include <citro3d.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,8 +35,8 @@ static int is_new3ds;
 /* 3DS keys -> PS1 digital pad bits (active high). Confirm is A, as on every Nintendo handheld; the circle pad
  * doubles the d-pad (FF9 reads a digital pad). ZL/ZR (New 3DS) are L2/R2; L+R together also gives L2+R2 (flee). */
 static const struct { u32 key; unsigned int psx; } keymap[] = {
-    {KEY_A, 0x4000},      /* cross */
-    {KEY_B, 0x2000},      /* circle */
+    {KEY_A, PORT_PAD_CONFIRM}, /* cross (JP: circle) */
+    {KEY_B, PORT_PAD_CANCEL},  /* circle (JP: cross) */
     {KEY_X, 0x1000},      /* triangle */
     {KEY_Y, 0x8000},      /* square */
     {KEY_L, 0x0400},      /* L1 */

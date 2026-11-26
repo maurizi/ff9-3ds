@@ -9,6 +9,7 @@
  * bottom's list takes the hint box's place too (menuChocograph_init wrapped: config/renames.txt). */
 #define M2CTX
 #include "ovl_32.h"
+#include "port_buttons.h"
 #include "port_text.h"
 
 void o32_menuChocograph_drawPicture(s32, s32, s32, s32, u8);
@@ -28,13 +29,13 @@ int port_chocograph_tap(int x, int y, unsigned *press) {
     ChocographMenu *st = &s_menuChocograph;
     MenuList *l = &st->list;
     if (in(&st->titleRect, x, y)) {
-        *press = 0x2000; /* (Circle) */
+        *press = PORT_PAD_CANCEL; /* (Circle) */
         return 1;
     }
     if (in(&st->tabRect, x, y)) {
         st->mode = CHOCO_MODE_TABS;
         st->tab = x < st->tabRect.x + 0x60 ? CHOCO_TAB_SELECT : CHOCO_TAB_CANCEL;
-        *press = 0x4000; /* (Cross) */
+        *press = PORT_PAD_CONFIRM; /* (Cross) */
         return 1;
     }
     if (in(&st->listRect, x, y)) {
@@ -46,7 +47,7 @@ int port_chocograph_tap(int x, int y, unsigned *press) {
         if (row >= l->visibleRows) row = l->visibleRows - 1;
         if (l->top + row >= l->count) return -1;
         if (st->mode == CHOCO_MODE_LIST && row == l->cursor) {
-            *press = 0x4000;
+            *press = PORT_PAD_CONFIRM;
             return 1;
         }
         if (st->mode != CHOCO_MODE_LIST || row != l->cursor) snd_playSe(SE_CURSOR);

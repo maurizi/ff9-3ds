@@ -2,6 +2,7 @@
  * next (the game's menuStatus_setMember with its slide, as L1 / R1), elsewhere opens the abilities page (Cross). */
 #define M2CTX
 #include "ovl_38.h"
+#include "port_buttons.h"
 
 void o38_menuStatus_setMember(s32 slot, s32 dir);
 
@@ -13,7 +14,7 @@ int port_status_tap(int x, int y, unsigned *press) {
     int cur = s_menuStatus.slot, next = cur;
     if (x < 48) next = party_getPrevMember(cur);
     else if (x >= 272) next = party_getNextMember(cur);
-    else { *press = 0x4000; return 1; }
+    else { *press = PORT_PAD_CONFIRM; return 1; }
     if (next != cur) {
         snd_playSe(SE_PAGE);
         o38_menuStatus_setMember(next, x < 48 ? 1 : 2);

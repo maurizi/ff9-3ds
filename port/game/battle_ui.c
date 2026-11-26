@@ -22,6 +22,7 @@
  * (the game's btlui_passTurn, the PS1's triangle).
  * Game logic and ATB timing are the game's: nothing here changes what a button does. */
 #include "psyq_port.h"
+#include "port_buttons.h"
 #include "port_text.h"
 #include "ovl_0b.h"
 
@@ -31,7 +32,7 @@
 #define PAD_DOWN_ 0x40u
 #define PAD_LEFT_ 0x80u
 #define PAD_TRIANGLE_ 0x1000u
-#define PAD_CROSS_ 0x4000u
+#define PAD_CROSS_ PORT_PAD_CONFIRM /* (the confirm button: Circle in JP) */
 #define TARGET_PANEL 1
 #define HOLD(n) ((u32)(n) << 24) /* (a press held n more frames: port/3ds/touch.c) */
 
