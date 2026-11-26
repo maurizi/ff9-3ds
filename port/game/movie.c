@@ -464,6 +464,9 @@ static int ahead_vlc_start(const u8 *bs, u32 bytes, u32 *out) {
     __builtin_memset((void *)ahead.ready, 0, sizeof ahead.ready);
     __sync_synchronize();
     if (plat_async(ahead_vlc_job, &ahead)) return 1;
+    /* (refused: no worker (the PC; a 3DS whose second core runs nothing: async.c). Nothing will expand into this buffer:
+     * vlc_wait would wait for it forever, as the PC did when Cross was pressed in the opening movie) */
+    vlc_ahead.out = NULL;
     ahead.buf = NULL;
     return 0;
 }
