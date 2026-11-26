@@ -1,5 +1,6 @@
 /* The port's own labels in the release's language: TX("NEW GAME", "NUEVA PARTIDA", "NUOVA PARTITA", "NEUES SPIEL", "NOUVELLE PARTIE")
- * is the string of the release the program is built for (NTSC-U, Spanish, Italian, German, French). They are drawn by the
+ * is the string of the release the program is built for (NTSC-U, Spanish, Italian, German, French; the PAL English
+ * release takes the NTSC-U one, as its own menus mostly keep NTSC-U's words). They are drawn by the
  * game's label font (ui_drawLabel): capitals, digits, space and & . _, and in the PAL releases' font also ! and the
  * accents, written before their letter as the games' own label strings write them: '#' acute (P#AG: PÁG), '$' grave
  * (ABILIT$A: ABILITÀ), '"' umlaut (AUSR"USTUNG: AUSRÜSTUNG). No apostrophe, hyphen or colon. The games' own words are

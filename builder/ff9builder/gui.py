@@ -24,7 +24,7 @@ class App:
         f.pack(fill='both', expand=True)
         f.columnconfigure(1, weight=1)
 
-        ttk.Label(f, text='Point this at your four Final Fantasy IX discs (NTSC-U; PAL Spanish, Italian, German or French): BIN/CUE, IMG/CCD or raw ISO.',
+        ttk.Label(f, text='Point this at your four Final Fantasy IX discs (NTSC-U; PAL English, Spanish, Italian, German or French): BIN/CUE, IMG/CCD or raw ISO.',
                   wraplength=600).grid(row=0, column=0, columnspan=3, sticky='w')
         ttk.Button(f, text='Add discs…', command=self.add_many).grid(row=1, column=0, columnspan=3, sticky='w',
                                                                      pady=(8, 4))

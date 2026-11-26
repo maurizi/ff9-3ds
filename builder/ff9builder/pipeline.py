@@ -155,11 +155,17 @@ def build(discs, out_dir, make_3dsx=True, make_cia=True, log=print, report=lambd
         pr.step('verify', 'Checking the discs')
         sizes = {n: os.path.getsize(discs[n].path) for n in discs}
         done = 0
+        unchecked = []
         for n in sorted(discs):
             log(f'Checking disc {n} ({os.path.basename(discs[n].path)})')
-            discs[n].verify(lambda d, t, base=done: pr.part(base + d, sum(sizes.values())))
+            if not discs[n].verify(lambda d, t, base=done: pr.part(base + d, sum(sizes.values()))):
+                unchecked.append(n)
             done += sizes[n]
-        log(f'All four discs are Final Fantasy IX ({release.name}), unmodified.')
+        if unchecked:
+            log(f'All four discs are Final Fantasy IX ({release.name}); FF9.IMG of disc '
+                f'{", ".join(map(str, unchecked))} not checked (no reference for it in this builder yet).')
+        else:
+            log(f'All four discs are Final Fantasy IX ({release.name}), unmodified.')
 
         pr.step('relocs', 'Analysing the executable')
         rel_path = os.path.join(work, 'psxrel.bin')

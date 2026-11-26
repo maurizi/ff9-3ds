@@ -11,10 +11,10 @@ This repository contains no game data, and neither do its releases. To play, you
 discs of one of these releases:
 
 - NTSC-U (SLUS-01251/01295/01296/01297), the original release or the Greatest Hits (v1.1)
-- PAL Spanish (SLES-02969/12969/22969/32969), Italian (SLES-02968/...), German (SLES-02967/...) or French
-  (SLES-02966/...): the game in its language, the port's own labels translated, at 60 Hz
+- PAL English (SLES-02965/...), Spanish (SLES-02969/12969/22969/32969), Italian (SLES-02968/...), German
+  (SLES-02967/...) or French (SLES-02966/...): the game in its language, the port's own labels translated, at 60 Hz
 
-The PAL English release and the Japanese one are not supported yet.
+The Japanese release is not supported yet.
 
 Final Fantasy IX © is owned by Square Enix; this project is not affiliated with or endorsed by Square Enix.
 

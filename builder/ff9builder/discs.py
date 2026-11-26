@@ -47,11 +47,13 @@ RELEASES = [
             '2082305d33d0aea451efab2eb2b8c870c7b60690', {
                 1: ('3d989e6cab9b86874056a1896c3f1ff8f6a2d520',), 2: ('a72c82efc64407e927dad5313a6676ae73fe144f',),
                 3: ('027e9468050d7bdc6e79ea70006eea560115b561',), 4: ('e42389f639fadbd12f73cfa8ab7522e8149979e4',)}),
+    # (discs 1-3 not yet hashed from a reference dump: their FF9.IMG is not checked)
+    Release('en', 'PAL, English', ('SLES_029.65', 'SLES_129.65', 'SLES_229.65', 'SLES_329.65'),
+            'e6fdd67c75fc0fc1c3458ee2062cd30083671589', {4: ('f3feea35ad3130d401f75a9cbdb5d2c688f09984',)}),
 ]
 RELEASE = {r.version: r for r in RELEASES}
 # FF9 releases the port isn't built for yet, by each disc's boot executable
-NOT_YET = {**{f'SLES_{d}29.65': 'the PAL English release' for d in '0123'},
-           **{f'SLPS_020.0{d}': 'the Japanese release' for d in '0123'}}
+NOT_YET = {f'SLPS_020.0{d}': 'the Japanese release' for d in '0123'}
 REGION_OF_PREFIX = {'SLES': 'a European (PAL) release', 'SLPS': 'a Japanese release',
                     'SCES': 'a European release', 'SCUS': 'a different NTSC-U title', 'SLPM': 'a Japanese release'}
 SUPPORTED = ', '.join(r.name for r in RELEASES)
@@ -209,7 +211,8 @@ class Disc:
         return h.hexdigest()
 
     def verify(self, progress=None):
-        """Check the executable and FF9.IMG against the release's (DiscError if not)"""
+        """Check the executable and FF9.IMG against the release's (DiscError if not); False when this disc's FF9.IMG
+        has no reference hash yet (not checked), else True"""
         name = os.path.basename(self.path)
         ents = self.entries()
         r = self.release
@@ -218,9 +221,12 @@ class Disc:
                             f'damaged dump?)')
         if 'FF9.IMG' not in ents:
             raise DiscError(f'{name}: no FF9.IMG')
+        if self.number not in r.imgs:
+            return False
         if self.file_sha1('FF9.IMG', progress) not in r.imgs[self.number]:
             raise DiscError(f'{name}: disc {self.number}\'s FF9.IMG differs from the {r.name} release\'s (a damaged '
                             f'dump or a patched/translated disc?)')
+        return True
 
     def raw_sectors(self, lba, count):
         """whole 2352-byte sectors (a movie's: their subheaders and Form 2 data)"""
