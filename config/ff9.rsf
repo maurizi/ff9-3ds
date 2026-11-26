@@ -39,7 +39,10 @@ AccessControlInfo:
   IdealProcessor                : 0
   AffinityMask                  : 1
   Priority                      : 16
-  MaxCpu                        : 0x9E
+  # Core 1's share: the most APT_SetAppCpuTimeLimit may be given (low 7 bits, percent) and how core 1 is shared with
+  # the system's modules (bit 7: alternating windows, the mode the usual 0x9E has too). The homebrew template's 0x9E
+  # allows 30%: asking for the 80% a 3DSX gets was refused, and an Old 3DS could make no thread on core 1 (no sound).
+  MaxCpu                        : 0xD0
   HandleTableSize               : 0x200
   DisableDebug                  : false
   EnableForceDebug              : false

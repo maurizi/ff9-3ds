@@ -130,6 +130,11 @@ static void start(void) {
     thread = threadCreate(audio_main, NULL, 32 * 1024, prio - 2, core, false);
     if (!thread && core == 2) ctr_core1_share(1), thread = threadCreate(audio_main, NULL, 32 * 1024, prio - 2, 1, false);
     port_log("spu: %s\n", thread ? (core == 2 ? "on core 2" : "on core 1") : "on the game's core (no thread)");
+    if (!thread) { /* (in line from here on: the mix made on the game's thread, and no thread asked for again at every
+                    * command. Left as it was, nothing was mixed at all and the log filled with the line above) */
+        inline_mode = 1;
+        spuw_set_rendering(1);
+    }
 }
 
 void ctr_spu_exit(void) {
