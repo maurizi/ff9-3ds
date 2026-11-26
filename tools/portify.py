@@ -130,6 +130,28 @@ def fxmod_macros(src, text):
     return "\n".join(lines)
 
 
+def matching_only_lines(code):
+    """line numbers inside a `#if ... !defined(NON_MATCHING)` branch (up to its #else / #elif / #endif): the matching
+    build's asm, which the port (NON_MATCHING) never compiles"""
+    dead, depth, inside = set(), 0, None
+    for n, line in enumerate(code.split("\n"), 1):
+        t = line.strip()
+        if t.startswith("#if"):
+            depth += 1
+            if inside is None and "!defined(NON_MATCHING)" in t.replace(" ", ""):
+                inside = depth
+        elif inside == depth and (t.startswith("#else") or t.startswith("#elif") or t.startswith("#endif")):
+            inside = None
+            if t.startswith("#endif"):
+                depth -= 1
+            continue
+        elif t.startswith("#endif"):
+            depth -= 1
+        if inside is not None:
+            dead.add(n)
+    return dead
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src")
@@ -145,7 +167,9 @@ def main():
     text = narrow_params(text, strip_comments_keep_lines(text))
 
     code = strip_comments_keep_lines(text)
-    bad = [code.count("\n", 0, m.start()) + 1 for m in re.finditer(r"(?<![A-Za-z_])__asm__\s*\(", code)]
+    dead = matching_only_lines(code)
+    bad = [n for n in (code.count("\n", 0, m.start()) + 1 for m in re.finditer(r"(?<![A-Za-z_])__asm__\s*\(", code))
+           if n not in dead]
     if bad:
         sys.exit(f"{args.src}: inline asm the port can't handle on lines {bad}")
 

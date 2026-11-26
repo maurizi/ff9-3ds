@@ -24,7 +24,11 @@ extern const PsxOverlay psx_overlays[];
 void psx_overlay_patch(unsigned int id, unsigned int off, unsigned int len);
 
 /* Load addresses of the code overlay slots (index = PsxOverlay.slot). */
+#if VERSION_JP
+#define PSX_OVL_SLOT_ADDRS {0x800A9800, 0x801EDF00, 0x80198700} /* (the Japanese release's mode overlays 0x2800 higher) */
+#else
 #define PSX_OVL_SLOT_ADDRS {0x800A7000, 0x801EDF00, 0x80198700}
+#endif
 extern unsigned char psx_ovl_resident[3];
 
 /* main's data from the disc's executable (psxrel.bin's main section: its byte ranges, their hash, relocations) */

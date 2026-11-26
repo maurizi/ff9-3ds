@@ -8,7 +8,7 @@ import ff9sym
 
 XREFS = Path("config/xrefs.txt")
 RAW_DATA = Path("config/raw_data.txt")
-SLOTS = {0x800A7000: 0, 0x801EDF00: 1, 0x80198700: 2}  # overlay load address -> psx_ovl_resident index
+SLOTS = {0x800A7000: 0, 0x800A9800: 0, 0x801EDF00: 1, 0x80198700: 2}  # overlay load address -> psx_ovl_resident index (0x800A9800: the Japanese release's mode overlays)
 TRAMP = "<trampoline>"
 
 
