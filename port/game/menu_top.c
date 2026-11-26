@@ -39,26 +39,38 @@ extern u8 s_menuItem[], s_menuItemHelp[], s_menuEquip[], s_menuEquipItemHelp[], 
 extern u8 s_menuParty[], s_menuStatus[];
 extern u8 s_shop[], s_shopBuy[], s_shopSell[], s_shopSynth[], s_shopItemHelp[];
 /* The ability names are the Ability screen's (ovl_33, file 0/0x33 read to 0x801EDF00): its action table (0x10-byte
- * entries, the name offset at +0xE) at 0x801F34EC, action names at 0x801F40EC, support names at 0x801F6540. Shops run
- * in the same overlay slot, so the port reads those sectors of the file once (bytes 0x5000-0x9000) and keeps them. */
+ * entries, the name offset at +0xE), action names and support names, where the release has them (the linked names:
+ * the decomp's symbols; a translation moves them). Shops run in the same overlay slot, so the port reads those
+ * sectors of the file once (from the action table's to past the support names) and keeps them. */
 void psx_cd_read_data(unsigned int lba, void *buf, unsigned int n);
-#define ABIL_FROM 0x5000
-static u8 abil[0x4000];
+extern u8 s_menuAbilityActionTable[], s_menuAbilityActionNames[], s_menuAbilitySupportNames[];
+#define ABIL_OVL_VRAM 0x801EDF00
+#define ABIL_OFS(sym) ((unsigned)(sym) - PSX_ADDR(ABIL_OVL_VRAM))
+#define ABIL_SUPPORT_SIZE 0x1000 /* (the support names: 0x9C0 bytes in NTSC-U) */
+static u8 abil[0x6000];
+static unsigned abil_from;
 static int abil_state; /* 0 not read, 1 read, -1 unreadable */
 
 static u8 *ability_name(int id) {
+    unsigned table = ABIL_OFS(s_menuAbilityActionTable), names = ABIL_OFS(s_menuAbilityActionNames);
+    unsigned support = ABIL_OFS(s_menuAbilitySupportNames);
     if (!abil_state) {
         FileEntry *f = file_find(0, 0x33);
+        unsigned to = support + ABIL_SUPPORT_SIZE;
+        abil_from = table & ~2047u;
         abil_state = -1;
-        if (f && (unsigned)(f->link - f->sector) * 2048 >= ABIL_FROM + sizeof abil) {
-            psx_cd_read_data((unsigned)(g_gameState->imgSector + f->sector) + ABIL_FROM / 2048, abil, sizeof abil / 2048);
-            abil_state = 1;
+        if (f && to - abil_from <= sizeof abil) {
+            unsigned file = (unsigned)(f->link - f->sector) * 2048, n = ((to < file ? to : file) - abil_from + 2047) / 2048;
+            if (file > support) {
+                psx_cd_read_data((unsigned)(g_gameState->imgSector + f->sector) + abil_from / 2048, abil, n);
+                abil_state = 1;
+            }
         }
     }
     if (abil_state < 0) return NULL;
-    if (id >= ABILITY_SUPPORT_FIRST) return abil + 0x8640 - ABIL_FROM + g_supportAbilities[id - ABILITY_SUPPORT_FIRST].name;
-    unsigned ofs = *(u16 *)(abil + 0x55EC - ABIL_FROM + id * 0x10 + 0xE);
-    return ofs < 0x8640 - 0x61EC ? abil + 0x61EC - ABIL_FROM + ofs : NULL;
+    if (id >= ABILITY_SUPPORT_FIRST) return abil + support - abil_from + g_supportAbilities[id - ABILITY_SUPPORT_FIRST].name;
+    unsigned ofs = *(u16 *)(abil + table - abil_from + id * 0x10 + 0xE);
+    return ofs < support - names ? abil + names - abil_from + ofs : NULL;
 }
 
 /* the abilities item id teaches that member c can learn: name and AP gathered / needed (grey once mastered), from x

@@ -71,11 +71,6 @@ DECOMP_HDRS := $(wildcard $(DECOMP)/include/*.h)
 # window_tween.c reimplemented func_80063118 before the decomp matched it; only its PSX comparison test uses it now.
 PSX_SRCS  := $(filter-out port/game/window_tween.c,$(wildcard port/psx/*.c port/game/*.c))
 
-# The version, for the decomp C and the port code that reads its headers: PAL content at 60 Hz (PAL_TV 0), and the
-# C of every function (NON_MATCHING: a version's asm-only functions in their C)
-VERSION_DEFS  := -DVERSION_$(shell echo $(VERSION) | tr a-z A-Z)=1 $(if $(filter $(PAL_VERSIONS),$(VERSION)),-DVERSION_PAL=1) \
-                 -DPAL_TV=0 -DNON_MATCHING -DFF9_VERSION='"$(VERSION)"' -DFF9_BUILD_DIR='"$(BUILD)"' \
-                 -DFF9_SD_NAME='"$(SD_NAME)"'
 # Each release's own place on the 3DS, so two can be installed side by side (their memory cards differ): the SD
 # folder sdmc:/3ds/<SD_NAME> (its full build <SD_NAME>-full.3dsx) and the CIA's title id
 SD_NAME       := ff9$(if $(filter us,$(VERSION)),,-$(VERSION))
@@ -84,6 +79,11 @@ UNIQUE_ID_es  := 0xF9F94
 UNIQUE_ID_it  := 0xF9F95
 UNIQUE_ID_de  := 0xF9F96
 UNIQUE_ID     := $(UNIQUE_ID_$(VERSION))
+# The version, for the decomp C and the port code that reads its headers: PAL content at 60 Hz (PAL_TV 0), and the
+# C of every function (NON_MATCHING: a version's asm-only functions in their C)
+VERSION_DEFS  := -DVERSION_$(shell echo $(VERSION) | tr a-z A-Z)=1 $(if $(filter $(PAL_VERSIONS),$(VERSION)),-DVERSION_PAL=1) \
+                 -DPAL_TV=0 -DNON_MATCHING -DFF9_VERSION='"$(VERSION)"' -DFF9_BUILD_DIR='"$(BUILD)"' \
+                 -DFF9_SD_NAME='"$(SD_NAME)"'
 # PS1 semantics: signed char, no strict aliasing, wrapping overflow; K&R-era C (gcc 2.8) needs gnu89 + permissive.
 DECOMP_CFLAGS := -std=gnu89 -fpermissive -O2 -g -fsigned-char -fno-strict-aliasing -fwrapv \
                  -fno-delete-null-pointer-checks -fno-builtin-memcpy -ffunction-sections -fdata-sections -w \

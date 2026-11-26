@@ -2,6 +2,7 @@
 # Run a 3DS build in Azahar on a private X display and capture what it shows.
 #   tools/azahar.sh [-t SECONDS] [-u FILE] [-s "T1 T2 ..."] [-o OUTDIR] [build/ff9-test.3dsx]
 # -u FILE: stop as soon as FILE exists (two seconds after, for what is being written), at SECONDS at the latest.
+# FF9_SD_NAME=ff9-es: the game log of another release (its own SD folder).
 # (default: the test build, which make writes when any test option is set, else build/ff9.3dsx)
 # Screenshots of the emulator window at each time in -s go to OUTDIR/shot_<T>.png; the game's log
 # (svcOutputDebugString lines) to OUTDIR/game.log. The display (:47, private to this project) is started if needed and left running.
@@ -57,6 +58,6 @@ flatpak kill org.azahar_emu.Azahar 2>/dev/null || true
 fi
 wait $PID 2>/dev/null || true
 # the game's own log (port/3ds/console.c), and the emulator's errors
-cp "$DATA/sdmc/3ds/ff9/log.txt" "$OUT/game.log" 2>/dev/null || : > "$OUT/game.log"
+cp "$DATA/sdmc/3ds/${FF9_SD_NAME:-ff9}/log.txt" "$OUT/game.log" 2>/dev/null || : > "$OUT/game.log"
 grep -a "Fatal\|Critical" "$LOG" >> "$OUT/game.log" || true
 echo "log: $OUT/game.log ($(wc -l < "$OUT/game.log") lines)"
