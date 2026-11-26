@@ -366,8 +366,8 @@ int main(int argc, char **argv) {
             btlui_check_mode(argv[++i]);
             atexit(btlui_check_report);
         } else if (!strcmp(argv[i], "--press") && i + 1 < argc) {
-            if (!input_script_add(argv[++i])) {
-                fprintf(stderr, "bad --press %s (BUTTON@FRAME[+FRAMES])\n", argv[i]);
+            if (!input_script_add_list(argv[++i])) { /* (one, or a list as AUTOPRESS takes: "UP@10,CROSS@40+3") */
+                fprintf(stderr, "bad --press %s (BUTTON@FRAME[+FRAMES][,...])\n", argv[i]);
                 return 1;
             }
         } else if (!strcmp(argv[i], "--watch") && i + 1 < argc && n_watches < 16) {
