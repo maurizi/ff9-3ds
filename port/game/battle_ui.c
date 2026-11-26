@@ -22,6 +22,7 @@
  * (the game's btlui_passTurn, the PS1's triangle).
  * Game logic and ATB timing are the game's: nothing here changes what a button does. */
 #include "psyq_port.h"
+#include "port_text.h"
 #include "ovl_0b.h"
 
 #define TARGET_WINDOW (1u << CFG_BIT_TARGET_WINDOW)
@@ -161,7 +162,7 @@ static void bar(u32 *ot, int x, int y, int w, int h, u32 bgr) {
 }
 
 static void draw_cards(void) {
-    static const u8 hp[] = "HP", mp[] = "MP";
+    static const u8 hp[] = TX("HP", "PV", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP");
     u8 a[16];
     int y = r_cards.y + 5;
     for (int i = 0; i < 4; i++, y += 43) {
@@ -211,7 +212,7 @@ static void draw_cards(void) {
 }
 
 static void draw_commands(void) {
-    static const u8 defend[] = "DEFEND", change[] = "CHANGE", command[] = "COMMAND";
+    static const u8 defend[] = TX("DEFEND", "DEFENSA", "DIFESA", "ABWEHR"), change[] = TX("CHANGE", "CAMBIAR", "CAMBIA", "WECHSEL"), command[] = TX("COMMAND", "COMANDO", "COMANDO", "KOMMANDO");
     cmd_shown = g_btlUi->menuState == BTLUI_MENU_CMD && g_btlUi->cmdUnit != NULL;
     if (!cmd_shown) return;
     ui_drawLabel(10, 41, 2, (s32)command, 0);
@@ -273,7 +274,7 @@ static void list_set_cursor(MenuList *L, int i) { /* (the game's view moves so t
 }
 
 static int draw_list(void) {
-    static const u8 back[] = "BACK", hp[] = "HP", mp[] = "MP";
+    static const u8 back[] = TX("BACK", "ATR#AS", "INDIETRO", "ZUR\"UCK"), hp[] = TX("HP", "PV", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP");
     list_shown = 0;
     Window *w = g_btlUi->windows[2];
     if (!w || w->state != 3 || !g_btluiList.cmd) return 0;
@@ -343,7 +344,7 @@ static int tap_kind, tap_arg;
 static BtlUnit *tap_unit;
 
 static int draw_targets(void) {
-    static const u8 enemy[] = "ENEMY", party[] = "PARTY", all[] = "ALL", one[] = "ONE", back[] = "BACK";
+    static const u8 enemy[] = TX("ENEMY", "ENEMIGOS", "NEMICO", "GEGNER"), party[] = TX("PARTY", "GRUPO", "SQUADRA", "GRUPPE"), all[] = TX("ALL", "TODOS", "TUTTI", "ALLE"), one[] = TX("ONE", "UNO", "UNO", "EINER"), back[] = TX("BACK", "ATR#AS", "INDIETRO", "ZUR\"UCK");
     tgt_shown = 0;
     /* (whether the game's target-name window is open or not: the config's Target Window off (ZL toggles it while
      * targeting) or the battle's markers hide it, and with this panel gone the bottom screen showed the PS1's own
@@ -363,7 +364,7 @@ static int draw_targets(void) {
         tgt_unit[n_tgt++] = u;
         int ko = u->hp == 0;
         if (is_party) {
-            static const u8 hpl[] = "HP", mpl[] = "MP";
+            static const u8 hpl[] = TX("HP", "PV", "HP", "HP"), mpl[] = TX("MP", "PM", "MP", "MP");
             u8 a[8];
             text_drawBlock(r->x + 12, r->y + 4, 2, (u8 *)o0b_btl_getUnitName(u), ko ? 2 : 0);
             /* (the game's two status icon tables, the ailments (Petrify, Poison, ...) and the boons (Protect, Shell,
@@ -449,7 +450,7 @@ int port_battle_hud_draw(void) {
     if (between) cmd_shown = 0;
     sys_shown = 0;
     if (g_btluiState.enabled) { /* PAUSE and RUN: with the party (party_unit), not over the battle's opening alone */
-        static const u8 pause[] = "PAUSE", run[] = "HOLD TO RUN";
+        static const u8 pause[] = TX("PAUSE", "PAUSA", "PAUSA", "PAUSE"), run[] = TX("HOLD TO RUN", "HUIR", "FUGA", "FLUCHT");
         sys_shown = g_btluiState.started != 0;
         int w = ui_measureLabel((u8 *)pause);
         ui_drawLabel(r_pause.x + (r_pause.w - w) / 2, r_pause.y + 11, 2, (s32)pause, 0);
@@ -769,3 +770,18 @@ u8 o0b_btlui_isPauseRequested(void) {
     if (live == 1 || live == 2) { g_btluiState.pauseReq = 0; return 0; }
     return o0b_btlui_isPauseRequested_game();
 }
+
+#ifdef NUI_DEBUG
+/* PC: FF9_TEXT_WIDTHS=1 in a battle logs the widest command name (the command buttons' room: 148 less 14 and the
+ * frame) in the release's text (port/pc/platform.c calls it at frame 1500) */
+char *getenv(const char *name);
+void port_cmd_widths(void) {
+    int best = 0, at = -1;
+    if (!getenv("FF9_TEXT_WIDTHS") || g_gameState->mode != 2) return;
+    for (int i = 1; i < 0x30; i++) {
+        int w = text_measure(g_btlCmdNames + g_btlCmdTable[i].nameOfs).w;
+        if (w > best) best = w, at = i;
+    }
+    port_log("widest command: %d (#%d)\n", best, at);
+}
+#endif

@@ -9,6 +9,7 @@
  * bottom's list takes the hint box's place too (menuChocograph_init wrapped: config/renames.txt). */
 #define M2CTX
 #include "ovl_32.h"
+#include "port_text.h"
 
 void o32_menuChocograph_drawPicture(s32, s32, s32, s32, u8);
 void o32_menuChocograph_drawFrame(s32, s32, s32, u8);
@@ -69,7 +70,7 @@ int port_chocograph_top(void) {
     o32_menuChocograph_drawPicture(28, 28, 2, id, 0);
     o32_menuChocograph_drawFrame(24, 24, 2, 0);
     text_drawBlock(112, 28, 2, text_get(id + CHOCO_TEXT_NAME), TEXT_PAL_WHITE);
-    if (st->found & (1u << id)) ui_drawLabel(112, 46, 2, (s32) "TREASURE FOUND", 0);
+    if (st->found & (1u << id)) ui_drawLabel(112, 46, 2, (s32) TX("TREASURE FOUND", "TESORO HALLADO", "TESORO TROVATO", "SCHATZ GEFUNDEN"), 0);
     text_drawBlock(112, 64, 2, text_get(CHOCO_TEXT_ABILITY), TEXT_PAL_WHITE);
     int need = o32_menuChocograph_getRequiredAbility(id);
     for (int i = 0; i <= need; i++)

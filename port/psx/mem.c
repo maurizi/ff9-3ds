@@ -47,7 +47,7 @@ void psx_load_image(void) {
     const unsigned int *chunks = m + 3, *relocs = chunks + 3 * nchunks;
     unsigned int lba, size;
     if (!psx_cd_boot_exe(&lba, &size)) port_fatal("the disc has no boot executable (SYSTEM.CNF)");
-    if (size != want_size) port_fatal("the disc's executable is %u bytes, not %u: not FF9 (NTSC-U)", size, want_size);
+    if (size != want_size) port_fatal("the disc's executable is %u bytes, not %u: not the FF9 release this program is for (" FF9_VERSION ")", size, want_size);
     const unsigned int sectors = (size + 2047) / 2048;
     unsigned char *exe = malloc(sectors * 2048);
     if (!exe) port_fatal("no room to read the executable (%u bytes)", size);
@@ -55,7 +55,7 @@ void psx_load_image(void) {
     unsigned int h = 0x811C9DC5u;
     for (unsigned int c = 0; c < nchunks; c++)
         for (unsigned int i = 0; i < chunks[3 * c + 1]; i++) h = (h ^ exe[chunks[3 * c + 2] + i]) * 0x01000193u;
-    if (h != want_hash) port_fatal("the disc's executable isn't the one psxrel.bin was made from (FF9 NTSC-U)");
+    if (h != want_hash) port_fatal("the disc's executable isn't the one psxrel.bin was made from (FF9 " FF9_VERSION ")");
     for (unsigned int c = 0; c < nchunks; c++) {
         memcpy(psx_ram + chunks[3 * c], exe + chunks[3 * c + 2], chunks[3 * c + 1]);
         psx_relocate(relocs, chunks[3 * c], chunks[3 * c + 1]);

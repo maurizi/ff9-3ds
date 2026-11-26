@@ -7,6 +7,7 @@
  * this instead of the field's bottom screen. */
 #define M2CTX
 #include "ff9.h"
+#include "port_text.h"
 #include "port_msgs.h"
 
 #define AUCTION_FIELD 909
@@ -61,12 +62,12 @@ static void line(int x, int y, const char *name, int v) {
 void port_auction_draw(void) {
     static RECT head = {16, 8, 288, 52};
     int p = price(), top = g_evtState->fieldVars[0x39];
-    line(head.x + 10, head.y + 10, "PRICE", p);
-    line(head.x + 10, head.y + 30, "FUNDS", (int)g_gameState->gameData->gil);
-    ui_drawLabel(head.x + 190, head.y + 20, 2, (s32)(top == 0 ? "YOUR BID" : top == 255 ? "" : "OUTBID"), top == 0 ? 0 : 2);
+    line(head.x + 10, head.y + 10, TX("PRICE", "PRECIO", "PREZZO", "PREIS"), p);
+    line(head.x + 10, head.y + 30, TX("FUNDS", "FONDOS", "FONDI", "GELD"), (int)g_gameState->gameData->gil);
+    ui_drawLabel(head.x + 190, head.y + 20, 2, (s32)(top == 0 ? TX("YOUR BID", "TU PUJA", "TUA OFFERTA", "DEIN GEBOT") : top == 255 ? "" : TX("OUTBID", "SUPERADA", "SUPERATA", "\"UBERBOTEN")), top == 0 ? 0 : 2);
     win_drawBox(&head, 3, 2);
     if (!entry_open()) {
-        label(&r_open, "PLACE A BID", !can_open());
+        label(&r_open, TX("PLACE A BID", "PUJAR", "FAI UN OFFERTA", "BIETEN"), !can_open());
         return;
     }
     u8 *v = bid_vars();
@@ -76,21 +77,21 @@ void port_auction_draw(void) {
     static RECT box = {16, 70, 288, 106};
     u8 a[12];
     text_formatNumber(bid * 100 < 0 ? 0 : bid * 100, a, 5, TEXT_NUM_ASCII);
-    ui_drawLabel(box.x + 12, box.y + 46, 2, (s32) "BID", 0);
+    ui_drawLabel(box.x + 12, box.y + 46, 2, (s32) TX("BID", "PUJA", "OFFERTA", "GEBOT"), 0);
     for (int d = 0; d < 3; d++) { /* (columns: 10000s, 1000s, 100s of the five digits) */
         int x = box.x + 64 + d * 44, step = d == 0 ? 100 : d == 1 ? 10 : 1;
         r_up[d] = (RECT){(s16)x, (s16)(box.y + 6), 38, 30};
         r_dn[d] = (RECT){(s16)x, (s16)(box.y + 70), 38, 30};
-        label(&r_up[d], "UP", bid + step > hi);
-        label(&r_dn[d], "DOWN", bid - step <= p / 100);
+        label(&r_up[d], TX("UP", "M#AS", "PI$U", "MEHR"), bid + step > hi);
+        label(&r_dn[d], TX("DOWN", "MENOS", "MENO", "WENIG"), bid - step <= p / 100);
         u8 one[2] = {a[d], 0};
         ui_drawDigits(x + 15, box.y + 46, 2, one, 0);
     }
     ui_drawDigits(box.x + 64 + 3 * 44 + 4, box.y + 46, 2, (u8 *)"00", 0);
-    ui_drawLabel(box.x + 64 + 3 * 44 + 30, box.y + 47, 2, (s32) "GIL", 0);
+    ui_drawLabel(box.x + 64 + 3 * 44 + 30, box.y + 47, 2, (s32) TX("GIL", "GIL", "GUIL", "GIL"), 0);
     win_drawBox(&box, 3, 2);
-    label(&r_bid, "BID", bid * 100 <= p);
-    label(&r_cancel, "CANCEL", 0);
+    label(&r_bid, TX("BID", "PUJA", "OFFERTA", "GEBOT"), bid * 100 <= p);
+    label(&r_cancel, TX("CANCEL", "CANCELAR", "ANNULLA", "ABBRECHEN"), 0);
 }
 static int in(const RECT *r, int x, int y) { return x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h; }
 int port_auction_tap(int x, int y) {

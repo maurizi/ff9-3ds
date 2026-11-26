@@ -20,6 +20,7 @@
  * GPU state is put back after. */
 #define M2CTX
 #include "ff9.h"
+#include "port_text.h"
 #include "gp0.h"
 #include "psx_display.h"
 
@@ -298,7 +299,7 @@ static void portrait(int slot, int index, int x, int y) {
 }
 
 static void draw_party(void) {
-    static const u8 hp[] = "HP", mp[] = "MP";
+    static const u8 hp[] = TX("HP", "PV", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP");
     GameData *g = g_gameState->gameData;
     u8 a[16];
     int y = r_party.y + 6;
@@ -422,9 +423,9 @@ __attribute__((weak)) void port_setting_set(int k, int v) { (void)k; (void)v; }
 /* (a setting this machine has no use for: its row is shown dim with the reason, and nothing changes it) */
 __attribute__((weak)) int port_setting_available(int k) { (void)k; return 1; }
 static const struct { const char *name; int n; const char *choice[3]; } opts[] = {
-    {"3D DEPTH", 3, {"LOW", "NORMAL", "HIGH"}},
-    {"TOP SCREEN", 2, {"FIT", "SHARP"}},
-    {"VOICES", 2, {"OFF", "ON"}},
+    {TX("3D DEPTH", "EFECTO 3D", "EFFETTO 3D", "3D TIEFE"), 3, {TX("LOW", "BAJO", "BASSO", "NIEDRIG"), TX("NORMAL", "NORMAL", "NORMALE", "NORMAL"), TX("HIGH", "ALTO", "ALTO", "HOCH")}},
+    {TX("TOP SCREEN", "PANTALLA SUP.", "SCHERMO SUP.", "OBERER BS"), 2, {TX("FIT", "AJUSTAR", "ADATTA", "ANPASSEN"), TX("SHARP", "N#ITIDO", "NITIDO", "SCHARF")}},
+    {TX("VOICES", "VOCES", "VOCI", "STIMMEN"), 2, {TX("OFF", "NO", "NO", "AUS"), TX("ON", "S#I", "S$I", "AN")}},
 };
 static void bar_mark(int x, int y, int w, int h) { /* a small bright bar (as the battle screen marks a target) */
     u32 *p = (u32 *)g_primPtr;
@@ -441,14 +442,14 @@ static void opt_step(int d) { /* to the next row there is something to set on */
     }
 }
 static void draw_options(void) {
-    static const u8 label[] = "OPTIONS";
+    static const u8 label[] = TX("OPTIONS", "OPCIONES", "OPZIONI", "OPTIONEN");
     RECT box = r_logbox;
     ui_drawLabel(box.x + 8, box.y - 3, 2, (s32)label, 0);
     if (!port_setting_available(opt_row)) opt_step(1);
     for (int i = 0; i < 3; i++) {
         ui_drawLabel(box.x + 10, 64 + i * 36 + 11, 2, (s32)opts[i].name, i == opt_row ? 0 : 2);
         if (!port_setting_available(i)) {
-            static const char why[] = "NEW 3DS ONLY";
+            static const char why[] = TX("NEW 3DS ONLY", "SOLO NEW 3DS", "SOLO NEW 3DS", "NUR NEW 3DS");
             RECT r = opt_rect(i, 0);
             ui_drawLabel(r.x + 8, r.y + 11, 2, (s32)why, 2);
             continue;
@@ -489,7 +490,7 @@ static void title_button(RECT *r, const char *label, int on, int dim) {
 __attribute__((weak)) int port_audio_missing(void) { return 0; } /* (the 3DS's audio.c) */
 static RECT r_boot = {40, 70, 240, 100};
 static void draw_boot(void) {
-    static const char name[] = "FINAL FANTASY IX", go[] = "PRESS START", tap[] = "OR TOUCH THE SCREEN";
+    static const char name[] = "FINAL FANTASY IX", go[] = TX("PRESS START", "PULSA START", "PREMI START", "DR\"UCKE START"), tap[] = TX("OR TOUCH THE SCREEN", "O TOCA LA PANTALLA", "O TOCCA LO SCHERMO", "ODER BER\"UHRE DEN BILDSCHIRM");
     int w = ui_measureLabel((u8 *)name);
     ui_drawLabel(r_boot.x + (r_boot.w - w) / 2, r_boot.y + 22, 2, (s32)name, 0);
     w = ui_measureLabel((u8 *)go);
@@ -500,7 +501,7 @@ static void draw_boot(void) {
     /* (no DSP firmware on the SD card: the game is silent, and only the log said why) */
     if (port_audio_missing()) {
         static RECT r = {40, 176, 240, 44};
-        static const char a[] = "NO SOUND  DSPFIRM.CDC NOT FOUND", b[] = "DUMP IT WITH DSP1  SEE THE README";
+        static const char a[] = TX("NO SOUND  DSPFIRM.CDC NOT FOUND", "SIN SONIDO  FALTA DSPFIRM.CDC", "NESSUN SUONO  MANCA DSPFIRM.CDC", "KEIN TON  DSPFIRM.CDC FEHLT"), b[] = TX("DUMP IT WITH DSP1  SEE THE README", "EXTR#AELO CON DSP1  VER EL README", "ESTRAILO CON DSP1  VEDI IL README", "MIT DSP1 AUSLESEN  SIEHE README");
         w = ui_measureLabel((u8 *)a);
         ui_drawLabel(r.x + (r.w - w) / 2, r.y + 11, 2, (s32)a, 0);
         w = ui_measureLabel((u8 *)b);
@@ -512,7 +513,7 @@ static void draw_boot(void) {
 /* game over (ovl_65 gameover_main: its picture, A goes back to the title) */
 static void draw_gameover(void) {
     static RECT box = {40, 70, 240, 100};
-    static const char a[] = "GAME OVER", b[] = "TOUCH THE SCREEN", c[] = "TO RETURN TO THE TITLE";
+    static const char a[] = "GAME OVER", b[] = TX("TOUCH THE SCREEN", "TOCA LA PANTALLA", "TOCCA LO SCHERMO", "BER\"UHRE DEN BILDSCHIRM"), c[] = TX("TO RETURN TO THE TITLE", "PARA VOLVER AL T#ITULO", "PER TORNARE AL TITOLO", "UM ZUM TITEL ZUR\"UCKZUKEHREN");
     int w = ui_measureLabel((u8 *)a);
     ui_drawLabel(box.x + (box.w - w) / 2, box.y + 22, 2, (s32)a, 0);
     w = ui_measureLabel((u8 *)b);
@@ -522,16 +523,39 @@ static void draw_gameover(void) {
     win_drawBox(&box, 3, 2);
 }
 
+#ifdef NUI_DEBUG
+/* PC: FF9_LABEL_WIDTHS=FILE measures each line of FILE as the label font draws it (ui_measureLabel) once the title
+ * has loaded it (port/pc/platform.c, frame 3600), logs "label width<TAB>line" and exits: the width of a translated label against its box (port_text.h) */
+char *getenv(const char *name);
+void *fopen(const char *path, const char *mode);
+char *fgets(char *s, int n, void *f);
+int fclose(void *f);
+void exit(int status);
+void port_label_widths(void) {
+    const char *path = getenv("FF9_LABEL_WIDTHS");
+    char line[128];
+    void *f = path ? fopen(path, "r") : NULL;
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        for (char *c = line; *c; c++)
+            if (*c == '\n' || *c == '\r') *c = 0;
+        port_log("label %d\t%s\n", ui_measureLabel((u8 *)line), line);
+    }
+    fclose(f);
+    exit(0);
+}
+#endif
+
 static void draw_title(void) {
     if (title_opts) {
         draw_options();
-        title_button(&r_log, "BACK", 0, 0);
+        title_button(&r_log, TX("BACK", "ATR#AS", "INDIETRO", "ZUR\"UCK"), 0, 0);
         return;
     }
     int cur = port_title_cursor();
-    title_button(&r_tnew, "NEW GAME", cur == 0, 0);
-    title_button(&r_tcont, "CONTINUE", cur == 1, !port_title_has_save());
-    title_button(&r_topt, "OPTIONS", 0, 0);
+    title_button(&r_tnew, TX("NEW GAME", "NUEVA PARTIDA", "NUOVA PARTITA", "NEUES SPIEL"), cur == 0, 0);
+    title_button(&r_tcont, TX("CONTINUE", "CONTINUAR", "CONTINUA", "FORTSETZEN"), cur == 1, !port_title_has_save());
+    title_button(&r_topt, TX("OPTIONS", "OPCIONES", "OPZIONI", "OPTIONEN"), 0, 0);
     ui_drawSprite(r_topt.x + 8, r_topt.y + 9, 2, 6, 0); /* (Square: Y) */
 }
 static int title_tap(int x, int y) {
@@ -558,10 +582,10 @@ static void draw_config_overlay(void) {
         static RECT shade = {4, 30, 312, 160};
         win_drawBox(&shade, 4, 2); /* (an opaque panel under the options: the Config rows don't show through) */
         draw_options();
-        title_button(&r_log, "BACK", 0, 0);
+        title_button(&r_log, TX("BACK", "ATR#AS", "INDIETRO", "ZUR\"UCK"), 0, 0);
         return;
     }
-    title_button(&r_cfgbtn, "3DS OPTIONS", 0, 0);
+    title_button(&r_cfgbtn, TX("3DS OPTIONS", "CONFIG. 3DS", "OPZIONI 3DS", "3DS EINST."), 0, 0);
     ui_drawSprite(r_cfgbtn.x + 4, r_cfgbtn.y + 5, 2, 6, 0); /* (Square: the 3DS's Y opens it too) */
 }
 static int config_overlay_tap(int x, int y) {
@@ -606,7 +630,7 @@ unsigned int port_pad_filter(unsigned int b) {
 }
 
 static void draw_log(void) {
-    static const u8 label[] = "LOG", optl[] = "OPTIONS";
+    static const u8 label[] = TX("LOG", "REGISTRO", "DIALOGHI", "VERLAUF"), optl[] = TX("OPTIONS", "OPCIONES", "OPZIONI", "OPTIONEN");
     RECT box = r_logbox;
     { int w = ui_measureLabel((u8 *)optl); ui_drawLabel(r_optbtn.x + (r_optbtn.w - w) / 2, r_optbtn.y + 7, 1, (s32)optl, 0); win_drawBox(&r_optbtn, 1, 2); }
     ui_drawLabel(box.x + 8, box.y - 3, 2, (s32)label, 0);
@@ -840,11 +864,11 @@ static int canary_prompt(void) {
     return -1;
 }
 static void draw_canary(int b) {
-    static const char *const names[8] = {"LEFT", "RIGHT", "X", "DOWN", "A", "UP", "B", "Y"};
+    static const char *const names[8] = {TX("LEFT", "IZQUIERDA", "SINISTRA", "LINKS"), TX("RIGHT", "DERECHA", "DESTRA", "RECHTS"), "X", TX("DOWN", "ABAJO", "GI$U", "UNTEN"), "A", TX("UP", "ARRIBA", "SU", "OBEN"), "B", "Y"};
     static const u8 icon[8] = {0, 0, 7, 0, 4, 0, 5, 6}; /* (the game's button sprites, drawn as the 3DS's: 0 none) */
     static RECT box = {60, 70, 200, 100};
-    int w = ui_measureLabel((u8 *)"PRESS");
-    ui_drawLabel(box.x + (box.w - w) / 2, box.y + 22, 2, (s32) "PRESS", 2);
+    int w = ui_measureLabel((u8 *)TX("PRESS", "PULSA", "PREMI", "DR\"UCKE"));
+    ui_drawLabel(box.x + (box.w - w) / 2, box.y + 22, 2, (s32) TX("PRESS", "PULSA", "PREMI", "DR\"UCKE"), 2);
     w = ui_measureLabel((u8 *)names[b]);
     if (icon[b]) ui_drawSprite(box.x + box.w / 2 - 8, box.y + 40, 2, icon[b], 0);
     ui_drawLabel(box.x + (box.w - w) / 2, box.y + (icon[b] ? 64 : 52), 2, (s32)names[b], 0);
@@ -858,7 +882,7 @@ static int choice_open(void) {
 }
 
 static void draw(void) {
-    static const u8 menu[] = "MENU", cards[] = "CARDS", party[] = "PARTY", map[] = "MAP", gil_suffix[] = "G";
+    static const u8 menu[] = TX("MENU", "MEN#U", "MENU", "MEN\"U"), cards[] = TX("CARDS", "CARTAS", "CARTE", "KARTEN"), party[] = TX("PARTY", "GRUPO", "SQUADRA", "GRUPPE"), map[] = TX("MAP", "MAPA", "MAPPA", "KARTE"), gil_suffix[] = "G";
     GameData *g = g_gameState->gameData;
     u8 buf[16];
     if (port_disc_prompt_live()) {
@@ -915,7 +939,7 @@ static void draw(void) {
         button(cards_rect = &r_cards, cards, buf);
     }
     {
-        static const u8 logl[] = "LOG", mapl[] = "MAP", hidel[] = "HIDE";
+        static const u8 logl[] = TX("LOG", "REGISTRO", "DIALOGHI", "VERLAUF"), mapl[] = TX("MAP", "MAPA", "MAPPA", "KARTE"), hidel[] = TX("HIDE", "OCULTAR", "NASCONDI", "AUSBLENDEN");
         button(&r_log, log_on ? (party_live() ? mapl : hidel) : logl, NULL); /* (closing the log: back to the map, or with
                                                                                 * no map up (a cutscene) to nothing) */
     }
@@ -1251,7 +1275,7 @@ static void stat(int x, int y, const char *label, int value) {
 }
 
 static void hp_mp(int x, int y, Character *c) {
-    static const u8 hp[] = "HP", mp[] = "MP";
+    static const u8 hp[] = TX("HP", "PV", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP");
     u8 a[16];
     ui_drawLabel(x, y, 2, (s32)hp, 0);
     text_formatNumber(c->hp, a, 4, 1);
@@ -1266,7 +1290,7 @@ static void hp_mp(int x, int y, Character *c) {
 }
 
 __attribute__((unused)) static void member_sheet(Character *c) {
-    static const u8 lv[] = "LV", exp[] = "EXP", stats[] = "STATUS", equip[] = "EQUIPMENT";
+    static const u8 lv[] = TX("LV", "NV", "LV", "LV"), exp[] = TX("EXP", "EXP", "EXP", "EP"), stats[] = "STATUS", equip[] = "EQUIPMENT";
     static RECT box = {8, 8, 384, 224}, rs = {150, 92, 234, 76}, re = {16, 92, 128, 132};
     u8 a[12];
     big_portrait(4, c, 18, 18, 64);
@@ -1300,7 +1324,7 @@ __attribute__((unused)) static void member_sheet(Character *c) {
 }
 
 __attribute__((unused)) static void party_overview(void) {
-    static const u8 lv[] = "LV";
+    static const u8 lv[] = TX("LV", "NV", "LV", "LV");
     GameData *g = g_gameState->gameData;
     u8 a[12];
     for (int i = 0; i < 4; i++) {

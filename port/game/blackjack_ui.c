@@ -5,6 +5,7 @@
  * run. Drawn by field_hud.c (port_bj_draw). */
 #define M2CTX
 #include "ovl_15.h"
+#include "port_text.h"
 
 void o15_bj_wagerUpdate_game(void), o15_bj_actionUpdate_game(void);
 void o15_bj_wagerDecide(void), o15_bj_actionDecide(void);
@@ -86,21 +87,21 @@ static void money(int x, int y, const char *name, int v) {
 int port_bj_live(void) { return live(wager_frame) || live(action_frame); }
 void port_bj_draw(void) {
     static RECT head = {24, 16, 272, 32};
-    money(head.x + 10, head.y + 12, "BANKROLL", g_bjBankroll);
-    money(head.x + 150, head.y + 12, "BET", g_bjWager);
+    money(head.x + 10, head.y + 12, TX("BANKROLL", "FONDOS", "FONDI", "KAPITAL"), g_bjBankroll);
+    money(head.x + 150, head.y + 12, TX("BET", "APUESTA", "PUNTATA", "EINSATZ"), g_bjWager);
     win_drawBox(&head, 3, 2);
     if (live(wager_frame)) {
-        label(&r_minus, "LESS", g_bjWager <= BJ_MIN_BET);
-        label(&r_plus, "MORE", g_bjWager >= BJ_MAX_BET || g_bjWager + BJ_MIN_BET > g_bjBankroll);
+        label(&r_minus, TX("LESS", "MENOS", "MENO", "WENIGER"), g_bjWager <= BJ_MIN_BET);
+        label(&r_plus, TX("MORE", "M#AS", "PI$U", "MEHR"), g_bjWager >= BJ_MAX_BET || g_bjWager + BJ_MIN_BET > g_bjBankroll);
         static RECT mid = {104, 96, 112, 44};
         u8 a[12];
         text_formatNumber(g_bjWager, a, 4, TEXT_NUM_ASCII);
         ui_drawDigits(mid.x + 34, mid.y + 18, 2, a, 0);
         win_drawBox(&mid, 3, 2);
-        label(&r_deal, "DEAL", 0);
+        label(&r_deal, TX("DEAL", "REPARTIR", "DAI CARTE", "GEBEN"), 0);
         return;
     }
-    static const char *const moves[4] = {"STAND", "HIT", "DOUBLE", "SPLIT"};
+    static const char *const moves[4] = {TX("STAND", "PLANTARSE", "STAI", "HALTEN"), TX("HIT", "CARTA", "CARTA", "KARTE"), TX("DOUBLE", "DOBLAR", "RADDOPPIA", "VERDOPPELN"), TX("SPLIT", "SEPARAR", "DIVIDI", "TEILEN")};
     for (int i = 0; i < 4; i++) {
         int dim = (i == BJ_DOUBLE && !g_bjCanDouble) || (i == BJ_SPLIT && !g_bjCanSplit);
         label(&r_move[i], moves[i], dim);

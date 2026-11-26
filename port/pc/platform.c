@@ -196,6 +196,15 @@ void btlui_check_report(void);
 void plat_wait_frame(void) {
     frames++;
     { extern unsigned int psx_probe_top; if (getenv("FF9_PROBE")) fprintf(stderr, "frame %ld\n", frames); psx_probe_top = 0; }
+    if (frames == 1500) {
+        extern void port_cmd_widths(void);
+        port_cmd_widths();
+    }
+    if (frames == 3600) { /* (the title's labels loaded: FF9_LABEL_WIDTHS, field_hud.c) */
+        extern void port_label_widths(void), port_text_widths(void);
+        port_text_widths();
+        port_label_widths();
+    }
     {
         static int shown_x = -1, shown_y = -1;
         PsxDisplayInfo d;

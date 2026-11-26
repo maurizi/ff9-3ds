@@ -4,6 +4,7 @@
  * docs/r32/3ds-requests-4.md). */
 #define M2CTX
 #include "ovl_36.h"
+#include "port_text.h"
 
 void o36_menuCard_selectCard(s32 id);
 
@@ -35,7 +36,7 @@ int port_card_top(void) {
         if (e && e != (CardEntry *)-1)
             port_card_panel(id, e->arrows, e->power, e->type, e->physDef, e->magicDef, s_menuCard.cache.shown == id ? 1 : 2);
         u8 a[8];
-        ui_drawLabel(info.x + 10, info.y + 64, 2, (s32) "OWNED", 0);
+        ui_drawLabel(info.x + 10, info.y + 64, 2, (s32) TX("OWNED", "TIENES", "COPIE", "BESITZ"), 0);
         text_formatNumber(s_menuCard.count[id], a, 2, TEXT_NUM_ASCII);
         ui_drawDigits(info.x + 56, info.y + 63, 2, a, 0);
     }

@@ -18,6 +18,7 @@
  * docs/r32/3ds-requests-2.md). The game's logic pauses as on the PS1; nothing here changes the menu. */
 #define M2CTX
 #include "ff9.h"
+#include "port_text.h"
 u8 *port_help_white(u8 *text); /* (battle_ui.c: after a keyword, back to white rather than the pale blue help palette) */
 
 void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h);
@@ -150,7 +151,7 @@ static void updown(int x, int y, int up) {
 
 /* what an item changes for a member: up to n stats as "LABEL ^3", from x on one row; how many shown */
 static int changes(int x, int y, Character *c, int slot, int id, int n) {
-    static const char *const names[] = {"SPD", "STR", "MAG", "SPR", "ATK", "DEF", "EVA", "MDEF", "MEVA", "HP", "MP"};
+    static const char *const names[] = {TX("SPD", "VEL", "VEL", "TMP"), TX("STR", "FUE", "FOR", "ST\"A"), TX("MAG", "MAG", "MAG", "MAG"), TX("SPR", "ESP", "SPI", "WIL"), TX("ATK", "ATQ", "ATT", "ANG"), TX("DEF", "DEF", "DIF", "ABW"), TX("EVA", "EVA", "EVA", "REF"), TX("MDEF", "DMAG", "DIFM", "ZABW"), TX("MEVA", "EMAG", "EVAM", "ZREF"), TX("HP", "PV", "HP", "HP"), TX("MP", "PM", "MP", "MP")};
     EquipStatsOut b = stats_with(c, -1, 0), a = stats_with(c, slot, id);
     int before[11] = {b.stats[0], b.stats[1], b.stats[2], b.stats[3], b.defs[0], b.defs[1], b.defs[2], b.defs[3], b.defs[4], b.maxHp, b.maxMp};
     int after[11] = {a.stats[0], a.stats[1], a.stats[2], a.stats[3], a.defs[0], a.defs[1], a.defs[2], a.defs[3], a.defs[4], a.maxHp, a.maxMp};
@@ -198,7 +199,7 @@ static int item_view(int id, u8 *help) {
         face(i, chr_portrait(c), 22, y, size);
         text_drawBlock(70, y, 2, c->name, ok ? 0 : 2);
         if (!ok) {
-            ui_drawLabel(70, y + 18, 2, (s32)"CAN T EQUIP", 2);
+            ui_drawLabel(70, y + 18, 2, (s32)TX("CAN T EQUIP", "NO EQUIPABLE", "NON EQUIPAGGIABILE", "NICHT AUSR\"USTBAR"), 2);
             continue;
         }
         int same = 0;
@@ -206,8 +207,8 @@ static int item_view(int id, u8 *help) {
         /* (rows closer than three lines (a long description: Cachusha's four): the abilities beside the name, the
          * changes under it; else under each other, the abilities ran into the next member's row) */
         int compact = step < 42, ly = compact ? y + 15 : y + 18;
-        if (same) ui_drawLabel(70, ly, 2, (s32)"EQUIPPED", 1);
-        else if (!changes(70, ly, c, slot, id, 4)) ui_drawLabel(70, ly, 2, (s32)"NO CHANGE", 2);
+        if (same) ui_drawLabel(70, ly, 2, (s32)TX("EQUIPPED", "EQUIPADO", "EQUIPAGGIATO", "AUSGER\"USTET"), 1);
+        else if (!changes(70, ly, c, slot, id, 4)) ui_drawLabel(70, ly, 2, (s32)TX("NO CHANGE", "SIN CAMBIOS", "NESSUNA MODIFICA", "KEINE \"ANDERUNG"), 2);
         if (compact) teaches(70 + text_measure(c->name).w + 16, y, 380, c, id);
         else teaches(70, y + 29, 380, c, id);
     }
@@ -237,8 +238,8 @@ static int equip_view(const u8 *st) {
         if (first + i == cur) bar_at(18, y - 2, 364, 28);
         ui_drawItemIcon(22, y, 2, id, 1);
         text_drawBlock(40, y, 2, g_itemNames + g_itemTable[id].name, 0);
-        if (c->equip[slot] == id) ui_drawLabel(176, y + 3, 2, (s32)"EQUIPPED", 1);
-        else if (!changes(176, y + 3, c, slot, id, 4)) ui_drawLabel(176, y + 3, 2, (s32)"NO CHANGE", 2);
+        if (c->equip[slot] == id) ui_drawLabel(176, y + 3, 2, (s32)TX("EQUIPPED", "EQUIPADO", "EQUIPAGGIATO", "AUSGER\"USTET"), 1);
+        else if (!changes(176, y + 3, c, slot, id, 4)) ui_drawLabel(176, y + 3, 2, (s32)TX("NO CHANGE", "SIN CAMBIOS", "NESSUNA MODIFICA", "KEINE \"ANDERUNG"), 2);
         teaches(40, y + 13, 380, c, id);
     }
     win_drawBox(&box, 5, 2);
@@ -250,7 +251,7 @@ static int equip_view(const u8 *st) {
 void o33_menuAbility_updateHelp(void);
 static int ability_view(const u8 *st) {
     static RECT box = {8, 8, 384, 224};
-    static const u8 taught[] = "TAUGHT BY";
+    static const u8 taught[] = TX("TAUGHT BY", "SE APRENDE CON", "INSEGNATA DA", "ERLERNT DURCH");
     GameData *g = g_gameState->gameData;
     int member = st[2]; /* (AbilityMenu.slot: the member shown; g_menuScreen.member is the one the screen opened on) */
     if (st[1] != 2 || member > 3 || !ram_ok(g->party[member], sizeof(Character))) return 0;
@@ -322,7 +323,7 @@ static int consumable_view(int id, u8 *help) {
     int held = 0;
     for (int s = 0; s < 256; s++)
         if (g->items.slots[s].id == id) held += g->items.slots[s].count;
-    ui_drawLabel(300, 22, 2, (s32) "HELD", 0);
+    ui_drawLabel(300, 22, 2, (s32) TX("HELD", "CANT.", "NUM", "MENGE"), 0);
     text_formatNumber(held, a, 2, 1);
     ui_drawDigits(334, 21, 2, a, 0);
     if (help && ram_ok(help, 1)) text_drawBlock(22, 44, 2, port_help_white(help), 0);
@@ -332,13 +333,13 @@ static int consumable_view(int id, u8 *help) {
         int y = party.y + 6 + i * 31;
         face(i, chr_portrait(c), party.x + 6, y, 28);
         text_drawBlock(party.x + 40, y + 2, 2, c->name, 0);
-        ui_drawLabel(party.x + 130, y + 4, 2, (s32) "HP", 0);
+        ui_drawLabel(party.x + 130, y + 4, 2, (s32) TX("HP", "PV", "HP", "HP"), 0);
         text_formatNumber(c->hp, a, 4, 1);
         a[4] = '/';
         text_formatNumber(c->maxHp, a + 5, -1, 1);
         ui_drawSmallDigits(party.x + 148, y + 4, 2, a, c->hp <= c->maxHp / 6 ? 4 : 0);
         hpmp_bar(party.x + 130, y + 16, 100, c->hp, c->maxHp, 0x40C040);
-        ui_drawLabel(party.x + 250, y + 4, 2, (s32) "MP", 0);
+        ui_drawLabel(party.x + 250, y + 4, 2, (s32) TX("MP", "PM", "MP", "MP"), 0);
         text_formatNumber(c->mp, a, 3, 1);
         a[3] = '/';
         text_formatNumber(c->maxMp, a + 4, -1, 1);
@@ -383,7 +384,7 @@ static void ap_bar(int x, int y, int w, int have, int need) {
 }
 static void member_view(Character *c) {
     static RECT box = {204, 8, 188, 224};
-    ui_drawLabel(box.x + 8, box.y - 3, 2, (s32) "LEARNING", 0);
+    ui_drawLabel(box.x + 8, box.y - 3, 2, (s32) TX("LEARNING", "APRENDIENDO", "APPRENDIMENTO", "LERNEN"), 0);
     int ch = c->info.b.id, y = box.y + 10, seen[16], nseen = 0;
     u8 buf[16];
     for (int sl = 0; sl < 5 && y < box.y + box.h - 24; sl++) {
@@ -412,7 +413,7 @@ static void member_view(Character *c) {
             y += 24;
         }
     }
-    if (y == box.y + 10) ui_drawLabel(box.x + 10, y + 4, 2, (s32) "NOTHING TO LEARN", 2);
+    if (y == box.y + 10) ui_drawLabel(box.x + 10, y + 4, 2, (s32) TX("NOTHING TO LEARN", "NADA QUE APRENDER", "NIENTE DA APPRENDERE", "NICHTS ZU LERNEN"), 2);
     win_drawBox(&box, 4, 2);
 }
 
@@ -439,7 +440,7 @@ static void order_view(int cur) {
         if (y > 202) y = 202;
         if (i == cur) bar_at(x, y - 2, 88, 34);
         text_drawBlock(x + 4, y, 2, party[i]->name, 0);
-        ui_drawLabel(x + 4, y + 16, 2, (s32)(backrow[i] ? "BACK ROW" : "FRONT ROW"), 0);
+        ui_drawLabel(x + 4, y + 16, 2, (s32)(backrow[i] ? TX("BACK ROW", "RETAGUARDIA", "RETROGUARDIA", "HINTEN") : TX("FRONT ROW", "VANGUARDIA", "AVANGUARDIA", "VORNE")), 0);
     }
 }
 
@@ -621,3 +622,35 @@ int port_help_top_draw(void) {
     port_help_panel(g_menuHelp.text);
     return 1;
 }
+
+#ifdef NUI_DEBUG
+/* PC: FF9_TEXT_WIDTHS=1 logs the widest of the game's own names the port's panels show (items, key items, abilities,
+ * cards), as the dialogue font draws them (text_measure), in the release's text: the room a translation needs
+ * (port/pc/platform.c calls it at frame 3600) */
+char *getenv(const char *name);
+static void widest(const char *what, int n, u8 *(*name)(int)) {
+    int best[3] = {0}, at[3] = {-1, -1, -1};
+    for (int i = 0; i < n; i++) {
+        u8 *s = name(i);
+        if (!s || *s == TEXT_END) continue;
+        int w = text_measure(s).w;
+        for (int k = 0; k < 3; k++)
+            if (w > best[k]) {
+                for (int j = 2; j > k; j--) best[j] = best[j - 1], at[j] = at[j - 1];
+                best[k] = w, at[k] = i;
+                break;
+            }
+    }
+    port_log("widest %s: %d (#%d), %d (#%d), %d (#%d)\n", what, best[0], at[0], best[1], at[1], best[2], at[2]);
+}
+static u8 *item_name_of(int i) { return g_itemNames + g_itemTable[i].name; }
+static u8 *key_name_of(int i) { return g_keyItemNames + g_keyItemTable[i].name; }
+static u8 *card_name_of(int i) { return (u8 *)card_getName(i); }
+void port_text_widths(void) {
+    if (!getenv("FF9_TEXT_WIDTHS")) return;
+    widest("item", 256, item_name_of);
+    widest("key item", 256, key_name_of);
+    widest("ability", 256, ability_name);
+    widest("card", 100, card_name_of);
+}
+#endif
