@@ -13,11 +13,13 @@ SYNC = b'\x00' + b'\xff' * 10 + b'\x00'
 # SYSTEM.CNF's boot executable -> disc number (NTSC-U). The executable is the same file on all four discs.
 DISC_OF_BOOT = {'SLUS_012.51': 1, 'SLUS_012.95': 2, 'SLUS_012.96': 3, 'SLUS_012.97': 4}
 EXE_SHA1 = 'e37e8c4dc7c374a06375f312b366f79b8fbd1764'  # (the decomp's config/checksums.us.sha1)
+# Each disc's FF9.IMG in v1.0 and in v1.1 (Greatest Hits): v1.1's code is v1.0's byte for byte, and its FF9.IMG
+# differs from v1.0's in one 8 KB picture (directory 1, file 0x2718).
 IMG_SHA1 = {
-    1: '38ec9ec7d7787985ae5befaac56ac4f88379a2e2',
-    2: '1483c1cfb13e5fb7f53d7381648a486d08a35911',
-    3: '4e4dab50e33f5a78bb1d02894e450e3facb56976',
-    4: '0b98b41549b5539670d957ad3579f0b677ee87f9',
+    1: ('38ec9ec7d7787985ae5befaac56ac4f88379a2e2', '17b2d43c02260537eab1a8b6352aa709a946a0dc'),
+    2: ('1483c1cfb13e5fb7f53d7381648a486d08a35911', 'eb35f16284b6cfdbe47581afe66e826566445eb8'),
+    3: ('4e4dab50e33f5a78bb1d02894e450e3facb56976', '48528297f953836b643d10096d30e1407cc2000e'),
+    4: ('0b98b41549b5539670d957ad3579f0b677ee87f9', 'd82ba9963b49cb87fcbe99be9ce2b10d89b8efb2'),
 }
 REGION_OF_PREFIX = {'SLES': 'the European (PAL) release', 'SLPS': 'the Japanese release',
                     'SCES': 'a European release', 'SCUS': 'a different NTSC-U title', 'SLPM': 'a Japanese release'}
@@ -171,7 +173,7 @@ class Disc:
                             f'damaged dump?)')
         if 'FF9.IMG' not in ents:
             raise DiscError(f'{name}: no FF9.IMG')
-        if self.file_sha1('FF9.IMG', progress) != IMG_SHA1[self.number]:
+        if self.file_sha1('FF9.IMG', progress) not in IMG_SHA1[self.number]:
             raise DiscError(f'{name}: disc {self.number}\'s FF9.IMG differs from the NTSC-U release\'s (a damaged dump '
                             f'or a patched/translated disc?)')
 

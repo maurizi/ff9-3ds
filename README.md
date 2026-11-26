@@ -8,7 +8,7 @@ The game runs natively on the 3DS's ARM11 without emulation, and features stereo
 [![ff9-3ds demo reel](https://img.youtube.com/vi/hRjhjAkbp20/maxresdefault.jpg)](https://www.youtube.com/watch?v=hRjhjAkbp20)
 
 This repository contains no game data, and neither do its releases. To play, you need your own copy of the four
-NTSC-U discs (SLUS-01251/01295/01296/01297).
+NTSC-U discs (SLUS-01251/01295/01296/01297), the original release or the Greatest Hits (v1.1).
 
 Final Fantasy IX © is owned by Square Enix; this project is not affiliated with or endorsed by Square Enix.
 
