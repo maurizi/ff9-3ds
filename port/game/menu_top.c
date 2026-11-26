@@ -45,7 +45,7 @@ extern u8 s_shop[], s_shopBuy[], s_shopSell[], s_shopSynth[], s_shopItemHelp[];
 void psx_cd_read_data(unsigned int lba, void *buf, unsigned int n);
 extern u8 s_menuAbilityActionTable[], s_menuAbilityActionNames[], s_menuAbilitySupportNames[];
 #define ABIL_OVL_VRAM 0x801EDF00
-#define ABIL_OFS(sym) ((unsigned)(sym) - PSX_ADDR(ABIL_OVL_VRAM))
+#define ABIL_OFS(sym) ((unsigned)((sym) - (psx_ram + (ABIL_OVL_VRAM & 0x1FFFFF))))
 #define ABIL_SUPPORT_SIZE 0x1000 /* (the support names: 0x9C0 bytes in NTSC-U) */
 static u8 abil[0x6000];
 static unsigned abil_from;
