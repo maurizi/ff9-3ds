@@ -1,6 +1,6 @@
 # ff9-3ds
 
-A native Nintendo 3DS port of Final Fantasy IX (PS1, NTSC-U), built from the C source of the
+A native Nintendo 3DS port of Final Fantasy IX (PS1), built from the C source of the
 [ff9-decomp](https://github.com/maurizi/ff9-decomp) matching decompilation.
 
 The game runs natively on the 3DS's ARM11 without emulation, and features stereoscopic 3D and a full dual-screen redesign of the UI.
@@ -8,13 +8,21 @@ The game runs natively on the 3DS's ARM11 without emulation, and features stereo
 [![ff9-3ds demo reel](https://img.youtube.com/vi/hRjhjAkbp20/maxresdefault.jpg)](https://www.youtube.com/watch?v=hRjhjAkbp20)
 
 This repository contains no game data, and neither do its releases. To play, you need your own copy of the four
-NTSC-U discs (SLUS-01251/01295/01296/01297), the original release or the Greatest Hits (v1.1).
+discs of one of these releases:
+
+- NTSC-U (SLUS-01251/01295/01296/01297), the original release or the Greatest Hits (v1.1)
+- PAL Spanish (SLES-02969/12969/22969/32969), Italian (SLES-02968/...) or German (SLES-02967/...): the game in its
+  language, the port's own labels translated, at 60 Hz
+
+The PAL English and French releases and the Japanese one are not supported yet.
 
 Final Fantasy IX © is owned by Square Enix; this project is not affiliated with or endorsed by Square Enix.
 
 ## Playing
 
-Download the builder for your computer from [Releases](https://github.com/maurizi/ff9-3ds/releases), run it, and point it at your four discs: BIN/CUE, IMG/CCD or raw ISO. It checks they are the NTSC-U release, unmodified, and writes the one you choose:
+Download the builder for your computer from [Releases](https://github.com/maurizi/ff9-3ds/releases), run it, and point it at your four discs: BIN/CUE, IMG/CCD or raw ISO. It tells which release they are, checks they are unmodified, and writes the one you choose (a PAL release's
+files are named `ff9-es-full.cia` and so on, and keep their own folder on the SD card, so releases can be installed
+side by side):
 
 - `ff9-full.cia` (about 1.7 GB): install it with a CIA installer such as FBI, then start Final Fantasy IX from the
   HOME Menu.
