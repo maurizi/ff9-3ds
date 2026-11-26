@@ -47,9 +47,10 @@ RELEASES = [
             '2082305d33d0aea451efab2eb2b8c870c7b60690', {
                 1: ('3d989e6cab9b86874056a1896c3f1ff8f6a2d520',), 2: ('a72c82efc64407e927dad5313a6676ae73fe144f',),
                 3: ('027e9468050d7bdc6e79ea70006eea560115b561',), 4: ('e42389f639fadbd12f73cfa8ab7522e8149979e4',)}),
-    # (discs 1-3 not yet hashed from a reference dump: their FF9.IMG is not checked)
     Release('en', 'PAL, English', ('SLES_029.65', 'SLES_129.65', 'SLES_229.65', 'SLES_329.65'),
-            'e6fdd67c75fc0fc1c3458ee2062cd30083671589', {4: ('f3feea35ad3130d401f75a9cbdb5d2c688f09984',)}),
+            'e6fdd67c75fc0fc1c3458ee2062cd30083671589', {
+                1: ('41158e3e46c06571302442510177a7cf85884024',), 2: ('8de08a6b550f274579f367c4c9462371dafbfc41',),
+                3: ('123f8182aad508d04282bb887c2673aec1a779dc',), 4: ('f3feea35ad3130d401f75a9cbdb5d2c688f09984',)}),
 ]
 RELEASE = {r.version: r for r in RELEASES}
 # FF9 releases the port isn't built for yet, by each disc's boot executable

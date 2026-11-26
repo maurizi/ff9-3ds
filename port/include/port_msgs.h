@@ -14,8 +14,8 @@
 #define MSG_FROG_COUNT 0x183 /* (NTSC-U, Italian) */
 #endif
 
-/* field 909, the Treno auction: the bid windows (NTSC-U 0xC9-0xCE, the bid entry 0xCB); one later in PAL */
-#if VERSION_PAL
+/* field 909, the Treno auction: the bid windows (NTSC-U 0xC9-0xCE, the bid entry 0xCB); one later in PAL but English */
+#if VERSION_PAL && !VERSION_EN
 #define MSG_AUCTION_SHIFT 1
 #else
 #define MSG_AUCTION_SHIFT 0
