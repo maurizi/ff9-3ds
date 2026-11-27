@@ -184,7 +184,7 @@ static void prepare_return_field(GameData *d) {
     typedef struct {u16 field,area;u32 sector;} FieldEntry;
     _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
     DirInfo *dirs=g_gameState->dirs;
-    const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+0x14c700+(dirs[4].tableSector<<11));
+    const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+(0x14c700-LOAD_AREA_JP_DELTA)+(dirs[4].tableSector<<11));
     int found=0;
     for(int i=0;i<dirs[4].count;i++) if(entries[i].field==scenario.field) {found=1;break;}
     if(!found) {
@@ -213,7 +213,7 @@ static void cache_field_ids(void) {
     typedef struct {u16 field,area;u32 sector;} FieldEntry;
     _Static_assert(sizeof(FieldEntry)==8,"field directory entry layout");
     DirInfo *dirs=g_gameState->dirs;
-    const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+0x14c700+(dirs[4].tableSector<<11));
+    const FieldEntry *entries=(const FieldEntry *)(g_loadAreaEnd+(0x14c700-LOAD_AREA_JP_DELTA)+(dirs[4].tableSector<<11));
     __builtin_memset(field_ids,0,sizeof field_ids);
     for(n_field_ids=0;n_field_ids<dirs[4].count;n_field_ids++) {
         if(entries[n_field_ids].field>=4096) port_fatal("scenario: field %d past the bitmap",(int)entries[n_field_ids].field);
@@ -286,7 +286,7 @@ static void prepare_battle_resources(GameData *d) {
      * Resolve the encounter's bundle and its background dependency directly
      * from the selected disc's own directories instead of fabricating them. */
     DirInfo *dirs=g_gameState->dirs;
-    FileIdEntry *entries=(FileIdEntry *)(g_loadAreaEnd+0x14c700+(dirs[5].tableSector<<11));
+    FileIdEntry *entries=(FileIdEntry *)(g_loadAreaEnd+(0x14c700-LOAD_AREA_JP_DELTA)+(dirs[5].tableSector<<11));
     int found=-1;
     for(int i=0;i<dirs[5].count;++i) if(entries[i].id==scenario.battle) {found=i;break;}
     if(found<0) port_fatal("scenario: battle %d is absent on disc %d",scenario.battle,scenario.disc);

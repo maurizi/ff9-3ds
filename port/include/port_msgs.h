@@ -8,14 +8,15 @@
 /* field 657, frog catching: "Frogs Captured: N" */
 #if VERSION_ES
 #define MSG_FROG_COUNT 0x182
-#elif VERSION_DE || VERSION_FR
-#define MSG_FROG_COUNT 0x184 /* (German, French) */
+#elif VERSION_DE || VERSION_FR || VERSION_JP
+#define MSG_FROG_COUNT 0x184 /* (German, French, Japanese) */
 #else
 #define MSG_FROG_COUNT 0x183 /* (NTSC-U, Italian) */
 #endif
 
-/* field 909, the Treno auction: the bid windows (NTSC-U 0xC9-0xCE, the bid entry 0xCB); one later in PAL but English */
-#if VERSION_PAL && !VERSION_EN
+/* field 909, the Treno auction: the bid windows (NTSC-U 0xC9-0xCE, the bid entry 0xCB); one later in PAL but English,
+ * and in Japanese */
+#if (VERSION_PAL && !VERSION_EN) || VERSION_JP
 #define MSG_AUCTION_SHIFT 1
 #else
 #define MSG_AUCTION_SHIFT 0
