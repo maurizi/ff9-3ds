@@ -334,7 +334,9 @@ static void draw_party(void) {
 /* the argument bytes after the message system's escape F9 c (msg.c's text stepping) */
 static int esc_args(u8 c) {
     switch (c) {
-    case 0x06: case 0x07: case 0x48: return 2;
+    case 0x5F: return 6; /* (TEXT_BALLOON_OFS) */
+    case 0x03: return 3; /* (TEXT_WIN_POS) */
+    case 0x06: case 0x07: case 0x48: case 0x4F: return 2;
     case 0x00: case 0x01: case 0x02: case 0x0E: case 0x0F: case 0x40: case 0x41: case 0x43: case 0x44: case 0x49:
     case 0x4A: case 0x4B: case 0x4C: case 0x4D: case 0x4E: case 0x70: return 1;
     default: return c >= 0x68 && c <= 0x6F ? 1 : 0;
@@ -392,17 +394,6 @@ static const u8 *msg_plain(const u8 *t, u8 *o, int max, u8 stop) {
                                                        * as a window of its own: Prima Vista's "Who's there!?") */
             if (stop == TEXT_END && o > start && o[-1] != TEXT_NEWLINE) *o++ = TEXT_NEWLINE;
             held = 1;
-            t += 2;
-            continue;
-        }
-        if (*t == TEXT_ESC && t[1] == TEXT_LINE_WIDTHS) { /* (a layout header: {u16 width, text up to TEXT_END}...,
-                                                            * 0xFFFF) */
-            t += 2;
-            while ((t[0] | t[1] << 8) != 0xFFFF) {
-                t += 2;
-                while (*t != TEXT_END) t++;
-                t++;
-            }
             t += 2;
             continue;
         }

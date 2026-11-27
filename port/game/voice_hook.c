@@ -8,6 +8,7 @@
  * (log_line). */
 #define M2CTX
 #include "ff9.h"
+#include "port_textcode.h"
 
 void msg_open_game(s32 msg, s32 id, WinLayout *l, s32 flags);
 __attribute__((weak)) void ctr_voice_line(unsigned bank, unsigned message) { (void)bank; (void)message; }
@@ -16,23 +17,41 @@ void port_log(const char *fmt, ...);
 
 static int voiced = -1, voiced_msg; /* the window whose line is voiced */
 
-/* the line to the bottom screen's dialogue log (field_hud.c). A message needn't end in TEXT_END: one the script
- * closes (a question it reads the answer of, after TEXT_HOLD) runs into the next, so it ends where the next message
- * of the table starts (the Moogle's "Save / Tent / Cancel" ran on into the rest of the bank: the save, tent and
- * goodbye lines and some test text) */
+/* the line to the bottom screen's dialogue log (field_hud.c), as the window shows it. Each message of the table has its
+ * layout header (msg_getEntry) and then its text (msg_drawText_msg), so a message's text ends where the next one's
+ * header starts: one the script closes needn't end in TEXT_END (a question it reads the answer of, after TEXT_HOLD),
+ * and read on, the Moogle's "Save / Tent / Cancel" ran into the rest of the bank (the save, tent and goodbye lines,
+ * test text) and the headers' numbers showed as letters. Of its choices, those the game hides (g_msgChoiceEnabled,
+ * which msg_getLayout set for this window) are left out: a field Moogle's menu text also has "Mogshop", "Switch party
+ * members" and "Debug". */
+u8 *msg_getEntry(s32 i, WinLayout *out);
 static void log_line(s32 msg) {
     void port_dialogue_log(const u8 *text);
-    static u8 line[1024 + 3];
-    const u8 *t = msg_drawText_msg(msg), *next = msg_drawText_msg(msg + 1);
-    unsigned n = 0;
+    static u8 raw[1024], line[1024 + 1];
+    const u8 *t = msg_drawText_msg(msg), *next = msg_getEntry(msg + 1, NULL);
+    unsigned n = 0, o = 0, lines = 0;
     if (!t) return;
-    if (next > t) { /* (to the next message; the layout headers in it can hold TEXT_END) */
-        n = (unsigned)(next - t) < 1024 ? (unsigned)(next - t) : 1024;
-        __builtin_memcpy(line, t, n);
-    } else {
-        while (n < 1024 && t[n] != TEXT_END) line[n] = t[n], n++;
+    unsigned max = next > t && (unsigned)(next - t) < sizeof raw ? (unsigned)(next - t) : sizeof raw;
+    while (n < max && t[n] != TEXT_END) raw[n] = t[n], n++;
+    u32 shown = g_msgChoiceEnabled ? (u32)g_msgChoiceEnabled : ~0u;
+    int choice = -1; /* the choice the line is, from the one holding TEXT_CHOICE_START */
+    for (unsigned i = 0; i < n;) { /* line by line */
+        unsigned e = i;
+        int starts = 0;
+        while (e < n && raw[e] != TEXT_NEWLINE) {
+            if (raw[e] == TEXT_ESC && e + 1 < n) starts |= raw[e + 1] == TEXT_CHOICE_START, e += 2;
+            else e += port_text_lead(raw[e]) && e + 1 < n ? 2 : 1;
+        }
+        if (e > n) e = n;
+        choice = starts ? 0 : choice >= 0 ? choice + 1 : -1;
+        if ((e > i || lines) && (choice < 0 || choice >= 32 || shown >> choice & 1)) { /* (not a blank first line) */
+            if (lines++) line[o++] = TEXT_NEWLINE;
+            __builtin_memcpy(line + o, raw + i, e - i);
+            o += e - i;
+        }
+        i = e + 1;
     }
-    line[n] = line[n + 1] = line[n + 2] = TEXT_END; /* (a header cut off at the end still ends: 0xFFFF) */
+    line[o] = TEXT_END;
     port_dialogue_log(line);
 }
 
