@@ -301,7 +301,7 @@ static void portrait(int slot, int index, int x, int y, int ko) {
     if (!e) return;
     const u8 *f = port_portrait_face(index);
     ctr_hud_image(slot, 0x100u | (u32)index, (const u16 *)e, f, 32, 32);
-    (ko ? ctr_hud_draw_semi : ctr_hud_draw)(slot, x, y, 32, 32); /* (KO: semi-transparent, as the main menu's) */
+    (ko ? ctr_hud_draw_semi : ctr_hud_draw)(slot, x, y, 32, 32); /* (KO: dimmed, as the main menu shows it) */
 }
 
 static void draw_party(void) {
