@@ -381,12 +381,22 @@ static u8 *msg_value(u8 c, const u8 *arg, u8 *o, u8 *end) {
 
 static const u8 *msg_plain(const u8 *t, u8 *o, int max, u8 stop) {
     u8 *start = o;
+    int held = 0; /* after a hold: its line break taken */
     while (*t != TEXT_END && *t != stop && o < start + max - 5) {
         if (*t == TEXT_ESC && (t[1] == TEXT_MSG_ITEM_NAME || t[1] == TEXT_MSG_NUMBER || t[1] == TEXT_BANK_TEXT)) {
             o = msg_value(t[1], t + 2, o, start + max - 5);
             t += 2 + esc_args(t[1]);
             continue;
         }
+        if (*t == TEXT_ESC && t[1] == TEXT_HOLD) { /* (the window waits for the script, which shows the rest after it
+                                                       * as a window of its own: Prima Vista's "Who's there!?") */
+            if (stop == TEXT_END && o > start && o[-1] != TEXT_NEWLINE) *o++ = TEXT_NEWLINE;
+            held = 1;
+            t += 2;
+            continue;
+        }
+        if (held && (*t == TEXT_NEWLINE || *t == 0x0F)) { t++; continue; } /* (its own line break or space after it) */
+        if (*t != TEXT_ESC) held = 0;
         if (*t == TEXT_ESC) {
             u8 c = t[1];
             int n = 2 + esc_args(c);
@@ -403,6 +413,7 @@ static const u8 *msg_plain(const u8 *t, u8 *o, int max, u8 stop) {
             t++;
         } else *o++ = *t++;
     }
+    while (o > start && o[-1] == TEXT_NEWLINE) o--; /* (nothing after a hold) */
     *o = TEXT_END;
     return t;
 }
