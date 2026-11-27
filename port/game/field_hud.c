@@ -70,6 +70,8 @@ int port_hud_shown(void) {
 
 static int menu_shown; /* the MENU button is there (the game allows the menu) */
 static int log_head, log_count, log_scroll, log_on; /* the dialogue log (port_dialogue_log) */
+static int log_shown; /* the log drawn this frame (draw_log): touch.c's drags then scroll it */
+static RECT r_tail = {284, 162, 26, 18}; /* the log scrolled back: back to the newest line (inside r_logbox) */
 static int opts_on; /* the options page in the log's place */
 static RECT r_optbtn = {226, 38, 84, 20};
 static int options_tap(int x, int y);
@@ -245,6 +247,7 @@ int port_hud_tap(int x, int y, int oy, unsigned *seq, int max) {
     if (inside(&r_log, x, y)) { log_on = !log_on; log_scroll = 0; opts_on = 0; return -1; }
     if (log_on && !opts_on && inside(&r_optbtn, x, y)) { opts_on = 1; return -1; }
     if (log_on && opts_on) { options_tap(x, y); return -1; }
+    if (log_on && log_scroll && inside(&r_tail, x, y)) { log_scroll = 0; return -1; } /* (back to the newest) */
     if (log_on && inside(&r_logbox, x, y)) { /* (the upper half: older, the lower: newer) */
         if (y < r_logbox.y + r_logbox.h / 2) { if (log_scroll < log_count - 1) log_scroll++; }
         else if (log_scroll > 0) log_scroll--;
@@ -431,7 +434,22 @@ void port_dialogue_log(const u8 *text) {
     if (log_count && !__builtin_memcmp(o, log_text[(log_head + LOG_LINES - 1) % LOG_LINES], sizeof log_text[0])) return;
     log_head = (log_head + 1) % LOG_LINES;
     if (log_count < LOG_LINES) log_count++;
-    log_scroll = 0;
+    if (log_scroll && log_scroll < log_count - 1) log_scroll++; /* (scrolled back: the view stays where it is) */
+}
+
+/* ---- dragging the log: the stylus went down at (x, y) (screen pixels); 1 when the log takes the drag, which touch.c
+ * then sends here (port_hud_drag: its vertical distance) instead of stepping the game's cursor. Down shows older lines,
+ * a line per LOG_DRAG_STEP pixels. ---- */
+#define LOG_DRAG_STEP 16
+static int drag_base;
+int port_hud_drag_begin(int x, int y) {
+    if (!log_shown || !inside(&r_logbox, x, y) || (log_scroll && inside(&r_tail, x, y))) return 0;
+    drag_base = log_scroll;
+    return 1;
+}
+void port_hud_drag(int dy) {
+    int s = drag_base + dy / LOG_DRAG_STEP;
+    log_scroll = s < 0 ? 0 : s > log_count - 1 ? (log_count > 0 ? log_count - 1 : 0) : s;
 }
 
 /* the log in the middle area, newest at the bottom (log_scroll lines back) */
@@ -661,7 +679,13 @@ static void draw_log(void) {
         y -= h + 4;
         text_drawBlock(box.x + 8, y, 2, t, i ? 2 : 0);
     }
+    if (log_scroll) { /* (over the lines: the arrow in front, its box over the text) */
+        const SpriteDef *d = &g_uiSprites[UI_SPRITE_SCROLL_DOWN];
+        ui_drawSprite(r_tail.x + (r_tail.w - d->w) / 2, r_tail.y + (r_tail.h - d->h) / 2, 0, UI_SPRITE_SCROLL_DOWN, 0);
+        win_drawBox(&r_tail, 1, 2);
+    }
     win_drawBox(&box, 3, 2);
+    log_shown = 1;
 }
 
 static int choices_only;
@@ -1078,6 +1102,7 @@ int psx_ui_list_begin_part(int x0, int y0, int x1, int y1);
 static int splash_on;
 void port_splash_running(int on) { splash_on = on; }
 void port_bottom_hud(void) {
+    log_shown = 0; /* (drawn again below, or not this frame) */
     { void port_rewards_live_draw(void); port_rewards_live_draw(); } /* (the rewards under a battle: rewards_top.c) */
     shown = shown_battle = 0;
     if (splash_on) return;

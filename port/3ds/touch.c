@@ -5,8 +5,8 @@
  * column), and presses cross. The game's own cursor logic (wrapping, skipped entries, sub-menus) is never
  * bypassed: touch is a faster way of pressing the buttons the player could press. A tap with no hand on screen
  * does nothing. A swipe instead of a tap: left is back (circle), up or down steps the cursor once per 24 pixels
- * (scrolling a list). AUTOTOUCH="X,Y@FRAME ..." scripts taps for tests (X,Y@FRAME+N holds, X,Y>X2,Y2@FRAME+N
- * drags). */
+ * (scrolling a list); on the open dialogue log a vertical drag scrolls the log instead (field_hud.c).
+ * AUTOTOUCH="X,Y@FRAME ..." scripts taps for tests (X,Y@FRAME+N holds, X,Y>X2,Y2@FRAME+N drags). */
 #include <3ds.h>
 #include "port_buttons.h"
 #include <stdlib.h>
@@ -27,6 +27,7 @@ static int goal, gx, gy, steps, timer;
 static unsigned held;
 /* the stylus while it is down: where it went down, and how far a vertical swipe has stepped */
 static int down, dx0, dy0, swiped, vsteps, last_x, last_y;
+static int log_drag; /* the stylus went down on the open dialogue log (field_hud.c): its drag scrolls the log; 2 once it moved */
 static unsigned queued, nqueued; /* presses a swipe asked for, done one at a time */
 static unsigned seq[16];
 static int nseq, iseq; /* presses a tap on the bottom screen's own buttons stands for (port/game/field_hud.c) */
@@ -127,11 +128,19 @@ unsigned int ctr_ui_pad_buttons(long frame) {
     (void)frame;
 #endif
     if (kh & KEY_TOUCH) {
-        if (kd & KEY_TOUCH) down = 1, dx0 = t.px, dy0 = t.py, swiped = 0, vsteps = 0;
+        if (kd & KEY_TOUCH) {
+            int port_hud_drag_begin(int x, int y);
+            down = 1, dx0 = t.px, dy0 = t.py, swiped = 0, vsteps = 0;
+            log_drag = port_hud_drag_begin(t.px, t.py);
+        }
         last_x = t.px;
         last_y = t.py;
         int mx = t.px - dx0, my = t.py - dy0;
-        if (!swiped && mx < -48 && abs(my) < 32) { /* swipe left: back */
+        if (log_drag) { /* (the log scrolls with the stylus; moved, it is no tap) */
+            void port_hud_drag(int dy);
+            if (abs(my) >= 6) log_drag = 2;
+            if (log_drag == 2) port_hud_drag(my);
+        } else if (!swiped && mx < -48 && abs(my) < 32) { /* swipe left: back */
             swiped = 1;
             queued = PORT_PAD_CANCEL, nqueued = 1; /* (cancel: Circle, Cross in JP) */
         } else if (!swiped || vsteps) {
@@ -147,6 +156,8 @@ unsigned int ctr_ui_pad_buttons(long frame) {
         down = 0;
         /* a tap: on release, where it was; on the field screen's buttons (port/game/field_hud.c), their button */
         int port_hud_tap(int x, int y, int oy, unsigned *seq, int max);
+        if (log_drag == 2) swiped = 1; /* (a drag of the log, not a tap) */
+        log_drag = 0;
         int n = swiped ? 0 : port_hud_tap(last_x, last_y, ctr_ui_oy, seq, 16);
         if (n > 0) nseq = n, iseq = 0;
         else if (!n && !swiped) tap(last_x, last_y);
