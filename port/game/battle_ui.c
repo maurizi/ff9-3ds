@@ -221,11 +221,11 @@ static void draw_cards(void) {
          * outlined digits) */
         ui_drawSmallDigits(x + 40, y + 15, 2, (u8 *)hp, TEXT_PAL_WHITE);
         text_formatNumber(u->menu->gauges[0].shown, a, 4, 1);
-        ui_drawSmallDigits(x + 54, y + 15, 2, a, row);
-        ui_drawSmallDigits(x + 86, y + 15, 2, (u8 *)mp, TEXT_PAL_WHITE);
+        ui_drawSmallDigits(x + 56, y + 15, 2, a, row);
+        ui_drawSmallDigits(x + 88, y + 15, 2, (u8 *)mp, TEXT_PAL_WHITE);
         text_formatNumber(u->menu->gauges[1].shown, a, 3, 1);
         /* (MP yellow at a sixth or less, as the panel's (btlui_drawPanelMp)) */
-        ui_drawSmallDigits(x + 100, y + 15, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE);
+        ui_drawSmallDigits(x + 104, y + 15, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE);
         /* the ATB bar and the trance bar under it, coloured as the game's panel (btlui_drawPanelGauges): the ATB's
          * colours for Slow or Stop, Haste or neither (the panel's atbKind), both pulsing when full while the member
          * can act (not KO, asleep, stopped, confused...: the panel's cantAct; no command given yet) */
@@ -420,10 +420,10 @@ static int draw_targets(void) {
             }
             ui_drawSmallDigits(r->x + 12, r->y + 20, 2, (u8 *)hpl, TEXT_PAL_WHITE);
             text_formatNumber(u->hp, a, 4, 1);
-            ui_drawSmallDigits(r->x + 26, r->y + 20, 2, a, row);
+            ui_drawSmallDigits(r->x + 28, r->y + 20, 2, a, row);
             ui_drawSmallDigits(r->x + 92, r->y + 20, 2, (u8 *)mpl, TEXT_PAL_WHITE);
             text_formatNumber(u->mp, a, 3, 1);
-            ui_drawSmallDigits(r->x + 106, r->y + 20, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE);
+            ui_drawSmallDigits(r->x + 108, r->y + 20, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE);
         } else /* (an enemy grey when KO, as the game's window) */
             text_drawBlock(r->x + 12, r->y + 7, 2, (u8 *)o0b_btl_getUnitName(u), o0b_btl_hasStatus(u, BTL_STATUS_KO) & 0xFF ? TEXT_PAL_GREY : 0);
         if (u->flags >> 29 & 1) bar(&g_ot[2], r->x + 3, r->y + 6, 3, r->h - 12, 0x40E0F8);

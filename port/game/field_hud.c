@@ -323,12 +323,12 @@ static void draw_party(void) {
         text_formatNumber(c->hp, a, 4, 1);
         a[4] = '/';
         text_formatNumber(c->maxHp, a + 5, -1, 1);
-        ui_drawSmallDigits(tx + 14, y + 15, 2, a, hpc);
+        ui_drawSmallDigits(tx + 16, y + 15, 2, a, hpc);
         ui_drawSmallDigits(tx, y + 24, 2, (u8 *)mp, TEXT_PAL_WHITE);
         text_formatNumber(c->mp, a, 4, 1);
         a[4] = '/';
         text_formatNumber(c->maxMp, a + 5, -1, 1);
-        ui_drawSmallDigits(tx + 14, y + 24, 2, a, (s16)((s16)c->maxMp / 6) >= (s16)c->mp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE);
+        ui_drawSmallDigits(tx + 16, y + 24, 2, a, (s16)((s16)c->maxMp / 6) >= (s16)c->mp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE);
     }
     win_drawBox(&r_party, 3, 2);
 }
