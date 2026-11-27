@@ -42,6 +42,7 @@ int port_battle_hud_targets; /* ... its targets too (render.c leaves the target 
 
 void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h);
 void ctr_hud_draw(int slot, int x, int y, int w, int h);
+void ctr_hud_draw_semi(int slot, int x, int y, int w, int h); /* (semi-transparent: a KO'd member, as the main menu) */
 void ctr_hud_bar(int x, int y, int w, int h, u32 bgr); /* (a solid bar over the bottom screen's layer, this present) */
 void ctr_hud_bar2(int x, int y, int w, int h, u32 bgr, u32 bgr2); /* (the same, a gradient: bgr at its left, bgr2 at its right) */
 const u8 *port_portrait(int index); /* field_hud.c: the menu's portrait entry (0x6C0 bytes), NULL if unread */
@@ -187,26 +188,6 @@ static void gauge(int x, int y, int w, int h, int cur, int max, int style, int a
     ctr_hud_bar2(x, y, w * cur / max, h, cv_bgr(&c1), cv_bgr(&c2));
 }
 
-/* a member's name as the game's panel draws it (btlui_drawPanelName): the sprite of it the battle renders in the
- * font's VRAM (outlined on every side), through the row's palette (g_btluiRowCluts: the colour of a KO or low HP);
- * 0 when that isn't there yet */
-static int panel_name(int x, int y, int row, int colour) {
-    if (!g_btluiPrims || !ram_ok(g_btluiPrims, sizeof *g_btluiPrims)) return 0;
-    int k = g_btluiPanel->slot[row] & 3;
-    const SPRT *src = &g_btluiPrims->names[k][g_drawBufs.cur];
-    if (!src->w || !src->h) return 0;
-    SPRT *sp = (SPRT *)g_primPtr;
-    *sp = *src;
-    sp->x0 = (s16)x, sp->y0 = (s16)y;
-    sp->clut = (u16)(g_btluiRowCluts[colour] + ((k >> 1) << 6));
-    addPrim(&g_ot[2], sp);
-    DR_TPAGE *tp = (DR_TPAGE *)(sp + 1);
-    *tp = g_btluiPrims->namesTpage[g_drawBufs.cur];
-    addPrim(&g_ot[2], tp); /* (before the sprite: the OT's head is drawn first) */
-    g_primPtr = (u8 *)(tp + 1);
-    return 1;
-}
-
 static void draw_cards(void) {
     static const u8 hp[] = TX("HP", "PV", "HP", "HP", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP", "MP", "MP");
     u8 a[16];
@@ -220,12 +201,12 @@ static void draw_cards(void) {
         if (e) {
             ctr_hud_image(4 + i, 0x200u | (u32)g_portraitByKind[c->info.b.kind], (const u16 *)e,
                           port_portrait_face(g_portraitByKind[c->info.b.kind]), 32, 32);
-            ctr_hud_draw(4 + i, x, y + 1, 32, 32);
+            (u->hp == 0 ? ctr_hud_draw_semi : ctr_hud_draw)(4 + i, x, y + 1, 32, 32); /* (KO: dimmed, as the main menu) */
         }
         /* (the row's colour as the game's panel takes it (btlui_updatePanelRowColor, which runs only while that panel is
          * drawn): red when KO, yellow at a sixth of the HP or less; the name and the HP in it) */
-        int row = u->hp == 0 ? DIGITS_RED : (s32)(u16)(u->max->maxHp / 6) >= u->hp ? DIGITS_YELLOW : DIGITS_WHITE;
-        if (!panel_name(x + 40, y - 1, i, row)) text_drawBlock(x + 40, y, 2, c->name, row);
+        int row = u->hp == 0 ? TEXT_PAL_RED : (s32)(u16)(u->max->maxHp / 6) >= u->hp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE;
+        text_drawBlock(x + 40, y, 2, c->name, row);
         { /* its statuses: the game's icons (the battle status list's table), up to four after the name */
             u32 st = u->status | u->autoStatus;
             int ix = x + 104, n = 0;
@@ -236,13 +217,15 @@ static void draw_cards(void) {
                     n++;
                 }
         }
-        ui_drawLabel(x + 40, y + 14, 2, (s32)hp, 0);
+        /* (the labels in the digits' small font: one plain style on the card, the user's choice over the panel's
+         * outlined digits) */
+        ui_drawSmallDigits(x + 40, y + 15, 2, (u8 *)hp, TEXT_PAL_WHITE);
         text_formatNumber(u->menu->gauges[0].shown, a, 4, 1);
-        ui_drawDigits(x + 54, y + 13, 2, a, row); /* (the panel's digits: larger, outlined; DIGITS_RED / YELLOW = the row) */
-        ui_drawLabel(x + 86, y + 14, 2, (s32)mp, 0);
+        ui_drawSmallDigits(x + 54, y + 15, 2, a, row);
+        ui_drawSmallDigits(x + 86, y + 15, 2, (u8 *)mp, TEXT_PAL_WHITE);
         text_formatNumber(u->menu->gauges[1].shown, a, 3, 1);
         /* (MP yellow at a sixth or less, as the panel's (btlui_drawPanelMp)) */
-        ui_drawDigits(x + 100, y + 13, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? DIGITS_YELLOW : DIGITS_WHITE);
+        ui_drawSmallDigits(x + 100, y + 15, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE);
         /* the ATB bar and the trance bar under it, coloured as the game's panel (btlui_drawPanelGauges): the ATB's
          * colours for Slow or Stop, Haste or neither (the panel's atbKind), both pulsing when full while the member
          * can act (not KO, asleep, stopped, confused...: the panel's cantAct; no command given yet) */
@@ -419,8 +402,8 @@ static int draw_targets(void) {
             static const u8 hpl[] = TX("HP", "PV", "HP", "HP", "HP", "HP"), mpl[] = TX("MP", "PM", "MP", "MP", "MP", "MP");
             u8 a[8];
             /* (the name as the game's target window draws a party member's (btlui_drawTargetList): red when KO, yellow
-             * at a sixth of the HP or less; HP and MP in the panel's digits, as the party cards) */
-            int row = ko ? DIGITS_RED : (s32)(u16)(u->max->maxHp / 6) >= u->hp ? DIGITS_YELLOW : DIGITS_WHITE;
+             * at a sixth of the HP or less; HP and MP in the small digits, as the party cards) */
+            int row = ko ? TEXT_PAL_RED : (s32)(u16)(u->max->maxHp / 6) >= u->hp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE;
             text_draw(r->x + 12, r->y + 4, 2, (u8 *)o0b_btl_getUnitName(u), row);
             /* (the game's two status icon tables, the ailments (Petrify, Poison, ...) and the boons (Protect, Shell,
              * Haste, Regen, Reflect, ...), as many as fit after the name. The PS1's window beside a target shows the
@@ -435,12 +418,12 @@ static int draw_targets(void) {
                 ui_drawSprite(ix, r->y + 5, 2, e->icon, 0);
                 ix += 12;
             }
-            ui_drawLabel(r->x + 12, r->y + 19, 2, (s32)hpl, 0);
+            ui_drawSmallDigits(r->x + 12, r->y + 20, 2, (u8 *)hpl, TEXT_PAL_WHITE);
             text_formatNumber(u->hp, a, 4, 1);
-            ui_drawDigits(r->x + 26, r->y + 18, 2, a, row);
-            ui_drawLabel(r->x + 92, r->y + 19, 2, (s32)mpl, 0);
+            ui_drawSmallDigits(r->x + 26, r->y + 20, 2, a, row);
+            ui_drawSmallDigits(r->x + 92, r->y + 20, 2, (u8 *)mpl, TEXT_PAL_WHITE);
             text_formatNumber(u->mp, a, 3, 1);
-            ui_drawDigits(r->x + 106, r->y + 18, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? DIGITS_YELLOW : DIGITS_WHITE);
+            ui_drawSmallDigits(r->x + 106, r->y + 20, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE);
         } else /* (an enemy grey when KO, as the game's window) */
             text_drawBlock(r->x + 12, r->y + 7, 2, (u8 *)o0b_btl_getUnitName(u), o0b_btl_hasStatus(u, BTL_STATUS_KO) & 0xFF ? TEXT_PAL_GREY : 0);
         if (u->flags >> 29 & 1) bar(&g_ot[2], r->x + 3, r->y + 6, 3, r->h - 12, 0x40E0F8);

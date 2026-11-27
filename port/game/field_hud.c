@@ -262,6 +262,7 @@ __attribute__((weak)) void ctr_hud_image(int slot, u32 key, const u16 *clut, con
     (void)slot; (void)key; (void)clut; (void)pix; (void)w; (void)h;
 }
 __attribute__((weak)) void ctr_hud_draw(int slot, int x, int y, int w, int h) { (void)slot; (void)x; (void)y; (void)w; (void)h; }
+__attribute__((weak)) void ctr_hud_draw_semi(int slot, int x, int y, int w, int h) { ctr_hud_draw(slot, x, y, w, h); }
 void psx_cd_read_data(unsigned int lba, void *buf, unsigned int n);
 #define PORTRAIT_BYTES 0x6C0
 static u8 portraits[48 * 1024];
@@ -295,12 +296,12 @@ const u8 *port_portrait_face(int index) {
     return face;
 }
 
-static void portrait(int slot, int index, int x, int y) {
+static void portrait(int slot, int index, int x, int y, int ko) {
     const u8 *e = port_portrait(index);
     if (!e) return;
     const u8 *f = port_portrait_face(index);
     ctr_hud_image(slot, 0x100u | (u32)index, (const u16 *)e, f, 32, 32);
-    ctr_hud_draw(slot, x, y, 32, 32);
+    (ko ? ctr_hud_draw_semi : ctr_hud_draw)(slot, x, y, 32, 32); /* (KO: semi-transparent, as the main menu's) */
 }
 
 static void draw_party(void) {
@@ -312,20 +313,22 @@ static void draw_party(void) {
         Character *c = g->party[i];
         if (!ram_ok(c, sizeof *c)) continue;
         int x = r_party.x + 6, tx = x + 38;
-        portrait(i, g_portraitByKind[g->characters[c->info.b.id].info.b.kind], x, y);
-        text_drawBlock(tx, y, 2, c->name, 0);
+        portrait(i, g_portraitByKind[g->characters[c->info.b.id].info.b.kind], x, y, c->hp == 0);
+        text_drawBlock(tx, y, 2, c->name, TEXT_PAL_WHITE);
         ui_drawStatusIcons(r_party.x + r_party.w - 30, y + 1, 2, c->status, 0);
-        int low = c->hp == 0 ? 3 : (c->hp <= c->maxHp / 6) * 4;
-        ui_drawLabel(tx, y + 14, 2, (s32)hp, 0);
+        /* (coloured as the main menu's (ui_drawCharStatus): HP red when KO, yellow at a sixth or less; MP yellow at a
+         * sixth or less; the name white. The labels in the digits' small font, as the battle cards) */
+        int hpc = c->hp == 0 ? TEXT_PAL_RED : (u16)(c->maxHp / 6) >= c->hp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE;
+        ui_drawSmallDigits(tx, y + 15, 2, (u8 *)hp, TEXT_PAL_WHITE);
         text_formatNumber(c->hp, a, 4, 1);
         a[4] = '/';
         text_formatNumber(c->maxHp, a + 5, -1, 1);
-        ui_drawSmallDigits(tx + 14, y + 15, 2, a, low ? 2 : 0);
-        ui_drawLabel(tx, y + 23, 2, (s32)mp, 0);
+        ui_drawSmallDigits(tx + 14, y + 15, 2, a, hpc);
+        ui_drawSmallDigits(tx, y + 24, 2, (u8 *)mp, TEXT_PAL_WHITE);
         text_formatNumber(c->mp, a, 4, 1);
         a[4] = '/';
         text_formatNumber(c->maxMp, a + 5, -1, 1);
-        ui_drawSmallDigits(tx + 14, y + 24, 2, a, c->mp < c->maxMp / 6 ? 2 : 0);
+        ui_drawSmallDigits(tx + 14, y + 24, 2, a, (s16)((s16)c->maxMp / 6) >= (s16)c->mp ? TEXT_PAL_YELLOW : TEXT_PAL_WHITE);
     }
     win_drawBox(&r_party, 3, 2);
 }
