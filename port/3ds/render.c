@@ -464,6 +464,7 @@ int ctr_freeze_held; /* the menu snapshot kept as it is (battle_ui.c: from the b
 static int menu_state; /* port_menu_state(), read at each present */
 static int have_freeze; /* freeze_tex holds a scene */
 #define UNDIM_FRAMES 12 /* a closed menu's paused scene undimmed over these presents */
+#define HOLD_LAG 3 /* presents a window's animation still holds the menu snapshot after it ends (menu_defer.c waits longer) */
 static int prev_mode;
 static int prev_menu, closing; /* (ctr_present: the menu at the last present; a closed menu's undimming, in presents) */
 int ctr_sw_uisame = 1;
@@ -5920,7 +5921,9 @@ void ctr_present(long frame) {
         int port_window_closing(void);
         static int unsettled; /* (frames the snapshot was held for a window animating: at most 30, a window kept small
                                 * for good would otherwise hold an old scene) */
-        int hold = have_freeze && port_window_closing() && unsettled < 30;
+        int port_windows_quiet(void), busy = port_window_closing(); /* (called every present: it keeps the time) */
+        /* (and for HOLD_LAG presents after: the picture lags the windows' state, a box just closed still shrinking in it) */
+        int hold = have_freeze && (busy || port_windows_quiet() < HOLD_LAG) && unsettled < 30;
         unsettled = hold ? unsettled + 1 : 0;
         if (!menu_state && w >= 256 && !ctr_freeze_held && !closing && !hold) {
             /* (held: the battle's exit fade, battle_ui.c; a window shrinking: ui_split.c) */

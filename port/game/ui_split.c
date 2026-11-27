@@ -254,15 +254,26 @@ int port_menu_state(void) {
 
 /* a window is closing (a speech bubble shrinking away): render.c keeps the scene it holds for a menu's top screen as it
  * was before, the bubble whole (a menu opened by a talk showed the bubble half shrunk, its text cut: "der.") */
+static unsigned busy_at; /* VSync(-1) when a window was last seen animating (port_windows_quiet) */
+static int busy_seen;
 int port_window_closing(void) {
     for (int i = 0; i < 10; i++) {
         const Window *w = &g_windows[i];
-        if (w->state == WIN_STATE_CLOSING || w->state == WIN_STATE_OPENING) return 1;
         /* (any not yet at its size: a question's box shrinking as its answer is taken ("on't buy") before its state
          * says so) */
-        if (w->state != WIN_STATE_CLOSED && w->visible && (w->cur.w < w->w || w->cur.h < w->h)) return 1;
+        if (w->state == WIN_STATE_CLOSING || w->state == WIN_STATE_OPENING ||
+            (w->state != WIN_STATE_CLOSED && w->visible && (w->cur.w < w->w || w->cur.h < w->h))) {
+            busy_at = VSync(-1), busy_seen = 1;
+            return 1;
+        }
     }
     return 0;
+}
+/* frames since a window was last seen animating (by render.c, each present): the picture shows the frames drawn a
+ * frame or two before, so a box whose window has just closed is still on the screen, shrinking (a shopkeeper's
+ * "Good afternoon!" cut to "aftern" in the top screen's frozen scene; menu_defer.c) */
+int port_windows_quiet(void) {
+    return busy_seen ? (int)(VSync(-1) - busy_at) : 1 << 20;
 }
 
 /* how dark the game's screen fade has the scene now, 0 (clear) to 256 (black), for the bottom screen to follow: the
