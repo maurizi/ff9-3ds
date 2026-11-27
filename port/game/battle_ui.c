@@ -311,6 +311,7 @@ static int list_shown, list_n, list_entry[5]; /* (the list entry each row shows)
 s32 o0b_btlui_getListHelpText(void);
 s32 o0b_btlui_getAbilityState(s32);
 void *o0b_btl_getUnitName(BtlUnit *);
+s32 o0b_btl_hasStatus(BtlUnit *, u32);
 
 /* An ability list holds every ability of the member's command, the ones they haven't (not learned, not on their gear)
  * as blank rows the PS1's cursor still stops on. Here only the ones they have are rows, and the cursor is kept on
@@ -417,7 +418,10 @@ static int draw_targets(void) {
         if (is_party) {
             static const u8 hpl[] = TX("HP", "PV", "HP", "HP", "HP", "HP"), mpl[] = TX("MP", "PM", "MP", "MP", "MP", "MP");
             u8 a[8];
-            text_drawBlock(r->x + 12, r->y + 4, 2, (u8 *)o0b_btl_getUnitName(u), ko ? 2 : 0);
+            /* (the name as the game's target window draws a party member's (btlui_drawTargetList): red when KO, yellow
+             * at a sixth of the HP or less; HP and MP in the panel's digits, as the party cards) */
+            int row = ko ? DIGITS_RED : (s32)(u16)(u->max->maxHp / 6) >= u->hp ? DIGITS_YELLOW : DIGITS_WHITE;
+            text_draw(r->x + 12, r->y + 4, 2, (u8 *)o0b_btl_getUnitName(u), row);
             /* (the game's two status icon tables, the ailments (Petrify, Poison, ...) and the boons (Protect, Shell,
              * Haste, Regen, Reflect, ...), as many as fit after the name. The PS1's window beside a target shows the
              * list the ability names (g_btlTarget.listKind: 1 HP, 2 MP, 3 ailments, 4 boons): Esuna or a Soft by the
@@ -433,11 +437,12 @@ static int draw_targets(void) {
             }
             ui_drawLabel(r->x + 12, r->y + 19, 2, (s32)hpl, 0);
             text_formatNumber(u->hp, a, 4, 1);
-            ui_drawSmallDigits(r->x + 26, r->y + 20, 2, a, ko || u->max->maxHp / 6 >= u->hp ? 2 : 0);
+            ui_drawDigits(r->x + 26, r->y + 18, 2, a, row);
             ui_drawLabel(r->x + 92, r->y + 19, 2, (s32)mpl, 0);
             text_formatNumber(u->mp, a, 3, 1);
-            ui_drawSmallDigits(r->x + 106, r->y + 20, 2, a, u->max->maxMp / 6 >= u->mp ? 2 : 0);
-        } else text_drawBlock(r->x + 12, r->y + 7, 2, (u8 *)o0b_btl_getUnitName(u), ko ? 2 : 0);
+            ui_drawDigits(r->x + 106, r->y + 18, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? DIGITS_YELLOW : DIGITS_WHITE);
+        } else /* (an enemy grey when KO, as the game's window) */
+            text_drawBlock(r->x + 12, r->y + 7, 2, (u8 *)o0b_btl_getUnitName(u), o0b_btl_hasStatus(u, BTL_STATUS_KO) & 0xFF ? TEXT_PAL_GREY : 0);
         if (u->flags >> 29 & 1) bar(&g_ot[2], r->x + 3, r->y + 6, 3, r->h - 12, 0x40E0F8);
         win_drawBox(r, 4, 2);
     }
