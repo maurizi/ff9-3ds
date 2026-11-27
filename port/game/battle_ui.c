@@ -201,7 +201,7 @@ static void draw_cards(void) {
         if (e) {
             ctr_hud_image(4 + i, 0x200u | (u32)g_portraitByKind[c->info.b.kind], (const u16 *)e,
                           port_portrait_face(g_portraitByKind[c->info.b.kind]), 32, 32);
-            (u->hp == 0 ? ctr_hud_draw_semi : ctr_hud_draw)(4 + i, x, y + 1, 32, 32); /* (KO: dimmed, as the main menu) */
+            (u->hp == 0 ? ctr_hud_draw_semi : ctr_hud_draw)(4 + i, x, y + 1, 32, 32); /* (KO: faded semi-transparent, as the main menu) */
         }
         /* (the row's colour as the game's panel takes it (btlui_updatePanelRowColor, which runs only while that panel is
          * drawn): red when KO, yellow at a sixth of the HP or less; the name and the HP in it) */

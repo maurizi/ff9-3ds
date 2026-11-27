@@ -5422,7 +5422,7 @@ void ctr_top_ui(unsigned *head, const void *buf, unsigned size) {
 /* ---- images of the port's own on the bottom screen (the field screen's portraits: port/game/field_hud.c) ---- */
 #define HUD_IMAGES 8
 static struct { C3D_Tex tex; u32 key; int ok; } hud_img[HUD_IMAGES];
-static struct { int slot, x, y, w, h, dw, dh, semi; } hud_draw[16]; /* (semi: dimmed, ctr_hud_draw_semi) */
+static struct { int slot, x, y, w, h, dw, dh, semi; } hud_draw[16]; /* (semi: B/2 + F/2, ctr_hud_draw_semi) */
 static int n_hud_draw;
 /* Solid bars over the bottom screen's layer, drawn at each present (ctr_hud_bar: a battle's ATB and Trance bars). In
  * the layer, a bar a pixel longer was the whole battle screen drawn again, its 400-odd primitives, at nearly every
@@ -5555,7 +5555,15 @@ static void draw_models(int eye) {
 /* draw image slot at (x, y) of the bottom screen's UI (its 320x224 coordinates) this frame, w x h of it */
 void ctr_hud_draw(int slot, int x, int y, int w, int h) {
     psx_gpu_sync();
-    if (slot < 0 || slot >= HUD_IMAGES || !hud_img[slot].ok || n_hud_draw == 16) return;
+    if (slot < 0 || slot >= HUD_IMAGES || !hud_img[slot].ok) return;
+    /* (the same image at the same place again before a present (a field at 30 frames a second records it at each of
+     * its two VBlanks): that one entry, not a second, so a semi-transparent one isn't blended twice) */
+    for (int i = 0; i < n_hud_draw; i++)
+        if (hud_draw[i].slot == slot && hud_draw[i].x == x && hud_draw[i].y == y) {
+            hud_draw[i].w = hud_draw[i].dw = w, hud_draw[i].h = hud_draw[i].dh = h, hud_draw[i].semi = 0;
+            return;
+        }
+    if (n_hud_draw == 16) return;
     hud_draw[n_hud_draw].slot = slot;
     hud_draw[n_hud_draw].x = x; hud_draw[n_hud_draw].y = y;
     hud_draw[n_hud_draw].w = w; hud_draw[n_hud_draw].h = h;
@@ -5563,13 +5571,12 @@ void ctr_hud_draw(int slot, int x, int y, int w, int h) {
     hud_draw[n_hud_draw].semi = 0;
     n_hud_draw++;
 }
-/* the same, dimmed: a KO'd member's portrait, as the game's main menu shows it. The PS1 draws it semi-transparent (B/2 +
- * F/2) over its window's dark blue, which darkens it; over the port's grey panels that blend lightened the dark parts
- * instead (a KO'd Vivi, mostly black, looked as ever: the user's report), so it is drawn at half its brightness */
+/* the same, semi-transparent as the PS1 draws it (B/2 + F/2): a KO'd member's portrait faded into the panel under it,
+ * as the game's main menu shows it (ui_drawPortrait's flag) */
 void ctr_hud_draw_semi(int slot, int x, int y, int w, int h) {
-    int n = n_hud_draw;
     ctr_hud_draw(slot, x, y, w, h);
-    if (n_hud_draw > n) hud_draw[n].semi = 1;
+    for (int i = 0; i < n_hud_draw; i++)
+        if (hud_draw[i].slot == slot && hud_draw[i].x == x && hud_draw[i].y == y) hud_draw[i].semi = 1;
 }
 
 void ctr_hud_bar2(int x, int y, int w, int h, u32 bgr, u32 bgr2) { /* (bgr at the left end to bgr2 at the right) */
@@ -5585,7 +5592,8 @@ void ctr_hud_bar(int x, int y, int w, int h, u32 bgr) { ctr_hud_bar2(x, y, w, h,
 void ctr_hud_draw_top(int slot, int x, int y, int w, int h, int dw, int dh) {
     psx_gpu_sync();
     ctr_hud_draw(slot, x + 1000, y, w, h);
-    if (n_hud_draw && hud_draw[n_hud_draw - 1].x == x + 1000) hud_draw[n_hud_draw - 1].dw = dw, hud_draw[n_hud_draw - 1].dh = dh;
+    for (int i = 0; i < n_hud_draw; i++) /* (its entry: a new one, or the same image's at this place) */
+        if (hud_draw[i].slot == slot && hud_draw[i].x == x + 1000 && hud_draw[i].y == y) hud_draw[i].dw = dw, hud_draw[i].dh = dh;
 }
 
 static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
@@ -5607,7 +5615,7 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
     if (k < 0) { ctr_ui_nhands = 0; return; }
     screen_quad(bottom_rt, &layers[k].tex, K_COMPOSITE, 5, 0xFFFFFFFF, 0, 0, w, h, 0, ctr_ui_oy);
     for (int i = 0; i < n_hud_draw; i++) /* (texels x 2 x grey: as drawn; transparent ones not) */
-        if (hud_draw[i].x < 1000) screen_quad(bottom_rt, &hud_img[hud_draw[i].slot].tex, K_TEX, NO_BLEND, hud_draw[i].semi ? 0xFF404040 : 0xFF808080, 0, 0, hud_draw[i].w,
+        if (hud_draw[i].x < 1000) screen_quad(bottom_rt, &hud_img[hud_draw[i].slot].tex, K_TEX, hud_draw[i].semi ? 0 : NO_BLEND, 0xFF808080, 0, 0, hud_draw[i].w,
                     hud_draw[i].h, hud_draw[i].x, hud_draw[i].y + ctr_ui_oy);
     for (int i = 0; i < n_hud_bar; i++)
         screen_rect2(bottom_rt, hud_bar[i].x, hud_bar[i].y + ctr_ui_oy, hud_bar[i].w, hud_bar[i].h, hud_bar[i].bgr, hud_bar[i].bgr2);
