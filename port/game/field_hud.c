@@ -20,6 +20,7 @@
  * GPU state is put back after. */
 #define M2CTX
 #include "ff9.h"
+#include "port_textcode.h"
 #include "port_buttons.h"
 #include "port_text.h"
 #include "gp0.h"
@@ -351,7 +352,10 @@ static u8 *msg_value(u8 c, const u8 *arg, u8 *o, u8 *end) {
         else str = (const u8 *)card_getName(id - ITEM_ID_CARD_FIRST);
         if (o + 2 > end) return o;
         *o++ = TEXT_ESC, *o++ = TEXT_COLOR + TEXT_PAL_YELLOW;
-        for (int i = 0; i < 32 && str[i] != TEXT_END && o < end - 2; i++) *o++ = str[i];
+        for (int i = 0; i < 32 && str[i] != TEXT_END && o < end - 3; i++) {
+            if (port_text_lead(str[i]) && str[i + 1] != TEXT_END) *o++ = str[i++]; /* (a two-byte character) */
+            *o++ = str[i];
+        }
         *o++ = TEXT_ESC, *o++ = TEXT_COLOR + TEXT_PAL_WHITE;
     } else if (c == TEXT_MSG_NUMBER) {
         s32 v = g_msgNumbers[arg[0] & 7];
@@ -367,7 +371,7 @@ static u8 *msg_value(u8 c, const u8 *arg, u8 *o, u8 *end) {
             const u8 *e = tbl + 1 + 2 * k;
             str = tbl + 1 + (e[0] | e[1] << 8);
             for (int i = 0; i < 64 && str[i] != TEXT_END && str[i] != TEXT_NEWLINE && o < end - 1; i++) {
-                if (str[i] == TEXT_ESC || (str[i] >= TEXT_WIDE_FIRST && str[i] <= TEXT_WIDE_LAST)) *o++ = str[i++];
+                if (str[i] == TEXT_ESC || port_text_lead(str[i])) *o++ = str[i++];
                 *o++ = str[i];
             }
         }
@@ -389,7 +393,7 @@ static const u8 *msg_plain(const u8 *t, u8 *o, int max, u8 stop) {
             /* drawn: names, colours, icons, button icons, argument values; the rest is timing, layout and choices */
             int keep = (c >= 0x10 && c <= 0x3F) || (c >= 0x60 && c <= 0x6F);
             while (n--) { if (keep) *o++ = *t; t++; }
-        } else if (*t >= 0xFA && *t <= 0xFD) { /* (a two-byte character) */
+        } else if (port_text_lead(*t)) { /* (a two-byte character: 0xFA-0xFD; JP's kanji too) */
             *o++ = *t++;
             *o++ = *t++;
         } else if (*t == TEXT_SPACE_1PX) { /* (message windows only: text_drawBlock draws it as a glyph, a box over the next letter) */
@@ -660,6 +664,7 @@ static int draw_choices(void) {
     /* skip to the first choice's line */
     for (int line = 0; line < g_msgChoiceLine && *t != TEXT_END; t++) {
         if (*t == TEXT_NEWLINE) line++;
+        else if (port_text_lead(*t) && t[1] != TEXT_END) t++; /* (its second byte can look like anything) */
         else if (*t == TEXT_ESC) t += t[1] == 0x43 || t[1] == 0x44 || t[1] == 0x49 || t[1] == 0x4A || (t[1] >= 0x4B && t[1] <= 0x4E) || (t[1] >= 0x68 && t[1] <= 0x6F) ? 2 : 1;
     }
     int n = g_msgChoiceCount > MAX_CHOICES ? MAX_CHOICES : g_msgChoiceCount;
@@ -678,6 +683,7 @@ static int draw_choices(void) {
         int r_n = 0;
         while (*t != TEXT_END && *t != TEXT_NEWLINE && r_n < 158) {
             if (t[0] == TEXT_ESC && t[1] == 0x09) { while (*t != TEXT_END && *t != TEXT_NEWLINE) t++; break; }
+            if (port_text_lead(*t) && t[1] != TEXT_END) raw[r_n++] = *t++; /* (a two-byte character) */
             raw[r_n++] = *t++;
         }
         raw[r_n] = TEXT_END;

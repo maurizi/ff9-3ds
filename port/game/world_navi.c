@@ -7,6 +7,7 @@
  * found names it (field_hud.c draws the name); elsewhere it zooms in 2x about the party, and out again. */
 #include "psyq_port.h"
 #include "ovl_0c.h"
+#include "port_textcode.h"
 
 void o0c_wm_naviDraw_game(void);
 void o0c_wm_drawTitle(void);
@@ -69,7 +70,10 @@ static const u8 *port_world_place_name(int *x, int *y) {
     const u8 *offs = bank + 1;
     const u8 *t = bank + 1 + (offs[(named + 1) * 2] | offs[(named + 1) * 2 + 1] << 8);
     int n = 0;
-    while (n < 46 && t[n] != 0xF7 && t[n] != 0xFF) name[n] = t[n], n++;
+    while (n < 46 && t[n] != 0xF7 && t[n] != 0xFF) {
+        if (port_text_lead(t[n]) && t[n + 1] != 0xFF && n < 45) name[n] = t[n], n++; /* (a two-byte character) */
+        name[n] = t[n], n++;
+    }
     name[n] = 0xFF;
     place_pos(g_worldNaviPage, named, x, y);
     return name;

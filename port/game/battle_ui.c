@@ -25,6 +25,7 @@
 #include "port_buttons.h"
 #include "port_text.h"
 #include "ovl_0b.h"
+#include "port_textcode.h"
 
 #define TARGET_WINDOW (1u << CFG_BIT_TARGET_WINDOW)
 #define PAD_UP_ 0x10u
@@ -243,7 +244,9 @@ u8 *port_help_white(u8 *text) { /* (menu_top.c's descriptions too) */
     unsigned n = 0;
     while (n < sizeof buf - 1 && text[n] != TEXT_END) {
         buf[n] = text[n];
-        if (text[n] == TEXT_ESC && n + 1 < sizeof buf - 1 && text[n + 1] != TEXT_END) {
+        if (port_text_lead(text[n]) && n + 1 < sizeof buf - 1 && text[n + 1] != TEXT_END) { /* (a two-byte character) */
+            n++, buf[n] = text[n];
+        } else if (text[n] == TEXT_ESC && n + 1 < sizeof buf - 1 && text[n + 1] != TEXT_END) {
             u8 c = text[++n];
             buf[n] = c == TEXT_COLOR + TEXT_PAL_HELP ? TEXT_COLOR + TEXT_PAL_WHITE : c;
             if ((c == TEXT_ARG_SPRITE || c == TEXT_ARG_ITEM_ICON) && n + 1 < sizeof buf - 1 && text[n + 1] != TEXT_END)
