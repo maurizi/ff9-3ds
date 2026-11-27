@@ -187,6 +187,26 @@ static void gauge(int x, int y, int w, int h, int cur, int max, int style, int a
     ctr_hud_bar2(x, y, w * cur / max, h, cv_bgr(&c1), cv_bgr(&c2));
 }
 
+/* a member's name as the game's panel draws it (btlui_drawPanelName): the sprite of it the battle renders in the
+ * font's VRAM (outlined on every side), through the row's palette (g_btluiRowCluts: the colour of a KO or low HP);
+ * 0 when that isn't there yet */
+static int panel_name(int x, int y, int row, int colour) {
+    if (!g_btluiPrims || !ram_ok(g_btluiPrims, sizeof *g_btluiPrims)) return 0;
+    int k = g_btluiPanel->slot[row] & 3;
+    const SPRT *src = &g_btluiPrims->names[k][g_drawBufs.cur];
+    if (!src->w || !src->h) return 0;
+    SPRT *sp = (SPRT *)g_primPtr;
+    *sp = *src;
+    sp->x0 = (s16)x, sp->y0 = (s16)y;
+    sp->clut = (u16)(g_btluiRowCluts[colour] + ((k >> 1) << 6));
+    addPrim(&g_ot[2], sp);
+    DR_TPAGE *tp = (DR_TPAGE *)(sp + 1);
+    *tp = g_btluiPrims->namesTpage[g_drawBufs.cur];
+    addPrim(&g_ot[2], tp); /* (before the sprite: the OT's head is drawn first) */
+    g_primPtr = (u8 *)(tp + 1);
+    return 1;
+}
+
 static void draw_cards(void) {
     static const u8 hp[] = TX("HP", "PV", "HP", "HP", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP", "MP", "MP");
     u8 a[16];
@@ -204,8 +224,8 @@ static void draw_cards(void) {
         }
         /* (the row's colour as the game's panel takes it (btlui_updatePanelRowColor, which runs only while that panel is
          * drawn): red when KO, yellow at a sixth of the HP or less; the name and the HP in it) */
-        int row = u->hp == 0 ? TEXT_PAL_RED : (s32)(u16)(u->max->maxHp / 6) >= u->hp ? TEXT_PAL_YELLOW : 0;
-        text_drawBlock(x + 40, y, 2, c->name, row);
+        int row = u->hp == 0 ? DIGITS_RED : (s32)(u16)(u->max->maxHp / 6) >= u->hp ? DIGITS_YELLOW : DIGITS_WHITE;
+        if (!panel_name(x + 40, y - 1, i, row)) text_drawBlock(x + 40, y, 2, c->name, row);
         { /* its statuses: the game's icons (the battle status list's table), up to four after the name */
             u32 st = u->status | u->autoStatus;
             int ix = x + 104, n = 0;
@@ -218,11 +238,11 @@ static void draw_cards(void) {
         }
         ui_drawLabel(x + 40, y + 14, 2, (s32)hp, 0);
         text_formatNumber(u->menu->gauges[0].shown, a, 4, 1);
-        ui_drawSmallDigits(x + 54, y + 15, 2, a, row);
+        ui_drawDigits(x + 54, y + 13, 2, a, row); /* (the panel's digits: larger, outlined; DIGITS_RED / YELLOW = the row) */
         ui_drawLabel(x + 86, y + 14, 2, (s32)mp, 0);
         text_formatNumber(u->menu->gauges[1].shown, a, 3, 1);
         /* (MP yellow at a sixth or less, as the panel's (btlui_drawPanelMp)) */
-        ui_drawSmallDigits(x + 100, y + 15, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? TEXT_PAL_YELLOW : 0);
+        ui_drawDigits(x + 100, y + 13, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? DIGITS_YELLOW : DIGITS_WHITE);
         /* the ATB bar and the trance bar under it, coloured as the game's panel (btlui_drawPanelGauges): the ATB's
          * colours for Slow or Stop, Haste or neither (the panel's atbKind), both pulsing when full while the member
          * can act (not KO, asleep, stopped, confused...: the panel's cantAct; no command given yet) */
