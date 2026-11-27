@@ -395,6 +395,17 @@ static const u8 *msg_plain(const u8 *t, u8 *o, int max, u8 stop) {
             t += 2;
             continue;
         }
+        if (*t == TEXT_ESC && t[1] == TEXT_LINE_WIDTHS) { /* (a layout header: {u16 width, text up to TEXT_END}...,
+                                                            * 0xFFFF) */
+            t += 2;
+            while ((t[0] | t[1] << 8) != 0xFFFF) {
+                t += 2;
+                while (*t != TEXT_END) t++;
+                t++;
+            }
+            t += 2;
+            continue;
+        }
         if (held && (*t == TEXT_NEWLINE || *t == 0x0F)) { t++; continue; } /* (its own line break or space after it) */
         if (*t != TEXT_ESC) held = 0;
         if (*t == TEXT_ESC) {
@@ -1097,6 +1108,8 @@ void port_bottom_hud(void) {
     int boot = g_gameState->mode == 0 && !title && !port_menu_state() && port_opening_takes_start(); /* (before the
                                                                      * title, while Start does something: boot_live) */
     boot_live = boot;
+    if (title || boot) log_head = log_count = log_scroll = log_on = 0; /* (a soft reset, or a new start: the last game's
+                                                                         * lines go with it) */
     /* (game over: a field's (mode 7) or a battle's, which battle_end runs in its own mode) */
     int gameover = g_gameState->mode == 7 || (g_gameState->mode == 8 && g_gameState->gameData &&
                                               g_gameState->gameData->battleResult == BATTLE_END_GAME_OVER);
