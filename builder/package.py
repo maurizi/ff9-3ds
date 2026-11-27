@@ -29,7 +29,8 @@ DECOMP_TOOLS = ["field_maps.py", "encounter_catalog.py", "ff9img.py", "effect_mo
 def tracked(repo, sub):
     """the files git tracks under repo/sub (falls back to all files there outside a git checkout)"""
     try:
-        out = subprocess.run(["git", "-C", str(repo), "ls-files", sub], capture_output=True, text=True, check=True)
+        out = subprocess.run(["git", "-C", str(repo), "ls-files", sub], capture_output=True, text=True, encoding="utf-8",
+                             check=True)
         return [repo / p for p in out.stdout.splitlines()]
     except (OSError, subprocess.CalledProcessError):
         return [p for p in (repo / sub).rglob("*") if p.is_file()]
@@ -57,13 +58,15 @@ def stage(payload, out):
         if f.suffix == ".c":
             dst = d / f.relative_to(DECOMP)
             dst.parent.mkdir(parents=True, exist_ok=True)
-            lines = [l for l in f.read_text(errors="replace").splitlines(True)
+            lines = [l for l in f.read_text(encoding="utf-8", errors="replace").splitlines(True)
                      if re.match(r"\s*INCLUDE_(ASM|RODATA)\b", l)]
-            dst.write_text("".join(lines))
-    # edis.py reads the event opcode names from the decomp's ff9.h: just those lines
+            dst.write_text("".join(lines), encoding="utf-8")
+    # edis.py reads the event opcode names from the decomp's ff9.h: just those lines (the decomp's source is UTF-8:
+    # read as such, not in the system's code page, which on Windows can't decode it)
     (d / "include").mkdir()
-    (d / "include/ff9.h").write_text("".join(l for l in (DECOMP / "include/ff9.h").read_text().splitlines(True)
-                                             if l.startswith("#define EVT_OP_")))
+    ff9h = (DECOMP / "include/ff9.h").read_text(encoding="utf-8")
+    (d / "include/ff9.h").write_text("".join(l for l in ff9h.splitlines(True) if l.startswith("#define EVT_OP_")),
+                                     encoding="utf-8")
     # the program for each release: the us one at the top, another's in its folder (make VERSION=es payload)
     for sub in [""] + sorted(p.name for p in Path(payload).iterdir() if p.is_dir()):
         (pkg / "payload" / sub).mkdir(parents=True, exist_ok=True)
