@@ -21,9 +21,9 @@ static int voiced = -1, voiced_msg; /* the window whose line is voiced */
  * layout header (msg_getEntry) and then its text (msg_drawText_msg), so a message's text ends where the next one's
  * header starts: one the script closes needn't end in TEXT_END (a question it reads the answer of, after TEXT_HOLD),
  * and read on, the Moogle's "Save / Tent / Cancel" ran into the rest of the bank (the save, tent and goodbye lines,
- * test text) and the headers' numbers showed as letters. Of its choices, those the game hides (g_msgChoiceEnabled,
- * which msg_getLayout set for this window) are left out: a field Moogle's menu text also has "Mogshop", "Switch party
- * members" and "Debug". */
+ * test text) and the headers' numbers showed as letters. A question's answers (its lines from the one holding
+ * TEXT_CHOICE_START) are left out, the question kept: the log is what was said (the user: a Moogle's "Save / Tent /
+ * Mognet" don't belong in it; its text also holds choices the game hides, "Mogshop", "Debug"). */
 u8 *msg_getEntry(s32 i, WinLayout *out);
 static void log_line(s32 msg) {
     void port_dialogue_log(const u8 *text);
@@ -33,8 +33,7 @@ static void log_line(s32 msg) {
     if (!t) return;
     unsigned max = next > t && (unsigned)(next - t) < sizeof raw ? (unsigned)(next - t) : sizeof raw;
     while (n < max && t[n] != TEXT_END) raw[n] = t[n], n++;
-    u32 shown = g_msgChoiceEnabled ? (u32)g_msgChoiceEnabled : ~0u;
-    int choice = -1; /* the choice the line is, from the one holding TEXT_CHOICE_START */
+    int choices = 0; /* from the line holding TEXT_CHOICE_START on: the answers, not logged */
     for (unsigned i = 0; i < n;) { /* line by line */
         unsigned e = i;
         int starts = 0;
@@ -43,8 +42,8 @@ static void log_line(s32 msg) {
             else e += port_text_lead(raw[e]) && e + 1 < n ? 2 : 1;
         }
         if (e > n) e = n;
-        choice = starts ? 0 : choice >= 0 ? choice + 1 : -1;
-        if ((e > i || lines) && (choice < 0 || choice >= 32 || shown >> choice & 1)) { /* (not a blank first line) */
+        choices |= starts;
+        if ((e > i || lines) && !choices) { /* (not a blank first line) */
             if (lines++) line[o++] = TEXT_NEWLINE;
             __builtin_memcpy(line + o, raw + i, e - i);
             o += e - i;
