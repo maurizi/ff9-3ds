@@ -33,23 +33,40 @@ static void worker_main(void *unused) {
 
 /* Core 1 (the system core) gives an application's threads only the share it sets. Only an Old 3DS runs threads of
  * ours there (a New 3DS has core 2): 80% then, while the game runs. The HOME Menu runs on core 1 while the game is
- * suspended: the share goes back to it then (else HOME, or the power button's sleep, takes half a minute). */
+ * suspended: the share goes back to it then (else HOME, or the power button's sleep, takes half a minute).
+ * 80% is the Homebrew Launcher's (Luma's) limit, a 3DSX's; an installed title's is its exheader's 30%, and asking it
+ * for 80 leaves core 1 with no share at all: no thread can be made there (an Old 3DS, the CIA: no worker, no sound
+ * thread, no sound). 30% is asked for where no thread can be made on core 1 with 80 asked for. */
+static int share = 80;
 static aptHookCookie share_hook;
 static void share_event(APT_HookType t, void *unused) {
     (void)unused;
     if (t == APTHOOK_ONSUSPEND || t == APTHOOK_ONSLEEP) APT_SetAppCpuTimeLimit(5);
-    else if (t == APTHOOK_ONRESTORE || t == APTHOOK_ONWAKEUP) APT_SetAppCpuTimeLimit(80);
+    else if (t == APTHOOK_ONRESTORE || t == APTHOOK_ONWAKEUP) APT_SetAppCpuTimeLimit(share);
 }
 /* closing: core 1 the application's again (the HOME Menu's 5% while suspended, which closing doesn't restore), so our
  * threads there end in time (render.c ctr_shutdown) */
 void ctr_core1_closing(void) {
-    if (share_hook.callback) APT_SetAppCpuTimeLimit(80);
+    if (share_hook.callback) APT_SetAppCpuTimeLimit(share);
 }
+static void share_probe(void *unused) { (void)unused; }
 void ctr_core1_share(int any_model) { /* (any_model: a New 3DS's thread falling back to core 1) */
     static int done;
     if (done || (ctr_is_new3ds() && !any_model)) return;
     done = 1;
-    APT_SetAppCpuTimeLimit(80);
+    Result r = APT_SetAppCpuTimeLimit(80);
+    /* (whether 80 was given: a thread made on core 1, the one thing that matters; what the limit reads back as under
+     * each launcher isn't known) */
+    Thread probe = threadCreate(share_probe, NULL, 4 * 1024, 0x3F, 1, false);
+    if (probe) threadJoin(probe, U64_MAX), threadFree(probe);
+    else {
+        share = 30;
+        Result r30 = APT_SetAppCpuTimeLimit(30);
+        u32 got = 0;
+        APT_GetAppCpuTimeLimit(&got);
+        port_log("core 1: no thread with 80%% asked for (result %08lx); 30%% asked for (result %08lx, read back %lu)\n",
+                 (unsigned long)r, (unsigned long)r30, (unsigned long)got);
+    }
     aptHook(&share_hook, share_event, NULL);
 }
 
