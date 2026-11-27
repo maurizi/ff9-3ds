@@ -43,6 +43,7 @@ int port_battle_hud_targets; /* ... its targets too (render.c leaves the target 
 void ctr_hud_image(int slot, u32 key, const u16 *clut, const u8 *pix, int w, int h);
 void ctr_hud_draw(int slot, int x, int y, int w, int h);
 void ctr_hud_bar(int x, int y, int w, int h, u32 bgr); /* (a solid bar over the bottom screen's layer, this present) */
+void ctr_hud_bar2(int x, int y, int w, int h, u32 bgr, u32 bgr2); /* (the same, a gradient: bgr at its left, bgr2 at its right) */
 const u8 *port_portrait(int index); /* field_hud.c: the menu's portrait entry (0x6C0 bytes), NULL if unread */
 const u8 *port_portrait_face(int index); /* field_hud.c: its face, 32x32 8-bit pixels */
 
@@ -163,6 +164,29 @@ static void bar(u32 *ot, int x, int y, int w, int h, u32 bgr) {
     g_primPtr = (u8 *)(p + 4);
 }
 
+/* a gauge's filled part as the game's ui_drawGauge colours it: its style's colours (g_gaugeColors: the ATB's normal,
+ * Slow/Stop or Haste, the Trance gauge's), from c[2] at the left to the colour as far towards c[3] as it is full; full
+ * and the member able to act, pulsing between them and c[0] / c[1] over 32 VBlanks */
+static u32 cv_bgr(const CVECTOR *c) { return (u32)c->r | (u32)c->g << 8 | (u32)c->b << 16; }
+static void gauge(int x, int y, int w, int h, int cur, int max, int style, int active) {
+    if (cur <= 0 || max <= 0) return;
+    if (cur > max) cur = max;
+    const GaugeColors *gc = &g_gaugeColors[style];
+    CVECTOR c1, c2;
+    if (active && cur >= max) {
+        int k = g_winLastVsync & 0x1F;
+        const CVECTOR *t = k < 16 ? &gc->c[0] : &gc->c[1];
+        k &= 15;
+        if (k >= 8) k = 15 - k;
+        CVECTOR_LERP(c1, &gc->c[2], t, k, 7);
+        CVECTOR_LERP(c2, &gc->c[3], t, k, 7);
+    } else {
+        c1 = gc->c[2];
+        CVECTOR_LERP(c2, &c1, &gc->c[3], cur, max);
+    }
+    ctr_hud_bar2(x, y, w * cur / max, h, cv_bgr(&c1), cv_bgr(&c2));
+}
+
 static void draw_cards(void) {
     static const u8 hp[] = TX("HP", "PV", "HP", "HP", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP", "MP", "MP");
     u8 a[16];
@@ -178,8 +202,10 @@ static void draw_cards(void) {
                           port_portrait_face(g_portraitByKind[c->info.b.kind]), 32, 32);
             ctr_hud_draw(4 + i, x, y + 1, 32, 32);
         }
-        int dead = u->hp == 0;
-        text_drawBlock(x + 40, y, 2, c->name, dead ? 2 : 0);
+        /* (the row's colour as the game's panel takes it (btlui_updatePanelRowColor, which runs only while that panel is
+         * drawn): red when KO, yellow at a sixth of the HP or less; the name and the HP in it) */
+        int row = u->hp == 0 ? TEXT_PAL_RED : (s32)(u16)(u->max->maxHp / 6) >= u->hp ? TEXT_PAL_YELLOW : 0;
+        text_drawBlock(x + 40, y, 2, c->name, row);
         { /* its statuses: the game's icons (the battle status list's table), up to four after the name */
             u32 st = u->status | u->autoStatus;
             int ix = x + 104, n = 0;
@@ -190,22 +216,23 @@ static void draw_cards(void) {
                     n++;
                 }
         }
-        int low = dead ? 2 : (u->max->maxHp / 6 >= u->hp) ? 2 : 0;
         ui_drawLabel(x + 40, y + 14, 2, (s32)hp, 0);
         text_formatNumber(u->menu->gauges[0].shown, a, 4, 1);
-        ui_drawSmallDigits(x + 54, y + 15, 2, a, low);
+        ui_drawSmallDigits(x + 54, y + 15, 2, a, row);
         ui_drawLabel(x + 86, y + 14, 2, (s32)mp, 0);
         text_formatNumber(u->menu->gauges[1].shown, a, 3, 1);
-        ui_drawSmallDigits(x + 100, y + 15, 2, a, u->max->maxMp / 6 >= u->mp ? 2 : 0);
-        /* the ATB bar: white when the member is ready, the trance bar under it */
-        int ready = u->inMenuQueue && !u->cmdIssued;
-        int max = u->max->maxAtb > 0 ? u->max->maxAtb : 1, atb = u->atb > max ? max : u->atb < 0 ? 0 : u->atb;
+        /* (MP yellow at a sixth or less, as the panel's (btlui_drawPanelMp)) */
+        ui_drawSmallDigits(x + 100, y + 15, 2, a, (s16)(u->max->maxMp / 6) >= u->mp ? TEXT_PAL_YELLOW : 0);
+        /* the ATB bar and the trance bar under it, coloured as the game's panel (btlui_drawPanelGauges): the ATB's
+         * colours for Slow or Stop, Haste or neither (the panel's atbKind), both pulsing when full while the member
+         * can act (not KO, asleep, stopped, confused...: the panel's cantAct; no command given yet) */
+        int active = !u->cmdIssued && !g_btluiPanel->cantAct[i];
         /* (the bars' filled parts over the screen's layer at each present, ctr_hud_bar: drawn in the layer, a bar a
          * pixel longer was the whole screen drawn again, at nearly every VBlank while the party's bars fill) */
-        ctr_hud_bar(x + 40, y + 25, 102 * atb / max, 4, ready ? 0xF0F0F0 : 0xC09040);
+        gauge(x + 40, y + 25, 102, 4, u->atb, u->max->maxAtb, g_btluiPanel->atbKind[i], active);
         bar(&g_ot[3], x + 40, y + 25, 102, 4, 0x302018);
         if (u->flags & 0x40000000u) {
-            ctr_hud_bar(x + 40, y + 31, 102 * u->trance / 255, 3, 0x9060F0);
+            gauge(x + 40, y + 31, 102, 3, u->trance, 255, 1, active);
             bar(&g_ot[3], x + 40, y + 31, 102, 3, 0x301830);
         }
         if (g_btlUi->cmdUnit == u) bar(&g_ot[2], r_cards.x + 2, y + 1, 2, 32, 0x40E0F8); /* (the member choosing) */

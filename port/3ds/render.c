@@ -5345,7 +5345,10 @@ static void draw_to_top(C3D_RenderTarget *rt, C3D_Tex *src, int sx, int sy, int 
 }
 
 /* a solid rectangle on a screen's render target (already drawn on) */
-static void screen_rect(C3D_RenderTarget *rt, int x, int y, int w, int h, u32 bgr) {
+static void screen_rect2(C3D_RenderTarget *rt, int x, int y, int w, int h, u32 bgr, u32 bgr2);
+static void screen_rect(C3D_RenderTarget *rt, int x, int y, int w, int h, u32 bgr) { screen_rect2(rt, x, y, w, h, bgr, bgr); }
+/* the same, bgr at its left edge to bgr2 at its right */
+static void screen_rect2(C3D_RenderTarget *rt, int x, int y, int w, int h, u32 bgr, u32 bgr2) {
     C3D_Mtx p;
     Mtx_OrthoTilt(&p, 0.0f, rt == bottom_rt ? 320.0f : 400.0f, 240.0f, 0.0f, 0.0f, 1.0f, true);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, u_proj, &p);
@@ -5355,6 +5358,7 @@ static void screen_rect(C3D_RenderTarget *rt, int x, int y, int w, int h, u32 bg
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     Vtx *v = alloc_vtx(6);
     quad(v, x, y, x + w, y + h, 0, 0, 0, 0, 0xFF000000u | bgr);
+    v[1].rgba = v[3].rgba = v[4].rgba = 0xFF000000u | bgr2; /* (the right edge's vertices: quad's b and d) */
     draw_tris(v - vb, 6);
 }
 
@@ -5423,7 +5427,7 @@ static int n_hud_draw;
 /* Solid bars over the bottom screen's layer, drawn at each present (ctr_hud_bar: a battle's ATB and Trance bars). In
  * the layer, a bar a pixel longer was the whole battle screen drawn again, its 400-odd primitives, at nearly every
  * VBlank while the party's bars fill: 2 to 4 ms of each on an Old 3DS (the sweep's e0057_a02: 489 ms of a beat). */
-static struct { s16 x, y, w, h; u32 bgr; } hud_bar[16];
+static struct { s16 x, y, w, h; u32 bgr, bgr2; } hud_bar[16]; /* (bgr2: its right end, a gradient as the game's gauges) */
 static int n_hud_bar;
 
 /* image slot: w x h (<= 64x64) 8-bit pixels through a CLUT of PS1 colours, kept while key is the same */
@@ -5559,12 +5563,14 @@ void ctr_hud_draw(int slot, int x, int y, int w, int h) {
     n_hud_draw++;
 }
 
-void ctr_hud_bar(int x, int y, int w, int h, u32 bgr) {
+void ctr_hud_bar2(int x, int y, int w, int h, u32 bgr, u32 bgr2) { /* (bgr at the left end to bgr2 at the right) */
     psx_gpu_sync();
     if (w <= 0 || h <= 0 || n_hud_bar == 16) return;
     hud_bar[n_hud_bar].x = (s16)x, hud_bar[n_hud_bar].y = (s16)y, hud_bar[n_hud_bar].w = (s16)w, hud_bar[n_hud_bar].h = (s16)h;
-    hud_bar[n_hud_bar++].bgr = bgr & 0xFFFFFF;
+    hud_bar[n_hud_bar].bgr = bgr & 0xFFFFFF;
+    hud_bar[n_hud_bar++].bgr2 = bgr2 & 0xFFFFFF;
 }
+void ctr_hud_bar(int x, int y, int w, int h, u32 bgr) { ctr_hud_bar2(x, y, w, h, bgr, bgr); }
 
 /* the same on the top screen (its 400x240), scaled to dw x dh */
 void ctr_hud_draw_top(int slot, int x, int y, int w, int h, int dw, int dh) {
@@ -5595,7 +5601,7 @@ static void present_bottom(const PsxDisplayInfo *d, int w, int h) {
         if (hud_draw[i].x < 1000) screen_quad(bottom_rt, &hud_img[hud_draw[i].slot].tex, K_TEX, NO_BLEND, 0xFF808080, 0, 0, hud_draw[i].w,
                     hud_draw[i].h, hud_draw[i].x, hud_draw[i].y + ctr_ui_oy);
     for (int i = 0; i < n_hud_bar; i++)
-        screen_rect(bottom_rt, hud_bar[i].x, hud_bar[i].y + ctr_ui_oy, hud_bar[i].w, hud_bar[i].h, hud_bar[i].bgr);
+        screen_rect2(bottom_rt, hud_bar[i].x, hud_bar[i].y + ctr_ui_oy, hud_bar[i].w, hud_bar[i].h, hud_bar[i].bgr, hud_bar[i].bgr2);
     layers[k].shown = 1;
     ctr_ui_nhands = layers[k].nhands;
     memcpy(ctr_ui_hands, layers[k].hands, sizeof ctr_ui_hands);
@@ -5814,9 +5820,9 @@ void ctr_present(long frame) {
                 else if (!hsh) hsh = 1;
             }
             for (int i = 0; i < n_hud_bar && hsh; i++) { /* (and its bars) */
-                const u32 w[3] = {(u32)(u16)hud_bar[i].x | (u32)(u16)hud_bar[i].y << 16, (u32)(u16)hud_bar[i].w | (u32)(u16)hud_bar[i].h << 16,
-                                  hud_bar[i].bgr};
-                for (int k = 0; k < 3; k++) hsh = (hsh ^ w[k]) * 0x01000193u;
+                const u32 w[4] = {(u32)(u16)hud_bar[i].x | (u32)(u16)hud_bar[i].y << 16, (u32)(u16)hud_bar[i].w | (u32)(u16)hud_bar[i].h << 16,
+                                  hud_bar[i].bgr, hud_bar[i].bgr2};
+                for (int k = 0; k < 4; k++) hsh = (hsh ^ w[k]) * 0x01000193u;
                 if (!hsh) hsh = 1;
             }
             if (hsh && hsh == last_hash && tex_writes == last_writes) {
