@@ -62,12 +62,12 @@ static void line(int x, int y, const char *name, int v) {
 void port_auction_draw(void) {
     static RECT head = {16, 8, 288, 52};
     int p = price(), top = g_evtState->fieldVars[0x39];
-    line(head.x + 10, head.y + 10, TX("PRICE", "PRECIO", "PREZZO", "PREIS", "PRIX"), p);
-    line(head.x + 10, head.y + 30, TX("FUNDS", "FONDOS", "FONDI", "GELD", "FONDS"), (int)g_gameState->gameData->gil);
-    ui_drawLabel(head.x + 190, head.y + 20, 2, (s32)(top == 0 ? TX("YOUR BID", "TU PUJA", "TUA OFFERTA", "DEIN GEBOT", "VOTRE OFFRE") : top == 255 ? "" : TX("OUTBID", "SUPERADA", "SUPERATA", "\"UBERBOTEN", "SURENCHERE")), top == 0 ? 0 : 2);
+    line(head.x + 10, head.y + 10, TX("PRICE", "PRECIO", "PREZZO", "PREIS", "PRIX", "@\xC8\xC0\xDE\xDD"), p);
+    line(head.x + 10, head.y + 30, TX("FUNDS", "FONDOS", "FONDI", "GELD", "FONDS", "@\xBC\xAE\xBC\xDE\xB7\xDD"), (int)g_gameState->gameData->gil);
+    ui_drawLabel(head.x + 190, head.y + 20, 2, (s32)(top == 0 ? TX("YOUR BID", "TU PUJA", "TUA OFFERTA", "DEIN GEBOT", "VOTRE OFFRE", "@\xB1\xC5\xC0\xC9 \xB2\xDA\xC8") : top == 255 ? "" : TX("OUTBID", "SUPERADA", "SUPERATA", "\"UBERBOTEN", "SURENCHERE", "@\xC7\xB6\xDA\xC0")), top == 0 ? 0 : 2);
     win_drawBox(&head, 3, 2);
     if (!entry_open()) {
-        label(&r_open, TX("PLACE A BID", "PUJAR", "FAI UN OFFERTA", "BIETEN", "ENCHERIR"), !can_open());
+        label(&r_open, TX("PLACE A BID", "PUJAR", "FAI UN OFFERTA", "BIETEN", "ENCHERIR", "@\xC6\xAD\xB3\xBB\xC2"), !can_open());
         return;
     }
     u8 *v = bid_vars();
@@ -77,21 +77,21 @@ void port_auction_draw(void) {
     static RECT box = {16, 70, 288, 106};
     u8 a[12];
     text_formatNumber(bid * 100 < 0 ? 0 : bid * 100, a, 5, TEXT_NUM_ASCII);
-    ui_drawLabel(box.x + 12, box.y + 46, 2, (s32) TX("BID", "PUJA", "OFFERTA", "GEBOT", "OFFRE"), 0);
+    ui_drawLabel(box.x + 12, box.y + 46, 2, (s32) TX("BID", "PUJA", "OFFERTA", "GEBOT", "OFFRE", "@\xB2\xDA\xC8"), 0);
     for (int d = 0; d < 3; d++) { /* (columns: 10000s, 1000s, 100s of the five digits) */
         int x = box.x + 64 + d * 44, step = d == 0 ? 100 : d == 1 ? 10 : 1;
         r_up[d] = (RECT){(s16)x, (s16)(box.y + 6), 38, 30};
         r_dn[d] = (RECT){(s16)x, (s16)(box.y + 70), 38, 30};
-        label(&r_up[d], TX("UP", "M#AS", "PI$U", "MEHR", "PLUS"), bid + step > hi);
-        label(&r_dn[d], TX("DOWN", "MENOS", "MENO", "WENIG", "MOINS"), bid - step <= p / 100);
+        label(&r_up[d], TX("UP", "M#AS", "PI$U", "MEHR", "PLUS", "@\xB1\xB9\xDE"), bid + step > hi);
+        label(&r_dn[d], TX("DOWN", "MENOS", "MENO", "WENIG", "MOINS", "@\xBB\xB9\xDE"), bid - step <= p / 100);
         u8 one[2] = {a[d], 0};
         ui_drawDigits(x + 15, box.y + 46, 2, one, 0);
     }
     ui_drawDigits(box.x + 64 + 3 * 44 + 4, box.y + 46, 2, (u8 *)"00", 0);
-    ui_drawLabel(box.x + 64 + 3 * 44 + 30, box.y + 47, 2, (s32) TX("GIL", "GIL", "GUIL", "GIL", "GILS"), 0);
+    ui_drawLabel(box.x + 64 + 3 * 44 + 30, box.y + 47, 2, (s32) TX("GIL", "GIL", "GUIL", "GIL", "GILS", "\xB7\xDE\xD9"), 0);
     win_drawBox(&box, 3, 2);
-    label(&r_bid, TX("BID", "PUJA", "OFFERTA", "GEBOT", "OFFRE"), bid * 100 <= p);
-    label(&r_cancel, TX("CANCEL", "CANCELAR", "ANNULLA", "ABBRECHEN", "ANNULER"), 0);
+    label(&r_bid, TX("BID", "PUJA", "OFFERTA", "GEBOT", "OFFRE", "@\xB2\xDA\xC8"), bid * 100 <= p);
+    label(&r_cancel, TX("CANCEL", "CANCELAR", "ANNULLA", "ABBRECHEN", "ANNULER", "@\xD4\xD2\xD9"), 0);
 }
 static int in(const RECT *r, int x, int y) { return x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h; }
 int port_auction_tap(int x, int y) {

@@ -87,21 +87,21 @@ static void money(int x, int y, const char *name, int v) {
 int port_bj_live(void) { return live(wager_frame) || live(action_frame); }
 void port_bj_draw(void) {
     static RECT head = {24, 16, 272, 32};
-    money(head.x + 10, head.y + 12, TX("BANKROLL", "FONDOS", "FONDI", "KAPITAL", "CAPITAL"), g_bjBankroll);
-    money(head.x + 150, head.y + 12, TX("BET", "APUESTA", "PUNTATA", "EINSATZ", "MISE"), g_bjWager);
+    money(head.x + 10, head.y + 12, TX("BANKROLL", "FONDOS", "FONDI", "KAPITAL", "CAPITAL", "@\xD3\xC1\xB7\xDD"), g_bjBankroll);
+    money(head.x + 150, head.y + 12, TX("BET", "APUESTA", "PUNTATA", "EINSATZ", "MISE", "@\xB6\xB9\xB7\xDD"), g_bjWager);
     win_drawBox(&head, 3, 2);
     if (live(wager_frame)) {
-        label(&r_minus, TX("LESS", "MENOS", "MENO", "WENIGER", "MOINS"), g_bjWager <= BJ_MIN_BET);
-        label(&r_plus, TX("MORE", "M#AS", "PI$U", "MEHR", "PLUS"), g_bjWager >= BJ_MAX_BET || g_bjWager + BJ_MIN_BET > g_bjBankroll);
+        label(&r_minus, TX("LESS", "MENOS", "MENO", "WENIGER", "MOINS", "@\xCD\xD7\xBD"), g_bjWager <= BJ_MIN_BET);
+        label(&r_plus, TX("MORE", "M#AS", "PI$U", "MEHR", "PLUS", "@\xCC\xD4\xBD"), g_bjWager >= BJ_MAX_BET || g_bjWager + BJ_MIN_BET > g_bjBankroll);
         static RECT mid = {104, 96, 112, 44};
         u8 a[12];
         text_formatNumber(g_bjWager, a, 4, TEXT_NUM_ASCII);
         ui_drawDigits(mid.x + 34, mid.y + 18, 2, a, 0);
         win_drawBox(&mid, 3, 2);
-        label(&r_deal, TX("DEAL", "REPARTIR", "DAI CARTE", "GEBEN", "DONNER"), 0);
+        label(&r_deal, TX("DEAL", "REPARTIR", "DAI CARTE", "GEBEN", "DONNER", "@\xB8\xCA\xDE\xD9"), 0);
         return;
     }
-    static const char *const moves[4] = {TX("STAND", "PLANTARSE", "STAI", "HALTEN", "RESTER"), TX("HIT", "CARTA", "CARTA", "KARTE", "CARTE"), TX("DOUBLE", "DOBLAR", "RADDOPPIA", "VERDOPPELN", "DOUBLER"), TX("SPLIT", "SEPARAR", "DIVIDI", "TEILEN", "PARTAGER")};
+    static const char *const moves[4] = {TX("STAND", "PLANTARSE", "STAI", "HALTEN", "RESTER", "\xBD\xC0\xDD\xC4\xDE"), TX("HIT", "CARTA", "CARTA", "KARTE", "CARTE", "\xCB\xAF\xC4"), TX("DOUBLE", "DOBLAR", "RADDOPPIA", "VERDOPPELN", "DOUBLER", "\xC0\xDE\xCC\xDE\xD9"), TX("SPLIT", "SEPARAR", "DIVIDI", "TEILEN", "PARTAGER", "\xBD\xCC\xDF\xD8\xAF\xC4")};
     for (int i = 0; i < 4; i++) {
         int dim = (i == BJ_DOUBLE && !g_bjCanDouble) || (i == BJ_SPLIT && !g_bjCanSplit);
         label(&r_move[i], moves[i], dim);

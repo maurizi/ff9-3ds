@@ -151,7 +151,7 @@ static void updown(int x, int y, int up) {
 
 /* what an item changes for a member: up to n stats as "LABEL ^3", from x on one row; how many shown */
 static int changes(int x, int y, Character *c, int slot, int id, int n) {
-    static const char *const names[] = {TX("SPD", "VEL", "VEL", "TMP", "VIT"), TX("STR", "FUE", "FOR", "ST\"A", "FOR"), TX("MAG", "MAG", "MAG", "MAG", "MAG"), TX("SPR", "ESP", "SPI", "WIL", "ESP"), TX("ATK", "ATQ", "ATT", "ANG", "ATT"), TX("DEF", "DEF", "DIF", "ABW", "DEF"), TX("EVA", "EVA", "EVA", "REF", "ESQ"), TX("MDEF", "DMAG", "DIFM", "ZABW", "DMAG"), TX("MEVA", "EMAG", "EVAM", "ZREF", "EMAG"), TX("HP", "PV", "HP", "HP", "HP"), TX("MP", "PM", "MP", "MP", "MP")};
+    static const char *const names[] = {TX("SPD", "VEL", "VEL", "TMP", "VIT", "@\xBD\xCA\xDE\xD4\xBB"), TX("STR", "FUE", "FOR", "ST\"A", "FOR", "@\xC1\xB6\xD7"), TX("MAG", "MAG", "MAG", "MAG", "MAG", "@\xCF\xD8\xAE\xB8"), TX("SPR", "ESP", "SPI", "WIL", "ESP", "@\xB7\xD8\xAE\xB8"), TX("ATK", "ATQ", "ATT", "ANG", "ATT", "@\xBA\xB3\xB9\xDE\xB7"), TX("DEF", "DEF", "DIF", "ABW", "DEF", "@\xCE\xDE\xB3\xB7\xDE\xAE"), TX("EVA", "EVA", "EVA", "REF", "ESQ", "@\xB6\xB2\xCB"), TX("MDEF", "DMAG", "DIFM", "ZABW", "DMAG", "@\xCF\xCE\xDE\xB3"), TX("MEVA", "EMAG", "EVAM", "ZREF", "EMAG", "@\xCF\xB6\xB2"), TX("HP", "PV", "HP", "HP", "HP", "HP"), TX("MP", "PM", "MP", "MP", "MP", "MP")};
     EquipStatsOut b = stats_with(c, -1, 0), a = stats_with(c, slot, id);
     int before[11] = {b.stats[0], b.stats[1], b.stats[2], b.stats[3], b.defs[0], b.defs[1], b.defs[2], b.defs[3], b.defs[4], b.maxHp, b.maxMp};
     int after[11] = {a.stats[0], a.stats[1], a.stats[2], a.stats[3], a.defs[0], a.defs[1], a.defs[2], a.defs[3], a.defs[4], a.maxHp, a.maxMp};
@@ -199,7 +199,7 @@ static int item_view(int id, u8 *help) {
         face(i, chr_portrait(c), 22, y, size);
         text_drawBlock(70, y, 2, c->name, ok ? 0 : 2);
         if (!ok) {
-            ui_drawLabel(70, y + 18, 2, (s32)TX("CAN T EQUIP", "NO EQUIPABLE", "NON EQUIPAGGIABILE", "NICHT AUSR\"USTBAR", "NON EQUIPABLE"), 2);
+            ui_drawLabel(70, y + 18, 2, (s32)TX("CAN T EQUIP", "NO EQUIPABLE", "NON EQUIPAGGIABILE", "NICHT AUSR\"USTBAR", "NON EQUIPABLE", "@\xBF\xB3\xCB\xDE\xC3\xDE\xB7\xC5\xB2"), 2);
             continue;
         }
         int same = 0;
@@ -207,8 +207,8 @@ static int item_view(int id, u8 *help) {
         /* (rows closer than three lines (a long description: Cachusha's four): the abilities beside the name, the
          * changes under it; else under each other, the abilities ran into the next member's row) */
         int compact = step < 42, ly = compact ? y + 15 : y + 18;
-        if (same) ui_drawLabel(70, ly, 2, (s32)TX("EQUIPPED", "EQUIPADO", "EQUIPAGGIATO", "AUSGER\"USTET", "EQUIPE"), 1);
-        else if (!changes(70, ly, c, slot, id, 4)) ui_drawLabel(70, ly, 2, (s32)TX("NO CHANGE", "SIN CAMBIOS", "NESSUNA MODIFICA", "KEINE \"ANDERUNG", "AUCUN CHANGEMENT"), 2);
+        if (same) ui_drawLabel(70, ly, 2, (s32)TX("EQUIPPED", "EQUIPADO", "EQUIPAGGIATO", "AUSGER\"USTET", "EQUIPE", "@\xBF\xB3\xCB\xDE\xC1\xAD\xB3"), 1);
+        else if (!changes(70, ly, c, slot, id, 4)) ui_drawLabel(70, ly, 2, (s32)TX("NO CHANGE", "SIN CAMBIOS", "NESSUNA MODIFICA", "KEINE \"ANDERUNG", "AUCUN CHANGEMENT", "@\xCD\xDD\xB6\xC5\xBC"), 2);
         if (compact) teaches(70 + text_measure(c->name).w + 16, y, 380, c, id);
         else teaches(70, y + 29, 380, c, id);
     }
@@ -238,8 +238,8 @@ static int equip_view(const u8 *st) {
         if (first + i == cur) bar_at(18, y - 2, 364, 28);
         ui_drawItemIcon(22, y, 2, id, 1);
         text_drawBlock(40, y, 2, g_itemNames + g_itemTable[id].name, 0);
-        if (c->equip[slot] == id) ui_drawLabel(176, y + 3, 2, (s32)TX("EQUIPPED", "EQUIPADO", "EQUIPAGGIATO", "AUSGER\"USTET", "EQUIPE"), 1);
-        else if (!changes(176, y + 3, c, slot, id, 4)) ui_drawLabel(176, y + 3, 2, (s32)TX("NO CHANGE", "SIN CAMBIOS", "NESSUNA MODIFICA", "KEINE \"ANDERUNG", "AUCUN CHANGEMENT"), 2);
+        if (c->equip[slot] == id) ui_drawLabel(176, y + 3, 2, (s32)TX("EQUIPPED", "EQUIPADO", "EQUIPAGGIATO", "AUSGER\"USTET", "EQUIPE", "@\xBF\xB3\xCB\xDE\xC1\xAD\xB3"), 1);
+        else if (!changes(176, y + 3, c, slot, id, 4)) ui_drawLabel(176, y + 3, 2, (s32)TX("NO CHANGE", "SIN CAMBIOS", "NESSUNA MODIFICA", "KEINE \"ANDERUNG", "AUCUN CHANGEMENT", "@\xCD\xDD\xB6\xC5\xBC"), 2);
         teaches(40, y + 13, 380, c, id);
     }
     win_drawBox(&box, 5, 2);
@@ -251,7 +251,7 @@ static int equip_view(const u8 *st) {
 void o33_menuAbility_updateHelp(void);
 static int ability_view(const u8 *st) {
     static RECT box = {8, 8, 384, 224};
-    static const u8 taught[] = TX("TAUGHT BY", "SE APRENDE CON", "INSEGNATA DA", "ERLERNT DURCH", "ENSEIGNEE PAR");
+    static const u8 taught[] = TX("TAUGHT BY", "SE APRENDE CON", "INSEGNATA DA", "ERLERNT DURCH", "ENSEIGNEE PAR", "@\xB5\xBC\xB4\xC3\xB8\xDA\xD9 \xBF\xB3\xCB\xDE");
     GameData *g = g_gameState->gameData;
     int member = st[2]; /* (AbilityMenu.slot: the member shown; g_menuScreen.member is the one the screen opened on) */
     if (st[1] != 2 || member > 3 || !ram_ok(g->party[member], sizeof(Character))) return 0;
@@ -323,7 +323,7 @@ static int consumable_view(int id, u8 *help) {
     int held = 0;
     for (int s = 0; s < 256; s++)
         if (g->items.slots[s].id == id) held += g->items.slots[s].count;
-    ui_drawLabel(300, 22, 2, (s32) TX("HELD", "CANT.", "NUM", "MENGE", "NBRE"), 0);
+    ui_drawLabel(300, 22, 2, (s32) TX("HELD", "CANT.", "NUM", "MENGE", "NBRE", "@\xBC\xAE\xBC\xDE"), 0);
     text_formatNumber(held, a, 2, 1);
     ui_drawDigits(334, 21, 2, a, 0);
     if (help && ram_ok(help, 1)) text_drawBlock(22, 44, 2, port_help_white(help), 0);
@@ -333,13 +333,13 @@ static int consumable_view(int id, u8 *help) {
         int y = party.y + 6 + i * 31;
         face(i, chr_portrait(c), party.x + 6, y, 28);
         text_drawBlock(party.x + 40, y + 2, 2, c->name, 0);
-        ui_drawLabel(party.x + 130, y + 4, 2, (s32) TX("HP", "PV", "HP", "HP", "HP"), 0);
+        ui_drawLabel(party.x + 130, y + 4, 2, (s32) TX("HP", "PV", "HP", "HP", "HP", "HP"), 0);
         text_formatNumber(c->hp, a, 4, 1);
         a[4] = '/';
         text_formatNumber(c->maxHp, a + 5, -1, 1);
         ui_drawSmallDigits(party.x + 148, y + 4, 2, a, c->hp <= c->maxHp / 6 ? 4 : 0);
         hpmp_bar(party.x + 130, y + 16, 100, c->hp, c->maxHp, 0x40C040);
-        ui_drawLabel(party.x + 250, y + 4, 2, (s32) TX("MP", "PM", "MP", "MP", "MP"), 0);
+        ui_drawLabel(party.x + 250, y + 4, 2, (s32) TX("MP", "PM", "MP", "MP", "MP", "MP"), 0);
         text_formatNumber(c->mp, a, 3, 1);
         a[3] = '/';
         text_formatNumber(c->maxMp, a + 4, -1, 1);
@@ -384,7 +384,7 @@ static void ap_bar(int x, int y, int w, int have, int need) {
 }
 static void member_view(Character *c) {
     static RECT box = {204, 8, 188, 224};
-    ui_drawLabel(box.x + 8, box.y - 3, 2, (s32) TX("LEARNING", "APRENDIENDO", "APPRENDIMENTO", "LERNEN", "APPRENTISSAGE"), 0);
+    ui_drawLabel(box.x + 8, box.y - 3, 2, (s32) TX("LEARNING", "APRENDIENDO", "APPRENDIMENTO", "LERNEN", "APPRENTISSAGE", "@\xBC\xAD\xB3\xC4\xB8"), 0);
     int ch = c->info.b.id, y = box.y + 10, seen[16], nseen = 0;
     u8 buf[16];
     for (int sl = 0; sl < 5 && y < box.y + box.h - 24; sl++) {
@@ -413,7 +413,7 @@ static void member_view(Character *c) {
             y += 24;
         }
     }
-    if (y == box.y + 10) ui_drawLabel(box.x + 10, y + 4, 2, (s32) TX("NOTHING TO LEARN", "NADA QUE APRENDER", "NIENTE DA APPRENDERE", "NICHTS ZU LERNEN", "RIEN A APPRENDRE"), 2);
+    if (y == box.y + 10) ui_drawLabel(box.x + 10, y + 4, 2, (s32) TX("NOTHING TO LEARN", "NADA QUE APRENDER", "NIENTE DA APPRENDERE", "NICHTS ZU LERNEN", "RIEN A APPRENDRE", "@\xB5\xCE\xDE\xB4\xD9 @\xB1\xCB\xDE\xD8\xC3\xA8@\xC5\xBC"), 2);
     win_drawBox(&box, 4, 2);
 }
 
@@ -440,7 +440,7 @@ static void order_view(int cur) {
         if (y > 202) y = 202;
         if (i == cur) bar_at(x, y - 2, 88, 34);
         text_drawBlock(x + 4, y, 2, party[i]->name, 0);
-        ui_drawLabel(x + 4, y + 16, 2, (s32)(backrow[i] ? TX("BACK ROW", "RETAGUARDIA", "RETROGUARDIA", "HINTEN", "ARRIERE") : TX("FRONT ROW", "VANGUARDIA", "AVANGUARDIA", "VORNE", "AVANT")), 0);
+        ui_drawLabel(x + 4, y + 16, 2, (s32)(backrow[i] ? TX("BACK ROW", "RETAGUARDIA", "RETROGUARDIA", "HINTEN", "ARRIERE", "@\xBA\xB3\xDA\xC2") : TX("FRONT ROW", "VANGUARDIA", "AVANGUARDIA", "VORNE", "AVANT", "@\xBE\xDE\xDD\xDA\xC2")), 0);
     }
 }
 

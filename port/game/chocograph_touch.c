@@ -71,7 +71,7 @@ int port_chocograph_top(void) {
     o32_menuChocograph_drawPicture(28, 28, 2, id, 0);
     o32_menuChocograph_drawFrame(24, 24, 2, 0);
     text_drawBlock(112, 28, 2, text_get(id + CHOCO_TEXT_NAME), TEXT_PAL_WHITE);
-    if (st->found & (1u << id)) ui_drawLabel(112, 46, 2, (s32) TX("TREASURE FOUND", "TESORO HALLADO", "TESORO TROVATO", "SCHATZ GEFUNDEN", "TRESOR TROUVE"), 0);
+    if (st->found & (1u << id)) ui_drawLabel(112, 46, 2, (s32) TX("TREASURE FOUND", "TESORO HALLADO", "TESORO TROVATO", "SCHATZ GEFUNDEN", "TRESOR TROUVE", "@\xB5\xC0\xB6\xD7 \xCA\xAF\xB9\xDD"), 0);
 #ifdef CHOCO_TEXT_ABILITY /* (the Japanese text bank has no "Ability Required": its screen draws a label) */
     text_drawBlock(112, 64, 2, text_get(CHOCO_TEXT_ABILITY), TEXT_PAL_WHITE);
 #endif

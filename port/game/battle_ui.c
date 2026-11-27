@@ -164,7 +164,7 @@ static void bar(u32 *ot, int x, int y, int w, int h, u32 bgr) {
 }
 
 static void draw_cards(void) {
-    static const u8 hp[] = TX("HP", "PV", "HP", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP", "MP");
+    static const u8 hp[] = TX("HP", "PV", "HP", "HP", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP", "MP", "MP");
     u8 a[16];
     int y = r_cards.y + 5;
     for (int i = 0; i < 4; i++, y += 43) {
@@ -214,7 +214,7 @@ static void draw_cards(void) {
 }
 
 static void draw_commands(void) {
-    static const u8 defend[] = TX("DEFEND", "DEFENSA", "DIFESA", "ABWEHR", "DEFENSE"), change[] = TX("CHANGE", "CAMBIAR", "CAMBIA", "WECHSEL", "CHANGER"), command[] = TX("COMMAND", "COMANDO", "COMANDO", "KOMMANDO", "COMMANDE");
+    static const u8 defend[] = TX("DEFEND", "DEFENSA", "DIFESA", "ABWEHR", "DEFENSE", "@\xCE\xDE\xB3\xB7\xDE\xAE"), change[] = TX("CHANGE", "CAMBIAR", "CAMBIA", "WECHSEL", "CHANGER", "\xC1\xAA\xDD\xBC\xDE"), command[] = TX("COMMAND", "COMANDO", "COMANDO", "KOMMANDO", "COMMANDE", "\xBA\xCF\xDD\xC4\xDE");
     cmd_shown = g_btlUi->menuState == BTLUI_MENU_CMD && g_btlUi->cmdUnit != NULL;
     if (!cmd_shown) return;
     ui_drawLabel(10, 41, 2, (s32)command, 0);
@@ -278,7 +278,7 @@ static void list_set_cursor(MenuList *L, int i) { /* (the game's view moves so t
 }
 
 static int draw_list(void) {
-    static const u8 back[] = TX("BACK", "ATR#AS", "INDIETRO", "ZUR\"UCK", "RETOUR"), hp[] = TX("HP", "PV", "HP", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP", "MP");
+    static const u8 back[] = TX("BACK", "ATR#AS", "INDIETRO", "ZUR\"UCK", "RETOUR", "@\xD3\xC4\xDE\xD9"), hp[] = TX("HP", "PV", "HP", "HP", "HP", "HP"), mp[] = TX("MP", "PM", "MP", "MP", "MP", "MP");
     list_shown = 0;
     Window *w = g_btlUi->windows[2];
     if (!w || w->state != 3 || !g_btluiList.cmd) return 0;
@@ -348,7 +348,7 @@ static int tap_kind, tap_arg;
 static BtlUnit *tap_unit;
 
 static int draw_targets(void) {
-    static const u8 enemy[] = TX("ENEMY", "ENEMIGOS", "NEMICO", "GEGNER", "ENNEMI"), party[] = TX("PARTY", "GRUPO", "SQUADRA", "GRUPPE", "EQUIPE"), all[] = TX("ALL", "TODOS", "TUTTI", "ALLE", "TOUS"), one[] = TX("ONE", "UNO", "UNO", "EINER", "UN"), back[] = TX("BACK", "ATR#AS", "INDIETRO", "ZUR\"UCK", "RETOUR");
+    static const u8 enemy[] = TX("ENEMY", "ENEMIGOS", "NEMICO", "GEGNER", "ENNEMI", "@\xC3\xB7"), party[] = TX("PARTY", "GRUPO", "SQUADRA", "GRUPPE", "EQUIPE", "\xCA\xDF\xB0\xC3\xA8"), all[] = TX("ALL", "TODOS", "TUTTI", "ALLE", "TOUS", "@\xBE\xDE\xDD\xC0\xB2"), one[] = TX("ONE", "UNO", "UNO", "EINER", "UN", "@\xCB\xC4\xD8"), back[] = TX("BACK", "ATR#AS", "INDIETRO", "ZUR\"UCK", "RETOUR", "@\xD3\xC4\xDE\xD9");
     tgt_shown = 0;
     /* (whether the game's target-name window is open or not: the config's Target Window off (ZL toggles it while
      * targeting) or the battle's markers hide it, and with this panel gone the bottom screen showed the PS1's own
@@ -368,7 +368,7 @@ static int draw_targets(void) {
         tgt_unit[n_tgt++] = u;
         int ko = u->hp == 0;
         if (is_party) {
-            static const u8 hpl[] = TX("HP", "PV", "HP", "HP", "HP"), mpl[] = TX("MP", "PM", "MP", "MP", "MP");
+            static const u8 hpl[] = TX("HP", "PV", "HP", "HP", "HP", "HP"), mpl[] = TX("MP", "PM", "MP", "MP", "MP", "MP");
             u8 a[8];
             text_drawBlock(r->x + 12, r->y + 4, 2, (u8 *)o0b_btl_getUnitName(u), ko ? 2 : 0);
             /* (the game's two status icon tables, the ailments (Petrify, Poison, ...) and the boons (Protect, Shell,
@@ -454,7 +454,7 @@ int port_battle_hud_draw(void) {
     if (between) cmd_shown = 0;
     sys_shown = 0;
     if (g_btluiState.enabled) { /* PAUSE and RUN: with the party (party_unit), not over the battle's opening alone */
-        static const u8 pause[] = TX("PAUSE", "PAUSA", "PAUSA", "PAUSE", "PAUSE"), run[] = TX("HOLD TO RUN", "HUIR", "FUGA", "FLUCHT", "FUITE");
+        static const u8 pause[] = TX("PAUSE", "PAUSA", "PAUSA", "PAUSE", "PAUSE", "\xCE\xDF\xB0\xBD\xDE"), run[] = TX("HOLD TO RUN", "HUIR", "FUGA", "FLUCHT", "FUITE", "@\xC6\xB9\xDE\xD9");
         sys_shown = g_btluiState.started != 0;
         int w = ui_measureLabel((u8 *)pause);
         ui_drawLabel(r_pause.x + (r_pause.w - w) / 2, r_pause.y + 11, 2, (s32)pause, 0);
